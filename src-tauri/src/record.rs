@@ -27,12 +27,50 @@ type Err = Box<dyn std::error::Error + Send + Sync>;
 const NO_WINDOW: u32 = 0x08000000;
 const BELOW_NORMAL: u32 = 0x00004000;
 
+static DATA_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+pub fn set_data_dir(dir: PathBuf) {
+    let _ = DATA_DIR.set(dir);
+}
+
 pub fn ffmpeg() -> PathBuf {
-    std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join("ffmpeg.exe")))
-        .filter(|path| path.exists())
-        .unwrap_or_else(|| PathBuf::from("ffmpeg"))
+    let beside = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|dir| dir.join("ffmpeg.exe")));
+    let downloaded = DATA_DIR.get().map(|dir| dir.join("ffmpeg.exe"));
+    [beside, downloaded].into_iter().flatten().find(|p| p.exists()).unwrap_or_else(|| PathBuf::from("ffmpeg"))
+}
+
+pub fn ffmpeg_present() -> bool {
+    ffmpeg().is_absolute()
+}
+
+const FFMPEG_URL: &str = "https://github.com/GyanD/codexffmpeg/releases/download/8.1/ffmpeg-8.1-essentials_build.zip";
+const FFMPEG_SHA256: &str = "8748283d821613d930b0e7be685aaa9df4ca6f0ad4d0c42fd02622b3623463c6";
+
+pub fn download_ffmpeg() -> Result<(), String> {
+    let dir = DATA_DIR.get().ok_or("no data folder")?;
+    let script = format!(
+        "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; \
+         $zip = Join-Path '{dir}' 'ffmpeg.zip'; \
+         Invoke-WebRequest -UseBasicParsing -Uri '{FFMPEG_URL}' -OutFile $zip; \
+         if ((Get-FileHash $zip -Algorithm SHA256).Hash.ToLower() -ne '{FFMPEG_SHA256}') {{ Remove-Item $zip; throw 'checksum mismatch' }}; \
+         Add-Type -AssemblyName System.IO.Compression.FileSystem; \
+         $z = [IO.Compression.ZipFile]::OpenRead($zip); \
+         $e = $z.Entries | Where-Object {{ $_.Name -eq 'ffmpeg.exe' }} | Select-Object -First 1; \
+         [IO.Compression.ZipFileExtensions]::ExtractToFile($e, (Join-Path '{dir}' 'ffmpeg.exe.part'), $true); \
+         $z.Dispose(); Remove-Item $zip; \
+         Move-Item -Force (Join-Path '{dir}' 'ffmpeg.exe.part') (Join-Path '{dir}' 'ffmpeg.exe')",
+        dir = dir.display()
+    );
+    let out = Command::new("powershell")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &script])
+        .creation_flags(NO_WINDOW)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
 }
 
 struct Shared {
@@ -101,26 +139,32 @@ pub struct Recorder {
     audio: JoinHandle<()>,
 }
 
-pub fn encoder_results() -> &'static Vec<(&'static str, bool)> {
-    static RESULTS: std::sync::OnceLock<Vec<(&'static str, bool)>> = std::sync::OnceLock::new();
-    RESULTS.get_or_init(|| {
-        ["h264_nvenc", "h264_amf", "h264_qsv", "libx264"]
-            .into_iter()
-            .map(|name| {
-                let ok = Command::new(ffmpeg())
-                    .args(["-v", "quiet", "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=30", "-t", "1", "-c:v", name, "-f", "null", "-"])
-                    .creation_flags(NO_WINDOW)
-                    .status()
-                    .map(|s| s.success())
-                    .unwrap_or(false);
-                (name, ok)
-            })
-            .collect()
-    })
+pub fn encoder_results() -> Vec<(&'static str, bool)> {
+    static CACHE: Mutex<Option<Vec<(&'static str, bool)>>> = Mutex::new(None);
+    if !ffmpeg_present() {
+        return Vec::new();
+    }
+    let mut cache = CACHE.lock().unwrap();
+    cache
+        .get_or_insert_with(|| {
+            ["h264_nvenc", "h264_amf", "h264_qsv", "libx264"]
+                .into_iter()
+                .map(|name| {
+                    let ok = Command::new(ffmpeg())
+                        .args(["-v", "quiet", "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=30", "-t", "1", "-c:v", name, "-f", "null", "-"])
+                        .creation_flags(NO_WINDOW)
+                        .status()
+                        .map(|s| s.success())
+                        .unwrap_or(false);
+                    (name, ok)
+                })
+                .collect()
+        })
+        .clone()
 }
 
 pub fn encoder() -> &'static str {
-    encoder_results().iter().find(|(_, ok)| *ok).map_or("libx264", |(name, _)| name)
+    encoder_results().into_iter().find(|(_, ok)| *ok).map_or("libx264", |(name, _)| name)
 }
 
 struct Probe(Arc<AtomicBool>);
@@ -253,6 +297,9 @@ fn audio_loop(pid: u32, listener: TcpListener, shared: Arc<Shared>) -> Result<()
 
 impl Recorder {
     pub fn start(dir: &Path, audio_pid: u32) -> Result<Self, Err> {
+        if !ffmpeg_present() {
+            return Err("ffmpeg is not installed yet".into());
+        }
         let monitor = Monitor::primary()?;
         let (width, height) = (monitor.width()?, monitor.height()?);
         let name = format!("rec-{}.mp4", now_us() / 1000);

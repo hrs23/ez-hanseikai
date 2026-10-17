@@ -30,6 +30,7 @@ pub struct Core {
     pub peer: Mutex<Option<EndpointId>>,
     pub conn: Mutex<Option<Connection>>,
     pub incoming: Mutex<Option<Connection>>,
+    pub ffmpeg_status: Mutex<String>,
     pub peer_info: Mutex<Option<(String, u32)>>,
     pub events: Mutex<Vec<String>>,
     pub started: Instant,
@@ -139,6 +140,7 @@ async fn state(core: State<'_, Arc<Core>>) -> Result<Value, String> {
     let peer_message = peer_info.as_ref().filter(|(_, proto)| *proto != PROTOCOL).map(|(version, _)| format!("peer has version {version}, update needed"));
     Ok(json!({
         "version": VERSION,
+        "ffmpeg": core.ffmpeg_status.lock().unwrap().clone(),
         "peer_version": peer_info.map(|(version, _)| version),
         "peer_message": peer_message,
         "id": core.ep.id().to_string(),
@@ -214,6 +216,7 @@ async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
     let dir = app.path().app_data_dir()?;
     std::fs::create_dir_all(dir.join("peer"))?;
     debug::init(&dir);
+    record::set_data_dir(dir.clone());
     log::repair(&dir.join("log.bin"));
     log::repair(&dir.join("peer").join("log.bin"));
     let key_path = dir.join("key.bin");
@@ -235,6 +238,7 @@ async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
         peer: Mutex::new(peer),
         conn: Mutex::new(None),
         incoming: Mutex::new(None),
+        ffmpeg_status: Mutex::new(String::new()),
         peer_info: Mutex::new(None),
         events: Mutex::new(Vec::new()),
         started: Instant::now(),
@@ -246,12 +250,26 @@ async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let core = tauri::async_runtime::block_on(init(app.handle().clone()))?;
             app.manage(core.clone());
             tauri::async_runtime::spawn(net::accept_loop(core.clone()));
             tauri::async_runtime::spawn(net::dial_loop(core.clone()));
-            std::thread::spawn(|| {
+            let setup_core = core.clone();
+            std::thread::spawn(move || {
+                if !record::ffmpeg_present() {
+                    *setup_core.ffmpeg_status.lock().unwrap() = "downloading ffmpeg...".into();
+                    tracing::info!("downloading ffmpeg");
+                    let result = record::download_ffmpeg();
+                    *setup_core.ffmpeg_status.lock().unwrap() = match &result {
+                        Ok(()) => String::new(),
+                        Err(e) => format!("ffmpeg download failed: {e}"),
+                    };
+                    if let Err(e) = result {
+                        tracing::warn!("ffmpeg download failed: {e}");
+                    }
+                }
                 record::encoder_results();
             });
             let args: Vec<String> = std::env::args().collect();

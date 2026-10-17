@@ -73,8 +73,11 @@ pub fn run(core: &Arc<Core>, audio_pid: Option<u32>) -> Vec<Value> {
         lines.push(line(level, text));
     }
     lines.extend(audio_lines(audio_pid));
+    if !record::ffmpeg_present() {
+        lines.push(line("fail", "ffmpeg is not installed yet; it is downloaded on first run"));
+    }
     for (name, ok) in record::encoder_results() {
-        lines.push(line(if *ok { "ok" } else { "info" }, format!("encoder {name}: {}", if *ok { "works" } else { "not available" })));
+        lines.push(line(if ok { "ok" } else { "info" }, format!("encoder {name}: {}", if ok { "works" } else { "not available" })));
     }
     lines.push(line("info", format!("encoder in use: {}", record::encoder())));
     let relay = format!("{:?}", core.ep.home_relay_status().get());

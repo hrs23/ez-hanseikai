@@ -18,7 +18,7 @@
 </style>
 </head>
 <body>
-<div class="row"><b>EZ Hanseikai</b> <span id="version"></span></div>
+<div class="row"><b>EZ Hanseikai</b> <span id="version"></span> <span id="update"></span><button id="checkupdate">Check for updates</button> <span id="ffmpeg" class="warn"></span></div>
 <div class="row">
   <span>Your ID</span><input class="id" id="id" readonly><button id="copy">Copy</button>
 </div>
@@ -120,6 +120,7 @@ async function refresh() {
   st = await invoke("state");
   $("id").value = st.id;
   $("version").textContent = "v" + st.version;
+  $("ffmpeg").textContent = st.ffmpeg;
   $("peermsg").textContent = st.peer_message ? "  " + st.peer_message : "";
   if (document.activeElement !== $("peer")) $("peer").value = st.peer || "";
   $("status").textContent = st.peer ? (st.connected ? "connected" : "connecting...") + (st.offset_us != null ? `, clock offset ${(st.offset_us / 1000).toFixed(1)} ms` : "") : "";
@@ -132,6 +133,28 @@ async function refresh() {
 async function refreshDebug() {
   if ($("debug").parentElement.open) $("debug").textContent = await invoke("debug_text");
 }
+let pending = null;
+async function checkUpdate(manual) {
+  const text = $("update");
+  try {
+    pending = await window.__TAURI__.updater.check();
+  } catch (e) {
+    if (manual) text.textContent = "update check failed: " + e;
+    return;
+  }
+  if (!pending) { if (manual) text.textContent = "up to date"; return; }
+  text.innerHTML = "";
+  const button = document.createElement("button");
+  button.textContent = "Update to " + pending.version;
+  button.onclick = async () => {
+    button.disabled = true;
+    text.textContent = "installing " + pending.version + "; the app will restart";
+    await pending.downloadAndInstall().catch((e) => { text.textContent = "update failed: " + e; });
+  };
+  text.append("update available: ", button, " ");
+}
+$("checkupdate").onclick = () => checkUpdate(true);
+setTimeout(() => checkUpdate(false), 4000);
 async function runCheck() {
   $("checks").textContent = "checking...";
   const lines = await invoke("check", { audioProcess: $("proc").value });
