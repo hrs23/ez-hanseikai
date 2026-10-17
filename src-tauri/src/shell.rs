@@ -7,13 +7,14 @@ use std::time::Duration;
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuBuilder, MenuItem, MenuItemBuilder, SubmenuBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{App, AppHandle, Emitter, Manager};
+use tauri::{App, AppHandle, Emitter, Manager, Theme, WebviewUrl, WebviewWindowBuilder};
 
 use crate::{room, Core, VERSION};
 
 const REPO: &str = "https://github.com/hrs23/ez-hanseikai";
 const TRAY_POLL: Duration = Duration::from_secs(1);
 const NO_WINDOW: u32 = 0x08000000;
+const DEBUG_SIZE: (f64, f64) = (760.0, 640.0);
 
 fn powershell(script: &str) -> String {
     Command::new("powershell")
@@ -55,6 +56,23 @@ fn show_window(app: &AppHandle) {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
+    }
+}
+
+fn open_debug(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("debug") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        return;
+    }
+    let built = WebviewWindowBuilder::new(app, "debug", WebviewUrl::App("debug.html".into()))
+        .title("EZ Hanseikai Debug")
+        .inner_size(DEBUG_SIZE.0, DEBUG_SIZE.1)
+        .theme(Some(Theme::Dark))
+        .build();
+    if let Ok(window) = built {
+        let _ = window.remove_menu();
     }
 }
 
@@ -186,6 +204,7 @@ pub fn setup(app: &App, core: Arc<Core>) -> tauri::Result<()> {
             "exit" => exit_app(app, core),
             "open" => show_window(app),
             "toggle-recording" => toggle_recording(core),
+            "debug" => open_debug(app),
             "github" => open_url(REPO),
             "issues" => open_url(&format!("{REPO}/issues/new")),
             "releases" => open_url(&format!("{REPO}/releases")),

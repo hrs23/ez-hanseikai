@@ -11,8 +11,12 @@
     "windows": [
       {
         "title": "EZ Hanseikai",
-        "width": 960,
-        "height": 600
+        "width": 1280,
+        "height": 800,
+        "minWidth": 960,
+        "minHeight": 600,
+        "theme": "Dark",
+        "backgroundColor": "#0c0e12"
       }
     ],
     "security": {

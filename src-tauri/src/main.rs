@@ -83,6 +83,7 @@ pub struct Core {
     pub events: Mutex<Vec<String>>,
     pub started: Instant,
     pub engine: record::Engine,
+    pub layout: Mutex<Value>,
     log_lock: Mutex<()>,
 }
 
@@ -108,6 +109,7 @@ impl Core {
             "mic": self.engine.mic.lock().unwrap().clone(),
             "mix": self.engine.mix.lock().unwrap().clone(),
             "deleted_sets": *self.deleted.lock().unwrap(),
+            "layout": *self.layout.lock().unwrap(),
         });
         let _ = std::fs::write(self.dir.join("settings.json"), value.to_string());
     }
@@ -270,6 +272,7 @@ async fn state(core: State<'_, Arc<Core>>) -> Result<Value, String> {
         "active_set": core.active_set_json(),
         "room": core.active_room().map(|r| json!({"id": r.id, "name": r.name})),
         "rooms": room_list,
+        "layout": core.layout.lock().unwrap().clone(),
         "sets": sets,
         "peers": peers,
         "notes": notes,
@@ -390,6 +393,23 @@ async fn stop_recording(core: State<'_, Arc<Core>>) -> Result<(), String> {
 #[tauri::command]
 fn delete_set(core: State<Arc<Core>>, room: String, set: String) -> Result<(), String> {
     room::delete_set(&core, &room, &set)
+}
+
+#[tauri::command]
+fn open_set_folder(core: State<Arc<Core>>, room: String, set: String) {
+    if room::valid_id(&room) && room::valid_id(&set) {
+        data::open_folder(&core.set_dir(&room, &set));
+    }
+}
+
+#[tauri::command]
+fn set_layout(core: State<Arc<Core>>, layout: Value) {
+    *core.layout.lock().unwrap() = layout;
+    core.save_settings();
+    let active = core.active_set.lock().unwrap().clone();
+    if let Some(active) = active {
+        room::write_set_json(&core, &active, false);
+    }
 }
 
 #[tauri::command]
@@ -629,6 +649,7 @@ async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
         events: Mutex::new(Vec::new()),
         started: Instant::now(),
         engine: record::Engine::new(&settings),
+        layout: Mutex::new(settings["layout"].clone()),
         log_lock: Mutex::new(()),
     }))
 }
@@ -678,7 +699,7 @@ fn main() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug_text, save_report, start_recording, stop_recording, delete_set, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, set_share, set_limit, set_codecs, cancel_invites, list_sources, set_source, use_display, list_mics, set_mic, set_mix, set_audio_process, set_keep_days, note_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_note, control])
+        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug_text, save_report, start_recording, stop_recording, delete_set, open_set_folder, set_layout, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, set_share, set_limit, set_codecs, cancel_invites, list_sources, set_source, use_display, list_mics, set_mic, set_mix, set_audio_process, set_keep_days, note_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_note, control])
         .run(tauri::generate_context!())
         .expect("failed to run");
 }

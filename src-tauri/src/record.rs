@@ -792,7 +792,7 @@ fn is_game(exe: &str) -> bool {
 pub fn list_sources() -> Vec<Value> {
     let mut list: Vec<(Window, String, String, u32)> = windows();
     list.sort_by_key(|w| !is_game(&w.1));
-    let windows = list.into_iter().map(|(_, exe, title, _)| json!({"id": {"kind": "window", "exe": exe, "title": title}, "name": format!("{title} ({exe})")}));
+    let windows = list.into_iter().map(|(_, exe, title, _)| json!({"id": {"kind": "window", "exe": exe, "title": title}, "name": format!("{title} (window)")}));
     let displays = Monitor::enumerate().unwrap_or_default().into_iter().enumerate().map(|(i, m)| {
         let size = m.width().and_then(|w| Ok((w, m.height()?))).map(|(w, h)| format!(" ({w}x{h})")).unwrap_or_default();
         json!({"id": {"kind": "display", "index": i + 1}, "name": format!("Display {}{size}", i + 1)})

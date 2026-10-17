@@ -233,6 +233,7 @@ pub fn write_set_json(core: &Core, set: &ActiveSet, ended: bool) {
         "id": set.id, "room": set.room, "by": set.by, "start_us": set.start_us, "ended": ended,
         "members": [me],
         "peers": peers,
+        "layout": *core.layout.lock().unwrap(),
     });
     let _ = std::fs::write(core.set_dir(&set.room, &set.id).join("set.json"), value.to_string());
 }
@@ -444,6 +445,7 @@ pub fn sets_json(core: &Core, room: &str, logs: &[Log], notes: &mut [Value]) -> 
     let mut out = Vec::new();
     for set in sets(core, room, logs) {
         let dir = core.set_dir(room, &set.id);
+        let saved: Value = std::fs::read_to_string(dir.join("set.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
         let mine: HashSet<String> = data::verified_files(&dir).iter().map(|f| have_key(&set.id, f.trim_end_matches(".mp4"))).collect();
         let mut holders = vec![Holder { key: "me".into(), name: "You".into(), have: mine, gone: false }];
         holders.extend(peers.iter().map(|(id, name, have, gone)| Holder { key: id.clone(), name: name.clone(), have: have.clone(), gone: gone.contains(&set.id) }));
@@ -494,7 +496,7 @@ pub fn sets_json(core: &Core, room: &str, logs: &[Log], notes: &mut [Value]) -> 
         }
         out.push(json!({
             "id": set.id, "room": room, "start_us": set.start(), "end_us": set.end(), "live": live, "by": players.first().map(|p| p["by"].clone()),
-            "players": players, "notes": covered, "progress": {"have": have, "total": total}, "verified_by": verified_by, "missing": missing, "all_verified": all_verified, "status": status,
+            "players": players, "notes": covered, "progress": {"have": have, "total": total}, "verified_by": verified_by, "missing": missing, "all_verified": all_verified, "status": status, "layout": saved["layout"],
         }));
     }
     out

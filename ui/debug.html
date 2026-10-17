@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EZ Hanseikai Debug</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="debug">
+<section>
+  <h3>Info</h3>
+  <pre id="info"></pre>
+  <div class="row"><button id="report">Save report</button><label class="check"><input type="checkbox" id="addr"> Include addresses and name</label></div>
+  <div id="reportpath" class="muted small"></div>
+</section>
+<section>
+  <h3 id="checksummary">Check</h3>
+  <div class="row"><button id="runcheck">Run check</button></div>
+  <div id="checks" class="small"></div>
+</section>
+<section>
+  <h3>Network</h3>
+  <pre id="network"></pre>
+</section>
+<section>
+  <h3>Files</h3>
+  <div id="datainfo" class="muted small"></div>
+  <div class="row"><button id="openfolder">Open data folder</button><button id="resetopen">Reset...</button></div>
+  <div id="resetpanel" class="panel" hidden>
+    <label class="check"><input type="radio" name="level" value="settings" checked> Reset settings and cache: deletes the downloaded video tool, logs, reports, the peer list and your name. Keeps recordings and your ID.</label>
+    <label class="check"><input type="radio" name="level" value="all"> Reset everything: also deletes all recordings and your identity key. Your ID will change. This cannot be undone.</label>
+    <input id="confirm" placeholder="Type RESET" hidden>
+    <div class="row"><button id="openfolder2">Open data folder first</button><button id="doreset" class="danger">Reset</button><button id="resetcancel">Cancel</button></div>
+    <div id="reseterr" class="err"></div>
+  </div>
+</section>
+<script src="debug.js"></script>
+</body>
+</html>
