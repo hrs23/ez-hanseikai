@@ -79,7 +79,9 @@ pub fn run(core: &Arc<Core>, audio_pid: Option<u32>) -> Vec<Value> {
     for (name, ok) in record::encoder_results() {
         lines.push(line(if ok { "ok" } else { "info" }, format!("encoder {name}: {}", if ok { "works" } else { "not available" })));
     }
-    lines.push(line("info", format!("encoder in use: {}", record::encoder())));
+    let usable = core.codecs.lock().unwrap().clone();
+    let (encoder, codec, _) = record::pick(&usable);
+    lines.push(line("info", format!("recording with {encoder} ({codec})")));
     let relay = format!("{:?}", core.ep.home_relay_status().get());
     if relay.contains("Connected") {
         lines.push(line("ok", "a relay server is reachable"));

@@ -45,6 +45,7 @@ pub struct Peer {
     pub offset_us: Option<i64>,
     pub failures: u32,
     pub announce: bool,
+    pub codecs: Vec<String>,
     pub info: Option<(String, u32)>,
 }
 
@@ -63,6 +64,7 @@ pub struct Core {
     pub audio_process: Mutex<String>,
     pub keep_days: Mutex<Option<u32>>,
     pub ready: AtomicBool,
+    pub codecs: Mutex<Vec<String>>,
     pub removed: Mutex<HashSet<String>>,
     pub pending_join: Mutex<HashMap<EndpointId, String>>,
     pub following: Mutex<HashSet<String>>,
@@ -269,6 +271,7 @@ async fn state(core: State<'_, Arc<Core>>) -> Result<Value, String> {
         "notice": core.notice.lock().unwrap().clone(),
         "free_bytes": free,
         "previous_version": core.previous_version,
+        "codec": record::pick(&core.codecs.lock().unwrap()).1,
         "recording": core.recorder.lock().unwrap().is_some(),
         "active_set": core.active_set_json(),
         "room": core.active_room().map(|r| json!({"id": r.id, "name": r.name})),
@@ -343,6 +346,11 @@ fn create_invite(core: State<Arc<Core>>, reuse: bool) -> String {
 #[tauri::command]
 fn cancel_invites(core: State<Arc<Core>>) {
     core.invites.lock().unwrap().clear();
+}
+
+#[tauri::command]
+fn set_codecs(core: State<Arc<Core>>, list: Vec<String>) {
+    *core.codecs.lock().unwrap() = list;
 }
 
 #[tauri::command]
@@ -481,8 +489,8 @@ fn add_note(core: State<Arc<Core>>, text: String, at_us: i64, set: String) {
 }
 
 #[tauri::command]
-async fn control(core: State<'_, Arc<Core>>, cmd: String, wall_us: i64, set: String) -> Result<(), String> {
-    net::send_control(&core, &cmd, wall_us, &set).await;
+async fn control(core: State<'_, Arc<Core>>, cmd: String, wall_us: i64, set: String, sent_us: i64, origin: String) -> Result<(), String> {
+    net::send_control(&core, &json!({"t": "ctl", "cmd": cmd, "wall_us": wall_us, "set": set, "sent_us": sent_us, "origin": origin})).await;
     Ok(())
 }
 
@@ -538,6 +546,7 @@ async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
         audio_process: Mutex::new(settings["audio_process"].as_str().unwrap_or_default().to_string()),
         keep_days: Mutex::new(settings["keep_days"].as_u64().map(|d| d as u32)),
         ready: AtomicBool::new(false),
+        codecs: Mutex::new(vec!["h264".to_string()]),
         removed: Mutex::new(settings["removed"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default()),
         pending_join: Mutex::new(HashMap::new()),
         following: Mutex::new(HashSet::new()),
@@ -598,7 +607,7 @@ fn main() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug_text, save_report, start_recording, stop_recording, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, set_share, set_limit, cancel_invites, set_audio_process, set_keep_days, note_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_note, control])
+        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug_text, save_report, start_recording, stop_recording, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, set_share, set_limit, set_codecs, cancel_invites, set_audio_process, set_keep_days, note_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_note, control])
         .run(tauri::generate_context!())
         .expect("failed to run");
 }

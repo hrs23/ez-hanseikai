@@ -154,8 +154,7 @@ pub fn encoder_results() -> Vec<(&'static str, bool)> {
     let mut cache = CACHE.lock().unwrap();
     cache
         .get_or_insert_with(|| {
-            ["h264_nvenc", "h264_amf", "h264_qsv", "libx264"]
-                .into_iter()
+            CANDIDATES.iter().map(|(name, _, _)| *name)
                 .map(|name| {
                     let ok = Command::new(ffmpeg())
                         .args(["-v", "quiet", "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=30", "-t", "1", "-c:v", name, "-f", "null", "-"])
@@ -170,8 +169,31 @@ pub fn encoder_results() -> Vec<(&'static str, bool)> {
         .clone()
 }
 
+const CANDIDATES: [(&str, &str, f64); 10] = [
+    ("av1_nvenc", "av1", 0.55),
+    ("av1_amf", "av1", 0.55),
+    ("av1_qsv", "av1", 0.55),
+    ("hevc_nvenc", "hevc", 0.7),
+    ("hevc_amf", "hevc", 0.7),
+    ("hevc_qsv", "hevc", 0.7),
+    ("h264_nvenc", "h264", 1.0),
+    ("h264_amf", "h264", 1.0),
+    ("h264_qsv", "h264", 1.0),
+    ("libx264", "h264", 1.0),
+];
+const BASE_BITRATE_KBPS: f64 = 6000.0;
+
+pub fn pick(usable: &[String]) -> (&'static str, &'static str, f64) {
+    let results = encoder_results();
+    CANDIDATES
+        .iter()
+        .find(|(name, codec, _)| usable.iter().any(|u| u == codec) && results.iter().any(|(n, ok)| n == name && *ok))
+        .copied()
+        .unwrap_or(("libx264", "h264", 1.0))
+}
+
 pub fn encoder() -> &'static str {
-    encoder_results().into_iter().find(|(_, ok)| *ok).map_or("libx264", |(name, _)| name)
+    pick(&["h264".to_string()]).0
 }
 
 struct Probe(Arc<AtomicBool>);
@@ -303,12 +325,13 @@ fn audio_loop(pid: u32, listener: TcpListener, shared: Arc<Shared>) -> Result<()
 }
 
 impl Recorder {
-    pub fn start(dir: &Path, out: &Path, audio_pid: u32, audio_name: &str, extra: serde_json::Value) -> Result<Self, Err> {
+    pub fn start(dir: &Path, out: &Path, audio_pid: u32, audio_name: &str, usable: &[String], extra: serde_json::Value) -> Result<Self, Err> {
         if !ffmpeg_present() {
             return Err("ffmpeg is not installed yet".into());
         }
         let monitor = Monitor::primary()?;
         let (width, height) = (monitor.width()?, monitor.height()?);
+        let chosen = pick(usable);
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let port = listener.local_addr()?.port();
         let mut child = Command::new(ffmpeg())
@@ -318,8 +341,9 @@ impl Recorder {
             .args(["-thread_queue_size", "512"])
             .args(["-f", "s16le", "-ar", "48000", "-ac", "2", "-i", &format!("tcp://127.0.0.1:{port}")])
             .args(["-vf", "scale=1280:-2:flags=fast_bilinear,format=yuv420p", "-r", &FPS.to_string()])
-            .args(["-c:v", encoder(), "-bf", "0", "-g", &FPS.to_string(), "-b:v", "6M"])
-            .args(if encoder() == "libx264" { ["-preset", "ultrafast"] } else { ["-v", "warning"] })
+            .args(["-c:v", chosen.0, "-bf", "0", "-g", &FPS.to_string(), "-b:v", &format!("{}k", (BASE_BITRATE_KBPS * chosen.2) as u32)])
+            .args(if chosen.0 == "libx264" { ["-preset", "ultrafast"] } else { ["-v", "warning"] })
+            .args(if chosen.1 == "hevc" { ["-tag:v", "hvc1"] } else { ["-v", "warning"] })
             .args(["-force_key_frames", "expr:gte(t,n_forced*1)"])
             .args(["-c:a", "aac", "-b:a", "128k"])
             .args(["-f", "mp4", "-movflags", "frag_keyframe+empty_moov+default_base_moof"])
@@ -366,7 +390,7 @@ impl Recorder {
                 last.1 = Instant::now() - Duration::from_millis(200);
             }
         });
-        let mut meta = json!({"width": width, "height": height, "fps": FPS, "encoder": encoder(), "audio": audio_name, "version": crate::VERSION});
+        let mut meta = json!({"width": width, "height": height, "fps": FPS, "encoder": chosen.0, "codec": chosen.1, "audio": audio_name, "version": crate::VERSION});
         meta.as_object_mut().unwrap().extend(extra.as_object().cloned().unwrap_or_default());
         let flags = || Flags { shared: shared.clone(), dir: dir.to_path_buf(), meta: meta.clone() };
         let mut started = Capture::start_free_threaded(settings(DrawBorderSettings::WithoutBorder, flags())?);

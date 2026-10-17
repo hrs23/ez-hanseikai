@@ -30,9 +30,9 @@ async fn request(conn: &Connection, req: &Value) -> Result<Vec<u8>> {
     .await?
 }
 
-pub async fn send_control(core: &Arc<Core>, cmd: &str, wall_us: i64, set: &str) {
+pub async fn send_control(core: &Arc<Core>, message: &Value) {
     for conn in core.connections() {
-        let _ = request(&conn, &json!({"t": "ctl", "cmd": cmd, "wall_us": wall_us, "set": set})).await;
+        let _ = request(&conn, message).await;
     }
 }
 
@@ -68,6 +68,11 @@ fn announce_join(core: &Core, id: &EndpointId, name: &str) {
         let shown = if name.is_empty() { short(id) } else { name.to_string() };
         let _ = core.app.emit("joined", shown);
     }
+}
+
+fn codec_list(value: &Value) -> Vec<String> {
+    let list: Vec<String> = value.as_array().into_iter().flatten().filter_map(|v| v.as_str()).filter(|c| ["h264", "hevc", "av1"].contains(c)).map(String::from).collect();
+    if list.is_empty() { vec!["h264".to_string()] } else { list }
 }
 
 fn bytes_per_sec(core: &Core) -> Option<f64> {
@@ -119,6 +124,9 @@ fn react_to_set(core: &Arc<Core>, set: &Value) {
     if !valid_id(id) || room != core.active_room_id() || core.recorder.lock().unwrap().is_some() {
         return;
     }
+    if core.set_dir(room, id).join(format!("{}.mp4", core.ep.id())).exists() {
+        return;
+    }
     let (core, id, by, start_us) = (core.clone(), id.to_string(), set["by"].as_str().unwrap_or_default().to_string(), set["start_us"].as_i64().unwrap_or(0));
     tokio::task::spawn_blocking(move || {
         let _ = room::begin_set(&core, &id, &by, start_us);
@@ -144,15 +152,17 @@ async fn handle(core: Arc<Core>, from: EndpointId, mut send: SendStream, mut rec
             let proto = req["proto"].as_u64().unwrap_or(0) as u32;
             let name = crate::clean_name(req["name"].as_str().unwrap_or_default());
             announce_join(&core, &from, &name);
+            let codecs = codec_list(&req["codecs"]);
             core.update_peer(&from, |p| {
                 p.info = Some((version, proto));
                 p.name = name;
+                p.codecs = codecs;
             });
             learn_members(&core, &req["room"], &req["members"]);
             react_to_set(&core, &req["set"]);
             let own = core.name.lock().unwrap().clone();
             let room = room_info(&core);
-            send.write_all(&serde_json::to_vec(&json!({"app": VERSION, "proto": PROTOCOL, "name": own, "room": room, "members": room["members"], "set": core.active_set_json()}))?).await?;
+            send.write_all(&serde_json::to_vec(&json!({"app": VERSION, "proto": PROTOCOL, "name": own, "room": room, "members": room["members"], "set": core.active_set_json(), "codecs": *core.codecs.lock().unwrap()}))?).await?;
         }
         Some("rec") => {
             if req["action"] == "start" {
@@ -166,7 +176,7 @@ async fn handle(core: Arc<Core>, from: EndpointId, mut send: SendStream, mut rec
         Some("ping") => send.write_all(&now_us().to_le_bytes()).await?,
         Some("ctl") => {
             let wall = req["wall_us"].as_i64().unwrap_or(0);
-            let _ = core.app.emit("control", json!({"cmd": req["cmd"], "wall_us": wall, "set": req["set"], "from": from.to_string()}));
+            let _ = core.app.emit("control", json!({"cmd": req["cmd"], "wall_us": wall, "set": req["set"], "sent_us": req["sent_us"], "origin": req["origin"], "from": from.to_string()}));
             send.write_all(b"ok").await?;
         }
         _ => {}
@@ -308,16 +318,18 @@ async fn measure(core: &Core, id: &EndpointId, conn: &Connection, samples: &mut 
 async fn hello(core: &Arc<Core>, id: &EndpointId, conn: &Connection) -> bool {
     let own = core.name.lock().unwrap().clone();
     let room = room_info(core);
-    let message = json!({"t": "hello", "app": VERSION, "proto": PROTOCOL, "name": own, "room": room, "members": room["members"], "set": core.active_set_json()});
+    let message = json!({"t": "hello", "app": VERSION, "proto": PROTOCOL, "name": own, "room": room, "members": room["members"], "set": core.active_set_json(), "codecs": *core.codecs.lock().unwrap()});
     let reply = request(conn, &message).await;
     let Ok(reply) = reply.and_then(|r| Ok(serde_json::from_slice::<Value>(&r)?)) else { return true };
     let proto = reply["proto"].as_u64().unwrap_or(0) as u32;
     let version = reply["app"].as_str().unwrap_or("unknown").to_string();
     let name = crate::clean_name(reply["name"].as_str().unwrap_or_default());
     announce_join(core, id, &name);
+    let codecs = codec_list(&reply["codecs"]);
     core.update_peer(id, |p| {
         p.info = Some((version, proto));
         p.name = name;
+        p.codecs = codecs;
     });
     learn_members(core, &reply["room"], &reply["members"]);
     react_to_set(core, &reply["set"]);

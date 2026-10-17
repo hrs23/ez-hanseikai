@@ -91,3 +91,10 @@ One member coordinates: Watch Party ordering, team plugins and alignment. It def
 ## Accounts
 
 The app is free and open source and works without any account. Accounts can come later as a layer that links a user ID to an account; the data model does not change. Recordings are never sold or put behind a paywall; EA's terms forbid that for its games.
+
+## Later
+
+- A Media Source player for live viewing, instead of reloading the growing file.
+- A local SQLite index over the logs for lists and search, rebuilt from the logs.
+- Per-author sequence numbers in the logs and relaying of logs between members.
+- Game plugins that mark events such as match start and end.

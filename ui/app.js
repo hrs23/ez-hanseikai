@@ -11,6 +11,7 @@ const RELOAD_GROWTH = 300000;
 const RETRY_MS = 3000;
 const LOW_DISK = 5e9;
 const NOTICE_MS = 5000;
+const CONTROL_REPEAT_MS = 4000;
 
 const tiles = {};
 const clock = { playing: false, m: 0, at: 0 };
@@ -29,6 +30,7 @@ let layoutSig = "";
 let idleTimer = null;
 let undoAction = null;
 let noteItems = [];
+let lastCtl = null;
 
 window.__TAURI__.app.getName().then((name) => {
   $("appname").textContent = name;
@@ -197,18 +199,36 @@ function apply(cmd, m, who) {
   else if (cmd === "seek") setClock(clock.playing, m);
   say(`${who} ${cmd === "play" ? "played" : cmd === "pause" ? "paused" : "jumped"} at ${fmt(m)}`);
 }
+const offsetOf = (id) => { const p = st.peers.find((x) => x.id === id); return (p && p.offset_us) || 0; };
+function isNewer(c) {
+  if (!lastCtl) return true;
+  const a = c.sent_us - offsetOf(c.origin), b = lastCtl.sent_us - offsetOf(lastCtl.origin);
+  return a > b || (a === b && c.origin > lastCtl.origin);
+}
+function sendCtl(c) {
+  invoke("control", { cmd: c.cmd, wallUs: c.wall_us, set: c.set, sentUs: c.sent_us, origin: c.origin }).catch(() => {});
+}
 function act(cmd, m) {
   if (cmd === "seek") { lastSeek = nowM(); undoAction = null; $("undo").hidden = false; $("undo").textContent = "Undo seek"; }
   apply(cmd, m, "You");
   const set = currentSet();
-  if (watchParty && set) invoke("control", { cmd, wallUs: wallOf(m), set: set.id }).catch(() => {});
+  if (!set) return;
+  lastCtl = { cmd, wall_us: wallOf(m), set: set.id, sent_us: Date.now() * 1000, origin: st.id };
+  if (watchParty) sendCtl(lastCtl);
 }
 window.__TAURI__.event.listen("control", (e) => {
   const set = currentSet();
-  if (!st || !watchParty || !set || e.payload.set !== set.id) return;
-  const peer = st.peers.find((p) => p.id === e.payload.from);
-  apply(e.payload.cmd, (e.payload.wall_us - ((peer && peer.offset_us) || 0) - base()) / 1e6, peer ? peer.name || peer.short : "Someone");
+  const c = e.payload;
+  if (!st || !watchParty || !set || c.set !== set.id || c.origin === st.id || !isNewer(c)) return;
+  lastCtl = c;
+  const peer = st.peers.find((p) => p.id === c.origin);
+  const age = c.cmd === "play" ? (Date.now() * 1000 - (c.sent_us - offsetOf(c.origin))) / 1e6 : 0;
+  apply(c.cmd === "seek" ? "seek" : c.cmd, (c.wall_us - offsetOf(c.origin) - base()) / 1e6 + Math.max(0, age), peer ? peer.name || peer.short : "Someone");
 });
+setInterval(() => {
+  const set = currentSet();
+  if (watchParty && lastCtl && set && lastCtl.set === set.id) sendCtl(lastCtl);
+}, CONTROL_REPEAT_MS);
 const toggle = () => act(clock.playing ? "pause" : "play", nowM());
 const jump = (delta) => act("seek", Math.min(total(), Math.max(0, nowM() + delta)));
 
@@ -366,7 +386,7 @@ async function refresh() {
 }
 
 function renderInfo() {
-  const lines = [`version ${st.version}${st.previous_version ? ` (previous run ${st.previous_version})` : ""}`, `id ${st.id}`];
+  const lines = [`version ${st.version}${st.previous_version ? ` (previous run ${st.previous_version})` : ""}`, `id ${st.id}`, `recording codec ${st.codec}`];
   for (const p of st.peers) lines.push(`peer ${label(p)}: ${p.connected ? p.path + ", " + p.rtt_ms + " ms" : "not connected"}${p.version ? ", v" + p.version : ""}${p.offset_us != null ? ", clock offset " + (p.offset_us / 1000).toFixed(1) + " ms" : ""}`);
   $("info").textContent = lines.join("\n");
 }
@@ -576,6 +596,18 @@ document.addEventListener("keydown", (e) => {
   e.preventDefault();
 });
 
+async function reportCodecs() {
+  const types = { av1: 'video/mp4; codecs="av01.0.08M.08"', hevc: 'video/mp4; codecs="hvc1.1.6.L93.B0"', h264: 'video/mp4; codecs="avc1.640028"' };
+  const list = [];
+  for (const [name, contentType] of Object.entries(types)) {
+    try {
+      const info = await navigator.mediaCapabilities.decodingInfo({ type: "file", video: { contentType, width: 1280, height: 720, bitrate: 6000000, framerate: 30 } });
+      if (info.supported) list.push(name);
+    } catch {}
+  }
+  invoke("set_codecs", { list: list.length ? list : ["h264"] });
+}
+reportCodecs();
 setInterval(tick, TICK_MS);
 setInterval(() => refresh().catch(() => {}), 1000);
 setInterval(() => refreshDebug().catch(() => {}), 2000);

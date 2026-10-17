@@ -109,7 +109,7 @@ pub fn apply_active(core: &Arc<Core>) {
         for id in &wanted {
             if !peers.iter().any(|p| p.id == *id) {
                 let announce = core.ready.load(std::sync::atomic::Ordering::Relaxed);
-                peers.push(Peer { id: *id, name: String::new(), conn: None, incoming: None, offset_us: None, failures: 0, announce, info: None });
+                peers.push(Peer { id: *id, name: String::new(), conn: None, incoming: None, offset_us: None, failures: 0, announce, codecs: vec!["h264".to_string()], info: None });
                 fresh.push(*id);
             }
         }
@@ -241,7 +241,11 @@ pub fn begin_set(core: &Arc<Core>, set: &str, by: &str, start_us: i64) -> Result
     let wanted = core.audio_process.lock().unwrap().clone();
     let (audio_name, pid) = crate::audio_target(&wanted);
     let meta = json!({"set": set, "room": room, "file": file, "by": by});
-    let recorder = record::Recorder::start(&core.dir, &dir.join(&file), pid, &audio_name, meta).map_err(|e| e.to_string())?;
+    let mut usable = core.codecs.lock().unwrap().clone();
+    for p in core.peers.lock().unwrap().iter().filter(|p| p.conn.is_some()) {
+        usable.retain(|c| p.codecs.contains(c));
+    }
+    let recorder = record::Recorder::start(&core.dir, &dir.join(&file), pid, &audio_name, &usable, meta).map_err(|e| e.to_string())?;
     *slot = Some(recorder);
     let active = ActiveSet { id: set.to_string(), room, by: by.to_string(), start_us };
     write_set_json(core, &active, false);
