@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod check;
 mod debug;
 mod log;
 mod net;
@@ -10,11 +11,13 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use iroh::endpoint::{presets, Connection};
-use iroh::{Endpoint, EndpointId, SecretKey};
+use iroh::{Endpoint, EndpointId, SecretKey, Watcher};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, State};
 
 pub const ALPN: &[u8] = b"ez-hanseikai/0";
+pub const PROTOCOL: u32 = 1;
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub fn now_us() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros() as i64
@@ -27,6 +30,7 @@ pub struct Core {
     pub peer: Mutex<Option<EndpointId>>,
     pub conn: Mutex<Option<Connection>>,
     pub incoming: Mutex<Option<Connection>>,
+    pub peer_info: Mutex<Option<(String, u32)>>,
     pub events: Mutex<Vec<String>>,
     pub started: Instant,
     pub offset_us: Mutex<Option<i64>>,
@@ -80,6 +84,10 @@ fn stop_recording_now(core: &Core) {
     }
 }
 
+fn pid_of(name: &str) -> Option<u32> {
+    processes().into_iter().find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, pid)| pid)
+}
+
 fn processes() -> Vec<(String, u32)> {
     use std::os::windows::process::CommandExt;
     let Ok(out) = std::process::Command::new("tasklist").args(["/FO", "CSV", "/NH"]).creation_flags(0x08000000).output() else {
@@ -97,7 +105,7 @@ fn processes() -> Vec<(String, u32)> {
 }
 
 #[tauri::command]
-fn list_processes() -> Vec<String> {
+async fn list_processes() -> Vec<String> {
     let mut names: Vec<String> = processes().into_iter().map(|(name, _)| name).collect();
     names.sort_by_key(|n| (!n.to_lowercase().contains("apex"), n.to_lowercase()));
     names.dedup();
@@ -105,7 +113,7 @@ fn list_processes() -> Vec<String> {
 }
 
 #[tauri::command]
-fn state(core: State<Arc<Core>>) -> Value {
+async fn state(core: State<'_, Arc<Core>>) -> Result<Value, String> {
     let dead = core.recorder.lock().unwrap().as_mut().is_some_and(|r| r.is_dead());
     if dead {
         tracing::warn!("recording stopped on its own");
@@ -127,7 +135,12 @@ fn state(core: State<Arc<Core>>) -> Value {
         }
     }
     notes.sort_by_key(|n| n["t_us"].as_i64());
-    json!({
+    let peer_info = core.peer_info.lock().unwrap().clone();
+    let peer_message = peer_info.as_ref().filter(|(_, proto)| *proto != PROTOCOL).map(|(version, _)| format!("peer has version {version}, update needed"));
+    Ok(json!({
+        "version": VERSION,
+        "peer_version": peer_info.map(|(version, _)| version),
+        "peer_message": peer_message,
         "id": core.ep.id().to_string(),
         "peer": core.peer.lock().unwrap().map(|p| p.to_string()),
         "connected": core.conn.lock().unwrap().is_some(),
@@ -136,28 +149,50 @@ fn state(core: State<Arc<Core>>) -> Value {
         "mine": mine,
         "peer_rec": peer,
         "notes": notes,
+    }))
+}
+
+async fn warm(core: &Core) {
+    let wait = Duration::from_secs(6);
+    let _ = tokio::time::timeout(wait, core.ep.online()).await;
+    let _ = tokio::time::timeout(wait, core.ep.net_report().initialized()).await;
+}
+
+#[tauri::command]
+async fn check(core: State<'_, Arc<Core>>, audio_process: String) -> Result<Vec<Value>, String> {
+    let core = core.inner().clone();
+    warm(&core).await;
+    tauri::async_runtime::spawn_blocking(move || check::run(&core, pid_of(&audio_process)))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn debug_text(core: State<'_, Arc<Core>>) -> Result<String, String> {
+    Ok(debug::text(&core))
+}
+
+#[tauri::command]
+async fn save_report(core: State<'_, Arc<Core>>, include_addresses: bool, audio_process: String) -> Result<String, String> {
+    let core = core.inner().clone();
+    warm(&core).await;
+    tauri::async_runtime::spawn_blocking(move || {
+        let lines = check::run(&core, pid_of(&audio_process));
+        debug::report(&core, include_addresses, &check::text(&lines)).map(|p| p.display().to_string()).map_err(|e| e.to_string())
     })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn debug_text(core: State<Arc<Core>>) -> String {
-    debug::text(&core)
+async fn start_recording(core: State<'_, Arc<Core>>, audio_process: String) -> Result<(), String> {
+    start_recording_now(&core, pid_of(&audio_process).unwrap_or(0))
 }
 
 #[tauri::command]
-fn save_report(core: State<Arc<Core>>, include_addresses: bool) -> Result<String, String> {
-    debug::report(&core, include_addresses).map(|p| p.display().to_string()).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn start_recording(core: State<Arc<Core>>, audio_process: String) -> Result<(), String> {
-    let pid = processes().into_iter().find(|(name, _)| name.eq_ignore_ascii_case(&audio_process)).map_or(0, |(_, pid)| pid);
-    start_recording_now(&core, pid)
-}
-
-#[tauri::command]
-fn stop_recording(core: State<Arc<Core>>) {
-    stop_recording_now(&core)
+async fn stop_recording(core: State<'_, Arc<Core>>) -> Result<(), String> {
+    stop_recording_now(&core);
+    Ok(())
 }
 
 #[tauri::command]
@@ -200,6 +235,7 @@ async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
         peer: Mutex::new(peer),
         conn: Mutex::new(None),
         incoming: Mutex::new(None),
+        peer_info: Mutex::new(None),
         events: Mutex::new(Vec::new()),
         started: Instant::now(),
         offset_us: Mutex::new(None),
@@ -215,6 +251,9 @@ fn main() {
             app.manage(core.clone());
             tauri::async_runtime::spawn(net::accept_loop(core.clone()));
             tauri::async_runtime::spawn(net::dial_loop(core.clone()));
+            std::thread::spawn(|| {
+                record::encoder_results();
+            });
             let args: Vec<String> = std::env::args().collect();
             let arg = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
             if let Some(id) = arg("--peer") {
@@ -233,7 +272,7 @@ fn main() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![state, list_processes, debug_text, save_report, start_recording, stop_recording, set_peer, add_note, control])
+        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug_text, save_report, start_recording, stop_recording, set_peer, add_note, control])
         .run(tauri::generate_context!())
         .expect("failed to run");
 }

@@ -140,16 +140,17 @@ fn redact(text: &str) -> String {
     text
 }
 
-pub fn report(core: &Core, include_addresses: bool) -> std::io::Result<PathBuf> {
+pub fn report(core: &Core, include_addresses: bool, check: &str) -> std::io::Result<PathBuf> {
     let log = fs::read_to_string(core.dir.join("log.txt")).unwrap_or_default();
     let recent: Vec<&str> = log.lines().rev().take(400).collect();
     let recent: Vec<&str> = recent.into_iter().rev().collect();
     let mut out = String::new();
-    out.push_str(&format!("ez-hanseikai {} on {} {}\n", env!("CARGO_PKG_VERSION"), std::env::consts::OS, command_line("cmd", &["/c", "ver"])));
+    out.push_str(&format!("ez-hanseikai {} on {} {}\n", crate::VERSION, std::env::consts::OS, command_line("cmd", &["/c", "ver"])));
     out.push_str(&format!("gpu {}\n", command_line("powershell", &["-NoProfile", "-Command", "(Get-CimInstance Win32_VideoController).Name -join ', '"])));
     out.push_str(&format!("encoder {}\n", crate::record::encoder()));
     out.push_str(&format!("ffmpeg {}\n", command_line(&crate::record::ffmpeg().to_string_lossy(), &["-version"]).lines().next().unwrap_or("")));
     out.push_str(&format!("iroh {}\n\n", "1.3.0"));
+    out.push_str(&format!("peer {:?}\n\nenvironment check\n{check}\n\n", core.peer_info.lock().unwrap()));
     out.push_str(&text(core));
     out.push_str("\nrecent log\n");
     out.push_str(&recent.join("\n"));

@@ -101,24 +101,81 @@ pub struct Recorder {
     audio: JoinHandle<()>,
 }
 
-pub fn encoder() -> &'static str {
-    static CHOSEN: std::sync::OnceLock<&str> = std::sync::OnceLock::new();
-    CHOSEN.get_or_init(probe_encoder)
+pub fn encoder_results() -> &'static Vec<(&'static str, bool)> {
+    static RESULTS: std::sync::OnceLock<Vec<(&'static str, bool)>> = std::sync::OnceLock::new();
+    RESULTS.get_or_init(|| {
+        ["h264_nvenc", "h264_amf", "h264_qsv", "libx264"]
+            .into_iter()
+            .map(|name| {
+                let ok = Command::new(ffmpeg())
+                    .args(["-v", "quiet", "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=30", "-t", "1", "-c:v", name, "-f", "null", "-"])
+                    .creation_flags(NO_WINDOW)
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false);
+                (name, ok)
+            })
+            .collect()
+    })
 }
 
-fn probe_encoder() -> &'static str {
-    for name in ["h264_nvenc", "h264_amf", "h264_qsv"] {
-        let ok = Command::new(ffmpeg())
-            .args(["-v", "quiet", "-f", "lavfi", "-i", "nullsrc=s=256x256", "-frames:v", "1", "-c:v", name, "-f", "null", "-"])
-            .creation_flags(NO_WINDOW)
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        if ok {
-            return name;
+pub fn encoder() -> &'static str {
+    encoder_results().iter().find(|(_, ok)| *ok).map_or("libx264", |(name, _)| name)
+}
+
+struct Probe(Arc<AtomicBool>);
+
+impl GraphicsCaptureApiHandler for Probe {
+    type Flags = Arc<AtomicBool>;
+    type Error = Err;
+
+    fn new(ctx: Context<Self::Flags>) -> Result<Self, Self::Error> {
+        Ok(Self(ctx.flags))
+    }
+
+    fn on_frame_arrived(&mut self, _frame: &mut Frame, _control: InternalCaptureControl) -> Result<(), Self::Error> {
+        self.0.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+fn settings<F>(border: DrawBorderSettings, flags: F) -> Result<Settings<F, Monitor>, Err> {
+    Ok(Settings::new(
+        Monitor::primary()?,
+        CursorCaptureSettings::Default,
+        border,
+        SecondaryWindowSettings::Default,
+        MinimumUpdateIntervalSettings::Default,
+        DirtyRegionSettings::Default,
+        ColorFormat::Bgra8,
+        flags,
+    ))
+}
+
+pub fn check_capture() -> Vec<(&'static str, String)> {
+    let mut lines = Vec::new();
+    let got = Arc::new(AtomicBool::new(false));
+    let mut control = Probe::start_free_threaded(settings(DrawBorderSettings::WithoutBorder, got.clone()).unwrap());
+    if let Err(e) = &control {
+        lines.push(("warn", format!("capture without border was refused ({e}); falling back to the default border")));
+        control = Probe::start_free_threaded(settings(DrawBorderSettings::Default, got.clone()).unwrap());
+    }
+    match control {
+        Err(e) => lines.push(("fail", format!("screen capture could not start: {e}"))),
+        Ok(control) => {
+            let until = Instant::now() + Duration::from_millis(2000);
+            while !got.load(Ordering::Relaxed) && Instant::now() < until {
+                thread::sleep(Duration::from_millis(50));
+            }
+            let _ = control.stop();
+            if got.load(Ordering::Relaxed) {
+                lines.push(("ok", "screen capture started and a frame arrived".into()));
+            } else {
+                lines.push(("warn", "screen capture started but no frame arrived in 2 s (idle or locked screen)".into()));
+            }
         }
     }
-    "libx264"
+    lines
 }
 
 fn audio_loop(pid: u32, listener: TcpListener, shared: Arc<Shared>) -> Result<(), Err> {
@@ -256,17 +313,13 @@ impl Recorder {
                 last.1 = Instant::now() - Duration::from_millis(200);
             }
         });
-        let settings = Settings::new(
-            monitor,
-            CursorCaptureSettings::Default,
-            DrawBorderSettings::WithoutBorder,
-            SecondaryWindowSettings::Default,
-            MinimumUpdateIntervalSettings::Default,
-            DirtyRegionSettings::Default,
-            ColorFormat::Bgra8,
-            Flags { shared: shared.clone(), dir: dir.to_path_buf(), name },
-        );
-        let control = match Capture::start_free_threaded(settings) {
+        let flags = || Flags { shared: shared.clone(), dir: dir.to_path_buf(), name: name.clone() };
+        let mut started = Capture::start_free_threaded(settings(DrawBorderSettings::WithoutBorder, flags())?);
+        if let Err(e) = &started {
+            tracing::warn!("capture without border refused ({e}), using the default border");
+            started = Capture::start_free_threaded(settings(DrawBorderSettings::Default, flags())?);
+        }
+        let control = match started {
             Ok(control) => control,
             Err(e) => {
                 shared.stop.store(true, Ordering::Relaxed);

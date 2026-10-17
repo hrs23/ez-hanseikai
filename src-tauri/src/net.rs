@@ -8,7 +8,7 @@ use tauri::Emitter;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::time::{sleep, timeout};
 
-use crate::{debug, log, now_us, Core, ALPN};
+use crate::{debug, log, now_us, Core, ALPN, PROTOCOL, VERSION};
 
 const CHUNK: u64 = 16 << 20;
 
@@ -43,6 +43,11 @@ async fn handle(core: Arc<Core>, mut send: SendStream, mut recv: RecvStream) -> 
                     send.write_all(&data).await?;
                 }
             }
+        }
+        Some("hello") => {
+            let version = req["app"].as_str().unwrap_or("unknown").to_string();
+            *core.peer_info.lock().unwrap() = Some((version, req["proto"].as_u64().unwrap_or(0) as u32));
+            send.write_all(&serde_json::to_vec(&json!({"app": VERSION, "proto": PROTOCOL}))?).await?;
         }
         Some("ping") => send.write_all(&now_us().to_le_bytes()).await?,
         Some("ctl") => {
@@ -156,6 +161,17 @@ pub async fn dial_loop(core: Arc<Core>) {
         debug::event(&core, dialing, "connected".into());
         *core.conn.lock().unwrap() = Some(conn.clone());
         watch_paths(&core, &conn, "outgoing");
+        let hello = request(&conn, &json!({"t": "hello", "app": VERSION, "proto": PROTOCOL})).await;
+        if let Ok(reply) = hello.and_then(|r| Ok(serde_json::from_slice::<Value>(&r)?)) {
+            let proto = reply["proto"].as_u64().unwrap_or(0) as u32;
+            *core.peer_info.lock().unwrap() = Some((reply["app"].as_str().unwrap_or("unknown").to_string(), proto));
+            if proto != PROTOCOL {
+                debug::event(&core, dialing, format!("peer protocol {proto} differs from ours {PROTOCOL}"));
+                sleep(Duration::from_secs(10)).await;
+                *core.conn.lock().unwrap() = None;
+                continue;
+            }
+        }
         let _ = sync(&core, &conn).await;
         *core.conn.lock().unwrap() = None;
     }

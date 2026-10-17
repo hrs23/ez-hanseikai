@@ -12,17 +12,19 @@
   video { width: 100%; background: #000; }
   .id { width: 24em; font-family: monospace; }
   #status { color: #8c8; }
+  .ok { color: #8c8; } .warn { color: #ec8; } .fail { color: #e88; } .info { color: #999; }
   #notes { color: #aaa; font-size: 13px; }
   #debug { color: #8c8; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
 </style>
 </head>
 <body>
+<div class="row"><b>EZ Hanseikai</b> <span id="version"></span></div>
 <div class="row">
   <span>Your ID</span><input class="id" id="id" readonly><button id="copy">Copy</button>
 </div>
 <div class="row">
   <span>Peer ID</span><input class="id" id="peer" placeholder="paste the other person's ID"><button id="set">Connect</button>
-  <span id="status"></span>
+  <span id="status"></span><span id="peermsg" style="color:#e99"></span>
 </div>
 <div class="row">
   <span>Game sound from</span><select id="proc"></select>
@@ -37,6 +39,10 @@
 <div class="videos"><div><div>You</div><video id="a" muted></video></div><div><div>Peer</div><video id="b"></video></div></div>
 <div class="row"><input id="note" placeholder="note" size="40"><button id="addnote">Add note</button></div>
 <div id="notes"></div>
+<details open><summary>Check</summary>
+  <div class="row"><button id="runcheck">Run check</button></div>
+  <div id="checks"></div>
+</details>
 <details><summary>Network</summary>
   <div class="row"><button id="report">Save report</button><label><input type="checkbox" id="addr"> include addresses</label><span id="reportpath"></span></div>
   <pre id="debug"></pre>
@@ -104,7 +110,7 @@ $("rec").onclick = () => st && st.recording
   ? invoke("stop_recording")
   : invoke("start_recording", { audioProcess: $("proc").value }).catch((e) => alert(e));
 $("addnote").onclick = () => { invoke("add_note", { text: $("note").value }); $("note").value = ""; };
-$("report").onclick = () => invoke("save_report", { includeAddresses: $("addr").checked }).then((p) => { $("reportpath").textContent = p; }).catch((e) => alert(e));
+$("report").onclick = () => invoke("save_report", { includeAddresses: $("addr").checked, audioProcess: $("proc").value }).then((p) => { $("reportpath").textContent = p; }).catch((e) => alert(e));
 a.ontimeupdate = () => {
   $("seek").value = a.currentTime;
   $("time").textContent = a.currentTime.toFixed(1) + " s";
@@ -113,6 +119,8 @@ a.ontimeupdate = () => {
 async function refresh() {
   st = await invoke("state");
   $("id").value = st.id;
+  $("version").textContent = "v" + st.version;
+  $("peermsg").textContent = st.peer_message ? "  " + st.peer_message : "";
   if (document.activeElement !== $("peer")) $("peer").value = st.peer || "";
   $("status").textContent = st.peer ? (st.connected ? "connected" : "connecting...") + (st.offset_us != null ? `, clock offset ${(st.offset_us / 1000).toFixed(1)} ms` : "") : "";
   $("rec").textContent = st.recording ? "Stop" : "Record";
@@ -124,6 +132,12 @@ async function refresh() {
 async function refreshDebug() {
   if ($("debug").parentElement.open) $("debug").textContent = await invoke("debug_text");
 }
+async function runCheck() {
+  $("checks").textContent = "checking...";
+  const lines = await invoke("check", { audioProcess: $("proc").value });
+  $("checks").innerHTML = lines.map((l) => `<div class="${l.level}">${{ ok: "OK", warn: "WARN", fail: "FAIL", info: "" }[l.level]} ${l.text.replace(/</g, "&lt;")}</div>`).join("");
+}
+$("runcheck").onclick = () => runCheck().catch((e) => alert(e));
 async function fillProcesses() {
   const names = await invoke("list_processes");
   const current = $("proc").value;
@@ -133,7 +147,7 @@ async function fillProcesses() {
 setInterval(() => refreshDebug().catch(() => {}), 2000);
 setInterval(() => refresh().catch(() => {}), 1000);
 refresh();
-fillProcesses();
+fillProcesses().then(runCheck);
 $("proc").onfocus = fillProcesses;
 </script>
 </body>
