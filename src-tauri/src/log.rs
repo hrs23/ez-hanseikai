@@ -44,3 +44,11 @@ pub fn append(path: &Path, record: &Value) -> std::io::Result<()> {
     out.extend_from_slice(&body);
     OpenOptions::new().create(true).append(true).open(path)?.write_all(&out)
 }
+
+pub fn extend(path: &Path, from: u64, data: &[u8]) -> std::io::Result<()> {
+    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    if file.metadata()?.len() != from {
+        return Ok(());
+    }
+    file.write_all(data)
+}

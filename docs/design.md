@@ -49,9 +49,15 @@ A recording is a set for the whole room: when anyone presses Record every member
 
 Discovery: the default n0 address lookup publishes only the relay URL, not IP addresses. Anyone who dials an ID can still see its IP while hole punching, so IDs and invite codes stay inside the team.
 
-Record kinds in a log (`rec` and `rec_end` carry the set and room, notes carry the set): `rec` (a recording starts: file name, start time, source kind and name, capture size, fps, encoder and codec, game sound process, microphone, app version; tracks are video, game sound, microphone), `rec_end`, `note`, `note_edit`, `note_del`, `note_restore` (edits and deletions refer to a note by its id), `offset` (clock offset to a peer), `layout` (a viewer's arrangement of tiles). Unknown kinds are kept and ignored.
+A set is known from the logs: its window runs from the earliest `rec` to the latest `rec_end` of its players, on this PC's clock. On connecting, a member pulls every room member's log from each peer it reaches (a peer passes on the logs it holds), so late joiners and members who were offline learn every set. Missing or incomplete files are then fetched from any member holding a verified copy, resuming from the local length, within the speed limit and behind live streams.
 
-Edits and deletions are new records. Only the recorder can delete a recording for everyone, and it goes to a trash period first. The app never removes the last copy of anything it knows about.
+Verification: when a set ends, each recorder appends a `file` record with the size and SHA-256 of its file. Every member hashes a copy once it has the full length and remembers the result in the set's `verified.json` (redone when the file changes). A copy that does not match is logged (`file_bad`) and, if another member holds a good copy, deleted and fetched again. Members tell each other which files they hold verified and which sets they deleted, so each set shows who still lacks which files.
+
+Notes belong to a room and a moment on the author's clock, not to a set: every set whose window covers that moment shows the note, whoever recorded it. Older notes that name a set count as notes of that set's room.
+
+Record kinds in a log (`rec`, `rec_end` and `file` carry the set and room, notes carry the room): `rec` (a recording starts: file name, start time, source kind and name, capture size, fps, encoder and codec, game sound process, microphone, app version; tracks are video, game sound, microphone), `rec_end`, `file` (size and SHA-256 of a finished recording), `file_bad`, `note`, `note_edit`, `note_del`, `note_restore` (edits and deletions refer to a note by its id), `offset` (clock offset to a peer), `layout` (a viewer's arrangement of tiles). Unknown kinds are kept and ignored.
+
+Edits and deletions of notes are new records. Deleting a set removes it from this PC only and the app remembers it, so it is not fetched again; others keep theirs. Sets older than the kept days are deleted the same way. When less than 10% of the drive is free (a share, so it suits any drive size, and Windows itself slows down when a drive is nearly full), the app deletes the oldest sets without notes first, then the oldest with notes, never one being recorded, and says which. Below 1% it stops recording and streaming.
 
 ## Sharing
 
@@ -96,5 +102,5 @@ The app is free and open source and works without any account. Accounts can come
 
 - A Media Source player for live viewing, instead of reloading the growing file.
 - A local SQLite index over the logs for lists and search, rebuilt from the logs.
-- Per-author sequence numbers in the logs and relaying of logs between members.
+- Per-author sequence numbers in the logs.
 - Game plugins that mark events such as match start and end.

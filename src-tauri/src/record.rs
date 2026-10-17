@@ -326,7 +326,7 @@ pub fn live_name(name: &str) -> Option<(String, i64)> {
 
 pub fn want(core: &Core) -> Option<Target> {
     let e = &core.engine;
-    if e.source.lock().unwrap().is_null() {
+    if e.source.lock().unwrap().is_null() || core.disk_full() {
         return None;
     }
     if let Some(s) = core.active_set.lock().unwrap().as_ref() {

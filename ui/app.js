@@ -9,7 +9,6 @@ const IDLE_MS = 2000;
 const LIVE_LAG = 1.5;
 const RELOAD_GROWTH = 300000;
 const RETRY_MS = 3000;
-const LOW_DISK = 5e9;
 const NOTICE_MS = 5000;
 const CONTROL_REPEAT_MS = 4000;
 
@@ -249,11 +248,8 @@ function renderNotes() {
   const set = currentSet();
   const b = base();
   noteItems = st.notes
-    .filter((n) => set && n.set === set.id)
-    .map((n) => {
-      const peer = st.peers.find((p) => p.id === n.from);
-      return { id: n.id, mine: n.from === "me", m: (n.at_us - ((peer && peer.offset_us) || 0) - b) / 1e6, who: n.from === "me" ? "You" : n.who, text: n.text };
-    })
+    .filter((n) => set && (set.notes || []).includes(n.key))
+    .map((n) => ({ id: n.id, mine: n.mine, m: (n.local_us - b) / 1e6, who: n.who, text: n.text }))
     .sort((x, y) => x.m - y.m);
   const sig = JSON.stringify(noteItems) + Math.round(total());
   if (sig === noteSig || $("notelist").querySelector("input")) return;
@@ -326,11 +322,12 @@ function renderSide() {
   $("cancelinvite").hidden = !st.invites;
   $("setlist").replaceChildren(...st.sets.map((s) => {
     const names = s.players.map((p) => nameOf(p.key)).join(", ");
-    const notes = st.notes.filter((n) => n.set === s.id).length;
+    const notes = s.notes.length;
     const cur = currentSet();
     return el("button", { className: "set" + (cur && cur.id === s.id ? " sel" : ""), onclick: () => { selected = s.id; resetPlayback(); } },
       el("div", { className: "t" }, setTitle(s.id), s.live ? el("span", { className: "live-tag", textContent: "LIVE" }) : ""),
-      el("div", { className: "p", textContent: names + (notes ? `, ${notes} notes` : "") }));
+      el("div", { className: "p", textContent: names + (notes ? `, ${notes} notes` : "") }),
+      el("div", { className: "p", textContent: s.status }));
   }));
   const rooms = st.rooms.map((r) => el("div", { className: "roomrow" + (r.active ? " active" : "") },
     el("span", { textContent: `${r.name} (${r.members})` }),
@@ -356,7 +353,7 @@ async function refresh() {
   if (document.activeElement !== $("limit")) $("limit").value = st.limit_mbps || "";
   if (document.activeElement !== $("keepdays")) $("keepdays").value = st.keep_days || "";
   if (document.activeElement !== $("proc")) $("proc").value = st.audio_process;
-  const warnings = [st.notice, st.ffmpeg, st.free_bytes && st.free_bytes < LOW_DISK ? `Low disk space: ${gb(st.free_bytes)} free` : ""].filter(Boolean);
+  const warnings = [st.notice, st.ffmpeg, st.disk.low ? `Low disk space: ${gb(st.disk.free)} free` : ""].filter(Boolean);
   if (warnings.length) { $("notice").textContent = warnings.join(" "); $("notice").hidden = false; }
   else if (!flashing) $("notice").hidden = true;
   $("rec").textContent = st.recording ? "Stop" : "Record";
@@ -552,7 +549,7 @@ $("timeline").onclick = (e) => {
 $("noteform").onsubmit = (e) => {
   e.preventDefault();
   const set = currentSet();
-  if (set) invoke("add_note", { text: $("note").value, atUs: wallOf(nowM()), set: set.id });
+  if (set) invoke("add_note", { text: $("note").value, atUs: wallOf(nowM()) });
   $("note").value = "";
   $("note").blur();
 };

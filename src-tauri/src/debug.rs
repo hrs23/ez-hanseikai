@@ -104,6 +104,22 @@ pub fn text(core: &Core) -> String {
             }
         }
     }
+    let room = core.active_room_id();
+    let logs = crate::room::logs(core, &room);
+    let mut notes = Vec::new();
+    for set in crate::room::sets_json(core, &room, &logs, &mut notes) {
+        out.push_str(&format!("set {} {}\n", set["id"].as_str().unwrap_or_default(), set["status"].as_str().unwrap_or_default()));
+        for p in set["players"].as_array().into_iter().flatten() {
+            out.push_str(&format!(
+                "  {} have {} of {:?} B sha256 {} verified by {}\n",
+                p["owner"].as_str().unwrap_or_default().chars().take(10).collect::<String>(),
+                p["size"],
+                p["total"].as_u64(),
+                p["sha256"].as_str().unwrap_or("unknown"),
+                p["verified_by"].as_array().into_iter().flatten().filter_map(|k| k.as_str()).map(|k| k.chars().take(10).collect::<String>()).collect::<Vec<_>>().join(", ")
+            ));
+        }
+    }
     out.push_str("events\n");
     for line in core.events.lock().unwrap().iter() {
         out.push_str(&format!("  {line}\n"));
