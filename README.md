@@ -12,6 +12,28 @@ Install the setup exe, start the app, copy your ID to the others, paste each of 
 
 The app records the primary monitor and, if you pick a process in "Game sound from", that process's sound. It only captures; it never touches the game. Recordings and logs are in `%APPDATA%\dev.ez-hanseikai.app`. Network details and "Save report" are under Network.
 
+## Security
+
+- What is shared: your recording of the whole main screen (and the chosen game's sound), your notes and your display name go to every peer you add, and only to them. Notifications or chats visible on screen are recorded too. Nothing goes to a server; recordings stay on the players' PCs.
+- IDs: your ID is the public half of a key pair that the app makes on first start. Only peers whose IDs you added can connect, and each connection is encrypted and tied to that key. Sharing your ID alone gives nobody access; the other person must add yours too. Removing a peer closes its connection at once.
+- The installer and the app are unsigned, so Windows SmartScreen warns. Updates are signed and checked before they are installed. The app never touches the game: it only captures the screen and sound.
+
+## Where files are stored and how to uninstall
+
+Everything the app writes is in `%LOCALAPPDATA%\dev.ez-hanseikai.app` (older versions used `%APPDATA%`; the app moves that data on first start). The Files section of the app shows the folder, the space used and the free space, and opens the folder.
+
+- `key.bin`: your identity key. Keep it private; it is never sent anywhere. Deleting it changes your ID.
+- `peers.txt`, `settings.json`: the peer list and your display name.
+- `log.bin` and `rec-*.mp4`: your event log and recordings. `peer\`: what other players sent you.
+- `ffmpeg.exe`: the video tool, downloaded on first run.
+- `log.txt`, `report.txt`, `id.txt`, `version.txt`: logs and small status files.
+
+To uninstall, use Settings > Apps > Installed apps, or `uninstall.exe` in `%LOCALAPPDATA%\EZ Hanseikai`. The uninstaller removes the app, its Start menu entry and its shortcut and closes a running copy. Your data stays by default, so reinstalling keeps your ID; to remove it too, tick the uninstaller's option to delete the application data (this also deletes the identity key and recordings), or use Reset in the app's Files section first.
+
+Files > Reset has two levels: settings and cache (keeps recordings and your ID), and everything (needs typing RESET; recordings and the ID cannot be recovered). If the previous start did not finish, or the key cannot be read, the app shows a recovery screen with the folder, a report and a reset instead of failing; it never deletes or overwrites `key.bin` by itself.
+
+To roll back after a bad update, uninstall without deleting the data, then install the previous version from GitHub Releases. File formats have not changed between 0.1.x versions, so older versions read newer data; a later format change would be noted in the release notes.
+
 ## Build
 
 On Windows with Node.js, Rust (MSVC), the Visual Studio C++ Build Tools and an ffmpeg with NVENC, AMF, QSV and libx264 in PATH:

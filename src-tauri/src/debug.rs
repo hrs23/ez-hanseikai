@@ -151,6 +151,10 @@ pub fn report(core: &Core, include_addresses: bool, check: &str) -> std::io::Res
     let mut out = String::new();
     out.push_str(&format!("ez-hanseikai {} on {} {}\n", crate::VERSION, std::env::consts::OS, command_line("cmd", &["/c", "ver"])));
     out.push_str(&format!("gpu {}\n", command_line("powershell", &["-NoProfile", "-Command", "(Get-CimInstance Win32_VideoController).Name -join ', '"])));
+    out.push_str(&format!("previous version {}\n", if core.previous_version.is_empty() { "none" } else { &core.previous_version }));
+    if include_addresses {
+        out.push_str(&format!("name {}\n", core.name.lock().unwrap()));
+    }
     out.push_str(&format!("encoder {}\n", crate::record::encoder()));
     out.push_str(&format!("ffmpeg {}\n", command_line(&crate::record::ffmpeg().to_string_lossy(), &["-version"]).lines().next().unwrap_or("")));
     out.push_str(&format!("iroh {}\n\n", "1.3.0"));

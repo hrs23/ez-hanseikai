@@ -1,12 +1,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod check;
+mod data;
 mod debug;
 mod log;
 mod net;
 mod record;
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -27,8 +29,13 @@ pub fn short(id: &EndpointId) -> String {
     id.to_string().chars().take(10).collect()
 }
 
+pub fn clean_name(raw: &str) -> String {
+    raw.chars().filter(|c| !c.is_control()).collect::<String>().trim().chars().take(24).collect::<String>().trim().to_string()
+}
+
 pub struct Peer {
     pub id: EndpointId,
+    pub name: String,
     pub conn: Option<Connection>,
     pub incoming: Option<Connection>,
     pub offset_us: Option<i64>,
@@ -41,6 +48,11 @@ pub struct Core {
     pub ep: Endpoint,
     pub app: AppHandle,
     pub peers: Mutex<Vec<Peer>>,
+    pub name: Mutex<String>,
+    pub recovery: Mutex<Option<String>>,
+    pub notice: Mutex<String>,
+    pub free_bytes: AtomicU64,
+    pub previous_version: String,
     pub ffmpeg_status: Mutex<String>,
     pub events: Mutex<Vec<String>>,
     pub started: Instant,
@@ -106,7 +118,7 @@ fn add_peer_id(core: &Arc<Core>, id: &str) -> Result<(), String> {
     if core.has_peer(&id) {
         return Ok(());
     }
-    core.peers.lock().unwrap().push(Peer { id, conn: None, incoming: None, offset_us: None, failures: 0, info: None });
+    core.peers.lock().unwrap().push(Peer { id, name: String::new(), conn: None, incoming: None, offset_us: None, failures: 0, info: None });
     core.save_peers();
     tauri::async_runtime::spawn(net::dial_loop(core.clone(), id));
     Ok(())
@@ -157,6 +169,11 @@ async fn list_processes() -> Vec<String> {
 
 #[tauri::command]
 async fn state(core: State<'_, Arc<Core>>) -> Result<Value, String> {
+    let free = core.free_bytes.load(Ordering::Relaxed);
+    if free > 0 && free < (1 << 30) && core.recorder.lock().unwrap().is_some() {
+        stop_recording_now(&core);
+        *core.notice.lock().unwrap() = "Recording stopped: the disk is almost full.".into();
+    }
     let dead = core.recorder.lock().unwrap().as_mut().is_some_and(|r| r.is_dead());
     if dead {
         tracing::warn!("recording stopped on its own");
@@ -171,22 +188,22 @@ async fn state(core: State<'_, Arc<Core>>) -> Result<Value, String> {
         .filter(|r| r["k"] == "note")
         .map(|r| json!({"who": "me", "t_us": r["t_us"], "text": r["text"]}))
         .collect();
-    let snapshot: Vec<(EndpointId, Option<Connection>, Option<Connection>, Option<i64>, Option<(String, u32)>, u32)> = core
+    let snapshot: Vec<(EndpointId, String, Option<Connection>, Option<Connection>, Option<i64>, Option<(String, u32)>, u32)> = core
         .peers
         .lock()
         .unwrap()
         .iter()
-        .map(|p| (p.id, p.conn.clone(), p.incoming.clone(), p.offset_us, p.info.clone(), p.failures))
+        .map(|p| (p.id, p.name.clone(), p.conn.clone(), p.incoming.clone(), p.offset_us, p.info.clone(), p.failures))
         .collect();
     let mut peers = Vec::new();
-    for (id, conn, incoming, offset_us, info, failures) in snapshot {
+    for (id, name, conn, incoming, offset_us, info, failures) in snapshot {
         let theirs = log::read(&core.peer_dir(&id).join("log.bin"));
         let rec = latest_rec(&theirs).map(|(name, start_us)| {
             let path = core.peer_dir(&id).join(&name);
             json!({"path": path, "start_us": start_us, "size": size(path.clone())})
         });
         for r in theirs.iter().filter(|r| r["k"] == "note") {
-            notes.push(json!({"who": short(&id), "t_us": r["t_us"], "text": r["text"]}));
+            notes.push(json!({"who": if name.is_empty() { short(&id) } else { format!("{name} ({})", short(&id)) }, "t_us": r["t_us"], "text": r["text"]}));
         }
         let alive = conn.iter().chain(incoming.iter()).find(|c| c.close_reason().is_none());
         let message = info.as_ref().filter(|(_, proto)| *proto != PROTOCOL).map(|(version, proto)| {
@@ -195,6 +212,7 @@ async fn state(core: State<'_, Arc<Core>>) -> Result<Value, String> {
         peers.push(json!({
             "id": id.to_string(),
             "short": short(&id),
+            "name": name,
             "connected": alive.is_some(),
             "path": alive.map(|c| path_kind(c).0),
             "rtt_ms": alive.map(|c| path_kind(c).1),
@@ -210,6 +228,11 @@ async fn state(core: State<'_, Arc<Core>>) -> Result<Value, String> {
         "version": VERSION,
         "ffmpeg": core.ffmpeg_status.lock().unwrap().clone(),
         "id": core.ep.id().to_string(),
+        "name": core.name.lock().unwrap().clone(),
+        "recovery": core.recovery.lock().unwrap().clone(),
+        "notice": core.notice.lock().unwrap().clone(),
+        "free_bytes": free,
+        "previous_version": core.previous_version,
         "recording": core.recorder.lock().unwrap().is_some(),
         "mine": mine,
         "peers": peers,
@@ -274,9 +297,63 @@ fn add_peer(core: State<Arc<Core>>, id: String) -> Result<(), String> {
 #[tauri::command]
 fn remove_peer(core: State<Arc<Core>>, id: String) {
     if let Ok(id) = id.parse::<EndpointId>() {
-        core.peers.lock().unwrap().retain(|p| p.id != id);
+        let removed: Vec<Peer> = {
+            let mut peers = core.peers.lock().unwrap();
+            let (gone, kept): (Vec<Peer>, Vec<Peer>) = std::mem::take(&mut *peers).into_iter().partition(|p| p.id == id);
+            *peers = kept;
+            gone
+        };
+        for peer in removed {
+            for conn in peer.conn.iter().chain(peer.incoming.iter()) {
+                conn.close(2u32.into(), b"removed");
+            }
+        }
         core.save_peers();
     }
+}
+
+#[tauri::command]
+fn set_name(core: State<Arc<Core>>, name: String) {
+    let name = clean_name(&name);
+    let _ = std::fs::write(core.dir.join("settings.json"), json!({"name": name}).to_string());
+    *core.name.lock().unwrap() = name;
+}
+
+#[tauri::command]
+fn open_data_folder(core: State<Arc<Core>>) {
+    data::open_folder(&core.dir);
+}
+
+#[tauri::command]
+async fn data_info(core: State<'_, Arc<Core>>) -> Result<Value, String> {
+    let dir = core.dir.clone();
+    let used = tauri::async_runtime::spawn_blocking({
+        let dir = dir.clone();
+        move || data::used_bytes(&dir)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(json!({"dir": dir, "used_bytes": used, "free_bytes": core.free_bytes.load(Ordering::Relaxed)}))
+}
+
+#[tauri::command]
+fn reset(core: State<Arc<Core>>, everything: bool, confirm: String) -> Result<(), String> {
+    if everything && confirm != "RESET" {
+        return Err("Type RESET to confirm.".into());
+    }
+    stop_recording_now(&core);
+    data::reset(&core.dir, everything);
+    core.app.restart()
+}
+
+#[tauri::command]
+fn ui_ready(core: State<Arc<Core>>) {
+    let _ = std::fs::remove_file(core.dir.join("running.marker"));
+}
+
+#[tauri::command]
+fn dismiss_recovery(core: State<Arc<Core>>) {
+    *core.recovery.lock().unwrap() = None;
 }
 
 #[tauri::command]
@@ -293,20 +370,34 @@ async fn control(core: State<'_, Arc<Core>>, cmd: String, wall_us: i64) -> Resul
 async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
     let dir = match std::env::var_os("EZH_DIR") {
         Some(dir) => PathBuf::from(dir),
-        None => app.path().app_data_dir()?,
+        None => {
+            let dir = app.path().app_local_data_dir()?;
+            data::migrate(&app.path().app_data_dir()?, &dir);
+            dir
+        }
     };
     std::fs::create_dir_all(dir.join("peer"))?;
     debug::init(&dir);
     record::set_data_dir(dir.clone());
     log::repair(&dir.join("log.bin"));
+    let marker = dir.join("running.marker");
+    let mut recovery = marker.exists().then(|| "The app did not start properly last time.".to_string());
+    let _ = std::fs::write(&marker, VERSION);
+    let previous_version = std::fs::read_to_string(dir.join("version.txt")).unwrap_or_default().trim().to_string();
+    let _ = std::fs::write(dir.join("version.txt"), VERSION);
     let key_path = dir.join("key.bin");
-    let key = match std::fs::read(&key_path).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()) {
-        Some(bytes) => SecretKey::from_bytes(&bytes),
-        None => {
-            let key = SecretKey::generate();
-            std::fs::write(&key_path, key.to_bytes())?;
-            key
+    let key = if key_path.exists() {
+        match std::fs::read(&key_path).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()) {
+            Some(bytes) => SecretKey::from_bytes(&bytes),
+            None => {
+                recovery = Some("The identity key file could not be read. It was left untouched; continuing uses a temporary ID.".into());
+                SecretKey::generate()
+            }
         }
+    } else {
+        let key = SecretKey::generate();
+        std::fs::write(&key_path, key.to_bytes())?;
+        key
     };
     let ep = Endpoint::builder(presets::N0).secret_key(key).alpns(vec![ALPN.to_vec()]).bind().await?;
     std::fs::write(dir.join("id.txt"), ep.id().to_string())?;
@@ -315,11 +406,21 @@ async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
         .lines()
         .filter_map(|l| l.trim().parse().ok())
         .collect();
+    let name = std::fs::read_to_string(dir.join("settings.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|v| v["name"].as_str().map(clean_name))
+        .unwrap_or_else(|| "player".into());
     Ok(Arc::new(Core {
         dir,
         ep,
         app,
-        peers: Mutex::new(saved.iter().map(|id| Peer { id: *id, conn: None, incoming: None, offset_us: None, failures: 0, info: None }).collect()),
+        peers: Mutex::new(saved.iter().map(|id| Peer { id: *id, name: String::new(), conn: None, incoming: None, offset_us: None, failures: 0, info: None }).collect()),
+        name: Mutex::new(name),
+        recovery: Mutex::new(recovery),
+        notice: Mutex::new(String::new()),
+        free_bytes: AtomicU64::new(0),
+        previous_version,
         ffmpeg_status: Mutex::new(String::new()),
         events: Mutex::new(Vec::new()),
         started: Instant::now(),
@@ -339,6 +440,11 @@ fn main() {
             for id in saved {
                 tauri::async_runtime::spawn(net::dial_loop(core.clone(), id));
             }
+            let free_core = core.clone();
+            std::thread::spawn(move || loop {
+                free_core.free_bytes.store(data::free_bytes(&free_core.dir), Ordering::Relaxed);
+                std::thread::sleep(Duration::from_secs(20));
+            });
             let setup_core = core.clone();
             std::thread::spawn(move || {
                 if !record::ffmpeg_present() {
@@ -377,7 +483,7 @@ fn main() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug_text, save_report, start_recording, stop_recording, add_peer, remove_peer, add_note, control])
+        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug_text, save_report, start_recording, stop_recording, add_peer, remove_peer, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_note, control])
         .run(tauri::generate_context!())
         .expect("failed to run");
 }

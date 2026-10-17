@@ -47,8 +47,13 @@ async fn handle(core: Arc<Core>, from: EndpointId, mut send: SendStream, mut rec
         Some("hello") => {
             let version = req["app"].as_str().unwrap_or("unknown").to_string();
             let proto = req["proto"].as_u64().unwrap_or(0) as u32;
-            core.update_peer(&from, |p| p.info = Some((version, proto)));
-            send.write_all(&serde_json::to_vec(&json!({"app": VERSION, "proto": PROTOCOL}))?).await?;
+            let name = crate::clean_name(req["name"].as_str().unwrap_or_default());
+            core.update_peer(&from, |p| {
+                p.info = Some((version, proto));
+                p.name = name;
+            });
+            let own = core.name.lock().unwrap().clone();
+            send.write_all(&serde_json::to_vec(&json!({"app": VERSION, "proto": PROTOCOL, "name": own}))?).await?;
         }
         Some("ping") => send.write_all(&now_us().to_le_bytes()).await?,
         Some("ctl") => {
@@ -130,10 +135,27 @@ async fn measure(core: &Core, id: &EndpointId, conn: &Connection, samples: &mut 
     Ok(())
 }
 
+async fn hello(core: &Core, id: &EndpointId, conn: &Connection) -> bool {
+    let own = core.name.lock().unwrap().clone();
+    let reply = request(conn, &json!({"t": "hello", "app": VERSION, "proto": PROTOCOL, "name": own})).await;
+    let Ok(reply) = reply.and_then(|r| Ok(serde_json::from_slice::<Value>(&r)?)) else { return true };
+    let proto = reply["proto"].as_u64().unwrap_or(0) as u32;
+    let version = reply["app"].as_str().unwrap_or("unknown").to_string();
+    let name = crate::clean_name(reply["name"].as_str().unwrap_or_default());
+    core.update_peer(id, |p| {
+        p.info = Some((version, proto));
+        p.name = name;
+    });
+    proto == PROTOCOL
+}
+
 async fn sync(core: &Arc<Core>, id: &EndpointId, conn: &Connection) -> Result<()> {
     let mut samples = Vec::new();
     let mut tick = 0u32;
     loop {
+        if tick % 5 == 4 {
+            hello(core, id, conn).await;
+        }
         if tick < 5 || tick % 30 == 0 {
             measure(core, id, conn, &mut samples).await?;
         }
@@ -169,17 +191,10 @@ pub async fn dial_loop(core: Arc<Core>, id: EndpointId) {
             p.failures = 0;
         });
         watch_paths(&core, &conn, format!("{} outgoing", short(&id)));
-        let hello = request(&conn, &json!({"t": "hello", "app": VERSION, "proto": PROTOCOL})).await;
-        let mut compatible = true;
-        if let Ok(reply) = hello.and_then(|r| Ok(serde_json::from_slice::<Value>(&r)?)) {
-            let proto = reply["proto"].as_u64().unwrap_or(0) as u32;
-            let version = reply["app"].as_str().unwrap_or("unknown").to_string();
-            core.update_peer(&id, |p| p.info = Some((version, proto)));
-            if proto != PROTOCOL {
-                debug::event(&core, dialing, format!("{} protocol {proto} differs from ours {PROTOCOL}", short(&id)));
-                sleep(Duration::from_secs(10)).await;
-                compatible = false;
-            }
+        let compatible = hello(&core, &id, &conn).await;
+        if !compatible {
+            debug::event(&core, dialing, format!("{} protocol differs from ours {PROTOCOL}", short(&id)));
+            sleep(Duration::from_secs(10)).await;
         }
         if compatible {
             let _ = sync(&core, &id, &conn).await;

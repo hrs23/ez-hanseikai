@@ -2,225 +2,86 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>EZ Hanseikai</title>
-<style>
-  body { font-family: system-ui, sans-serif; background: #111; color: #eee; margin: 0; padding: 12px; }
-  input, button, select { background: #222; color: #eee; border: 1px solid #444; padding: 4px 8px; font: inherit; }
-  button { cursor: pointer; }
-  .row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
-  .videos { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 8px; }
-  video { width: 100%; background: #000; }
-  .id { width: 24em; font-family: monospace; }
-  #status { color: #8c8; }
-  .ok { color: #8c8; } .warn { color: #ec8; } .fail { color: #e88; } .info { color: #999; }
-  #notes { color: #aaa; font-size: 13px; }
-  #debug { color: #8c8; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
-</style>
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div class="row"><b>EZ Hanseikai</b> <span id="version"></span> <span id="update"></span><button id="checkupdate">Check for updates</button> <span id="ffmpeg" class="warn"></span></div>
-<div class="row">
-  <span>Your ID</span><input class="id" id="id" readonly><button id="copy">Copy</button>
+<header>
+  <img src="logo.svg" alt="">
+  <b id="appname"></b><span id="version" class="muted"></span>
+  <span id="update" class="small"></span>
+  <span id="ffmpeg" class="warn small"></span>
+  <span class="spacer"></span>
+  <button id="checkupdate">Check for updates</button>
+</header>
+<div id="app">
+  <aside>
+    <section>
+      <h3>You</h3>
+      <div class="row"><input id="name" maxlength="24" placeholder="name"></div>
+      <div class="row"><input id="id" class="id" readonly><button id="copy">Copy</button></div>
+    </section>
+    <section>
+      <h3>Peers</h3>
+      <div id="peers"></div>
+      <div class="row"><input id="peer" class="id" placeholder="paste an ID"><button id="set">Add</button></div>
+    </section>
+    <section>
+      <h3>Record</h3>
+      <div class="row"><select id="proc" title="Game sound from"></select></div>
+      <div class="row"><button id="rec" class="primary">Record</button><span id="recstate" class="small muted"></span></div>
+      <div class="small muted">Records your whole main screen and shares it with everyone you add.</div>
+      <div id="notice" class="small warn"></div>
+    </section>
+    <section>
+      <h3>Notes</h3>
+      <div class="row"><input id="note" placeholder="note"><button id="addnote">Add</button></div>
+      <div id="notes"></div>
+    </section>
+    <details><summary id="checksummary">Check</summary>
+      <div class="row"><button id="runcheck">Run check</button></div>
+      <div id="checks" class="small"></div>
+    </details>
+    <details><summary>Network</summary>
+      <div class="row"><button id="report">Save report</button><label class="small"><input type="checkbox" id="addr"> include addresses and name</label></div>
+      <div id="reportpath" class="small muted"></div>
+      <pre id="debug"></pre>
+    </details>
+    <details><summary>Files</summary>
+      <div id="datainfo" class="small muted"></div>
+      <div class="row"><button id="openfolder">Open data folder</button><button id="resetopen">Reset...</button></div>
+      <div id="resetpanel" class="panel small" hidden>
+        <label><input type="radio" name="level" value="settings" checked> Reset settings and cache: deletes the downloaded video tool, logs, reports, the peer list and your name. Keeps recordings and your ID.</label><br>
+        <label><input type="radio" name="level" value="all"> Reset everything: also deletes all recordings and your identity key. Your ID will change. This cannot be undone.</label>
+        <div class="row" style="margin-top:8px"><input id="confirm" placeholder="type RESET" hidden></div>
+        <div class="row"><button id="openfolder2">Open data folder first</button><button id="doreset" class="danger">Reset</button><button id="resetcancel">Cancel</button></div>
+        <div id="reseterr" class="fail"></div>
+      </div>
+    </details>
+  </aside>
+  <main>
+    <div id="videos" class="videos"></div>
+    <div id="empty" class="empty">Add a peer and record. Everyone's recordings appear here.</div>
+    <div class="bar">
+      <button id="play">Play</button><button id="pause">Pause</button>
+      <input id="seek" type="range" min="0" max="0" step="0.1" value="0">
+      <span id="time" class="small muted"></span>
+    </div>
+  </main>
 </div>
-<div class="row">
-  <span>Add peer</span><input class="id" id="peer" placeholder="paste the other person's ID"><button id="set">Connect</button>
+<div id="recovery" hidden>
+  <div class="box">
+    <p id="recoverymsg"></p>
+    <div class="row">
+      <button id="rfolder">Open data folder</button>
+      <button id="rreport">Save report</button>
+      <button id="rreset" class="danger">Reset settings and cache</button>
+      <button id="rcontinue" class="primary">Continue</button>
+    </div>
+    <div id="rinfo" class="small muted"></div>
+  </div>
 </div>
-<div id="peers"></div>
-<div class="row">
-  <span>Game sound from</span><select id="proc"></select>
-  <button id="rec">Record</button><span id="recstate"></span>
-</div>
-<div class="row">
-  <button id="play">Play</button><button id="pause">Pause</button>
-  <input id="seek" type="range" min="0" max="0" step="0.1" value="0" style="width:40%">
-  <span id="time"></span>
-  
-</div>
-<div class="videos" id="videos"></div>
-<div class="row"><input id="note" placeholder="note" size="40"><button id="addnote">Add note</button></div>
-<div id="notes"></div>
-<details><summary id="checksummary">Check</summary>
-  <div class="row"><button id="runcheck">Run check</button></div>
-  <div id="checks"></div>
-</details>
-<details><summary>Network</summary>
-  <div class="row"><button id="report">Save report</button><label><input type="checkbox" id="addr"> include addresses</label><span id="reportpath"></span></div>
-  <pre id="debug"></pre>
-</details>
-<script>
-const { invoke, convertFileSrc } = window.__TAURI__.core;
-const $ = (id) => document.getElementById(id);
-let st = null;
-const live = new Set();
-const sec = (us) => us / 1e6;
-const tiles = {};
-
-function tile(key, title) {
-  if (tiles[key]) return tiles[key];
-  const box = document.createElement("div");
-  const head = document.createElement("div");
-  const video = document.createElement("video");
-  video.muted = key === "me";
-  head.textContent = title + " ";
-  if (key !== "me") {
-    const button = document.createElement("button");
-    button.textContent = "Live";
-    button.onclick = () => { live.add(key); if (video.duration) { video.currentTime = Math.max(0, video.duration - 1.5); video.play(); } };
-    head.append(button);
-  }
-  box.append(head, video);
-  $("videos").append(box);
-  return (tiles[key] = { box, video, head });
-}
-const a = tile("me", "You").video;
-
-function delta(peer) {
-  if (!st || !st.mine || !peer.rec) return 0;
-  return sec(st.mine.start_us + (peer.offset_us || 0) - peer.rec.start_us);
-}
-function reload(v, rec, mode) {
-  const t = v.currentTime;
-  v.dataset.size = rec.size;
-  v.dataset.retry = Date.now();
-  v.load();
-  v.onloadedmetadata = () => {
-    if (mode === "live") { v.currentTime = Math.max(0, v.duration - 1.5); v.play(); }
-    else v.currentTime = t;
-  };
-}
-function source(v, rec, isLive) {
-  if (!rec || !rec.size) return;
-  const src = convertFileSrc(rec.path);
-  if (v.dataset.src !== src) { v.dataset.src = src; v.src = src; v.dataset.size = rec.size; return; }
-  const loaded = Number(v.dataset.size);
-  const settled = v.dataset.seen === String(rec.size);
-  v.dataset.seen = rec.size;
-  const stuck = v.error && Date.now() - Number(v.dataset.retry || 0) > 3000;
-  const grown = rec.size > loaded + 300000 && (v.paused || isLive);
-  const final = settled && rec.size !== loaded && v.paused;
-  if (stuck || grown || final) reload(v, rec, isLive ? "live" : "");
-}
-function peerVideos() {
-  return st.peers.filter((p) => tiles[p.id]).map((p) => ({ peer: p, video: tiles[p.id].video }));
-}
-function seekTo(pos) {
-  a.currentTime = Math.max(0, pos);
-  for (const { peer, video } of peerVideos()) video.currentTime = Math.max(0, pos + delta(peer));
-}
-function wallOf(pos) { return Math.round(st.mine.start_us + pos * 1e6); }
-function posOf(wall, from) {
-  const peer = st.peers.find((p) => p.id === from);
-  return sec(wall - ((peer && peer.offset_us) || 0) - st.mine.start_us);
-}
-function apply(cmd, pos) {
-  live.clear();
-  const all = [a, ...peerVideos().map((x) => x.video)];
-  if (cmd === "play") { seekTo(pos); all.forEach((v) => v.play()); }
-  else if (cmd === "pause") { all.forEach((v) => v.pause()); seekTo(pos); }
-  else if (cmd === "seek") seekTo(pos);
-}
-function send(cmd, pos) {
-  apply(cmd, pos);
-  if (st && st.mine) invoke("control", { cmd, wallUs: wallOf(pos) }).catch(() => {});
-}
-window.__TAURI__.event.listen("control", (e) => {
-  if (st && st.mine) apply(e.payload.cmd, posOf(e.payload.wall_us, e.payload.from));
-});
-$("play").onclick = () => send("play", a.currentTime);
-$("pause").onclick = () => send("pause", a.currentTime);
-$("seek").onchange = (e) => send("seek", parseFloat(e.target.value));
-$("copy").onclick = () => navigator.clipboard.writeText($("id").value);
-$("set").onclick = () => invoke("add_peer", { id: $("peer").value }).then(() => { $("peer").value = ""; }).catch((e) => alert(e));
-$("rec").onclick = () => st && st.recording
-  ? invoke("stop_recording")
-  : invoke("start_recording", { audioProcess: $("proc").value }).catch((e) => alert(e));
-$("addnote").onclick = () => { invoke("add_note", { text: $("note").value }); $("note").value = ""; };
-$("report").onclick = () => invoke("save_report", { includeAddresses: $("addr").checked, audioProcess: $("proc").value }).then((p) => { $("reportpath").textContent = p; }).catch((e) => alert(e));
-a.ontimeupdate = () => {
-  $("seek").value = a.currentTime;
-  $("time").textContent = a.currentTime.toFixed(1) + " s";
-  if (a.paused) return;
-  for (const { peer, video } of peerVideos()) {
-    if (!video.paused && Math.abs(video.currentTime - (a.currentTime + delta(peer))) > 0.4) video.currentTime = Math.max(0, a.currentTime + delta(peer));
-  }
-};
-async function refresh() {
-  st = await invoke("state");
-  $("id").value = st.id;
-  $("version").textContent = "v" + st.version;
-  $("ffmpeg").textContent = st.ffmpeg;
-  $("rec").textContent = st.recording ? "Stop" : "Record";
-  const rows = document.createDocumentFragment();
-  for (const p of st.peers) {
-    const row = document.createElement("div");
-    row.className = "row";
-    const state = p.connected ? `${p.path === "direct" ? "direct" : "via relay"}, ${p.rtt_ms} ms` : p.failures > 2 ? "not reachable" : "connecting...";
-    const label = document.createElement("span");
-    label.textContent = `${p.short}: ${state}`;
-    label.className = p.connected ? "ok" : "warn";
-    const warn = document.createElement("span");
-    warn.textContent = p.message || (!p.connected && p.failures > 2 ? "Is their app open? If Windows asked about the firewall, it must be allowed." : "");
-    warn.className = "fail";
-    const remove = document.createElement("button");
-    remove.textContent = "Remove";
-    remove.onclick = () => invoke("remove_peer", { id: p.id });
-    row.append(label, warn, remove);
-    rows.append(row);
-  }
-  $("peers").replaceChildren(rows);
-  $("recstate").textContent = st.mine ? `you ${(st.mine.size / 1e6).toFixed(1)} MB` : "";
-  source(a, st.mine, false);
-  const ids = new Set(st.peers.map((p) => p.id));
-  for (const key of Object.keys(tiles)) if (key !== "me" && !ids.has(key)) { tiles[key].box.remove(); delete tiles[key]; }
-  for (const p of st.peers) source(tile(p.id, p.short).video, p.rec, live.has(p.id));
-  if (a.duration) $("seek").max = a.duration;
-  $("notes").innerHTML = st.notes.map((n) => `<div>${n.who}: ${n.text.replace(/</g, "&lt;")}</div>`).join("");
-}
-async function refreshDebug() {
-  if ($("debug").parentElement.open) $("debug").textContent = await invoke("debug_text");
-}
-let pending = null;
-async function checkUpdate(manual) {
-  const text = $("update");
-  try {
-    pending = await window.__TAURI__.updater.check();
-  } catch (e) {
-    if (manual) text.textContent = "update check failed: " + e;
-    return;
-  }
-  if (!pending) { if (manual) text.textContent = "up to date"; return; }
-  text.innerHTML = "";
-  const button = document.createElement("button");
-  button.textContent = "Update to " + pending.version;
-  button.onclick = async () => {
-    button.disabled = true;
-    text.textContent = "installing " + pending.version + "; the app will restart";
-    await pending.downloadAndInstall().catch((e) => { text.textContent = "update failed: " + e; });
-  };
-  text.append("update available: ", button, " ");
-}
-$("checkupdate").onclick = () => checkUpdate(true);
-setTimeout(() => checkUpdate(false), 4000);
-async function runCheck() {
-  $("checks").textContent = "checking...";
-  const lines = await invoke("check", { audioProcess: $("proc").value });
-  const bad = lines.filter((l) => l.level === "fail").length;
-  const warn = lines.filter((l) => l.level === "warn").length;
-  $("checksummary").textContent = bad ? `Check: ${bad} problem(s)` : warn ? `Check: ${warn} warning(s)` : "Check: OK";
-  $("checks").innerHTML = lines.map((l) => `<div class="${l.level}">${{ ok: "OK", warn: "WARN", fail: "FAIL", info: "" }[l.level]} ${l.text.replace(/</g, "&lt;")}</div>`).join("");
-}
-$("runcheck").onclick = () => runCheck().catch((e) => alert(e));
-async function fillProcesses() {
-  const names = await invoke("list_processes");
-  const current = $("proc").value;
-  $("proc").innerHTML = '<option value="">(no game sound)</option>' + names.map((n) => `<option>${n}</option>`).join("");
-  $("proc").value = current || names.find((n) => /apex/i.test(n)) || "";
-}
-setInterval(() => refreshDebug().catch(() => {}), 2000);
-setInterval(() => refresh().catch(() => {}), 1000);
-refresh();
-fillProcesses().then(runCheck);
-$("proc").onfocus = fillProcesses;
-</script>
+<script src="app.js"></script>
 </body>
 </html>
