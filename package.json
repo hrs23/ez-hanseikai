@@ -4,6 +4,7 @@
   "version": "0.1.1",
   "license": "MIT OR Apache-2.0",
   "scripts": {
+    "tauri": "tauri",
     "dev": "tauri dev",
     "build": "tauri build"
   },
