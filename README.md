@@ -14,3 +14,7 @@ On Windows with Node.js, Rust (MSVC) and the Visual Studio C++ Build Tools:
 npm install
 npm run dev
 ```
+
+## License
+
+MIT or Apache-2.0, at your option.
