@@ -9,89 +9,112 @@
 <body>
 <header>
   <img src="logo.svg" alt="">
-  <b id="appname"></b><span id="version" class="muted small"></span>
+  <b id="appname"></b>
+  <button id="rec" class="primary">Record</button>
+  <span id="recinfo" class="small muted"></span>
   <span id="chips"></span>
   <span class="spacer"></span>
-  <span id="update" class="small"></span><span id="ffmpeg" class="warn small"></span>
-  <button id="rec2" class="primary">Record</button>
+  <span id="update" class="small"></span>
+  <button id="roombtn">Room</button>
   <button id="helpbtn" title="Shortcuts">?</button>
+  <button id="gearbtn" title="Settings" aria-label="Settings">&#9881;</button>
 </header>
-<details id="setup" open>
-  <summary>Setup</summary>
-  <div id="setupbody">
-    <section>
-      <h3>You</h3>
-      <div class="row"><input id="name" maxlength="24" placeholder="name"></div>
-      <div class="row"><input id="id" class="id" readonly><button id="copy">Copy</button></div>
-      <button id="checkupdate">Check for updates</button>
-    </section>
-    <section>
-      <h3>Peers</h3>
-      <div id="peers"></div>
-      <div class="row"><input id="peer" class="id" placeholder="paste an ID"><button id="set">Add</button></div>
-    </section>
-    <section>
-      <h3>Record</h3>
-      <div class="row"><select id="proc" title="Game sound from"></select></div>
-      <div class="row"><button id="rec" class="primary">Record</button><span id="recstate" class="small muted"></span></div>
-      <div class="small muted">Records your whole main screen and shares it with everyone you add.</div>
-      <div id="notice" class="small warn"></div>
-    </section>
-    <section>
-      <details class="fold"><summary id="checksummary">Check</summary>
-        <div class="row"><button id="runcheck">Run check</button></div>
-        <div id="checks" class="small"></div>
-      </details>
-      <details class="fold"><summary>Network</summary>
-        <div class="row"><button id="report">Save report</button><label class="small"><input type="checkbox" id="addr"> include addresses and name</label></div>
-        <div id="reportpath" class="small muted"></div>
-        <pre id="debug"></pre>
-      </details>
-      <details class="fold"><summary>Files</summary>
-        <div id="datainfo" class="small muted"></div>
-        <div class="row"><button id="openfolder">Open data folder</button><button id="resetopen">Reset...</button></div>
-        <div id="resetpanel" class="panel small" hidden>
-          <label><input type="radio" name="level" value="settings" checked> Reset settings and cache: deletes the downloaded video tool, logs, reports, the peer list and your name. Keeps recordings and your ID.</label><br>
-          <label><input type="radio" name="level" value="all"> Reset everything: also deletes all recordings and your identity key. Your ID will change. This cannot be undone.</label>
-          <div class="row" style="margin-top:8px"><input id="confirm" placeholder="type RESET" hidden></div>
-          <div class="row"><button id="openfolder2">Open data folder first</button><button id="doreset" class="danger">Reset</button><button id="resetcancel">Cancel</button></div>
-          <div id="reseterr" class="fail"></div>
-        </div>
-      </details>
-    </section>
-  </div>
-</details>
-<div id="review">
-  <div id="stage">
-    <div id="videos" class="videos"></div>
-    <div id="empty" class="empty">Add a peer and record. Everyone's recordings appear here.</div>
-  </div>
-  <aside id="notes">
-    <div id="notelist"></div>
-    <form id="noteform"><input id="note" placeholder="note at this time" autocomplete="off"><button class="primary">Add</button></form>
-  </aside>
+<div id="notice" class="notice" hidden></div>
+<div id="roompop" class="pop" hidden>
+  <div id="members"></div>
+  <div class="row"><button id="invite">Create invite</button><button id="rejoin" hidden>Rejoin</button><button id="leave" hidden>Leave</button></div>
+  <div class="row" id="invitebox" hidden><input id="code" class="id" readonly><button id="copycode">Copy</button></div>
+  <div class="row"><input id="joincode" class="id" placeholder="paste an invite"><button id="join">Join</button></div>
+  <div id="roomerr" class="small fail"></div>
 </div>
-<div id="transport">
-  <div id="timeline"><div class="track"></div><div class="fill"></div><div class="head"></div></div>
-  <div class="controls">
-    <button id="back" title="Back 5 s">-5</button>
-    <button id="play" class="primary">Play</button>
-    <button id="fwd" title="Forward 5 s">+5</button>
-    <span id="clock" class="muted"></span>
-    <select id="speed" title="Speed"><option value="0.5">0.5x</option><option value="1" selected>1x</option><option value="1.5">1.5x</option><option value="2">2x</option></select>
-    <input id="volume" type="range" min="0" max="1" step="0.05" value="1" title="Volume" style="width:90px">
-    <button id="live" title="Follow the newest part">Live</button>
-    <span id="who"></span>
-    <button id="undo" hidden>Undo seek</button>
+<aside id="gear" class="pop side" hidden>
+  <h3>You</h3>
+  <div class="row"><input id="name" maxlength="24" placeholder="name"></div>
+  <h3>Recording</h3>
+  <div class="row"><select id="proc" title="Game sound from"></select></div>
+  <label class="row"><input type="checkbox" id="share"> Share my recordings</label>
+  <div class="row"><input id="limit" type="number" min="0" step="1" placeholder="no limit"><span class="small muted">Mbit/s</span></div>
+  <h3>App</h3>
+  <div class="row"><button id="checkupdate">Check for updates</button><span id="version" class="small muted"></span></div>
+  <div class="row"><button id="opendebug">Debug page</button></div>
+</aside>
+<div id="reviewwrap">
+  <div id="review">
+    <div id="stage">
+      <div id="onboard" class="onboard">
+        <h2>Watch your team's screens together</h2>
+        <div class="row"><input id="name2" maxlength="24" placeholder="your name"></div>
+        <div class="row"><button id="invite2" class="primary">Create a room</button></div>
+        <div class="row"><input id="joincode2" class="id" placeholder="or paste an invite"><button id="join2">Join</button></div>
+        <div id="roomerr2" class="small fail"></div>
+        <div id="invitebox2" class="row" hidden><input id="code2" class="id" readonly><button id="copycode2">Copy</button></div>
+      </div>
+      <div id="videos" class="videos"></div>
+      <div id="empty" class="empty">Press Record. Everyone's recordings appear here.</div>
+    </div>
+    <aside id="notes">
+      <div id="notelist"></div>
+      <form id="noteform"><input id="note" placeholder="note at this time" autocomplete="off"><button class="primary">Add</button></form>
+    </aside>
+  </div>
+  <div id="transport">
+    <div id="timeline"><div class="track"></div><div class="fill"></div><div class="head"></div></div>
+    <div class="controls">
+      <button id="back" title="Back 5 s">-5</button>
+      <button id="play" class="primary">Play</button>
+      <button id="fwd" title="Forward 5 s">+5</button>
+      <span id="clock" class="muted"></span>
+      <select id="speed" title="Speed"><option value="0.5">0.5x</option><option value="0.75">0.75x</option><option value="1" selected>1x</option><option value="1.25">1.25x</option><option value="1.5">1.5x</option><option value="2">2x</option></select>
+      <input id="volume" type="range" min="0" max="1" step="0.05" value="1" title="Volume" style="width:90px">
+      <button id="live" title="Follow the newest part">Live</button>
+      <button id="full" title="Full screen">Full screen</button>
+      <span id="who"></span>
+      <button id="undo" hidden>Undo</button>
+    </div>
   </div>
 </div>
-<div id="helpbox" hidden>
-  <div><span>Play / pause</span><kbd>Space</kbd></div>
-  <div><span>Back / forward 5 s</span><kbd>&larr; &rarr;</kbd></div>
-  <div><span>All players</span><kbd>0</kbd></div>
-  <div><span>One player</span><kbd>1-9</kbd></div>
-  <div><span>Add a note</span><kbd>N</kbd></div>
+<div id="helpbox" class="pop" hidden>
+  <div><span>Play / pause</span><kbd>Space</kbd> <kbd>K</kbd></div>
+  <div><span>Back / forward 5 s (Shift 1 s)</span><kbd>&larr;</kbd> <kbd>&rarr;</kbd></div>
+  <div><span>Back / forward 10 s (Shift 1 min)</span><kbd>J</kbd> <kbd>L</kbd></div>
+  <div><span>Slower / faster</span><kbd>&lt;</kbd> <kbd>&gt;</kbd></div>
+  <div><span>Mute / volume</span><kbd>M</kbd> <kbd>&uarr;</kbd> <kbd>&darr;</kbd></div>
+  <div><span>Full screen / leave</span><kbd>F</kbd> <kbd>Esc</kbd></div>
+  <div><span>All players / one player</span><kbd>0</kbd> <kbd>1-9</kbd> <kbd>Tab</kbd></div>
+  <div><span>Add note / previous / next</span><kbd>C</kbd> <kbd>Q</kbd> <kbd>E</kbd></div>
   <div><span>Undo seek</span><kbd>U</kbd></div>
+</div>
+<div id="debugpage" hidden>
+  <div class="debugbar"><button id="closedebug">Back</button><b>Debug</b></div>
+  <div class="debugbody">
+    <section>
+      <h3>Info</h3>
+      <pre id="info"></pre>
+      <div class="row"><button id="report">Save report</button><label class="small"><input type="checkbox" id="addr"> include addresses and name</label></div>
+      <div id="reportpath" class="small muted"></div>
+    </section>
+    <section>
+      <h3 id="checksummary">Check</h3>
+      <div class="row"><button id="runcheck">Run check</button></div>
+      <div id="checks" class="small"></div>
+    </section>
+    <section>
+      <h3>Network</h3>
+      <pre id="debug"></pre>
+    </section>
+    <section>
+      <h3>Files</h3>
+      <div id="datainfo" class="small muted"></div>
+      <div class="row"><button id="openfolder">Open data folder</button><button id="resetopen">Reset...</button></div>
+      <div id="resetpanel" class="panel small" hidden>
+        <label><input type="radio" name="level" value="settings" checked> Reset settings and cache: deletes the downloaded video tool, logs, reports, the peer list and your name. Keeps recordings and your ID.</label><br>
+        <label><input type="radio" name="level" value="all"> Reset everything: also deletes all recordings and your identity key. Your ID will change. This cannot be undone.</label>
+        <div class="row" style="margin-top:8px"><input id="confirm" placeholder="type RESET" hidden></div>
+        <div class="row"><button id="openfolder2">Open data folder first</button><button id="doreset" class="danger">Reset</button><button id="resetcancel">Cancel</button></div>
+        <div id="reseterr" class="fail"></div>
+      </div>
+    </section>
+  </div>
 </div>
 <div id="recovery" hidden>
   <div class="box">

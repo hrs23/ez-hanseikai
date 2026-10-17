@@ -26,6 +26,7 @@ type Err = Box<dyn std::error::Error + Send + Sync>;
 
 const NO_WINDOW: u32 = 0x08000000;
 const BELOW_NORMAL: u32 = 0x00004000;
+const FPS: u32 = 30;
 
 static DATA_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
@@ -84,6 +85,7 @@ struct Flags {
     shared: Arc<Shared>,
     dir: PathBuf,
     name: String,
+    meta: serde_json::Value,
 }
 
 struct Capture {
@@ -113,7 +115,8 @@ impl GraphicsCaptureApiHandler for Capture {
         let buffer = frame.buffer()?;
         let data = buffer.as_nopadding_buffer(&mut self.buffer);
         if !shared.started.swap(true, Ordering::Relaxed) {
-            let record = json!({"k": "rec", "name": self.flags.name, "start_us": now_us()});
+            let mut record = json!({"k": "rec", "name": self.flags.name, "start_us": now_us()});
+            record.as_object_mut().unwrap().extend(self.flags.meta.as_object().cloned().unwrap_or_default());
             log::append(&self.flags.dir.join("log.bin"), &record)?;
         }
         {
@@ -138,6 +141,7 @@ impl GraphicsCaptureApiHandler for Capture {
 }
 
 pub struct Recorder {
+    pub name: String,
     control: CaptureControl<Capture, Err>,
     shared: Arc<Shared>,
     child: Child,
@@ -301,7 +305,7 @@ fn audio_loop(pid: u32, listener: TcpListener, shared: Arc<Shared>) -> Result<()
 }
 
 impl Recorder {
-    pub fn start(dir: &Path, audio_pid: u32) -> Result<Self, Err> {
+    pub fn start(dir: &Path, audio_pid: u32, audio_name: &str) -> Result<Self, Err> {
         if !ffmpeg_present() {
             return Err("ffmpeg is not installed yet".into());
         }
@@ -316,8 +320,8 @@ impl Recorder {
             .args(["-f", "rawvideo", "-pix_fmt", "bgra", "-video_size", &format!("{width}x{height}"), "-i", "-"])
             .args(["-thread_queue_size", "512"])
             .args(["-f", "s16le", "-ar", "48000", "-ac", "2", "-i", &format!("tcp://127.0.0.1:{port}")])
-            .args(["-vf", "scale=1280:-2:flags=fast_bilinear,format=yuv420p", "-r", "30"])
-            .args(["-c:v", encoder(), "-bf", "0", "-g", "30", "-b:v", "6M"])
+            .args(["-vf", "scale=1280:-2:flags=fast_bilinear,format=yuv420p", "-r", &FPS.to_string()])
+            .args(["-c:v", encoder(), "-bf", "0", "-g", &FPS.to_string(), "-b:v", "6M"])
             .args(if encoder() == "libx264" { ["-preset", "ultrafast"] } else { ["-v", "warning"] })
             .args(["-force_key_frames", "expr:gte(t,n_forced*1)"])
             .args(["-c:a", "aac", "-b:a", "128k"])
@@ -365,7 +369,8 @@ impl Recorder {
                 last.1 = Instant::now() - Duration::from_millis(200);
             }
         });
-        let flags = || Flags { shared: shared.clone(), dir: dir.to_path_buf(), name: name.clone() };
+        let meta = json!({"width": width, "height": height, "fps": FPS, "encoder": encoder(), "audio": audio_name, "version": crate::VERSION});
+        let flags = || Flags { shared: shared.clone(), dir: dir.to_path_buf(), name: name.clone(), meta: meta.clone() };
         let mut started = Capture::start_free_threaded(settings(DrawBorderSettings::WithoutBorder, flags())?);
         if let Err(e) = &started {
             tracing::warn!("capture without border refused ({e}), using the default border");
@@ -381,7 +386,7 @@ impl Recorder {
                 return Err(e.into());
             }
         };
-        Ok(Self { control, shared, child, audio })
+        Ok(Self { name, control, shared, child, audio })
     }
 
     pub fn is_dead(&mut self) -> bool {

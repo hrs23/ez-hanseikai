@@ -45,6 +45,8 @@ Everything is a set of append-only files, one writer each:
 
 A file never changes in the middle, so syncing is "send me the bytes after offset N". Each log record has a length, a checksum and the writer's signature; a torn last record is dropped on start. A local SQLite database is only an index and is rebuilt from the files whenever needed.
 
+Record kinds in a log: `rec` (a recording starts: file name, start time, capture size, fps, encoder, audio process, app version), `rec_end`, `note`, `note_edit`, `note_del`, `note_restore` (edits and deletions refer to a note by its id), `offset` (clock offset to a peer), `layout` (a viewer's arrangement of tiles). Unknown kinds are kept and ignored.
+
 Edits and deletions are new records. Only the recorder can delete a recording for everyone, and it goes to a trash period first. The app never removes the last copy of anything it knows about.
 
 ## Sharing
