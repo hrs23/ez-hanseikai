@@ -25,9 +25,19 @@ use crate::{log, now_us};
 type Err = Box<dyn std::error::Error + Send + Sync>;
 
 const NO_WINDOW: u32 = 0x08000000;
+const BELOW_NORMAL: u32 = 0x00004000;
+
+pub fn ffmpeg() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("ffmpeg.exe")))
+        .filter(|path| path.exists())
+        .unwrap_or_else(|| PathBuf::from("ffmpeg"))
+}
 
 struct Shared {
     stdin: Mutex<Option<ChildStdin>>,
+    last: Mutex<(Vec<u8>, Instant)>,
     started: AtomicBool,
     stop: AtomicBool,
 }
@@ -63,13 +73,21 @@ impl GraphicsCaptureApiHandler for Capture {
             let record = json!({"k": "rec", "name": self.flags.name, "start_us": now_us()});
             log::append(&self.flags.dir.join("log.bin"), &record)?;
         }
+        {
+            let mut last = shared.last.lock().unwrap();
+            last.0.clear();
+            last.0.extend_from_slice(data);
+            last.1 = Instant::now();
+        }
         let mut stdin = shared.stdin.lock().unwrap();
         let Some(pipe) = stdin.as_mut() else {
+            shared.stop.store(true, Ordering::Relaxed);
             control.stop();
             return Ok(());
         };
         if pipe.write_all(data).is_err() {
             *stdin = None;
+            shared.stop.store(true, Ordering::Relaxed);
             control.stop();
         }
         Ok(())
@@ -89,8 +107,8 @@ pub fn encoder() -> &'static str {
 }
 
 fn probe_encoder() -> &'static str {
-    for name in ["h264_nvenc", "h264_amf"] {
-        let ok = Command::new("ffmpeg")
+    for name in ["h264_nvenc", "h264_amf", "h264_qsv"] {
+        let ok = Command::new(ffmpeg())
             .args(["-v", "quiet", "-f", "lavfi", "-i", "nullsrc=s=256x256", "-frames:v", "1", "-c:v", name, "-f", "null", "-"])
             .creation_flags(NO_WINDOW)
             .status()
@@ -104,7 +122,20 @@ fn probe_encoder() -> &'static str {
 }
 
 fn audio_loop(pid: u32, listener: TcpListener, shared: Arc<Shared>) -> Result<(), Err> {
-    let (mut out, _) = listener.accept()?;
+    listener.set_nonblocking(true)?;
+    let mut out = loop {
+        match listener.accept() {
+            Ok((stream, _)) => break stream,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                if shared.stop.load(Ordering::Relaxed) {
+                    return Ok(());
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(e) => return Err(e.into()),
+        }
+    };
+    out.set_nonblocking(false)?;
     initialize_mta().ok()?;
     let mut source = None;
     if pid != 0 {
@@ -170,7 +201,7 @@ impl Recorder {
         let name = format!("rec-{}.mp4", now_us() / 1000);
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let port = listener.local_addr()?.port();
-        let mut child = Command::new("ffmpeg")
+        let mut child = Command::new(ffmpeg())
             .args(["-hide_banner", "-loglevel", "warning", "-y"])
             .args(["-use_wallclock_as_timestamps", "1", "-thread_queue_size", "512"])
             .args(["-f", "rawvideo", "-pix_fmt", "bgra", "-video_size", &format!("{width}x{height}"), "-i", "-"])
@@ -178,22 +209,51 @@ impl Recorder {
             .args(["-f", "s16le", "-ar", "48000", "-ac", "2", "-i", &format!("tcp://127.0.0.1:{port}")])
             .args(["-vf", "scale=1280:-2:flags=fast_bilinear,format=yuv420p", "-r", "30"])
             .args(["-c:v", encoder(), "-bf", "0", "-g", "30", "-b:v", "6M"])
+            .args(if encoder() == "libx264" { ["-preset", "ultrafast"] } else { ["-v", "warning"] })
             .args(["-force_key_frames", "expr:gte(t,n_forced*1)"])
             .args(["-c:a", "aac", "-b:a", "128k"])
             .args(["-f", "mp4", "-movflags", "frag_keyframe+empty_moov+default_base_moof"])
             .arg(dir.join(&name))
             .stdin(Stdio::piped())
-            .creation_flags(NO_WINDOW)
+            .stderr(Stdio::piped())
+            .creation_flags(NO_WINDOW | BELOW_NORMAL)
             .spawn()?;
+        if let Some(stderr) = child.stderr.take() {
+            thread::spawn(move || {
+                use std::io::BufRead;
+                for line in std::io::BufReader::new(stderr).lines().map_while(Result::ok) {
+                    tracing::warn!("ffmpeg: {line}");
+                }
+            });
+        }
         let shared = Arc::new(Shared {
             stdin: Mutex::new(child.stdin.take()),
+            last: Mutex::new((Vec::new(), Instant::now())),
             started: AtomicBool::new(false),
             stop: AtomicBool::new(false),
         });
         let audio_shared = shared.clone();
         let audio = thread::spawn(move || {
             if let Err(e) = audio_loop(audio_pid, listener, audio_shared) {
-                eprintln!("audio failed: {e}");
+                tracing::warn!("audio failed: {e}");
+            }
+        });
+        let repeat = shared.clone();
+        thread::spawn(move || {
+            while !repeat.stop.load(Ordering::Relaxed) {
+                thread::sleep(Duration::from_millis(100));
+                let mut last = repeat.last.lock().unwrap();
+                if last.0.is_empty() || last.1.elapsed() < Duration::from_millis(250) {
+                    continue;
+                }
+                let mut stdin = repeat.stdin.lock().unwrap();
+                let Some(pipe) = stdin.as_mut() else { break };
+                if pipe.write_all(&last.0).is_err() {
+                    *stdin = None;
+                    repeat.stop.store(true, Ordering::Relaxed);
+                    break;
+                }
+                last.1 = Instant::now() - Duration::from_millis(200);
             }
         });
         let settings = Settings::new(
@@ -206,8 +266,21 @@ impl Recorder {
             ColorFormat::Bgra8,
             Flags { shared: shared.clone(), dir: dir.to_path_buf(), name },
         );
-        let control = Capture::start_free_threaded(settings)?;
+        let control = match Capture::start_free_threaded(settings) {
+            Ok(control) => control,
+            Err(e) => {
+                shared.stop.store(true, Ordering::Relaxed);
+                *shared.stdin.lock().unwrap() = None;
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(e.into());
+            }
+        };
         Ok(Self { control, shared, child, audio })
+    }
+
+    pub fn is_dead(&mut self) -> bool {
+        self.shared.stop.load(Ordering::Relaxed) || matches!(self.child.try_wait(), Ok(Some(_)))
     }
 
     pub fn stop(self) {
@@ -216,6 +289,15 @@ impl Recorder {
         *self.shared.stdin.lock().unwrap() = None;
         let _ = self.audio.join();
         let mut child = self.child;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                return;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        tracing::warn!("ffmpeg did not finish in time, killing it");
+        let _ = child.kill();
         let _ = child.wait();
     }
 }

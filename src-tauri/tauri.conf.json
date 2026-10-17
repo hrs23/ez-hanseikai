@@ -26,9 +26,20 @@
     }
   },
   "bundle": {
-    "active": false,
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
     "icon": [
       "icons/icon.ico"
-    ]
+    ],
+    "externalBin": [
+      "binaries/ffmpeg"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
   }
 }

@@ -14,7 +14,10 @@ Get-ChildItem $root -Force | Where-Object { $_.Name -ne "node_modules" } | ForEa
 Expand-Archive (Join-Path $env:USERPROFILE "ezh.zip") $root -Force
 Set-Location $root
 npm install --no-audit --no-fund | Out-Null
-npx tauri build --no-bundle
+$bin = Join-Path $root "src-tauri\binaries"
+New-Item -ItemType Directory -Force $bin | Out-Null
+Copy-Item (Get-Command ffmpeg).Source (Join-Path $bin "ffmpeg-x86_64-pc-windows-msvc.exe") -Force
+npx tauri build
 if ($LASTEXITCODE -ne 0) { exit 1 }
 $exe = Join-Path $root "src-tauri\target\release\ez-hanseikai.exe"
 schtasks /Create /TN ezh-run /TR "`"$exe`" $AppArgs" /SC ONCE /ST 00:00 /IT /F | Out-Null

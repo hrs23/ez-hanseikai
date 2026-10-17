@@ -69,20 +69,25 @@ pub fn init(dir: &Path) {
 fn describe(conn: &Connection, label: &str, out: &mut String) {
     out.push_str(&format!("{label} connection to {}\n", conn.remote_id().fmt_short()));
     for path in conn.paths().iter() {
+        let stats = path.stats();
         let kind = if path.is_relay() { "relay" } else if path.is_ip() { "direct" } else { "other" };
         out.push_str(&format!(
-            "  path {kind}{} remote {:?} rtt {:?}\n    {:?}\n",
+            "  path {kind}{} remote {:?} rtt {:?} sent {} B received {} B mtu {}\n",
             if path.is_selected() { " (selected)" } else { "" },
             path.remote_addr(),
-            path.rtt(),
-            path.stats()
+            stats.rtt,
+            stats.udp_tx.bytes,
+            stats.udp_rx.bytes,
+            stats.current_mtu
         ));
     }
-    out.push_str(&format!("  {:?}\n", conn.stats()));
+    let stats = conn.stats();
+    out.push_str(&format!("  total sent {} B received {} B lost packets {}\n", stats.udp_tx.bytes, stats.udp_rx.bytes, stats.lost_packets));
 }
 
 pub fn text(core: &Core) -> String {
     let mut out = String::new();
+    out.push_str(&format!("encoder {} ({})\n", crate::record::encoder(), crate::record::ffmpeg().display()));
     out.push_str(&format!("endpoint id {}\n", core.ep.id()));
     out.push_str(&format!("bound sockets {:?}\n", core.ep.bound_sockets()));
     out.push_str(&format!("address {:?}\n", core.ep.addr()));
@@ -122,6 +127,7 @@ fn command_line(program: &str, args: &[&str]) -> String {
 
 fn redact(text: &str) -> String {
     let patterns = [
+        (r"(?i)[a-z]:\\users\\[^\\]+", r"C:\Users\<user>"),
         (r"https?://[^\s/\x22,)]+", "<host>"),
         (r"\b\d{1,3}(?:\.\d{1,3}){3}\b", "<ip>"),
         (r"\[?[0-9a-fA-F]{0,4}(?::[0-9a-fA-F]{0,4}){3,7}\]?", "<ip6>"),
@@ -142,7 +148,7 @@ pub fn report(core: &Core, include_addresses: bool) -> std::io::Result<PathBuf> 
     out.push_str(&format!("ez-hanseikai {} on {} {}\n", env!("CARGO_PKG_VERSION"), std::env::consts::OS, command_line("cmd", &["/c", "ver"])));
     out.push_str(&format!("gpu {}\n", command_line("powershell", &["-NoProfile", "-Command", "(Get-CimInstance Win32_VideoController).Name -join ', '"])));
     out.push_str(&format!("encoder {}\n", crate::record::encoder()));
-    out.push_str(&format!("ffmpeg {}\n", command_line("ffmpeg", &["-version"]).lines().next().unwrap_or("")));
+    out.push_str(&format!("ffmpeg {}\n", command_line(&crate::record::ffmpeg().to_string_lossy(), &["-version"]).lines().next().unwrap_or("")));
     out.push_str(&format!("iroh {}\n\n", "1.3.0"));
     out.push_str(&text(core));
     out.push_str("\nrecent log\n");

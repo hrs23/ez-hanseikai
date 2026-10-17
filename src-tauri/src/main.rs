@@ -80,8 +80,37 @@ fn stop_recording_now(core: &Core) {
     }
 }
 
+fn processes() -> Vec<(String, u32)> {
+    use std::os::windows::process::CommandExt;
+    let Ok(out) = std::process::Command::new("tasklist").args(["/FO", "CSV", "/NH"]).creation_flags(0x08000000).output() else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut cells = line.trim().trim_matches('"').split("\",\"");
+            let name = cells.next()?.to_string();
+            let pid = cells.next()?.parse().ok()?;
+            Some((name, pid))
+        })
+        .collect()
+}
+
+#[tauri::command]
+fn list_processes() -> Vec<String> {
+    let mut names: Vec<String> = processes().into_iter().map(|(name, _)| name).collect();
+    names.sort_by_key(|n| (!n.to_lowercase().contains("apex"), n.to_lowercase()));
+    names.dedup();
+    names
+}
+
 #[tauri::command]
 fn state(core: State<Arc<Core>>) -> Value {
+    let dead = core.recorder.lock().unwrap().as_mut().is_some_and(|r| r.is_dead());
+    if dead {
+        tracing::warn!("recording stopped on its own");
+        stop_recording_now(&core);
+    }
     let own = core.own_log();
     let theirs = core.peer_log();
     let mine = latest_rec(&own).map(|(name, start_us)| {
@@ -121,8 +150,9 @@ fn save_report(core: State<Arc<Core>>, include_addresses: bool) -> Result<String
 }
 
 #[tauri::command]
-fn start_recording(core: State<Arc<Core>>, audio_pid: u32) -> Result<(), String> {
-    start_recording_now(&core, audio_pid)
+fn start_recording(core: State<Arc<Core>>, audio_process: String) -> Result<(), String> {
+    let pid = processes().into_iter().find(|(name, _)| name.eq_ignore_ascii_case(&audio_process)).map_or(0, |(_, pid)| pid);
+    start_recording_now(&core, pid)
 }
 
 #[tauri::command]
@@ -203,7 +233,7 @@ fn main() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![state, debug_text, save_report, start_recording, stop_recording, set_peer, add_note, control])
+        .invoke_handler(tauri::generate_handler![state, list_processes, debug_text, save_report, start_recording, stop_recording, set_peer, add_note, control])
         .run(tauri::generate_context!())
         .expect("failed to run");
 }

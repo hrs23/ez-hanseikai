@@ -5,31 +5,36 @@
 <title>EZ Hanseikai</title>
 <style>
   body { font-family: system-ui, sans-serif; background: #111; color: #eee; margin: 0; padding: 12px; }
-  input, button { background: #222; color: #eee; border: 1px solid #444; padding: 4px 8px; }
+  input, button, select { background: #222; color: #eee; border: 1px solid #444; padding: 4px 8px; font: inherit; }
+  button { cursor: pointer; }
   .row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
   .videos { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   video { width: 100%; background: #000; }
-  #id { width: 26em; }
-  #debug { color: #8c8; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+  .id { width: 24em; font-family: monospace; }
+  #status { color: #8c8; }
   #notes { color: #aaa; font-size: 13px; }
+  #debug { color: #8c8; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
 </style>
 </head>
 <body>
 <div class="row">
-  <span>You</span><input id="id" readonly>
-  <span>Peer</span><input id="peer" placeholder="peer id"><button id="set">Connect</button>
-  <span id="link"></span>
+  <span>Your ID</span><input class="id" id="id" readonly><button id="copy">Copy</button>
 </div>
 <div class="row">
-  <input id="pid" size="6" placeholder="audio pid">
+  <span>Peer ID</span><input class="id" id="peer" placeholder="paste the other person's ID"><button id="set">Connect</button>
+  <span id="status"></span>
+</div>
+<div class="row">
+  <span>Game sound from</span><select id="proc"></select>
   <button id="rec">Record</button><span id="recstate"></span>
 </div>
 <div class="row">
   <button id="play">Play</button><button id="pause">Pause</button>
   <input id="seek" type="range" min="0" max="0" step="0.1" value="0" style="width:40%">
   <span id="time"></span>
+  <button id="live">Peer live</button>
 </div>
-<div class="videos"><video id="a" muted></video><video id="b"></video></div>
+<div class="videos"><div><div>You</div><video id="a" muted></video></div><div><div>Peer</div><video id="b"></video></div></div>
 <div class="row"><input id="note" placeholder="note" size="40"><button id="addnote">Add note</button></div>
 <div id="notes"></div>
 <details><summary>Network</summary>
@@ -41,19 +46,34 @@ const { invoke, convertFileSrc } = window.__TAURI__.core;
 const $ = (id) => document.getElementById(id);
 const a = $("a"), b = $("b");
 let st = null;
+let live = false;
 const sec = (us) => us / 1e6;
 
 function delta() {
   if (!st || !st.mine || !st.peer_rec) return 0;
   return sec(st.mine.start_us + (st.offset_us || 0) - st.peer_rec.start_us);
 }
+function reload(v, rec, resume) {
+  const t = v.currentTime;
+  v.dataset.size = rec.size;
+  v.dataset.retry = Date.now();
+  v.load();
+  v.onloadedmetadata = () => {
+    if (resume === "live") { v.currentTime = Math.max(0, v.duration - 1.5); v.play(); }
+    else v.currentTime = t;
+  };
+}
 function source(v, rec) {
   if (!rec || !rec.size) return;
   const src = convertFileSrc(rec.path);
-  if (v.dataset.src !== src) { v.dataset.src = src; v.src = src; v.dataset.size = rec.size; }
-  else if (v.paused && rec.size > Number(v.dataset.size) + 500000) {
-    const t = v.currentTime; v.dataset.size = rec.size; v.load(); v.currentTime = t;
-  }
+  if (v.dataset.src !== src) { v.dataset.src = src; v.src = src; v.dataset.size = rec.size; return; }
+  const loaded = Number(v.dataset.size);
+  const settled = v.dataset.seen === String(rec.size);
+  v.dataset.seen = rec.size;
+  const stuck = v.error && Date.now() - Number(v.dataset.retry || 0) > 3000;
+  const grown = rec.size > loaded + 300000 && (v.paused || (v === b && live));
+  const final = settled && rec.size !== loaded && v.paused;
+  if (stuck || grown || final) reload(v, rec, v === b && live ? "live" : "");
 }
 function seekTo(pos) {
   a.currentTime = Math.max(0, pos);
@@ -62,6 +82,7 @@ function seekTo(pos) {
 function wallOf(pos) { return Math.round(st.mine.start_us + pos * 1e6); }
 function posOf(wall) { return sec(wall - (st.offset_us || 0) - st.mine.start_us); }
 function apply(cmd, pos) {
+  live = false;
   if (cmd === "play") { seekTo(pos); a.play(); b.play(); }
   else if (cmd === "pause") { a.pause(); b.pause(); seekTo(pos); }
   else if (cmd === "seek") seekTo(pos);
@@ -76,11 +97,14 @@ window.__TAURI__.event.listen("control", (e) => {
 $("play").onclick = () => send("play", a.currentTime);
 $("pause").onclick = () => send("pause", a.currentTime);
 $("seek").onchange = (e) => send("seek", parseFloat(e.target.value));
+$("live").onclick = () => { live = true; if (b.duration) { b.currentTime = Math.max(0, b.duration - 1.5); b.play(); } };
+$("copy").onclick = () => navigator.clipboard.writeText($("id").value);
 $("set").onclick = () => invoke("set_peer", { id: $("peer").value }).catch((e) => alert(e));
 $("rec").onclick = () => st && st.recording
   ? invoke("stop_recording")
-  : invoke("start_recording", { audioPid: parseInt($("pid").value || "0") }).catch((e) => alert(e));
+  : invoke("start_recording", { audioProcess: $("proc").value }).catch((e) => alert(e));
 $("addnote").onclick = () => { invoke("add_note", { text: $("note").value }); $("note").value = ""; };
+$("report").onclick = () => invoke("save_report", { includeAddresses: $("addr").checked }).then((p) => { $("reportpath").textContent = p; }).catch((e) => alert(e));
 a.ontimeupdate = () => {
   $("seek").value = a.currentTime;
   $("time").textContent = a.currentTime.toFixed(1) + " s";
@@ -90,20 +114,27 @@ async function refresh() {
   st = await invoke("state");
   $("id").value = st.id;
   if (document.activeElement !== $("peer")) $("peer").value = st.peer || "";
-  $("link").textContent = st.peer ? (st.connected ? "connected" : "connecting") + (st.offset_us != null ? `, offset ${(st.offset_us / 1000).toFixed(1)} ms` : "") : "";
+  $("status").textContent = st.peer ? (st.connected ? "connected" : "connecting...") + (st.offset_us != null ? `, clock offset ${(st.offset_us / 1000).toFixed(1)} ms` : "") : "";
   $("rec").textContent = st.recording ? "Stop" : "Record";
-  $("recstate").textContent = (st.mine ? `mine ${(st.mine.size / 1e6).toFixed(1)} MB` : "") + (st.peer_rec ? `  peer ${(st.peer_rec.size / 1e6).toFixed(1)} MB` : "");
+  $("recstate").textContent = (st.mine ? `you ${(st.mine.size / 1e6).toFixed(1)} MB` : "") + (st.peer_rec ? `  peer ${(st.peer_rec.size / 1e6).toFixed(1)} MB` : "");
   source(a, st.mine); source(b, st.peer_rec);
   if (a.duration) $("seek").max = a.duration;
   $("notes").innerHTML = st.notes.map((n) => `<div>${n.who}: ${n.text.replace(/</g, "&lt;")}</div>`).join("");
 }
-$("report").onclick = () => invoke("save_report", { includeAddresses: $("addr").checked }).then((p) => { $("reportpath").textContent = p; }).catch((e) => alert(e));
 async function refreshDebug() {
   if ($("debug").parentElement.open) $("debug").textContent = await invoke("debug_text");
+}
+async function fillProcesses() {
+  const names = await invoke("list_processes");
+  const current = $("proc").value;
+  $("proc").innerHTML = '<option value="">(no game sound)</option>' + names.map((n) => `<option>${n}</option>`).join("");
+  $("proc").value = current || names.find((n) => /apex/i.test(n)) || "";
 }
 setInterval(() => refreshDebug().catch(() => {}), 2000);
 setInterval(() => refresh().catch(() => {}), 1000);
 refresh();
+fillProcesses();
+$("proc").onfocus = fillProcesses;
 </script>
 </body>
 </html>
