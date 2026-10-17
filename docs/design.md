@@ -45,7 +45,9 @@ Everything is a set of append-only files, one writer each:
 
 A file never changes in the middle, so syncing is "send me the bytes after offset N". Each log record has a length, a checksum and the writer's signature; a torn last record is dropped on start. A local SQLite database is only an index and is rebuilt from the files whenever needed.
 
-A recording is a set for the whole room: when anyone presses Record every member records their own screen, and Stop ends it for all. Each set is a folder named by its local start time, `rooms/<room>/sets/<time>/`, holding `<player-id>.mp4` for every player (own and received, streamed while they record) and `set.json`, which also keeps this member's tile order and layout from the Record tab as the set's default in the Player. Playback aligns the players inside a set from the start times in the logs and the measured clock offsets. A member who joins mid-set starts recording from then on; an absent member is an empty tile. Between sets, each member who has chosen a window or display and has sharing on streams a live file, `rooms/<room>/live/<player-id>-<start ms>.mp4`, started anew at every set boundary and after a size limit; everyone keeps only the newest live file per player. Nothing is captured until a source is chosen.
+A recording is a set for the whole room: when anyone presses Record every member records their own screen, and Stop ends it for all. Each set is a folder named by its local start time, `rooms/<room>/sets/<time>/`, holding `<player-id>.mp4` for every player (own and received, streamed while they record) and `set.json`, which also keeps this member's tile order and layout from the Record tab as the set's default in the Player. Playback aligns the players inside a set from the start times in the logs and the measured clock offsets. A member who joins mid-set starts recording from then on; an absent member is an empty tile. One ffmpeg process encodes each capture once and writes it, through the tee muxer, to short live segments, `rooms/<room>/live/<player-id>-<start ms>-<n>.mp4` (10 s each, so reloading the newest one stays cheap), and, while the room records, also to the set file. The live tiles always play the newest live segment of each player, which streams to the room whenever a source is chosen and sharing is on; the set file streams to the room behind it for the saved copy. Everyone keeps only the newest few segments per player. Nothing is captured until a source is chosen.
+
+Export: File > Export set as one video writes one 2560x1440, 30 fps H.264 file on this PC, like a screen recording of the Player: the players in the set's saved order on the auto grid with name labels, lined up as in playback, audio track 1 the mix of everyone and one track per player (game sound and voice) named after them, as fragmented MP4 so a cut-off export still plays. Players whose files are not on this PC yet are left out.
 
 Discovery: the default n0 address lookup publishes only the relay URL, not IP addresses. Anyone who dials an ID can still see its IP while hole punching, so IDs and invite codes stay inside the team.
 
@@ -100,7 +102,6 @@ The app is free and open source and works without any account. Accounts can come
 
 ## Later
 
-- A Media Source player for live viewing, instead of reloading the growing file.
 - A local SQLite index over the logs for lists and search, rebuilt from the logs.
 - Per-author sequence numbers in the logs.
 - Game plugins that mark events such as match start and end.

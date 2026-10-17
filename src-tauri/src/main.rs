@@ -3,6 +3,7 @@
 mod check;
 mod data;
 mod debug;
+mod export;
 mod log;
 mod net;
 mod record;
@@ -84,6 +85,7 @@ pub struct Core {
     pub started: Instant,
     pub engine: record::Engine,
     pub layout: Mutex<Value>,
+    pub export: Mutex<Option<export::Running>>,
     log_lock: Mutex<()>,
 }
 
@@ -210,15 +212,18 @@ async fn state(core: State<'_, Arc<Core>>) -> Result<Value, String> {
         .map(|p| (p.id, p.name.clone(), p.conn.clone(), p.incoming.clone(), p.offset_us, p.info.clone(), p.failures, p.sharing, p.live.clone()))
         .collect();
     let mut peers = Vec::new();
-    let mut names: HashMap<String, String> = HashMap::from([(my_id.clone(), "You".to_string())]);
+    let mut names: HashMap<String, String> = core.active_room().map(|r| r.names).unwrap_or_default();
+    names.insert(my_id.clone(), "You".to_string());
     let live_of = |name: Option<String>| {
         name.map(|n| {
             let path = core.live_dir(&room_id).join(&n);
-            json!({"path": path, "size": size(path.clone()), "start_us": record::live_name(&n).map(|(_, ms)| ms * 1000)})
+            json!({"path": path, "size": size(path.clone())})
         })
     };
     for (id, name, conn, incoming, offset_us, info, failures, sharing, live) in snapshot {
-        names.insert(id.to_string(), if name.is_empty() { short(&id) } else { format!("{name} ({})", short(&id)) });
+        if !name.is_empty() {
+            names.insert(id.to_string(), name.clone());
+        }
         let alive = conn.iter().chain(incoming.iter()).find(|c| c.close_reason().is_none());
         let message = info.as_ref().filter(|(_, proto)| *proto != PROTOCOL).map(|(version, proto)| {
             format!("peer has version {version} (protocol {proto}, ours {PROTOCOL}), update needed")
@@ -276,6 +281,7 @@ async fn state(core: State<'_, Arc<Core>>) -> Result<Value, String> {
         "sets": sets,
         "peers": peers,
         "notes": notes,
+        "names": names,
     }))
 }
 
@@ -403,6 +409,26 @@ fn open_set_folder(core: State<Arc<Core>>, room: String, set: String) {
 }
 
 #[tauri::command]
+async fn export_set(core: State<'_, Arc<Core>>, room: String, set: String, path: Option<String>) -> Result<Value, String> {
+    if !room::valid_id(&room) || !room::valid_id(&set) {
+        return Err("Unknown set.".into());
+    }
+    let core = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        export::check(&core)?;
+        let Some(path) = path.map(PathBuf::from).or_else(|| shell::pick_file(true, &format!("{set}.mp4"))) else { return Ok(Value::Null) };
+        export::start(&core, &room, &set, path).map(|skipped| json!({"skipped": skipped}))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn cancel_export(core: State<Arc<Core>>) {
+    export::cancel(&core);
+}
+
+#[tauri::command]
 fn set_layout(core: State<Arc<Core>>, layout: Value) {
     *core.layout.lock().unwrap() = layout;
     core.save_settings();
@@ -474,7 +500,7 @@ fn join_room(core: State<Arc<Core>>, code: String) -> Result<(), String> {
     {
         let mut rooms = core.rooms.lock().unwrap();
         rooms.list.retain(|r| r.id != pending);
-        rooms.list.push(room::Room { id: pending.clone(), name: "Joining...".into(), members: vec![core.ep.id().to_string(), id.to_string()] });
+        rooms.list.push(room::Room { id: pending.clone(), name: "Joining...".into(), members: vec![core.ep.id().to_string(), id.to_string()], names: HashMap::new() });
         rooms.active = Some(pending.clone());
     }
     core.save_rooms();
@@ -650,6 +676,7 @@ async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
         started: Instant::now(),
         engine: record::Engine::new(&settings),
         layout: Mutex::new(settings["layout"].clone()),
+        export: Mutex::new(None),
         log_lock: Mutex::new(()),
     }))
 }
@@ -699,7 +726,7 @@ fn main() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug_text, save_report, start_recording, stop_recording, delete_set, open_set_folder, set_layout, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, set_share, set_limit, set_codecs, cancel_invites, list_sources, set_source, use_display, list_mics, set_mic, set_mix, set_audio_process, set_keep_days, note_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_note, control])
+        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug_text, save_report, start_recording, stop_recording, delete_set, open_set_folder, export_set, cancel_export, set_layout, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, set_share, set_limit, set_codecs, cancel_invites, list_sources, set_source, use_display, list_mics, set_mic, set_mix, set_audio_process, set_keep_days, note_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_note, control])
         .run(tauri::generate_context!())
         .expect("failed to run");
 }

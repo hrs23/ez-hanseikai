@@ -98,7 +98,8 @@ select.lost-src { border-color: var(--bad); }
 .meter.muted { filter: grayscale(1); opacity: .5; }
 
 .roomcol { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--s2); padding: var(--s3) var(--s4); }
-.head { display: flex; align-items: center; gap: var(--s2); min-height: 28px; }
+.head { display: flex; align-items: center; gap: var(--s1); }
+.head .icon { height: 20px; min-width: 24px; }
 #rectiles { flex: 1; min-height: 120px; }
 .members { display: flex; flex-direction: column; max-height: 30%; overflow-y: auto; flex: none; }
 .member { display: flex; align-items: center; height: 26px; gap: var(--s2); padding: var(--s1) var(--s1); border-radius: var(--r1); }
@@ -154,7 +155,7 @@ select.lost-src { border-color: var(--bad); }
 .setrow .t { display: flex; align-items: center; gap: 6px; }
 .setrow .t .ok { margin-left: auto; color: var(--ok); }
 .setrow small { color: var(--muted); font-size: var(--t1); }
-.setrow .left-files { color: var(--relay); }
+.setrow .left-files { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bar { height: 3px; border-radius: 2px; background: var(--line); overflow: hidden; }
 .bar i { display: block; height: 100%; background: var(--accent); }
 .skel { height: 44px; border-radius: var(--r1); margin-bottom: 2px; background: linear-gradient(90deg, var(--raised), var(--line), var(--raised)); background-size: 200% 100%; animation: skel 1.2s infinite linear; }

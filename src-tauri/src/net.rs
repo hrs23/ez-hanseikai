@@ -52,7 +52,10 @@ pub fn broadcast(core: &Arc<Core>, message: Value) {
 
 fn room_info(core: &Core) -> Value {
     match core.active_room() {
-        Some(r) => json!({"id": r.id, "name": r.name, "members": r.members}),
+        Some(mut r) => {
+            r.names.insert(core.ep.id().to_string(), core.name.lock().unwrap().clone());
+            json!({"id": r.id, "name": r.name, "members": r.members, "names": r.names})
+        }
         None => Value::Null,
     }
 }
@@ -64,6 +67,11 @@ fn learn_members(core: &Arc<Core>, room: &Value, members: &Value) {
     }
     for member in members.as_array().into_iter().flatten().filter_map(|v| v.as_str()) {
         room::add_member(core, id, member);
+    }
+    for (member, name) in room["names"].as_object().into_iter().flatten() {
+        if member.parse::<EndpointId>().is_ok_and(|m| m != core.ep.id()) {
+            room::remember_name(core, member, &crate::clean_name(name.as_str().unwrap_or_default()), false);
+        }
     }
 }
 
@@ -157,10 +165,13 @@ async fn follow(core: &Core, send: &mut SendStream, req: &Value) -> Result<()> {
     }
     let own = core.ep.id().to_string();
     let path = match live {
-        Some(name) if record::live_name(name).is_some_and(|(who, _)| who == own) => core.live_dir(room).join(name),
+        Some(name) if record::live_name(name).is_some_and(|(who, _, _)| who == own) => core.live_dir(room).join(name),
         None if valid_id(set) => core.set_dir(room, set).join(format!("{own}.mp4")),
         _ => return Ok(()),
     };
+    if live.is_none() {
+        let _ = send.set_priority(HISTORY_PRIORITY);
+    }
     let still = || {
         core.share.load(Ordering::Relaxed)
             && match live {
@@ -241,9 +252,9 @@ async fn handle(core: Arc<Core>, from: EndpointId, mut send: SendStream, mut rec
             let codecs = codec_list(&req["codecs"]);
             core.update_peer(&from, |p| {
                 p.info = Some((version, proto));
-                p.name = name;
                 p.codecs = codecs;
             });
+            room::remember_name(&core, &from.to_string(), &name, true);
             learn_members(&core, &req["room"], &req["members"]);
             learn_holdings(&core, &from, &req);
             react_to_set(&core, &req["set"]);
@@ -395,15 +406,28 @@ async fn follow_recording(core: Arc<Core>, id: EndpointId, conn: Connection, roo
     core.following.lock().unwrap().remove(&key);
 }
 
-async fn follow_live(core: Arc<Core>, id: EndpointId, conn: Connection, room: String, name: String) {
-    let key = format!("{id}/{room}/live/{name}");
-    let path = core.live_dir(&room).join(&name);
-    let current = || core.update_peer(&id, |p| p.live.as_deref() == Some(name.as_str())).unwrap_or(false);
-    while core.active_room_id() == room && current() {
+async fn live_info(core: &Core, id: &EndpointId, conn: &Connection) -> Option<String> {
+    let info: Value = request(conn, &json!({"t": "live"})).await.ok().and_then(|r| serde_json::from_slice(&r).ok()).unwrap_or_default();
+    let live = info["live"].as_str().filter(|n| record::live_name(n).is_some_and(|(who, _, _)| who == id.to_string())).map(String::from);
+    core.update_peer(id, |p| {
+        p.sharing = info["sharing"] == true;
+        p.live = live.clone();
+    });
+    live
+}
+
+async fn follow_live(core: Arc<Core>, id: EndpointId, conn: Connection, room: String, mut name: String) {
+    let key = format!("{id}/{room}/live");
+    while core.active_room_id() == room && conn.close_reason().is_none() {
+        let path = core.live_dir(&room).join(&name);
         if receive(&core, &conn, json!({"t": "follow", "room": room, "live": name}), &path).await.is_err() {
             break;
         }
-        sleep(RETRY).await;
+        match live_info(&core, &id, &conn).await {
+            Some(next) if next != name => name = next,
+            Some(_) => sleep(RETRY).await,
+            None => break,
+        }
     }
     core.following.lock().unwrap().remove(&key);
 }
@@ -445,14 +469,11 @@ fn fetch_history(core: &Arc<Core>, peer: &EndpointId, conn: &Connection, room: &
 }
 
 async fn pull_live(core: &Arc<Core>, id: &EndpointId, conn: &Connection, room: &str) {
-    let info: Value = request(conn, &json!({"t": "live"})).await.ok().and_then(|r| serde_json::from_slice(&r).ok()).unwrap_or_default();
-    let live = info["live"].as_str().filter(|n| record::live_name(n).is_some_and(|(who, _)| who == id.to_string())).map(String::from);
-    core.update_peer(id, |p| {
-        p.sharing = info["sharing"] == true;
-        p.live = live.clone();
-    });
-    if let Some(name) = live {
-        if core.following.lock().unwrap().insert(format!("{id}/{room}/live/{name}")) {
+    if core.following.lock().unwrap().contains(&format!("{id}/{room}/live")) {
+        return;
+    }
+    if let Some(name) = live_info(core, id, conn).await {
+        if core.following.lock().unwrap().insert(format!("{id}/{room}/live")) {
             tokio::spawn(follow_live(core.clone(), *id, conn.clone(), room.to_string(), name));
         }
     }
@@ -485,9 +506,9 @@ async fn hello(core: &Arc<Core>, id: &EndpointId, conn: &Connection) -> bool {
     let codecs = codec_list(&reply["codecs"]);
     core.update_peer(id, |p| {
         p.info = Some((version, proto));
-        p.name = name;
         p.codecs = codecs;
     });
+    room::remember_name(core, &id.to_string(), &name, true);
     learn_members(core, &reply["room"], &reply["members"]);
     learn_holdings(core, id, &reply);
     react_to_set(core, &reply["set"]);

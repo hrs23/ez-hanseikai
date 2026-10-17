@@ -15,6 +15,8 @@ pub struct Room {
     pub id: String,
     pub name: String,
     pub members: Vec<String>,
+    #[serde(default)]
+    pub names: HashMap<String, String>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -90,11 +92,33 @@ impl Core {
     }
 }
 
+pub fn remember_name(core: &Core, id: &str, name: &str, replace: bool) {
+    if name.is_empty() {
+        return;
+    }
+    let mut changed = false;
+    for r in core.rooms.lock().unwrap().list.iter_mut().filter(|r| r.members.iter().any(|m| m == id)) {
+        if r.names.get(id).is_none_or(|old| replace && old != name) {
+            r.names.insert(id.to_string(), name.to_string());
+            changed = true;
+        }
+    }
+    if changed {
+        core.save_rooms();
+    }
+    if let Ok(id) = id.parse::<EndpointId>() {
+        core.update_peer(&id, |p| {
+            if p.name.is_empty() || replace {
+                p.name = name.to_string();
+            }
+        });
+    }
+}
+
 pub fn apply_active(core: &Arc<Core>) {
-    let wanted: Vec<EndpointId> = core
-        .active_room()
-        .map(|r| r.members)
-        .unwrap_or_default()
+    let room = core.active_room().unwrap_or_default();
+    let wanted: Vec<EndpointId> = room
+        .members
         .iter()
         .filter_map(|m| m.parse().ok())
         .filter(|id| *id != core.ep.id())
@@ -114,7 +138,7 @@ pub fn apply_active(core: &Arc<Core>) {
         for id in &wanted {
             if !peers.iter().any(|p| p.id == *id) {
                 let announce = core.ready.load(std::sync::atomic::Ordering::Relaxed);
-                peers.push(Peer { id: *id, name: String::new(), conn: None, incoming: None, offset_us: None, failures: 0, announce, codecs: vec!["h264".to_string()], info: None, sharing: false, live: None, have: HashSet::new(), gone: HashSet::new() });
+                peers.push(Peer { id: *id, name: room.names.get(&id.to_string()).cloned().unwrap_or_default(), conn: None, incoming: None, offset_us: None, failures: 0, announce, codecs: vec!["h264".to_string()], info: None, sharing: false, live: None, have: HashSet::new(), gone: HashSet::new() });
                 fresh.push(*id);
             }
         }
@@ -129,7 +153,7 @@ pub fn create_room(core: &Arc<Core>, name: &str) -> String {
     let name = if name.trim().is_empty() { format!("{}'s room", core.name.lock().unwrap()) } else { name.trim().chars().take(40).collect() };
     {
         let mut rooms = core.rooms.lock().unwrap();
-        rooms.list.push(Room { id: id.clone(), name, members: vec![core.ep.id().to_string()] });
+        rooms.list.push(Room { id: id.clone(), name, members: vec![core.ep.id().to_string()], names: HashMap::new() });
         rooms.active = Some(id.clone());
     }
     core.save_rooms();
@@ -480,11 +504,15 @@ pub fn sets_json(core: &Core, room: &str, logs: &[Log], notes: &mut [Value]) -> 
         let status = if live {
             "Recording".to_string()
         } else if all_verified {
-            "Everyone has every file".to_string()
+            "Everyone has it".to_string()
         } else if missing.is_empty() {
-            "Waiting for file checks".to_string()
+            "Checking files".to_string()
         } else {
-            missing.iter().map(|m| { let n = m["files"].as_array().map_or(0, |a| a.len()); format!("{}: {n} file{} left", m["name"].as_str().unwrap_or_default(), plural(n)) }).collect::<Vec<_>>().join(", ")
+            let mut by_count: BTreeMap<usize, Vec<&str>> = BTreeMap::new();
+            for m in &missing {
+                by_count.entry(m["files"].as_array().map_or(0, |a| a.len())).or_default().push(m["name"].as_str().unwrap_or_default());
+            }
+            by_count.iter().rev().map(|(n, names)| format!("{}: {n} file{} left", names.join(", "), plural(*n))).collect::<Vec<_>>().join(" · ")
         };
         let mut covered = Vec::new();
         for n in notes.iter_mut().filter(|n| n["local_us"].as_i64().is_some_and(|t| set.covers(t))) {

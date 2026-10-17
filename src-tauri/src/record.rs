@@ -197,7 +197,9 @@ const PAD_AFTER_FRAMES: u64 = SAMPLE_RATE as u64 / 50;
 const AUDIO_WAIT_MS: u32 = 20;
 const SHARED_MAX_WIDTH: u32 = 1280;
 const LEVELS_PER_SECOND: u64 = 30;
-const LIVE_ROTATE_BYTES: u64 = 100 << 20;
+const LIVE_SEGMENT_S: u32 = 10;
+const LIVE_KEEP: usize = 3;
+const FRAGMENTED: &str = "frag_keyframe+empty_moov+default_base_moof";
 const SUPERVISE_EVERY: Duration = Duration::from_millis(500);
 const RESCAN_EVERY: Duration = Duration::from_secs(5);
 const RETRY_FIRST: Duration = Duration::from_secs(1);
@@ -222,7 +224,8 @@ struct Track {
 
 pub struct Sink {
     pub target: Target,
-    pub path: PathBuf,
+    live_dir: PathBuf,
+    live_prefix: String,
     size: (u32, u32),
     meta: Value,
     child: Mutex<Child>,
@@ -232,7 +235,6 @@ pub struct Sink {
     start: OnceLock<Instant>,
     closed: AtomicBool,
     dead: AtomicBool,
-    rotate: AtomicBool,
     born: Instant,
 }
 
@@ -304,9 +306,15 @@ impl Engine {
     }
 
     pub fn live_file(&self) -> Option<String> {
-        let sink = self.sink.lock().unwrap();
-        let sink = sink.as_ref().filter(|s| s.target.set.is_none())?;
-        Some(sink.path.file_name()?.to_string_lossy().to_string())
+        let (dir, prefix) = self.sink.lock().unwrap().as_ref().map(|s| (s.live_dir.clone(), s.live_prefix.clone()))?;
+        std::fs::read_dir(dir)
+            .ok()?
+            .flatten()
+            .map(|f| f.file_name().to_string_lossy().to_string())
+            .filter(|n| n.starts_with(&prefix))
+            .filter_map(|n| Some((live_name(&n)?.2, n)))
+            .max()
+            .map(|(_, n)| n)
     }
 
     fn failed(&self, born: Instant, why: &str) {
@@ -319,9 +327,14 @@ impl Engine {
     }
 }
 
-pub fn live_name(name: &str) -> Option<(String, i64)> {
-    let (who, ms) = name.strip_suffix(".mp4")?.rsplit_once('-')?;
-    Some((who.to_string(), ms.parse().ok()?))
+pub fn live_name(name: &str) -> Option<(String, i64, u32)> {
+    let (rest, n) = name.strip_suffix(".mp4")?.rsplit_once('-')?;
+    let (who, ms) = rest.rsplit_once('-')?;
+    Some((who.to_string(), ms.parse().ok()?, n.parse().ok()?))
+}
+
+fn slashes(path: &std::path::Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }
 
 pub fn want(core: &Core) -> Option<Target> {
@@ -342,12 +355,19 @@ impl Sink {
             return Err("ffmpeg is not installed yet".into());
         }
         let id = core.ep.id().to_string();
-        let (dir, file) = match &target.set {
-            Some(set) => (core.set_dir(&target.room, set), format!("{id}.mp4")),
-            None => (core.live_dir(&target.room), format!("{id}-{}.mp4", now_us() / 1000)),
-        };
-        std::fs::create_dir_all(&dir)?;
-        let path = dir.join(&file);
+        let file = format!("{id}.mp4");
+        let live_dir = core.live_dir(&target.room);
+        let live_prefix = format!("{id}-{}-", now_us() / 1000);
+        std::fs::create_dir_all(&live_dir)?;
+        let mut outputs = format!(
+            "[f=segment:segment_time={LIVE_SEGMENT_S}:reset_timestamps=1:segment_format=mp4:segment_format_options=movflags={FRAGMENTED}]{}/{live_prefix}%d.mp4",
+            slashes(&live_dir)
+        );
+        if let Some(set) = &target.set {
+            let dir = core.set_dir(&target.room, set);
+            std::fs::create_dir_all(&dir)?;
+            outputs += &format!("|[f=mp4:movflags={FRAGMENTED}:flush_packets=1]{}", slashes(&dir.join(&file)));
+        }
         let mut usable = core.codecs.lock().unwrap().clone();
         for p in core.peers.lock().unwrap().iter().filter(|p| p.conn.is_some()) {
             usable.retain(|c| p.codecs.contains(c));
@@ -373,8 +393,8 @@ impl Sink {
             .args(if chosen.1 == "hevc" { ["-tag:v", "hvc1"] } else { ["-v", "warning"] })
             .args(["-force_key_frames", "expr:gte(t,n_forced*1)"])
             .args(["-c:a", "aac", "-b:a", "128k", "-metadata:s:a:0", "title=Game", "-metadata:s:a:1", "title=Microphone"])
-            .args(["-flush_packets", "1", "-f", "mp4", "-movflags", "frag_keyframe+empty_moov+default_base_moof"])
-            .arg(&path)
+            .args(["-flags", "+global_header", "-f", "tee"])
+            .arg(&outputs)
             .stdin(Stdio::piped())
             .stderr(Stdio::piped())
             .creation_flags(NO_WINDOW | BELOW_NORMAL)
@@ -398,7 +418,8 @@ impl Sink {
         }
         let sink = Arc::new(Self {
             target,
-            path,
+            live_dir,
+            live_prefix,
             size,
             meta,
             video: Mutex::new(child.stdin.take()),
@@ -408,7 +429,6 @@ impl Sink {
             start: OnceLock::new(),
             closed: AtomicBool::new(false),
             dead: AtomicBool::new(false),
-            rotate: AtomicBool::new(false),
             born: Instant::now(),
         });
         for (track, listener) in listeners.into_iter().enumerate() {
@@ -517,7 +537,7 @@ fn current_sink(core: &Arc<Core>, canvas: Option<(u32, u32)>) -> Option<Arc<Sink
     let mut slot = e.sink.lock().unwrap();
     let stale = slot.as_ref().map(|sink| {
         let resized = sink.target.set.is_none() && canvas.is_some_and(|c| c != sink.size);
-        (sink.dead.load(Ordering::Relaxed), resized || sink.rotate.load(Ordering::Relaxed) || Some(&sink.target) != want.as_ref())
+        (sink.dead.load(Ordering::Relaxed), resized || Some(&sink.target) != want.as_ref())
     });
     if let Some((dead, changed)) = stale.filter(|(dead, changed)| *dead || *changed) {
         let old = slot.take().unwrap();
@@ -777,12 +797,20 @@ fn windows() -> Vec<(Window, String, String, u32)> {
         .filter_map(|w| {
             let pid = w.process_id().ok().filter(|p| *p != own)?;
             let title = w.title().ok().map(|t| t.trim().to_string()).filter(|t| !t.is_empty())?;
-            if w.width().ok()? <= 0 || w.height().ok()? <= 0 {
+            if w.width().ok()? <= 0 || w.height().ok()? <= 0 || cloaked(&w) {
                 return None;
             }
             Some((w, names.get(&pid)?.clone(), title, pid))
         })
         .collect()
+}
+
+fn cloaked(w: &Window) -> bool {
+    use ::windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+    let mut value = 0u32;
+    let hwnd = ::windows::Win32::Foundation::HWND(w.as_raw_hwnd());
+    let got = unsafe { DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &mut value as *mut u32 as *mut _, std::mem::size_of::<u32>() as u32) };
+    got.is_ok() && value != 0
 }
 
 fn is_game(exe: &str) -> bool {
@@ -847,24 +875,21 @@ fn start_item<T: TryInto<GraphicsCaptureItemType> + Send + Copy + 'static>(core:
 }
 
 fn clean_live(core: &Core) {
-    let own = core.ep.id().to_string();
-    let current = core.engine.sink.lock().unwrap().as_ref().map(|s| s.path.clone());
     let Ok(rooms) = std::fs::read_dir(core.dir.join("rooms")) else { return };
     for room in rooms.flatten() {
         let Ok(files) = std::fs::read_dir(room.path().join("live")) else { continue };
-        let all: Vec<(String, i64, PathBuf)> = files
+        let mut all: Vec<(String, i64, u32, String)> = files
             .flatten()
-            .filter_map(|f| live_name(&f.file_name().to_string_lossy()).map(|(who, ms)| (who, ms, f.path())))
+            .map(|f| f.file_name().to_string_lossy().to_string())
+            .filter_map(|n| live_name(&n).map(|(who, ms, i)| (who, ms, i, n)))
             .collect();
-        let mut newest: HashMap<&str, i64> = HashMap::new();
-        for (who, ms, _) in &all {
-            let best = newest.entry(who).or_insert(*ms);
-            *best = (*best).max(*ms);
-        }
-        for (who, ms, path) in &all {
-            let keep = if *who == own { current.as_ref() == Some(path) } else { newest[who.as_str()] == *ms };
-            if !keep {
-                let _ = std::fs::remove_file(path);
+        all.sort_by(|a, b| (&b.0, b.1, b.2).cmp(&(&a.0, a.1, a.2)));
+        let mut kept: HashMap<String, usize> = HashMap::new();
+        for (who, _, _, name) in &all {
+            let count = kept.entry(who.clone()).or_default();
+            *count += 1;
+            if *count > LIVE_KEEP {
+                let _ = std::fs::remove_file(room.path().join("live").join(name));
             }
         }
     }
@@ -927,9 +952,6 @@ pub fn supervise(core: Arc<Core>) {
         if let Some(sink) = sink {
             if matches!(sink.child.lock().unwrap().try_wait(), Ok(Some(_))) {
                 sink.dead.store(true, Ordering::Relaxed);
-            }
-            if sink.target.set.is_none() && std::fs::metadata(&sink.path).map(|m| m.len()).unwrap_or(0) > LIVE_ROTATE_BYTES {
-                sink.rotate.store(true, Ordering::Relaxed);
             }
             if sink.born.elapsed() > STABLE_AFTER {
                 e.failures.store(0, Ordering::Relaxed);

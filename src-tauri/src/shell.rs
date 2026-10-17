@@ -129,6 +129,7 @@ fn item(app: &App, id: &str, text: &str, accel: Option<&str>) -> tauri::Result<M
 fn build_menu(app: &App, toggle: &MenuItem<tauri::Wry>) -> tauri::Result<Menu<tauri::Wry>> {
     let file = SubmenuBuilder::new(app, "File")
         .item(&item(app, "open-folder", "Open data folder", None)?)
+        .item(&item(app, "export-set", "Export set as one video...", None)?)
         .separator()
         .item(&item(app, "export-identity", "Export identity...", None)?)
         .item(&item(app, "import-identity", "Import identity...", None)?)

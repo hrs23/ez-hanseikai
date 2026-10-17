@@ -62,6 +62,7 @@ let dismissed = "";
 let pending = null;
 let updateText = "";
 let menuReturn = null;
+let exporting = null;
 
 function el(tag, props = {}, ...children) {
   const e = Object.assign(document.createElement(tag), props);
@@ -83,7 +84,7 @@ function fmt(sec) {
 const gb = (bytes) => (bytes / 1e9).toFixed(1) + " GB";
 const setTime = (id) => { const [d, t] = id.split(" "); return t ? `${d.slice(5).replace("-", "/")} ${t.replaceAll("-", ":").slice(0, 5)}` : id; };
 const peerOf = (key) => st.peers.find((p) => p.id === key);
-const nameOf = (key) => (key === "me" ? "You" : (peerOf(key) || {}).name || (peerOf(key) || { short: key.slice(0, 10) }).short);
+const nameOf = (key) => (key === "me" ? "You" : (peerOf(key) || {}).name || st.names[key] || key.slice(0, 10));
 const idOf = (key) => (key === "me" ? st.id : key);
 const keyOf = (id) => (id === st.id ? "me" : id);
 const typing = () => { const a = document.activeElement; return a && (a.tagName === "SELECT" || a.tagName === "TEXTAREA" || (a.tagName === "INPUT" && a.type !== "range") || a.isContentEditable); };
@@ -209,9 +210,15 @@ function swapIn(t, file, at) {
 function feed(t, file, following) {
   const src = convertFileSrc(file.path);
   if (t.src !== src) {
+    if (t.next && Date.now() - t.loadedAt < NEXT_TIMEOUT_MS) return;
     if (t.next) { t.next.remove(); t.next = null; }
+    const v = t.video;
+    const playing = following && t.src && !v.paused && !v.error;
+    if (playing && !t.complete) { t.complete = true; swapIn(t, { size: t.size }); return; }
+    if (playing && !v.ended && isFinite(v.duration) && v.duration - v.currentTime > (t.loadSec || 0)) return;
     const first = !t.src;
     t.src = src;
+    t.complete = false;
     if (first) { t.size = file.size; t.loadedAt = Date.now(); t.video.src = src; }
     else swapIn(t, file, 0);
     return;
@@ -243,11 +250,8 @@ function recordSet() { return st.sets.find((s) => s.live) || null; }
 function recordPlayers() {
   const set = recordSet();
   const files = {};
-  if (set) for (const p of set.players) files[p.key] = p;
-  else {
-    if (st.capture.live) files.me = st.capture.live;
-    for (const p of st.peers) if (p.live) files[p.id] = p.live;
-  }
+  if (st.capture.live) files.me = st.capture.live;
+  for (const p of st.peers) if (p.live) files[p.id] = p.live;
   const keys = ["me", ...st.peers.filter((p) => p.connected || files[p.id]).map((p) => p.id)];
   return keys.map((key) => ({ key, file: files[key] && files[key].size > 0 ? files[key] : null, recording: !!(set && set.players.some((p) => p.key === key && p.recording)) }));
 }
@@ -415,23 +419,23 @@ function renderSets() {
     return;
   }
   const now = Date.now() * 1000;
-  const rows = st.sets.map((s) => ({ id: s.id, room: s.room, live: s.live, sel: s.id === selected, notes: s.notes.length, dur: fmt(((s.end_us || now) - s.start_us) / 1e6), progress: s.progress.total && s.progress.have < s.progress.total ? s.progress.have / s.progress.total : null, ok: s.all_verified, status: s.status }));
+  const rows = st.sets.map((s) => ({ id: s.id, room: s.room, live: s.live, sel: s.id === selected, notes: s.notes.length, dur: fmt(((s.end_us || now) - s.start_us) / 1e6), progress: s.progress.total && s.progress.have < s.progress.total ? s.progress.have / s.progress.total : null, ok: s.all_verified, left: !s.live && s.missing.length ? s.status : "" }));
   const sig = JSON.stringify(rows);
   if (sig === setSig) return;
   setSig = sig;
   if (!rows.length) { $("setlist").replaceChildren(el("div", { className: "none", textContent: "No sets yet" })); return; }
   $("setlist").replaceChildren(...rows.map((r) => {
-    const top = r.live ? el("span", { className: "t" }, el("i", { className: "dot rec" }), "Live") : el("span", { className: "t" }, setTime(r.id), r.ok ? el("span", { className: "ok", textContent: "✓", title: "Everyone has every file" }) : null);
+    const top = r.live ? el("span", { className: "t" }, el("i", { className: "dot rec" }), "Live") : el("span", { className: "t" }, setTime(r.id), r.ok ? el("span", { className: "ok", textContent: "✓", title: "Everyone has it" }) : null);
     const sub = [r.live ? setTime(r.id) : "", r.dur, r.notes ? `${r.notes} note${r.notes === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ");
     const b = el("button", { className: "setrow" + (r.sel ? " sel" : ""), role: "option", ariaSelected: r.sel },
       top, el("small", { textContent: sub }),
       r.progress !== null ? el("span", { className: "bar" }, el("i", { style: `width:${(r.progress * 100).toFixed(1)}%` })) : null,
-      !r.live && !r.ok ? el("small", { className: "left-files", textContent: r.status }) : null);
+      r.left ? el("small", { className: "left-files", textContent: r.left, title: r.left }) : null);
     b.onclick = () => { selectSet(r.id); $("sets").classList.remove("open"); refresh(); };
     b.oncontextmenu = (e) => {
       e.preventDefault();
       openMenu([
-        { label: "Export as video...", disabled: true },
+        { label: "Export as one video...", disabled: r.live, run: () => exportSet(st.sets.find((s) => s.id === r.id)) },
         { label: "Open folder", run: () => invoke("open_set_folder", { room: r.room, set: r.id }) },
         { label: "Delete from this PC", danger: true, disabled: r.live, run: () => { if (confirm(`Delete the set ${setTime(r.id)} from this PC?`)) invoke("delete_set", { room: r.room, set: r.id }).catch(flash); } },
       ], e);
@@ -669,14 +673,29 @@ function flash(text, info) {
 function renderNotice() {
   const problems = st ? [st.notice, st.ffmpeg, st.capture.status, st.disk.low ? `Low disk space: ${gb(st.disk.free)} free` : "", ...st.peers.filter((p) => p.message).map((p) => `${p.name || p.short}: ${p.message}`)] : [];
   const update = pending ? `Version ${pending.version} is available` : updateText;
-  const list = [flashText, ...problems, update].filter(Boolean);
+  const progress = exporting ? `Exporting ${Math.floor(exporting.percent)}%${exporting.skipped ? ` without ${exporting.skipped} (not on this PC yet)` : ""}` : "";
+  const list = [flashText, ...problems, progress, update].filter(Boolean);
   const text = list.join("  ·  ");
   $("noticetext").textContent = text;
-  $("notice").hidden = !text || text === dismissed;
-  $("notice").classList.toggle("info", list.every((t) => (t === flashText && flashInfo) || t === update));
+  $("notice").hidden = !text || (text === dismissed && !exporting);
+  $("notice").classList.toggle("info", list.every((t) => (t === flashText && flashInfo) || t === update || t === progress));
   $("updatebtn").hidden = !pending;
+  $("exportcancel").hidden = !exporting;
 }
-$("notice").onclick = (e) => { if (e.target !== $("updatebtn")) { dismissed = $("noticetext").textContent; renderNotice(); } };
+$("notice").onclick = (e) => { if (e.target.tagName !== "BUTTON") { dismissed = $("noticetext").textContent; renderNotice(); } };
+$("exportcancel").onclick = () => invoke("cancel_export");
+function exportSet(set) {
+  if (!set) { flash("Choose a set in the Player first"); return; }
+  invoke("export_set", { room: set.room, set: set.id }).then((r) => {
+    if (r) { exporting = { percent: 0, ...exporting, skipped: r.skipped.join(", ") }; renderNotice(); }
+  }).catch(flash);
+}
+window.__TAURI__.event.listen("export", (e) => {
+  const x = e.payload;
+  if (x.done) { exporting = null; flash(x.error || "Export finished", !x.error); return; }
+  exporting = { ...exporting, percent: x.percent };
+  renderNotice();
+});
 async function checkUpdate(manual) {
   try {
     pending = await window.__TAURI__.updater.check();
@@ -697,8 +716,9 @@ $("updatebtn").onclick = async (e) => {
 };
 
 function renderTop() {
+  const online = 1 + st.peers.filter((p) => p.connected).length;
   const pendingRoom = st.room && st.room.id.startsWith("pending-");
-  $("roomlabel").replaceChildren(...(!st.room ? ["No room"] : pendingRoom ? ["Connecting..."] : [el("b", { textContent: st.room.name }), ` · ${st.peers.length + 1}`]));
+  $("roomlabel").replaceChildren(...(!st.room ? ["No room"] : pendingRoom ? ["Connecting..."] : [el("b", { textContent: st.room.name }), ` · ${online}${online > st.peers.length ? "" : "/" + (st.peers.length + 1)}`]));
   $("rec").disabled = !st.room || pendingRoom;
   $("rec").classList.toggle("on", st.recording);
   $("rec").lastElementChild.textContent = st.recording ? "Stop" : "Record";
@@ -913,6 +933,7 @@ const menuActions = {
   "copy-invite": () => invoke("create_invite", { reuse: true }).then((code) => { showCode(code); return navigator.clipboard.writeText(code); }).then(() => flash("Invite code copied", true)),
   "cancel-invite": () => invoke("cancel_invites").then(() => { $("invitebox").hidden = true; flash("Invite cancelled", true); }),
   "leave-room": () => st && st.room && invoke("leave_room", { id: st.room.id }).then(refresh),
+  "export-set": () => exportSet(playSet()),
   "fullscreen": toggleFull,
   "all-players": () => setView(current(), 0),
   "next-player": () => cycle(current(), 1),
