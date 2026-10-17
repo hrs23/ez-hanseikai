@@ -15,7 +15,7 @@ npm install
 npm run dev
 ```
 
-To try a change on another Windows PC over SSH without pushing: `scripts/deploy.sh <user@host>`. It sends the working tree, builds and starts the app. Set `SCRIPT=capture.ps1` or `SCRIPT=audio.ps1` to also run a screen or per-process audio capture check.
+To try a change on another Windows PC over SSH without pushing: `scripts/deploy.sh <user@host>`. It sends the working tree, builds and starts the app. Set `SCRIPT=capture.ps1`, `audio.ps1` or `record.ps1` to also run a screen capture, a per-process audio capture or a combined recording check. `record-run.ps1 -TargetPid <pid>` records a running app instead of the test tone.
 
 ## License
 
