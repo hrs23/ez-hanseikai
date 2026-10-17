@@ -54,9 +54,15 @@ function el(tag, props = {}, ...children) {
 }
 const nameOf = (key) => (key === "me" ? "You" : label(st.peers.find((p) => p.id === key) || { short: key.slice(0, 10) }));
 
+function liveSet() {
+  if (!st.room) return null;
+  const own = st.capture.live ? [{ key: "me", ...st.capture.live, offset_us: 0 }] : [];
+  const peers = st.peers.filter((p) => p.live).map((p) => ({ key: p.id, ...p.live, offset_us: p.offset_us || 0 }));
+  return { id: "live", live: true, players: [...own, ...peers].map((p) => ({ ...p, recording: true })) };
+}
 function currentSet() {
   if (!st) return null;
-  if (tab === "record") return st.sets.find((s) => s.live) || st.sets[0] || null;
+  if (tab === "record") return st.sets.find((s) => s.live) || liveSet() || st.sets[0] || null;
   return st.sets.find((s) => s.id === selected) || st.sets[0] || null;
 }
 function players() {
@@ -305,13 +311,13 @@ function renderSide() {
   $("tabplayer").classList.toggle("on", tab === "player");
   $("roomtitle").textContent = st.room ? st.room.name : "";
   const me = el("div", { className: "peer" }, el("span", { className: "dot " + (st.recording ? "rec" : "") }),
-    el("div", { className: "info" }, el("div", { className: "name", textContent: `${st.name || "You"} (you)` }), el("div", { className: "sub", textContent: st.recording ? "recording" : "idle" })));
+    el("div", { className: "info" }, el("div", { className: "name", textContent: `${st.name || "You"} (you)` }), el("div", { className: "sub", textContent: [st.recording ? "recording" : "idle", st.capture.sharing ? "sharing" : "not sharing"].join(", ") })));
   const rows = st.peers.map((p) => {
     const set = st.sets.find((s) => s.live);
     const pl = set && set.players.find((x) => x.key === p.id);
     const route = p.connected ? `${p.path === "direct" ? "direct" : "via relay"}, ${p.rtt_ms} ms` : p.failures > 2 ? "offline" : "connecting";
     const info = el("div", { className: "info" }, el("div", { className: "name", textContent: label(p) }),
-      el("div", { className: "sub", textContent: [pl && pl.recording ? "recording" : "", route, pl && pl.size ? mb(pl.size) : ""].filter(Boolean).join(", ") }));
+      el("div", { className: "sub", textContent: [pl && pl.recording ? "recording" : "", route, p.connected ? (p.sharing ? "live" : "no source") : "", pl && pl.size ? mb(pl.size) : ""].filter(Boolean).join(", ") }));
     if (p.message) info.append(el("div", { className: "sub fail", textContent: p.message }));
     return el("div", { className: "peer" }, el("span", { className: "dot " + (pl && pl.recording ? "rec" : p.connected ? p.path : p.failures > 2 ? "bad" : "") }), info,
       el("button", { textContent: "Remove", onclick: () => invoke("remove_peer", { id: p.id }) }));
@@ -369,6 +375,13 @@ async function refresh() {
     any = source(t.video, p.rec) || any;
   }
   const inRoom = !!st.room;
+  const waiting = tab === "record" && set && set.id === "live" ? st.peers.filter((p) => !p.live) : [];
+  for (const [id, box] of Object.entries(placeholders)) if (!waiting.some((p) => p.id === id)) { box.remove(); delete placeholders[id]; }
+  for (const p of waiting) {
+    const box = placeholders[p.id] || (placeholders[p.id] = $("videos").appendChild(el("div", { className: "tile waiting" })));
+    box.textContent = `${label(p)}: ${p.connected ? "connected, no source" : "not connected"}`;
+  }
+  any = any || waiting.length > 0;
   $("onboard").hidden = inRoom;
   $("empty").hidden = any || !inRoom;
   $("videos").hidden = !any;
@@ -377,13 +390,53 @@ async function refresh() {
   applyView();
   renderSide();
   renderNotes();
-  if (tab === "record" && live_ && !live) { live = true; }
+  if (tab === "record" && set && set.live && !live) { live = true; }
+  renderCapture();
   if (live && total() - nowM() > LIVE_LAG * 2) setClock(true, total() - LIVE_LAG);
   $("recovery").hidden = !st.recovery;
   $("recoverymsg").textContent = st.recovery || "";
   $("rinfo").textContent = st.previous_version ? `Version ${st.version}, previous run ${st.previous_version}` : `Version ${st.version}`;
   if (!$("debugpage").hidden) renderInfo();
 }
+
+const placeholders = {};
+function renderCapture() {
+  const c = st.capture;
+  const value = c.source ? JSON.stringify(c.source) : "";
+  if (document.activeElement !== $("source")) {
+    if (![...$("source").options].some((o) => o.value === value)) $("source").append(el("option", { value, textContent: c.source.kind === "window" ? `${c.source.title} (${c.source.exe})` : `Display ${c.source.index}` }));
+    $("source").value = value;
+  }
+  if (document.activeElement !== $("mic")) $("mic").value = [...$("mic").options].some((o) => o.value === c.mic) ? c.mic : "";
+  $("lost").hidden = !c.source_lost;
+  for (const kind of ["game", "mic"]) {
+    if (document.activeElement !== $(kind + "vol")) $(kind + "vol").value = c.mix[kind].volume;
+    $(kind + "mute").textContent = c.mix[kind].muted ? "Unmute" : "Mute";
+  }
+  $("capinfo").textContent = [c.source ? `${c.source_kind === "display" ? "Showing the whole display" : "Window"}: ${c.source_name || "not found"}` : "No source: nothing is captured or sent",
+    c.game ? `game sound from ${c.game}` : "no game sound", c.mic_name ? `mic ${c.mic_name}` : "no microphone", c.status].filter(Boolean).join(". ");
+}
+async function fillSources() {
+  const list = await invoke("list_sources");
+  $("source").replaceChildren(el("option", { value: "", textContent: "No source" }), ...list.map((s) => el("option", { value: JSON.stringify(s.id), textContent: s.name })));
+  if (st) renderCapture();
+}
+async function fillMics() {
+  const list = await invoke("list_mics");
+  $("mic").replaceChildren(el("option", { value: "", textContent: list.length ? "Default microphone" : "No microphone found" }), ...list.map((m) => el("option", { value: m.id, textContent: m.name })));
+  if (st) renderCapture();
+}
+const setMix = (kind, muted) => invoke("set_mix", { kind, volume: Number($(kind + "vol").value), muted }).then(refresh);
+for (const kind of ["game", "mic"]) {
+  $(kind + "vol").oninput = () => setMix(kind, st.capture.mix[kind].muted);
+  $(kind + "mute").onclick = () => setMix(kind, !st.capture.mix[kind].muted);
+}
+$("source").onfocus = fillSources;
+$("source").onchange = () => invoke("set_source", { source: $("source").value ? JSON.parse($("source").value) : null }).then(() => $("source").blur());
+$("mic").onfocus = fillMics;
+$("mic").onchange = () => invoke("set_mic", { id: $("mic").value }).then(() => $("mic").blur());
+$("usedisplay").onclick = () => invoke("use_display").then(fillSources);
+window.__TAURI__.event.listen("levels", (e) => { $("gamelevel").value = e.payload.game; $("miclevel").value = e.payload.mic; });
 
 function renderInfo() {
   const lines = [`version ${st.version}${st.previous_version ? ` (previous run ${st.previous_version})` : ""}`, `id ${st.id}`, `recording codec ${st.codec}`];
@@ -613,4 +666,6 @@ setInterval(() => refresh().catch(() => {}), 1000);
 setInterval(() => refreshDebug().catch(() => {}), 2000);
 refresh();
 fillProcesses();
+fillSources();
+fillMics();
 setTimeout(() => checkUpdate(false), 4000);

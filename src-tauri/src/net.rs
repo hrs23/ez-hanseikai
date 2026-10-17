@@ -11,6 +11,7 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::time::{sleep, timeout};
 
 use crate::room::{self, valid_id};
+use crate::record;
 use crate::{debug, log, now_us, short, Core, ALPN, PROTOCOL, VERSION};
 
 const CHUNK: usize = 64 << 10;
@@ -93,11 +94,20 @@ fn set_active(core: &Core, set: &str) -> bool {
 }
 
 async fn follow(core: &Core, send: &mut SendStream, req: &Value) -> Result<()> {
-    let (set, room) = (req["set"].as_str().unwrap_or_default(), req["room"].as_str().unwrap_or_default());
-    if !valid_id(set) || !valid_id(room) || room != core.active_room_id() || !core.share.load(Ordering::Relaxed) {
+    let (set, room, live) = (req["set"].as_str().unwrap_or_default(), req["room"].as_str().unwrap_or_default(), req["live"].as_str());
+    if !valid_id(room) || room != core.active_room_id() || !core.share.load(Ordering::Relaxed) {
         return Ok(());
     }
-    let path = core.set_dir(room, set).join(format!("{}.mp4", core.ep.id()));
+    let own = core.ep.id().to_string();
+    let path = match live {
+        Some(name) if record::live_name(name).is_some_and(|(who, _)| who == own) => core.live_dir(room).join(name),
+        None if valid_id(set) => core.set_dir(room, set).join(format!("{own}.mp4")),
+        _ => return Ok(()),
+    };
+    let still = || match live {
+        Some(name) => core.engine.live_file().as_deref() == Some(name),
+        None => set_active(core, set),
+    };
     let Ok(mut file) = tokio::fs::File::open(path).await else { return Ok(()) };
     file.seek(std::io::SeekFrom::Start(req["from"].as_u64().unwrap_or(0))).await?;
     let started = Instant::now();
@@ -106,7 +116,7 @@ async fn follow(core: &Core, send: &mut SendStream, req: &Value) -> Result<()> {
     loop {
         let n = file.read(&mut buf).await?;
         if n == 0 {
-            if !set_active(core, set) || !core.share.load(Ordering::Relaxed) {
+            if !still() || !core.share.load(Ordering::Relaxed) {
                 break;
             }
             sleep(FILE_WATCH).await;
@@ -121,16 +131,13 @@ async fn follow(core: &Core, send: &mut SendStream, req: &Value) -> Result<()> {
 
 fn react_to_set(core: &Arc<Core>, set: &Value) {
     let (Some(id), Some(room)) = (set["id"].as_str(), set["room"].as_str()) else { return };
-    if !valid_id(id) || room != core.active_room_id() || core.recorder.lock().unwrap().is_some() {
+    if !valid_id(id) || room != core.active_room_id() || core.active_set.lock().unwrap().is_some() {
         return;
     }
     if core.set_dir(room, id).join(format!("{}.mp4", core.ep.id())).exists() {
         return;
     }
-    let (core, id, by, start_us) = (core.clone(), id.to_string(), set["by"].as_str().unwrap_or_default().to_string(), set["start_us"].as_i64().unwrap_or(0));
-    tokio::task::spawn_blocking(move || {
-        let _ = room::begin_set(&core, &id, &by, start_us);
-    });
+    let _ = room::begin_set(core, id, set["by"].as_str().unwrap_or_default(), set["start_us"].as_i64().unwrap_or(0));
 }
 
 async fn handle(core: Arc<Core>, from: EndpointId, mut send: SendStream, mut recv: RecvStream) -> Result<()> {
@@ -172,6 +179,10 @@ async fn handle(core: Arc<Core>, from: EndpointId, mut send: SendStream, mut rec
                 tokio::task::spawn_blocking(move || room::end_set(&core));
             }
             send.write_all(b"ok").await?;
+        }
+        Some("live") => {
+            let sharing = core.engine.sink.lock().unwrap().is_some() && core.share.load(Ordering::Relaxed);
+            send.write_all(&serde_json::to_vec(&json!({"sharing": sharing, "live": core.engine.live_file().filter(|_| sharing)}))?).await?;
         }
         Some("ping") => send.write_all(&now_us().to_le_bytes()).await?,
         Some("ctl") => {
@@ -265,15 +276,15 @@ fn recording_ended(core: &Core, id: &EndpointId, set: &str) -> bool {
     log::read(&core.peer_dir(id).join("log.bin")).iter().any(|r| r["k"] == "rec_end" && r["set"] == set)
 }
 
-async fn receive(core: &Core, id: &EndpointId, conn: &Connection, room: &str, set: &str) -> Result<u64> {
-    let dir = core.set_dir(room, set);
-    tokio::fs::create_dir_all(&dir).await?;
-    let path = dir.join(format!("{id}.mp4"));
-    let from = tokio::fs::metadata(&path).await.map(|m| m.len()).unwrap_or(0);
+async fn receive(core: &Core, conn: &Connection, mut req: Value, path: &std::path::Path) -> Result<u64> {
+    if let Some(dir) = path.parent() {
+        tokio::fs::create_dir_all(dir).await?;
+    }
+    req["from"] = json!(tokio::fs::metadata(path).await.map(|m| m.len()).unwrap_or(0));
     let (mut send, mut recv) = conn.open_bi().await?;
-    send.write_all(&serde_json::to_vec(&json!({"t": "follow", "set": set, "room": room, "from": from}))?).await?;
+    send.write_all(&serde_json::to_vec(&req)?).await?;
     send.finish()?;
-    let mut file = tokio::fs::OpenOptions::new().create(true).append(true).open(&path).await?;
+    let mut file = tokio::fs::OpenOptions::new().create(true).append(true).open(path).await?;
     let started = Instant::now();
     let mut got = 0u64;
     let mut buf = vec![0u8; CHUNK];
@@ -291,13 +302,41 @@ async fn follow_recording(core: Arc<Core>, id: EndpointId, conn: Connection, roo
         if core.active_room_id() != room || !core.has_peer(&id) {
             break;
         }
-        match receive(&core, &id, &conn, &room, &set).await {
+        let path = core.set_dir(&room, &set).join(format!("{id}.mp4"));
+        match receive(&core, &conn, json!({"t": "follow", "set": set, "room": room}), &path).await {
             Ok(0) if recording_ended(&core, &id, &set) => sleep(FINISHED_RECHECK).await,
             Ok(_) => sleep(RETRY).await,
             Err(_) => break,
         }
     }
     core.following.lock().unwrap().remove(&key);
+}
+
+async fn follow_live(core: Arc<Core>, id: EndpointId, conn: Connection, room: String, name: String) {
+    let key = format!("{id}/{room}/live/{name}");
+    let path = core.live_dir(&room).join(&name);
+    let current = || core.update_peer(&id, |p| p.live.as_deref() == Some(name.as_str())).unwrap_or(false);
+    while core.active_room_id() == room && current() {
+        if receive(&core, &conn, json!({"t": "follow", "room": room, "live": name}), &path).await.is_err() {
+            break;
+        }
+        sleep(RETRY).await;
+    }
+    core.following.lock().unwrap().remove(&key);
+}
+
+async fn pull_live(core: &Arc<Core>, id: &EndpointId, conn: &Connection, room: &str) {
+    let info: Value = request(conn, &json!({"t": "live"})).await.ok().and_then(|r| serde_json::from_slice(&r).ok()).unwrap_or_default();
+    let live = info["live"].as_str().filter(|n| record::live_name(n).is_some_and(|(who, _)| who == id.to_string())).map(String::from);
+    core.update_peer(id, |p| {
+        p.sharing = info["sharing"] == true;
+        p.live = live.clone();
+    });
+    if let Some(name) = live {
+        if core.following.lock().unwrap().insert(format!("{id}/{room}/live/{name}")) {
+            tokio::spawn(follow_live(core.clone(), *id, conn.clone(), room.to_string(), name));
+        }
+    }
 }
 
 async fn measure(core: &Core, id: &EndpointId, conn: &Connection, samples: &mut Vec<(i64, i64)>) -> Result<()> {
@@ -364,6 +403,7 @@ async fn sync(core: &Arc<Core>, id: &EndpointId, conn: &Connection) -> Result<()
         tick += 1;
         pull_log(core, id, conn).await?;
         let room = core.active_room_id();
+        pull_live(core, id, conn, &room).await;
         let peer_log = log::read(&core.peer_dir(id).join("log.bin"));
         for r in peer_log.iter().filter(|r| r["k"] == "rec" && r["room"] == room.as_str()) {
             let Some(set) = r["set"].as_str().filter(|s| valid_id(s)) else { continue };
@@ -404,7 +444,11 @@ pub async fn dial_loop(core: Arc<Core>, id: EndpointId) {
         } else {
             let _ = sync(&core, &id, &conn).await;
         }
-        core.update_peer(&id, |p| p.conn = None);
+        core.update_peer(&id, |p| {
+            p.conn = None;
+            p.sharing = false;
+            p.live = None;
+        });
         conn.close(0u32.into(), b"done");
     }
 }

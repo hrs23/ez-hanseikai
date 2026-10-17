@@ -59,7 +59,7 @@ fn show_window(app: &AppHandle) {
 }
 
 fn exit_app(app: &AppHandle, core: &Arc<Core>) {
-    if core.recorder.lock().unwrap().is_some() {
+    if core.active_set.lock().unwrap().is_some() {
         show_window(app);
         if !message("Recording is running. Stop recording and exit?", "OKCancel") {
             return;
@@ -93,7 +93,7 @@ fn import_identity(app: &AppHandle, core: &Core) {
 }
 
 pub fn toggle_recording(core: &Arc<Core>) {
-    if core.recorder.lock().unwrap().is_some() {
+    if core.active_set.lock().unwrap().is_some() {
         room::stop_set(core);
     } else {
         let _ = room::start_set(core);
@@ -202,7 +202,7 @@ pub fn setup(app: &App, core: Arc<Core>) -> tauri::Result<()> {
     std::thread::spawn(move || {
         let mut last = None;
         loop {
-            let recording = core.recorder.lock().unwrap().is_some();
+            let recording = core.active_set.lock().unwrap().is_some();
             if last != Some(recording) {
                 last = Some(recording);
                 let text = if recording { "Stop recording" } else { "Start recording" };

@@ -41,6 +41,14 @@
         <div id="members"></div>
         <div class="row"><button id="invite">Create invite</button><button id="cancelinvite" hidden>Cancel invite</button></div>
         <div class="row" id="invitebox" hidden><input id="code" class="id" readonly><button id="copycode">Copy</button></div>
+        <div id="capture" class="panel small">
+          <label class="field">Source<select id="source"></select></label>
+          <div class="row" id="lost" hidden><span class="warn">The window is gone.</span><button id="usedisplay">Use display instead</button></div>
+          <label class="field">Microphone<select id="mic"></select></label>
+          <div class="row">Game<input id="gamevol" type="range" min="0" max="1" step="0.05"><button id="gamemute">Mute</button><meter id="gamelevel" min="0" max="1"></meter></div>
+          <div class="row">Mic<input id="micvol" type="range" min="0" max="1" step="0.05"><button id="micmute">Mute</button><meter id="miclevel" min="0" max="1"></meter></div>
+          <div id="capinfo" class="sub"></div>
+        </div>
       </div>
       <div id="sideplayer" hidden>
         <h3>Recordings</h3>

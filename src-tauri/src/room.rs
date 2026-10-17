@@ -72,6 +72,10 @@ impl Core {
         self.dir.join("rooms").join(room).join("sets").join(set)
     }
 
+    pub fn live_dir(&self, room: &str) -> PathBuf {
+        self.dir.join("rooms").join(room).join("live")
+    }
+
     pub fn save_rooms(&self) {
         let text = serde_json::to_string(&*self.rooms.lock().unwrap()).unwrap_or_default();
         let _ = std::fs::write(self.dir.join("rooms.json"), text);
@@ -109,7 +113,7 @@ pub fn apply_active(core: &Arc<Core>) {
         for id in &wanted {
             if !peers.iter().any(|p| p.id == *id) {
                 let announce = core.ready.load(std::sync::atomic::Ordering::Relaxed);
-                peers.push(Peer { id: *id, name: String::new(), conn: None, incoming: None, offset_us: None, failures: 0, announce, codecs: vec!["h264".to_string()], info: None });
+                peers.push(Peer { id: *id, name: String::new(), conn: None, incoming: None, offset_us: None, failures: 0, announce, codecs: vec!["h264".to_string()], info: None, sharing: false, live: None });
                 fresh.push(*id);
             }
         }
@@ -133,7 +137,7 @@ pub fn create_room(core: &Arc<Core>, name: &str) -> String {
 }
 
 pub fn switch_room(core: &Arc<Core>, id: &str) -> Result<(), String> {
-    if core.recorder.lock().unwrap().is_some() {
+    if core.active_set.lock().unwrap().is_some() {
         return Err("Stop recording before switching rooms.".into());
     }
     {
@@ -216,52 +220,44 @@ pub fn adopt_room(core: &Arc<Core>, pending: &str, id: &str, name: &str, members
     }
 }
 
-fn write_set_json(core: &Core, set: &ActiveSet, ended: bool) {
+pub fn write_set_json(core: &Core, set: &ActiveSet, ended: bool) {
+    let mut me = json!({"id": core.ep.id().to_string(), "name": *core.name.lock().unwrap()});
+    if let Some(rec) = core.own_log().into_iter().find(|r| r["k"] == "rec" && r["set"] == set.id.as_str()) {
+        for key in ["source_kind", "source", "width", "height", "fps", "encoder", "codec", "audio", "mic"] {
+            me[key] = rec[key].clone();
+        }
+    }
     let peers: Vec<Value> = core.peers.lock().unwrap().iter().map(|p| json!({"id": p.id.to_string(), "name": p.name, "offset_us": p.offset_us})).collect();
     let value = json!({
         "id": set.id, "room": set.room, "by": set.by, "start_us": set.start_us, "ended": ended,
-        "members": [{"id": core.ep.id().to_string(), "name": *core.name.lock().unwrap()}],
+        "members": [me],
         "peers": peers,
     });
     let _ = std::fs::write(core.set_dir(&set.room, &set.id).join("set.json"), value.to_string());
 }
 
 pub fn begin_set(core: &Arc<Core>, set: &str, by: &str, start_us: i64) -> Result<(), String> {
-    let mut slot = core.recorder.lock().unwrap();
-    if slot.is_some() {
-        return Err("already recording".into());
-    }
     if !record::ffmpeg_present() {
         return Err("The video tool is still downloading. Wait a minute and try again.".into());
     }
     let room = core.active_room_id();
-    let dir = core.set_dir(&room, set);
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let file = format!("{}.mp4", core.ep.id());
-    let wanted = core.audio_process.lock().unwrap().clone();
-    let (audio_name, pid) = crate::audio_target(&wanted);
-    let meta = json!({"set": set, "room": room, "file": file, "by": by});
-    let mut usable = core.codecs.lock().unwrap().clone();
-    for p in core.peers.lock().unwrap().iter().filter(|p| p.conn.is_some()) {
-        usable.retain(|c| p.codecs.contains(c));
-    }
-    let recorder = record::Recorder::start(&core.dir, &dir.join(&file), pid, &audio_name, &usable, meta).map_err(|e| e.to_string())?;
-    *slot = Some(recorder);
+    std::fs::create_dir_all(core.set_dir(&room, set)).map_err(|e| e.to_string())?;
     let active = ActiveSet { id: set.to_string(), room, by: by.to_string(), start_us };
+    {
+        let mut slot = core.active_set.lock().unwrap();
+        if slot.is_some() {
+            return Err("already recording".into());
+        }
+        *slot = Some(active.clone());
+    }
     write_set_json(core, &active, false);
-    *core.active_set.lock().unwrap() = Some(active);
     Ok(())
 }
 
 pub fn end_set(core: &Arc<Core>) {
-    let recorder = core.recorder.lock().unwrap().take();
-    let Some(recorder) = recorder else { return };
-    recorder.stop();
-    let active = core.active_set.lock().unwrap().take();
-    if let Some(active) = active {
-        core.append_log(&json!({"k": "rec_end", "set": active.id, "t_us": now_us()}));
-        write_set_json(core, &active, true);
-    }
+    let Some(active) = record::end_set(core) else { return };
+    core.append_log(&json!({"k": "rec_end", "set": active.id, "t_us": now_us()}));
+    write_set_json(core, &active, true);
 }
 
 pub fn start_set(core: &Arc<Core>) -> Result<(), String> {

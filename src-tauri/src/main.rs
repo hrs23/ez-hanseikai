@@ -47,6 +47,8 @@ pub struct Peer {
     pub announce: bool,
     pub codecs: Vec<String>,
     pub info: Option<(String, u32)>,
+    pub sharing: bool,
+    pub live: Option<String>,
 }
 
 pub struct Core {
@@ -75,7 +77,7 @@ pub struct Core {
     pub ffmpeg_status: Mutex<String>,
     pub events: Mutex<Vec<String>>,
     pub started: Instant,
-    pub recorder: Mutex<Option<record::Recorder>>,
+    pub engine: record::Engine,
     log_lock: Mutex<()>,
 }
 
@@ -85,7 +87,7 @@ impl Core {
         let _ = log::append(&self.dir.join("log.bin"), record);
     }
 
-    fn own_log(&self) -> Vec<Value> {
+    pub fn own_log(&self) -> Vec<Value> {
         log::read(&self.dir.join("log.bin"))
     }
 
@@ -97,6 +99,9 @@ impl Core {
             "removed": *self.removed.lock().unwrap(),
             "audio_process": *self.audio_process.lock().unwrap(),
             "keep_days": *self.keep_days.lock().unwrap(),
+            "source": self.engine.source.lock().unwrap().clone(),
+            "mic": self.engine.mic.lock().unwrap().clone(),
+            "mix": self.engine.mix.lock().unwrap().clone(),
         });
         let _ = std::fs::write(self.dir.join("settings.json"), value.to_string());
     }
@@ -160,7 +165,7 @@ fn pid_of(name: &str) -> Option<u32> {
     processes().into_iter().find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, pid)| pid)
 }
 
-fn processes() -> Vec<(String, u32)> {
+pub fn processes() -> Vec<(String, u32)> {
     use std::os::windows::process::CommandExt;
     let Ok(out) = std::process::Command::new("tasklist").args(["/FO", "CSV", "/NH"]).creation_flags(0x08000000).output() else {
         return Vec::new();
@@ -188,29 +193,31 @@ async fn list_processes() -> Vec<String> {
 async fn state(core: State<'_, Arc<Core>>) -> Result<Value, String> {
     let core = core.inner().clone();
     let free = core.free_bytes.load(Ordering::Relaxed);
-    if free > 0 && free < (1 << 30) && core.recorder.lock().unwrap().is_some() {
+    if free > 0 && free < (1 << 30) && core.active_set.lock().unwrap().is_some() {
         room::stop_set(&core);
         *core.notice.lock().unwrap() = "Recording stopped: the disk is almost full.".into();
-    }
-    let dead = core.recorder.lock().unwrap().as_mut().is_some_and(|r| r.is_dead());
-    if dead {
-        tracing::warn!("recording stopped on its own");
-        room::stop_set(&core);
     }
     let room_id = core.active_room_id();
     let own = core.own_log();
     let mut notes: Vec<Value> = latest_notes(&own, "me", "me");
     let my_id = core.ep.id().to_string();
-    let snapshot: Vec<(EndpointId, String, Option<Connection>, Option<Connection>, Option<i64>, Option<(String, u32)>, u32)> = core
+    type Snapshot = (EndpointId, String, Option<Connection>, Option<Connection>, Option<i64>, Option<(String, u32)>, u32, bool, Option<String>);
+    let snapshot: Vec<Snapshot> = core
         .peers
         .lock()
         .unwrap()
         .iter()
-        .map(|p| (p.id, p.name.clone(), p.conn.clone(), p.incoming.clone(), p.offset_us, p.info.clone(), p.failures))
+        .map(|p| (p.id, p.name.clone(), p.conn.clone(), p.incoming.clone(), p.offset_us, p.info.clone(), p.failures, p.sharing, p.live.clone()))
         .collect();
     let mut logs: Vec<(String, String, i64, Vec<Value>)> = vec![("me".into(), my_id.clone(), 0, own)];
     let mut peers = Vec::new();
-    for (id, name, conn, incoming, offset_us, info, failures) in snapshot {
+    let live_of = |name: Option<String>| {
+        name.map(|n| {
+            let path = core.live_dir(&room_id).join(&n);
+            json!({"path": path, "size": size(path.clone()), "start_us": record::live_name(&n).map(|(_, ms)| ms * 1000)})
+        })
+    };
+    for (id, name, conn, incoming, offset_us, info, failures, sharing, live) in snapshot {
         let theirs = log::read(&core.peer_dir(&id).join("log.bin"));
         let who = if name.is_empty() { short(&id) } else { format!("{name} ({})", short(&id)) };
         notes.extend(latest_notes(&theirs, &id.to_string(), &who));
@@ -229,6 +236,8 @@ async fn state(core: State<'_, Arc<Core>>) -> Result<Value, String> {
             "offset_us": offset_us,
             "version": info.map(|(version, _)| version),
             "message": message,
+            "sharing": sharing && alive.is_some(),
+            "live": live_of(live.filter(|_| sharing && alive.is_some())),
         }));
         logs.push((id.to_string(), id.to_string(), offset_us.unwrap_or(0), theirs));
     }
@@ -272,7 +281,8 @@ async fn state(core: State<'_, Arc<Core>>) -> Result<Value, String> {
         "free_bytes": free,
         "previous_version": core.previous_version,
         "codec": record::pick(&core.codecs.lock().unwrap()).1,
-        "recording": core.recorder.lock().unwrap().is_some(),
+        "recording": core.active_set.lock().unwrap().is_some(),
+        "capture": capture_json(&core, live_of(core.engine.live_file())),
         "active_set": core.active_set_json(),
         "room": core.active_room().map(|r| json!({"id": r.id, "name": r.name})),
         "rooms": room_list,
@@ -280,6 +290,74 @@ async fn state(core: State<'_, Arc<Core>>) -> Result<Value, String> {
         "peers": peers,
         "notes": notes,
     }))
+}
+
+fn capture_json(core: &Core, live: Option<Value>) -> Value {
+    let e = &core.engine;
+    let names = e.names.lock().unwrap().clone();
+    let mix = |track| {
+        let key = e.mix_key(track);
+        let m = e.mix.lock().unwrap()[&key].clone();
+        json!({"volume": m["volume"].as_f64().unwrap_or(1.0), "muted": m["muted"].as_bool().unwrap_or(false)})
+    };
+    json!({
+        "source": e.source.lock().unwrap().clone(),
+        "source_name": names.source,
+        "source_kind": names.kind,
+        "source_lost": e.source_lost.load(Ordering::Relaxed),
+        "sharing": e.sink.lock().unwrap().is_some() && core.share.load(Ordering::Relaxed),
+        "status": e.status.lock().unwrap().clone(),
+        "game": names.game,
+        "mic": e.mic.lock().unwrap().clone(),
+        "mic_name": names.mic,
+        "mix": {"game": mix(record::GAME), "mic": mix(record::MIC)},
+        "live": live,
+    })
+}
+
+#[tauri::command]
+async fn list_sources() -> Vec<Value> {
+    record::list_sources()
+}
+
+#[tauri::command]
+fn set_source(core: State<Arc<Core>>, source: Value) -> Result<(), String> {
+    if !record::valid_source(&source) {
+        return Err("unknown source".into());
+    }
+    *core.engine.source.lock().unwrap() = source;
+    core.save_settings();
+    Ok(())
+}
+
+#[tauri::command]
+fn use_display(core: State<Arc<Core>>) {
+    *core.engine.source.lock().unwrap() = record::primary_display();
+    core.save_settings();
+}
+
+#[tauri::command]
+async fn list_mics() -> Result<Vec<Value>, String> {
+    tauri::async_runtime::spawn_blocking(record::list_mics).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_mic(core: State<Arc<Core>>, id: String) {
+    *core.engine.mic.lock().unwrap() = id;
+    core.save_settings();
+}
+
+#[tauri::command]
+fn set_mix(core: State<Arc<Core>>, kind: String, volume: f64, muted: bool) -> Result<(), String> {
+    let track = match kind.as_str() {
+        "game" => record::GAME,
+        "mic" => record::MIC,
+        _ => return Err("unknown kind".into()),
+    };
+    let key = core.engine.mix_key(track);
+    core.engine.mix.lock().unwrap()[&key] = json!({"volume": volume.clamp(0.0, 1.0), "muted": muted});
+    core.save_settings();
+    Ok(())
 }
 
 async fn warm(core: &Core) {
@@ -367,7 +445,7 @@ fn set_keep_days(core: State<Arc<Core>>, days: Option<u32>) {
 
 #[tauri::command]
 fn create_room(core: State<Arc<Core>>, name: String) -> Result<String, String> {
-    if core.recorder.lock().unwrap().is_some() {
+    if core.active_set.lock().unwrap().is_some() {
         return Err("Stop recording before switching rooms.".into());
     }
     Ok(room::create_room(&core, &name))
@@ -379,7 +457,7 @@ fn join_room(core: State<Arc<Core>>, code: String) -> Result<(), String> {
     let text: String = code.split_whitespace().collect();
     let (id, token) = text.strip_prefix("ezh-").and_then(|t| t.split_once('-')).ok_or_else(bad)?;
     let peer: EndpointId = id.parse().map_err(|_| bad())?;
-    if core.recorder.lock().unwrap().is_some() {
+    if core.active_set.lock().unwrap().is_some() {
         return Err("Stop recording before switching rooms.".into());
     }
     core.removed.lock().unwrap().remove(id);
@@ -557,7 +635,7 @@ async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
         ffmpeg_status: Mutex::new(String::new()),
         events: Mutex::new(Vec::new()),
         started: Instant::now(),
-        recorder: Mutex::new(None),
+        engine: record::Engine::new(&settings),
         log_lock: Mutex::new(()),
     }))
 }
@@ -584,6 +662,8 @@ fn main() {
             });
             tauri::async_runtime::spawn(net::accept_loop(core.clone()));
             room::apply_active(&core);
+            let capture_core = core.clone();
+            std::thread::spawn(move || record::supervise(capture_core));
             let free_core = core.clone();
             std::thread::spawn(move || loop {
                 free_core.free_bytes.store(data::free_bytes(&free_core.dir), Ordering::Relaxed);
@@ -607,7 +687,7 @@ fn main() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug_text, save_report, start_recording, stop_recording, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, set_share, set_limit, set_codecs, cancel_invites, set_audio_process, set_keep_days, note_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_note, control])
+        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug_text, save_report, start_recording, stop_recording, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, set_share, set_limit, set_codecs, cancel_invites, list_sources, set_source, use_display, list_mics, set_mic, set_mix, set_audio_process, set_keep_days, note_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_note, control])
         .run(tauri::generate_context!())
         .expect("failed to run");
 }

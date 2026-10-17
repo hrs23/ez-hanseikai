@@ -84,6 +84,8 @@ pre { white-space: pre-wrap; word-break: break-all; font-size: 11px; color: var(
 .tile .label { position: absolute; left: var(--s2); bottom: var(--s2); display: flex; align-items: center; gap: 6px; padding: 2px var(--s2); border-radius: 6px; background: rgba(0, 0, 0, .6); color: #fff; font-size: var(--t-sm); }
 .tile .key { position: absolute; right: var(--s2); top: var(--s2); padding: 0 6px; border-radius: 4px; background: rgba(0, 0, 0, .55); color: #fff; font-size: 11px; }
 .empty { color: var(--muted); text-align: center; padding: 60px var(--s4); }
+.tile.waiting { display: flex; align-items: center; justify-content: center; color: var(--muted); background: var(--raised); cursor: default; order: 99; }
+#capture meter { flex: 1; min-width: 40px; }
 
 #notes { min-height: 0; border-left: 1px solid var(--line); background: var(--surface); display: flex; flex-direction: column; min-height: 0; }
 #notelist { flex: 1; overflow-y: auto; padding: var(--s2); }
