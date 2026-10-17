@@ -45,7 +45,11 @@ Everything is a set of append-only files, one writer each:
 
 A file never changes in the middle, so syncing is "send me the bytes after offset N". Each log record has a length, a checksum and the writer's signature; a torn last record is dropped on start. A local SQLite database is only an index and is rebuilt from the files whenever needed.
 
-Record kinds in a log: `rec` (a recording starts: file name, start time, capture size, fps, encoder, audio process, app version), `rec_end`, `note`, `note_edit`, `note_del`, `note_restore` (edits and deletions refer to a note by its id), `offset` (clock offset to a peer), `layout` (a viewer's arrangement of tiles). Unknown kinds are kept and ignored.
+A recording is a set for the whole room: when anyone presses Record every member records their own screen, and Stop ends it for all. Each set is a folder named by its local start time, `rooms/<room>/sets/<time>/`, holding `<player-id>.mp4` for every player (own and received, streamed while they record) and `set.json`. Playback aligns the players inside a set from the start times in the logs and the measured clock offsets. A member who joins mid-set starts recording from then on; an absent member is an empty tile.
+
+Discovery: the default n0 address lookup publishes only the relay URL, not IP addresses. Anyone who dials an ID can still see its IP while hole punching, so IDs and invite codes stay inside the team.
+
+Record kinds in a log (`rec` and `rec_end` carry the set and room, notes carry the set): `rec` (a recording starts: file name, start time, capture size, fps, encoder, audio process, app version), `rec_end`, `note`, `note_edit`, `note_del`, `note_restore` (edits and deletions refer to a note by its id), `offset` (clock offset to a peer), `layout` (a viewer's arrangement of tiles). Unknown kinds are kept and ignored.
 
 Edits and deletions are new records. Only the recorder can delete a recording for everyone, and it goes to a trash period first. The app never removes the last copy of anything it knows about.
 

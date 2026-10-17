@@ -64,19 +64,26 @@ pub fn reset(dir: &Path, everything: bool) {
 pub fn delete_old(core: &crate::Core) {
     let Some(days) = *core.keep_days.lock().unwrap() else { return };
     let limit = std::time::Duration::from_secs(days as u64 * 86400);
-    let active = core.recording_name.lock().unwrap().clone();
-    let mut dirs = vec![core.dir.clone()];
-    if let Ok(entries) = std::fs::read_dir(core.dir.join("peer")) {
-        dirs.extend(entries.flatten().map(|e| e.path()));
-    }
-    for dir in dirs {
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            let old = entry.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age > limit);
-            if name.starts_with("rec-") && name.ends_with(".mp4") && Some(&name) != active.as_ref() && old {
-                let _ = std::fs::remove_file(entry.path());
+    let active = core.active_set.lock().unwrap().as_ref().map(|s| s.id.clone());
+    let Ok(rooms) = std::fs::read_dir(core.dir.join("rooms")) else { return };
+    for room in rooms.flatten() {
+        let Ok(sets) = std::fs::read_dir(room.path().join("sets")) else { continue };
+        for set in sets.flatten() {
+            let name = set.file_name().to_string_lossy().to_string();
+            let old = set.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age > limit);
+            if old && Some(&name) != active.as_ref() {
+                let _ = std::fs::remove_dir_all(set.path());
             }
         }
     }
+}
+
+pub fn tz_offset_seconds() -> i64 {
+    Command::new("powershell")
+        .args(["-NoProfile", "-Command", "[int][TimeZoneInfo]::Local.GetUtcOffset([DateTime]::UtcNow).TotalSeconds"])
+        .creation_flags(0x08000000)
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok())
+        .unwrap_or(0)
 }

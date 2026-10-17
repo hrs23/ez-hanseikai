@@ -10,21 +10,25 @@ const LIVE_LAG = 1.5;
 const RELOAD_GROWTH = 300000;
 const RETRY_MS = 3000;
 const LOW_DISK = 5e9;
+const NOTICE_MS = 5000;
 
 const tiles = {};
 const clock = { playing: false, m: 0, at: 0 };
-const chipState = {};
 let st = null;
 let ready = false;
+let tab = "record";
+let selected = null;
 let view = 0;
 let lastSingle = 1;
 let rate = 1;
 let live = false;
+let watchParty = true;
 let lastSeek = null;
 let noteSig = "";
 let layoutSig = "";
-let rateSample = {};
 let idleTimer = null;
+let undoAction = null;
+let noteItems = [];
 
 window.__TAURI__.app.getName().then((name) => {
   $("appname").textContent = name;
@@ -40,33 +44,23 @@ function fmt(sec) {
   const m = String(Math.floor((sec % 3600) / 60)).padStart(h ? 2 : 1, "0");
   return `${h ? h + ":" : ""}${m}:${String(sec % 60).padStart(2, "0")}`;
 }
+const setTitle = (id) => { const [d, t] = id.split(" "); return t ? `${d.slice(5)} ${t.replaceAll("-", ":").slice(0, 5)}` : id; };
 function el(tag, props = {}, ...children) {
   const e = Object.assign(document.createElement(tag), props);
   e.append(...children);
   return e;
 }
+const nameOf = (key) => (key === "me" ? "You" : label(st.peers.find((p) => p.id === key) || { short: key.slice(0, 10) }));
 
-function loadOrder() {
-  try { return JSON.parse(localStorage.getItem("order")) || []; } catch { return []; }
+function currentSet() {
+  if (!st) return null;
+  if (tab === "record") return st.sets.find((s) => s.live) || st.sets[0] || null;
+  return st.sets.find((s) => s.id === selected) || st.sets[0] || null;
 }
-function keys() {
-  const present = ["me", ...st.peers.map((p) => p.id)];
-  const saved = loadOrder().filter((k) => present.includes(k));
-  return [...saved, ...present.filter((k) => !saved.includes(k))];
-}
-function swap(a, b) {
-  const list = keys();
-  const i = list.indexOf(a), j = list.indexOf(b);
-  [list[i], list[j]] = [list[j], list[i]];
-  try { localStorage.setItem("order", JSON.stringify(list)); } catch {}
-  applyView();
-}
-
 function players() {
-  const list = [];
-  if (st.mine) list.push({ key: "me", label: "You", start: st.mine.start_us, off: 0, rec: st.mine });
-  for (const p of st.peers) if (p.rec && p.rec.size) list.push({ key: p.id, label: label(p), start: p.rec.start_us, off: p.offset_us || 0, rec: p.rec });
-  return list;
+  const set = currentSet();
+  if (!set) return [];
+  return set.players.filter((p) => p.size > 0).map((p) => ({ key: p.key, label: nameOf(p.key), start: p.start_us, off: p.offset_us || 0, rec: p, recording: p.recording }));
 }
 function base() {
   const list = players();
@@ -86,6 +80,22 @@ function setClock(playing, m) {
   tick();
 }
 const wallOf = (m) => Math.round(base() + m * 1e6);
+
+function loadOrder() {
+  try { return JSON.parse(localStorage.getItem("order")) || []; } catch { return []; }
+}
+function keys() {
+  const present = players().map((p) => p.key);
+  const saved = loadOrder().filter((k) => present.includes(k));
+  return [...saved, ...present.filter((k) => !saved.includes(k))];
+}
+function swap(a, b) {
+  const list = keys();
+  const i = list.indexOf(a), j = list.indexOf(b);
+  [list[i], list[j]] = [list[j], list[i]];
+  try { localStorage.setItem("order", JSON.stringify(list)); } catch {}
+  applyView();
+}
 
 function tile(key) {
   if (tiles[key]) return tiles[key];
@@ -118,11 +128,14 @@ function applyView() {
     t.video.volume = Number($("volume").value);
     t.video.playbackRate = rate;
   });
-  const sig = JSON.stringify([view, list]);
+  const views = [el("button", { textContent: "All", className: view === 0 ? "on" : "", onclick: () => { view = 0; applyView(); } }),
+    ...list.map((key, i) => el("button", { textContent: `${i + 1} ${nameOf(key)}`, className: view === i + 1 ? "on" : "", onclick: () => { view = i + 1; lastSingle = view; applyView(); } }))];
+  const sig = JSON.stringify([view, list, list.map(nameOf)]);
   if (sig !== layoutSig) {
     layoutSig = sig;
-    const shown = list.map((key, i) => ({ id: key === "me" ? "me" : key, index: i, w: Math.round(tile(key).box.clientWidth), h: Math.round(tile(key).box.clientHeight) }));
-    invoke("log_layout", { layout: { mode: view ? "focus" : "grid", tiles: shown } }).catch(() => {});
+    $("views").replaceChildren(...views);
+    const shown = list.map((key, i) => ({ id: key, index: i, w: Math.round(tile(key).box.clientWidth), h: Math.round(tile(key).box.clientHeight) }));
+    invoke("log_layout", { layout: { set: currentSet() && currentSet().id, mode: view ? "focus" : "grid", tiles: shown } }).catch(() => {});
   }
 }
 
@@ -185,19 +198,20 @@ function apply(cmd, m, who) {
   say(`${who} ${cmd === "play" ? "played" : cmd === "pause" ? "paused" : "jumped"} at ${fmt(m)}`);
 }
 function act(cmd, m) {
-  if (cmd === "seek") { lastSeek = nowM(); $("undo").hidden = false; $("undo").textContent = "Undo seek"; }
+  if (cmd === "seek") { lastSeek = nowM(); undoAction = null; $("undo").hidden = false; $("undo").textContent = "Undo seek"; }
   apply(cmd, m, "You");
-  if (players().length) invoke("control", { cmd, wallUs: wallOf(m) }).catch(() => {});
+  const set = currentSet();
+  if (watchParty && set) invoke("control", { cmd, wallUs: wallOf(m), set: set.id }).catch(() => {});
 }
 window.__TAURI__.event.listen("control", (e) => {
-  if (!st) return;
+  const set = currentSet();
+  if (!st || !watchParty || !set || e.payload.set !== set.id) return;
   const peer = st.peers.find((p) => p.id === e.payload.from);
   apply(e.payload.cmd, (e.payload.wall_us - ((peer && peer.offset_us) || 0) - base()) / 1e6, peer ? peer.name || peer.short : "Someone");
 });
 const toggle = () => act(clock.playing ? "pause" : "play", nowM());
 const jump = (delta) => act("seek", Math.min(total(), Math.max(0, nowM() + delta)));
 
-let undoAction = null;
 function offerUndo(text, action) {
   say(text);
   undoAction = action;
@@ -205,10 +219,11 @@ function offerUndo(text, action) {
   $("undo").textContent = "Undo";
 }
 
-let noteItems = [];
 function renderNotes() {
+  const set = currentSet();
   const b = base();
   noteItems = st.notes
+    .filter((n) => set && n.set === set.id)
     .map((n) => {
       const peer = st.peers.find((p) => p.id === n.from);
       return { id: n.id, mine: n.from === "me", m: (n.at_us - ((peer && peer.offset_us) || 0) - b) / 1e6, who: n.from === "me" ? "You" : n.who, text: n.text };
@@ -217,8 +232,10 @@ function renderNotes() {
   const sig = JSON.stringify(noteItems) + Math.round(total());
   if (sig === noteSig || $("notelist").querySelector("input")) return;
   noteSig = sig;
+  $("noteshead").textContent = `Notes ${noteItems.length || ""}`;
   $("notelist").replaceChildren(...noteItems.map((n) => {
     const acts = el("span", { className: "acts" });
+    const row = el("div", { className: "note", role: "button", tabIndex: 0 });
     if (n.mine) {
       acts.append(
         el("button", { textContent: "Edit", onclick: (e) => { e.stopPropagation(); editNote(n, row); } }),
@@ -229,7 +246,7 @@ function renderNotes() {
         } }),
       );
     }
-    const row = el("div", { className: "note", role: "button", tabIndex: 0 },
+    row.append(
       el("span", { className: "when", textContent: fmt(n.m) }),
       el("span", { className: "body" }, el("span", { textContent: n.text }), el("div", { className: "who", textContent: n.who })),
       acts);
@@ -261,43 +278,48 @@ function stepNote(dir) {
   if (next !== undefined) act("seek", Math.max(0, next));
 }
 
-function renderChips() {
-  const entries = [{ key: "me", label: "You", dot: st.recording ? "rec" : "", text: st.recording && st.mine ? `rec ${fmt((Date.now() * 1000 - st.mine.start_us) / 1e6)}` : "", sig: "" }];
-  for (const p of st.peers) {
-    const route = p.connected ? "" : p.failures > 2 ? "offline" : "connecting";
-    const recText = p.recording && p.rec ? `rec ${fmt((Date.now() * 1000 + (p.offset_us || 0) - p.rec.start_us) / 1e6)}` : "";
-    const got = p.rec && p.rec.size ? mb(p.rec.size) : "";
-    const prev = rateSample[p.id];
-    const speed = prev && p.rec && p.rec.size > prev.size ? ` ${(((p.rec.size - prev.size) * 8) / 1e6 / ((Date.now() - prev.at) / 1000)).toFixed(1)} Mbit/s` : "";
-    if (p.rec) rateSample[p.id] = { size: p.rec.size, at: Date.now() };
-    entries.push({ key: p.id, label: label(p), dot: p.recording ? "rec" : p.connected ? p.path : p.failures > 2 ? "bad" : "", text: [route, recText, got && p.recording ? got + speed : ""].filter(Boolean).join(", "), sig: `${p.connected}${p.path}${p.recording}` });
-  }
-  const chips = $("chips");
-  const keep = new Set(entries.map((e) => e.key));
-  for (const key of Object.keys(chipState)) if (!keep.has(key)) { chipState[key].box.remove(); delete chipState[key]; }
-  for (const e of entries) {
-    let c = chipState[e.key];
-    if (!c) {
-      const dot = el("span", { className: "dot" });
-      const text = el("span");
-      c = chipState[e.key] = { box: el("span", { className: "chip" }, dot, text), dot, text, sig: e.sig };
-      chips.append(c.box);
-    }
-    c.dot.className = "dot " + e.dot;
-    c.text.textContent = e.text ? `${e.label}: ${e.text}` : e.label;
-    if (c.sig !== e.sig) { c.sig = e.sig; c.box.classList.remove("flash"); void c.box.offsetWidth; c.box.classList.add("flash"); }
-  }
+function renderSide() {
+  $("siderecord").hidden = tab !== "record";
+  $("sideplayer").hidden = tab !== "player";
+  $("tabrecord").classList.toggle("on", tab === "record");
+  $("tabplayer").classList.toggle("on", tab === "player");
+  $("roomtitle").textContent = st.room ? st.room.name : "";
+  const me = el("div", { className: "peer" }, el("span", { className: "dot " + (st.recording ? "rec" : "") }),
+    el("div", { className: "info" }, el("div", { className: "name", textContent: `${st.name || "You"} (you)` }), el("div", { className: "sub", textContent: st.recording ? "recording" : "idle" })));
+  const rows = st.peers.map((p) => {
+    const set = st.sets.find((s) => s.live);
+    const pl = set && set.players.find((x) => x.key === p.id);
+    const route = p.connected ? `${p.path === "direct" ? "direct" : "via relay"}, ${p.rtt_ms} ms` : p.failures > 2 ? "offline" : "connecting";
+    const info = el("div", { className: "info" }, el("div", { className: "name", textContent: label(p) }),
+      el("div", { className: "sub", textContent: [pl && pl.recording ? "recording" : "", route, pl && pl.size ? mb(pl.size) : ""].filter(Boolean).join(", ") }));
+    if (p.message) info.append(el("div", { className: "sub fail", textContent: p.message }));
+    return el("div", { className: "peer" }, el("span", { className: "dot " + (pl && pl.recording ? "rec" : p.connected ? p.path : p.failures > 2 ? "bad" : "") }), info,
+      el("button", { textContent: "Remove", onclick: () => invoke("remove_peer", { id: p.id }) }));
+  });
+  $("members").replaceChildren(me, ...rows);
+  $("cancelinvite").hidden = !st.invites;
+  $("setlist").replaceChildren(...st.sets.map((s) => {
+    const names = s.players.map((p) => nameOf(p.key)).join(", ");
+    const notes = st.notes.filter((n) => n.set === s.id).length;
+    const cur = currentSet();
+    return el("button", { className: "set" + (cur && cur.id === s.id ? " sel" : ""), onclick: () => { selected = s.id; resetPlayback(); } },
+      el("div", { className: "t" }, setTitle(s.id), s.live ? el("span", { className: "live-tag", textContent: "LIVE" }) : ""),
+      el("div", { className: "p", textContent: names + (notes ? `, ${notes} notes` : "") }));
+  }));
+  const rooms = st.rooms.map((r) => el("div", { className: "roomrow" + (r.active ? " active" : "") },
+    el("span", { textContent: `${r.name} (${r.members})` }),
+    r.active ? "" : el("button", { textContent: "Switch", onclick: () => invoke("switch_room", { id: r.id }).catch((e) => { $("roomerr").textContent = e; }) }),
+    el("button", { textContent: "Leave", onclick: () => invoke("leave_room", { id: r.id }) })));
+  $("roomlist").replaceChildren(...rooms);
+  $("roombtn").textContent = st.room ? `${st.room.name} (${st.peers.length + 1})` : "Rooms";
 }
-
-function renderRoom() {
-  const inRoom = st.peers.length > 0;
-  $("members").replaceChildren(...st.peers.map((p) => el("div", { className: "member" },
-    el("span", { className: "dot " + (p.connected ? p.path : p.failures > 2 ? "bad" : "") }),
-    el("span", { textContent: label(p) + (p.message ? ` - ${p.message}` : "") }),
-    el("button", { textContent: "Remove", onclick: () => invoke("remove_peer", { id: p.id }) }))));
-  $("rejoin").hidden = inRoom || !st.can_rejoin;
-  $("roombtn").textContent = inRoom ? `Room (${st.peers.length + 1})` : "Room";
-  $("onboard").hidden = inRoom;
+function resetPlayback() {
+  clock.playing = false;
+  clock.m = 0;
+  live = false;
+  noteSig = "";
+  layoutSig = "";
+  for (const key of Object.keys(tiles)) { tiles[key].box.remove(); delete tiles[key]; }
 }
 
 async function refresh() {
@@ -309,33 +331,33 @@ async function refresh() {
   if (document.activeElement !== $("keepdays")) $("keepdays").value = st.keep_days || "";
   if (document.activeElement !== $("proc")) $("proc").value = st.audio_process;
   const warnings = [st.notice, st.ffmpeg, st.free_bytes && st.free_bytes < LOW_DISK ? `Low disk space: ${gb(st.free_bytes)} free` : ""].filter(Boolean);
-  $("notice").textContent = warnings.join(" ");
-  $("notice").hidden = !warnings.length;
+  if (warnings.length) { $("notice").textContent = warnings.join(" "); $("notice").hidden = false; }
+  else if (!flashing) $("notice").hidden = true;
   $("rec").textContent = st.recording ? "Stop" : "Record";
   $("rec").className = st.recording ? "rec-on" : "primary";
-  $("recinfo").textContent = st.recording && st.mine ? fmt((Date.now() * 1000 - st.mine.start_us) / 1e6) : "";
-  const ids = new Set(keys());
-  for (const key of Object.keys(tiles)) if (!ids.has(key)) { tiles[key].box.remove(); delete tiles[key]; }
-  const shown = [];
-  tile("me").name.textContent = "You";
-  tile("me").dot.className = "dot " + (st.recording ? "rec" : "");
-  shown.push(source(tile("me").video, st.mine));
-  for (const p of st.peers) {
-    const t = tile(p.id);
-    t.name.textContent = label(p);
-    t.dot.className = "dot " + (p.recording ? "rec" : p.connected ? p.path : "");
-    shown.push(source(t.video, p.rec));
+  const live_ = st.sets.find((s) => s.live);
+  $("recinfo").textContent = st.active_set ? `${fmt((Date.now() * 1000 - st.active_set.start_us) / 1e6)}${st.active_set.by ? ", started by " + st.active_set.by : ""}` : live_ ? "recording" : "";
+  const set = currentSet();
+  if (tab === "record" && set && (!selected || live_)) selected = set.id;
+  const wanted = new Set(keys());
+  for (const key of Object.keys(tiles)) if (!wanted.has(key)) { tiles[key].box.remove(); delete tiles[key]; }
+  let any = false;
+  for (const p of players()) {
+    const t = tile(p.key);
+    t.name.textContent = p.label;
+    t.dot.className = "dot " + (p.recording ? "rec" : "");
+    any = source(t.video, p.rec) || any;
   }
-  tile("me").box.hidden = !shown[0];
-  st.peers.forEach((p, i) => { tiles[p.id].box.hidden = !shown[i + 1]; });
-  const any = shown.some(Boolean);
-  $("empty").hidden = any || st.peers.length === 0;
+  const inRoom = !!st.room;
+  $("onboard").hidden = inRoom;
+  $("empty").hidden = any || !inRoom;
   $("videos").hidden = !any;
-  $("reviewwrap").classList.toggle("bare", !any && st.notes.length === 0);
+  $("toolbar").hidden = !any;
+  $("reviewwrap").classList.toggle("bare", !inRoom);
   applyView();
-  renderChips();
-  renderRoom();
+  renderSide();
   renderNotes();
+  if (tab === "record" && live_ && !live) { live = true; }
   if (live && total() - nowM() > LIVE_LAG * 2) setClock(true, total() - LIVE_LAG);
   $("recovery").hidden = !st.recovery;
   $("recoverymsg").textContent = st.recovery || "";
@@ -345,7 +367,7 @@ async function refresh() {
 
 function renderInfo() {
   const lines = [`version ${st.version}${st.previous_version ? ` (previous run ${st.previous_version})` : ""}`, `id ${st.id}`];
-  for (const p of st.peers) lines.push(`peer ${label(p)}: ${p.connected ? p.path + ", " + p.rtt_ms + " ms" : "not connected"}${p.version ? ", v" + p.version : ""}${p.offset_us != null ? ", clock offset " + (p.offset_us / 1000).toFixed(1) + " ms" : ""}${p.rec ? ", " + mb(p.rec.size) : ""}`);
+  for (const p of st.peers) lines.push(`peer ${label(p)}: ${p.connected ? p.path + ", " + p.rtt_ms + " ms" : "not connected"}${p.version ? ", v" + p.version : ""}${p.offset_us != null ? ", clock offset " + (p.offset_us / 1000).toFixed(1) + " ms" : ""}`);
   $("info").textContent = lines.join("\n");
 }
 
@@ -404,16 +426,42 @@ document.addEventListener("fullscreenchange", wake);
 
 function closePops() { for (const id of ["roompop", "settings", "helpbox"]) $(id).hidden = true; }
 function pop(id) { const open = $(id).hidden; closePops(); $(id).hidden = !open; }
+let flashing = false;
+function flash(text) {
+  flashing = true;
+  $("notice").textContent = text;
+  $("notice").hidden = false;
+  setTimeout(() => { flashing = false; $("notice").hidden = true; }, NOTICE_MS);
+}
 
-const record = () => (st && st.recording ? invoke("stop_recording") : invoke("start_recording").catch((e) => { $("notice").textContent = e; $("notice").hidden = false; }));
-const showCode = (code) => { for (const [box, input] of [["invitebox", "code"], ["invitebox2", "code2"]]) { $(box).hidden = false; $(input).value = code; } };
-const createInvite = () => invoke("create_invite", { reuse: false }).then(showCode);
+const record = () => (st && st.recording ? invoke("stop_recording") : invoke("start_recording").catch((e) => flash(e)));
+const showCode = (code) => { $("invitebox").hidden = false; $("code").value = code; };
+const makeInvite = () => invoke("create_invite", { reuse: false }).then(showCode);
+const createRoom = () => invoke("create_room", { name: "" }).then(() => { tab = "record"; return makeInvite(); }).catch((e) => flash(e));
 const join = (field, err) => invoke("join_room", { code: $(field).value }).then(() => { $(field).value = ""; $(err).textContent = ""; closePops(); }).catch((e) => { $(err).textContent = e; });
+function openDebug() { closePops(); $("debugpage").hidden = false; renderInfo(); runCheck(); refreshDebug(); }
+function focusPlayer(delta) {
+  const n = keys().length;
+  view = view === 0 ? (delta > 0 ? 1 : n) : ((view - 1 + delta + n) % n) + 1;
+  lastSingle = view;
+  applyView();
+}
+function showTab(name) {
+  tab = name;
+  if (name === "record") selected = null;
+  resetPlayback();
+  refresh();
+}
 
 $("rec").onclick = record;
+$("tabrecord").onclick = () => showTab("record");
+$("tabplayer").onclick = () => { selected = (st.sets[0] || {}).id; showTab("player"); };
 $("play").onclick = toggle;
 $("back").onclick = () => jump(-STEP.normal);
 $("fwd").onclick = () => jump(STEP.normal);
+$("back60").onclick = () => jump(-STEP.huge);
+$("fwd60").onclick = () => jump(STEP.huge);
+$("wp").onclick = () => { watchParty = !watchParty; $("wp").classList.toggle("on", watchParty); };
 $("undo").onclick = () => {
   if (undoAction) { undoAction(); undoAction = null; }
   else if (lastSeek !== null) act("seek", lastSeek);
@@ -430,19 +478,19 @@ $("timeline").onclick = (e) => {
 };
 $("noteform").onsubmit = (e) => {
   e.preventDefault();
-  invoke("add_note", { text: $("note").value, atUs: wallOf(nowM()) });
+  const set = currentSet();
+  if (set) invoke("add_note", { text: $("note").value, atUs: wallOf(nowM()), set: set.id });
   $("note").value = "";
   $("note").blur();
 };
 $("roombtn").onclick = () => pop("roompop");
-$("invite").onclick = createInvite;
-$("invite2").onclick = createInvite;
+$("newroom").onclick = () => { closePops(); createRoom(); };
+$("invite").onclick = makeInvite;
+$("invite2").onclick = createRoom;
+$("cancelinvite").onclick = () => invoke("cancel_invites").then(() => { $("invitebox").hidden = true; });
 $("copycode").onclick = () => navigator.clipboard.writeText($("code").value);
-$("copycode2").onclick = () => navigator.clipboard.writeText($("code2").value);
 $("join").onclick = () => join("joincode", "roomerr");
 $("join2").onclick = () => join("joincode2", "roomerr2");
-$("leave2").onclick = () => invoke("leave_room");
-$("rejoin").onclick = () => invoke("rejoin");
 $("closesettings").onclick = closePops;
 $("proc").onchange = () => invoke("set_audio_process", { name: $("proc").value });
 $("keepdays").onchange = () => invoke("set_keep_days", { days: $("keepdays").value ? Number($("keepdays").value) : null });
@@ -470,7 +518,31 @@ $("rreset").onclick = () => invoke("reset", { everything: false, confirm: "" });
 $("rcontinue").onclick = () => invoke("dismiss_recovery");
 $("proc").onfocus = fillProcesses;
 
-function openNoteInput() { $("note").focus(); }
+const menuActions = {
+  "settings": () => { closePops(); $("settings").hidden = false; },
+  "create-room": createRoom,
+  "join-room": () => { closePops(); $("roompop").hidden = false; $("joincode").focus(); },
+  "copy-invite": () => invoke("create_invite", { reuse: true }).then((code) => { showCode(code); navigator.clipboard.writeText(code); flash("Invite code copied"); }),
+  "cancel-invite": () => invoke("cancel_invites").then(() => { $("invitebox").hidden = true; flash("Invite cancelled"); }),
+  "leave-room": () => st && st.room && invoke("leave_room", { id: st.room.id }),
+  "fullscreen": toggleFull,
+  "all-players": () => { view = 0; applyView(); },
+  "next-player": () => focusPlayer(1),
+  "prev-player": () => focusPlayer(-1),
+  "shortcuts": () => { closePops(); $("helpbox").hidden = false; },
+  "debug": openDebug,
+  "update": () => checkUpdate(true),
+};
+window.__TAURI__.event.listen("menu", (e) => { if (menuActions[e.payload]) menuActions[e.payload](); });
+window.__TAURI__.event.listen("joined", (e) => flash(`${e.payload} joined`));
+
+function changeRate(dir) {
+  rate = SPEEDS[Math.max(0, Math.min(SPEEDS.length - 1, SPEEDS.indexOf(rate) + dir))];
+  $("speed").value = rate;
+  clock.m = nowM();
+  clock.at = performance.now();
+  applyView();
+}
 document.addEventListener("keydown", (e) => {
   const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName);
   if (e.key === "Escape") {
@@ -487,15 +559,15 @@ document.addEventListener("keydown", (e) => {
   else if (e.key === "ArrowRight") jump(stepSize(STEP.small, STEP.normal));
   else if (k === "j") jump(-stepSize(STEP.huge, STEP.big));
   else if (k === "l") jump(stepSize(STEP.huge, STEP.big));
-  else if (e.key === "<" || e.key === ",") { const i = Math.max(0, SPEEDS.indexOf(rate) - 1); rate = SPEEDS[i]; $("speed").value = rate; clock.m = nowM(); clock.at = performance.now(); applyView(); }
-  else if (e.key === ">" || e.key === ".") { const i = Math.min(SPEEDS.length - 1, SPEEDS.indexOf(rate) + 1); rate = SPEEDS[i]; $("speed").value = rate; clock.m = nowM(); clock.at = performance.now(); applyView(); }
+  else if (e.key === "<" || e.key === ",") changeRate(-1);
+  else if (e.key === ">" || e.key === ".") changeRate(1);
   else if (k === "m") { $("volume").value = Number($("volume").value) > 0 ? 0 : 1; applyView(); }
   else if (e.key === "ArrowUp") { $("volume").value = Math.min(1, Number($("volume").value) + VOLUME_STEP); applyView(); }
   else if (e.key === "ArrowDown") { $("volume").value = Math.max(0, Number($("volume").value) - VOLUME_STEP); applyView(); }
   else if (k === "f") toggleFull();
   else if (/^[0-9]$/.test(e.key)) { view = Number(e.key); if (view) lastSingle = view; applyView(); }
   else if (e.key === "Tab") { view = view ? 0 : lastSingle; applyView(); }
-  else if (k === "c") openNoteInput();
+  else if (k === "c") $("note").focus();
   else if (k === "q") stepNote(-1);
   else if (k === "e") stepNote(1);
   else if (k === "u") $("undo").click();
@@ -504,35 +576,6 @@ document.addEventListener("keydown", (e) => {
   e.preventDefault();
 });
 
-function openDebug() { closePops(); $("debugpage").hidden = false; renderInfo(); runCheck(); refreshDebug(); }
-function focusPlayer(delta) {
-  const n = keys().length;
-  view = view === 0 ? (delta > 0 ? 1 : n) : ((view - 1 + delta + n) % n) + 1;
-  lastSingle = view;
-  applyView();
-}
-function flash(text) {
-  $("notice").textContent = text;
-  $("notice").hidden = false;
-  setTimeout(() => { $("notice").hidden = true; }, 5000);
-}
-const menuActions = {
-  "settings": () => { closePops(); $("settings").hidden = false; },
-  "create-room": () => { closePops(); $("roompop").hidden = false; createInvite(); },
-  "join-room": () => { closePops(); $("roompop").hidden = false; $("joincode").focus(); },
-  "copy-invite": () => invoke("create_invite", { reuse: true }).then((code) => { showCode(code); navigator.clipboard.writeText(code); flash("Invite code copied"); }),
-  "cancel-invite": () => invoke("cancel_invites").then(() => { for (const b of ["invitebox", "invitebox2"]) $(b).hidden = true; flash("Invite cancelled"); }),
-  "leave-room": () => invoke("leave_room"),
-  "fullscreen": toggleFull,
-  "all-players": () => { view = 0; applyView(); },
-  "next-player": () => focusPlayer(1),
-  "prev-player": () => focusPlayer(-1),
-  "shortcuts": () => { closePops(); $("helpbox").hidden = false; },
-  "debug": openDebug,
-  "update": () => checkUpdate(true),
-};
-window.__TAURI__.event.listen("menu", (e) => { if (menuActions[e.payload]) menuActions[e.payload](); });
-window.__TAURI__.event.listen("joined", (e) => flash(`${e.payload} joined`));
 setInterval(tick, TICK_MS);
 setInterval(() => refresh().catch(() => {}), 1000);
 setInterval(() => refreshDebug().catch(() => {}), 2000);

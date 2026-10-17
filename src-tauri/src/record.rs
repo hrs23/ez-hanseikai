@@ -84,7 +84,6 @@ struct Shared {
 struct Flags {
     shared: Arc<Shared>,
     dir: PathBuf,
-    name: String,
     meta: serde_json::Value,
 }
 
@@ -115,7 +114,7 @@ impl GraphicsCaptureApiHandler for Capture {
         let buffer = frame.buffer()?;
         let data = buffer.as_nopadding_buffer(&mut self.buffer);
         if !shared.started.swap(true, Ordering::Relaxed) {
-            let mut record = json!({"k": "rec", "name": self.flags.name, "start_us": now_us()});
+            let mut record = json!({"k": "rec", "start_us": now_us()});
             record.as_object_mut().unwrap().extend(self.flags.meta.as_object().cloned().unwrap_or_default());
             log::append(&self.flags.dir.join("log.bin"), &record)?;
         }
@@ -141,7 +140,6 @@ impl GraphicsCaptureApiHandler for Capture {
 }
 
 pub struct Recorder {
-    pub name: String,
     control: CaptureControl<Capture, Err>,
     shared: Arc<Shared>,
     child: Child,
@@ -305,13 +303,12 @@ fn audio_loop(pid: u32, listener: TcpListener, shared: Arc<Shared>) -> Result<()
 }
 
 impl Recorder {
-    pub fn start(dir: &Path, audio_pid: u32, audio_name: &str) -> Result<Self, Err> {
+    pub fn start(dir: &Path, out: &Path, audio_pid: u32, audio_name: &str, extra: serde_json::Value) -> Result<Self, Err> {
         if !ffmpeg_present() {
             return Err("ffmpeg is not installed yet".into());
         }
         let monitor = Monitor::primary()?;
         let (width, height) = (monitor.width()?, monitor.height()?);
-        let name = format!("rec-{}.mp4", now_us() / 1000);
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let port = listener.local_addr()?.port();
         let mut child = Command::new(ffmpeg())
@@ -326,7 +323,7 @@ impl Recorder {
             .args(["-force_key_frames", "expr:gte(t,n_forced*1)"])
             .args(["-c:a", "aac", "-b:a", "128k"])
             .args(["-f", "mp4", "-movflags", "frag_keyframe+empty_moov+default_base_moof"])
-            .arg(dir.join(&name))
+            .arg(out)
             .stdin(Stdio::piped())
             .stderr(Stdio::piped())
             .creation_flags(NO_WINDOW | BELOW_NORMAL)
@@ -369,8 +366,9 @@ impl Recorder {
                 last.1 = Instant::now() - Duration::from_millis(200);
             }
         });
-        let meta = json!({"width": width, "height": height, "fps": FPS, "encoder": encoder(), "audio": audio_name, "version": crate::VERSION});
-        let flags = || Flags { shared: shared.clone(), dir: dir.to_path_buf(), name: name.clone(), meta: meta.clone() };
+        let mut meta = json!({"width": width, "height": height, "fps": FPS, "encoder": encoder(), "audio": audio_name, "version": crate::VERSION});
+        meta.as_object_mut().unwrap().extend(extra.as_object().cloned().unwrap_or_default());
+        let flags = || Flags { shared: shared.clone(), dir: dir.to_path_buf(), meta: meta.clone() };
         let mut started = Capture::start_free_threaded(settings(DrawBorderSettings::WithoutBorder, flags())?);
         if let Err(e) = &started {
             tracing::warn!("capture without border refused ({e}), using the default border");
@@ -386,7 +384,7 @@ impl Recorder {
                 return Err(e.into());
             }
         };
-        Ok(Self { name, control, shared, child, audio })
+        Ok(Self { control, shared, child, audio })
     }
 
     pub fn is_dead(&mut self) -> bool {

@@ -10,12 +10,14 @@ use tauri::Emitter;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::time::{sleep, timeout};
 
-use crate::{add_peer_id, debug, log, now_us, short, Core, ALPN, PROTOCOL, VERSION};
+use crate::room::{self, valid_id};
+use crate::{debug, log, now_us, short, Core, ALPN, PROTOCOL, VERSION};
 
 const CHUNK: usize = 64 << 10;
 const LOG_SYNC: Duration = Duration::from_secs(2);
 const FILE_WATCH: Duration = Duration::from_millis(250);
 const RETRY: Duration = Duration::from_secs(2);
+const FINISHED_RECHECK: Duration = Duration::from_secs(30);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 async fn request(conn: &Connection, req: &Value) -> Result<Vec<u8>> {
@@ -28,23 +30,35 @@ async fn request(conn: &Connection, req: &Value) -> Result<Vec<u8>> {
     .await?
 }
 
-pub async fn send_control(core: &Arc<Core>, cmd: &str, wall_us: i64) {
+pub async fn send_control(core: &Arc<Core>, cmd: &str, wall_us: i64, set: &str) {
     for conn in core.connections() {
-        let _ = request(&conn, &json!({"t": "ctl", "cmd": cmd, "wall_us": wall_us})).await;
+        let _ = request(&conn, &json!({"t": "ctl", "cmd": cmd, "wall_us": wall_us, "set": set})).await;
     }
 }
 
-fn members(core: &Core) -> Vec<String> {
-    let mut list: Vec<String> = core.peers.lock().unwrap().iter().map(|p| p.id.to_string()).collect();
-    list.push(core.ep.id().to_string());
-    list
+pub fn broadcast(core: &Arc<Core>, message: Value) {
+    for conn in core.connections() {
+        let message = message.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = request(&conn, &message).await;
+        });
+    }
 }
 
-fn learn_members(core: &Arc<Core>, list: &Value) {
-    for id in list.as_array().into_iter().flatten().filter_map(|v| v.as_str()) {
-        if !core.removed.lock().unwrap().contains(id) {
-            let _ = add_peer_id(core, id);
-        }
+fn room_info(core: &Core) -> Value {
+    match core.active_room() {
+        Some(r) => json!({"id": r.id, "name": r.name, "members": r.members}),
+        None => Value::Null,
+    }
+}
+
+fn learn_members(core: &Arc<Core>, room: &Value, members: &Value) {
+    let Some(id) = room["id"].as_str() else { return };
+    if core.active_room_id() != id {
+        return;
+    }
+    for member in members.as_array().into_iter().flatten().filter_map(|v| v.as_str()) {
+        room::add_member(core, id, member);
     }
 }
 
@@ -69,20 +83,17 @@ async fn pace(rate: Option<f64>, started: Instant, bytes: u64) {
     }
 }
 
-fn valid_recording(name: &str) -> bool {
-    name.starts_with("rec-") && name.ends_with(".mp4") && !name.contains(['/', '\\'])
-}
-
-fn recording_active(core: &Core, name: &str) -> bool {
-    core.recording_name.lock().unwrap().as_deref() == Some(name)
+fn set_active(core: &Core, set: &str) -> bool {
+    core.active_set.lock().unwrap().as_ref().is_some_and(|s| s.id == set)
 }
 
 async fn follow(core: &Core, send: &mut SendStream, req: &Value) -> Result<()> {
-    let name = req["file"].as_str().unwrap_or_default();
-    if !valid_recording(name) || !core.share.load(Ordering::Relaxed) {
+    let (set, room) = (req["set"].as_str().unwrap_or_default(), req["room"].as_str().unwrap_or_default());
+    if !valid_id(set) || !valid_id(room) || room != core.active_room_id() || !core.share.load(Ordering::Relaxed) {
         return Ok(());
     }
-    let Ok(mut file) = tokio::fs::File::open(core.dir.join(name)).await else { return Ok(()) };
+    let path = core.set_dir(room, set).join(format!("{}.mp4", core.ep.id()));
+    let Ok(mut file) = tokio::fs::File::open(path).await else { return Ok(()) };
     file.seek(std::io::SeekFrom::Start(req["from"].as_u64().unwrap_or(0))).await?;
     let started = Instant::now();
     let mut sent = 0u64;
@@ -90,7 +101,7 @@ async fn follow(core: &Core, send: &mut SendStream, req: &Value) -> Result<()> {
     loop {
         let n = file.read(&mut buf).await?;
         if n == 0 {
-            if !recording_active(core, name) || !core.share.load(Ordering::Relaxed) {
+            if !set_active(core, set) || !core.share.load(Ordering::Relaxed) {
                 break;
             }
             sleep(FILE_WATCH).await;
@@ -101,6 +112,17 @@ async fn follow(core: &Core, send: &mut SendStream, req: &Value) -> Result<()> {
         pace(bytes_per_sec(core), started, sent).await;
     }
     Ok(())
+}
+
+fn react_to_set(core: &Arc<Core>, set: &Value) {
+    let (Some(id), Some(room)) = (set["id"].as_str(), set["room"].as_str()) else { return };
+    if !valid_id(id) || room != core.active_room_id() || core.recorder.lock().unwrap().is_some() {
+        return;
+    }
+    let (core, id, by, start_us) = (core.clone(), id.to_string(), set["by"].as_str().unwrap_or_default().to_string(), set["start_us"].as_i64().unwrap_or(0));
+    tokio::task::spawn_blocking(move || {
+        let _ = room::begin_set(&core, &id, &by, start_us);
+    });
 }
 
 async fn handle(core: Arc<Core>, from: EndpointId, mut send: SendStream, mut recv: RecvStream) -> Result<()> {
@@ -126,14 +148,25 @@ async fn handle(core: Arc<Core>, from: EndpointId, mut send: SendStream, mut rec
                 p.info = Some((version, proto));
                 p.name = name;
             });
-            learn_members(&core, &req["members"]);
+            learn_members(&core, &req["room"], &req["members"]);
+            react_to_set(&core, &req["set"]);
             let own = core.name.lock().unwrap().clone();
-            send.write_all(&serde_json::to_vec(&json!({"app": VERSION, "proto": PROTOCOL, "name": own, "members": members(&core)}))?).await?;
+            let room = room_info(&core);
+            send.write_all(&serde_json::to_vec(&json!({"app": VERSION, "proto": PROTOCOL, "name": own, "room": room, "members": room["members"], "set": core.active_set_json()}))?).await?;
+        }
+        Some("rec") => {
+            if req["action"] == "start" {
+                react_to_set(&core, &json!({"id": req["set"], "room": req["room"], "by": req["by"], "start_us": req["start_us"]}));
+            } else if req["action"] == "stop" && set_active(&core, req["set"].as_str().unwrap_or_default()) {
+                let core = core.clone();
+                tokio::task::spawn_blocking(move || room::end_set(&core));
+            }
+            send.write_all(b"ok").await?;
         }
         Some("ping") => send.write_all(&now_us().to_le_bytes()).await?,
         Some("ctl") => {
             let wall = req["wall_us"].as_i64().unwrap_or(0);
-            let _ = core.app.emit("control", json!({"cmd": req["cmd"], "wall_us": wall, "from": from.to_string()}));
+            let _ = core.app.emit("control", json!({"cmd": req["cmd"], "wall_us": wall, "set": req["set"], "from": from.to_string()}));
             send.write_all(b"ok").await?;
         }
         _ => {}
@@ -145,16 +178,18 @@ async fn handle(core: Arc<Core>, from: EndpointId, mut send: SendStream, mut rec
 async fn join(core: &Arc<Core>, from: EndpointId, mut send: SendStream, mut recv: RecvStream) -> Result<()> {
     let req: Value = serde_json::from_slice(&recv.read_to_end(4096).await?)?;
     let token = req["token"].as_str().unwrap_or_default().to_string();
+    let room_id = core.active_room_id();
     let valid = req["t"] == "join" && {
         let mut invites = core.invites.lock().unwrap();
         let before = invites.len();
-        invites.retain(|t| *t != token);
+        invites.retain(|(t, r)| !(*t == token && *r == room_id));
         invites.len() < before
     };
     if valid {
         core.removed.lock().unwrap().remove(&from.to_string());
-        let _ = add_peer_id(core, &from.to_string());
-        send.write_all(&serde_json::to_vec(&json!({"ok": true, "members": members(core)}))?).await?;
+        room::add_member(core, &room_id, &from.to_string());
+        let room = room_info(core);
+        send.write_all(&serde_json::to_vec(&json!({"ok": true, "room": room, "members": room["members"]}))?).await?;
     }
     send.finish()?;
     send.stopped().await.ok();
@@ -216,18 +251,17 @@ async fn pull_log(core: &Core, id: &EndpointId, conn: &Connection) -> Result<()>
     Ok(())
 }
 
-fn recording_ended(core: &Core, id: &EndpointId, name: &str) -> bool {
-    let records = log::read(&core.peer_dir(id).join("log.bin"));
-    let start = records.iter().rposition(|r| r["k"] == "rec" && r["name"] == name);
-    let end = records.iter().rposition(|r| r["k"] == "rec_end");
-    matches!((start, end), (Some(s), Some(e)) if e > s)
+fn recording_ended(core: &Core, id: &EndpointId, set: &str) -> bool {
+    log::read(&core.peer_dir(id).join("log.bin")).iter().any(|r| r["k"] == "rec_end" && r["set"] == set)
 }
 
-async fn receive(core: &Core, id: &EndpointId, conn: &Connection, name: &str) -> Result<u64> {
-    let path = core.peer_dir(id).join(name);
+async fn receive(core: &Core, id: &EndpointId, conn: &Connection, room: &str, set: &str) -> Result<u64> {
+    let dir = core.set_dir(room, set);
+    tokio::fs::create_dir_all(&dir).await?;
+    let path = dir.join(format!("{id}.mp4"));
     let from = tokio::fs::metadata(&path).await.map(|m| m.len()).unwrap_or(0);
     let (mut send, mut recv) = conn.open_bi().await?;
-    send.write_all(&serde_json::to_vec(&json!({"t": "follow", "file": name, "from": from}))?).await?;
+    send.write_all(&serde_json::to_vec(&json!({"t": "follow", "set": set, "room": room, "from": from}))?).await?;
     send.finish()?;
     let mut file = tokio::fs::OpenOptions::new().create(true).append(true).open(&path).await?;
     let started = Instant::now();
@@ -241,11 +275,14 @@ async fn receive(core: &Core, id: &EndpointId, conn: &Connection, name: &str) ->
     Ok(got)
 }
 
-async fn follow_recording(core: Arc<Core>, id: EndpointId, conn: Connection, name: String) {
-    let key = format!("{id}/{name}");
+async fn follow_recording(core: Arc<Core>, id: EndpointId, conn: Connection, room: String, set: String) {
+    let key = format!("{id}/{room}/{set}");
     loop {
-        match receive(&core, &id, &conn, &name).await {
-            Ok(0) if recording_ended(&core, &id, &name) => break,
+        if core.active_room_id() != room || !core.has_peer(&id) {
+            break;
+        }
+        match receive(&core, &id, &conn, &room, &set).await {
+            Ok(0) if recording_ended(&core, &id, &set) => sleep(FINISHED_RECHECK).await,
             Ok(_) => sleep(RETRY).await,
             Err(_) => break,
         }
@@ -270,7 +307,9 @@ async fn measure(core: &Core, id: &EndpointId, conn: &Connection, samples: &mut 
 
 async fn hello(core: &Arc<Core>, id: &EndpointId, conn: &Connection) -> bool {
     let own = core.name.lock().unwrap().clone();
-    let reply = request(conn, &json!({"t": "hello", "app": VERSION, "proto": PROTOCOL, "name": own, "members": members(core)})).await;
+    let room = room_info(core);
+    let message = json!({"t": "hello", "app": VERSION, "proto": PROTOCOL, "name": own, "room": room, "members": room["members"], "set": core.active_set_json()});
+    let reply = request(conn, &message).await;
     let Ok(reply) = reply.and_then(|r| Ok(serde_json::from_slice::<Value>(&r)?)) else { return true };
     let proto = reply["proto"].as_u64().unwrap_or(0) as u32;
     let version = reply["app"].as_str().unwrap_or("unknown").to_string();
@@ -280,7 +319,8 @@ async fn hello(core: &Arc<Core>, id: &EndpointId, conn: &Connection) -> bool {
         p.info = Some((version, proto));
         p.name = name;
     });
-    learn_members(core, &reply["members"]);
+    learn_members(core, &reply["room"], &reply["members"]);
+    react_to_set(core, &reply["set"]);
     proto == PROTOCOL
 }
 
@@ -288,12 +328,15 @@ async fn present_invite(core: &Arc<Core>, id: &EndpointId, conn: &Connection) {
     let token = core.pending_join.lock().unwrap().get(id).cloned();
     let Some(token) = token else { return };
     let Ok(reply) = request(conn, &json!({"t": "join", "token": token})).await else { return };
-    if let Ok(reply) = serde_json::from_slice::<Value>(&reply) {
-        if reply["ok"] == true {
-            core.pending_join.lock().unwrap().remove(id);
-            learn_members(core, &reply["members"]);
-        }
+    let Ok(reply) = serde_json::from_slice::<Value>(&reply) else { return };
+    if reply["ok"] != true {
+        return;
     }
+    core.pending_join.lock().unwrap().remove(id);
+    let (Some(real), Some(name)) = (reply["room"]["id"].as_str(), reply["room"]["name"].as_str()) else { return };
+    let members: Vec<String> = reply["members"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(String::from)).collect();
+    room::adopt_room(core, &format!("pending-{token}"), real, name, &members);
+    room::apply_active(core);
 }
 
 async fn sync(core: &Arc<Core>, id: &EndpointId, conn: &Connection) -> Result<()> {
@@ -308,12 +351,12 @@ async fn sync(core: &Arc<Core>, id: &EndpointId, conn: &Connection) -> Result<()
         }
         tick += 1;
         pull_log(core, id, conn).await?;
+        let room = core.active_room_id();
         let peer_log = log::read(&core.peer_dir(id).join("log.bin"));
-        let latest = peer_log.iter().rev().find(|r| r["k"] == "rec");
-        if let Some(name) = latest.and_then(|r| r["name"].as_str()).filter(|n| valid_recording(n)) {
-            let key = format!("{id}/{name}");
-            if core.following.lock().unwrap().insert(key) {
-                tokio::spawn(follow_recording(core.clone(), *id, conn.clone(), name.to_string()));
+        for r in peer_log.iter().filter(|r| r["k"] == "rec" && r["room"] == room.as_str()) {
+            let Some(set) = r["set"].as_str().filter(|s| valid_id(s)) else { continue };
+            if core.following.lock().unwrap().insert(format!("{id}/{room}/{set}")) {
+                tokio::spawn(follow_recording(core.clone(), *id, conn.clone(), room.clone(), set.to_string()));
             }
         }
         sleep(LOG_SYNC).await;

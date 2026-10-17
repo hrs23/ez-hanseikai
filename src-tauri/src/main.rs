@@ -6,10 +6,11 @@ mod debug;
 mod log;
 mod net;
 mod record;
+mod room;
 mod shell;
 
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
-use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -55,15 +56,16 @@ pub struct Core {
     pub name: Mutex<String>,
     pub share: AtomicBool,
     pub limit_mbps: Mutex<Option<f64>>,
-    pub last_members: Mutex<Vec<String>>,
-    pub invites: Mutex<Vec<String>>,
+    pub invites: Mutex<Vec<(String, String)>>,
+    pub rooms: Mutex<room::Rooms>,
+    pub active_set: Mutex<Option<room::ActiveSet>>,
+    pub tz_offset_s: i64,
     pub audio_process: Mutex<String>,
     pub keep_days: Mutex<Option<u32>>,
     pub ready: AtomicBool,
     pub removed: Mutex<HashSet<String>>,
     pub pending_join: Mutex<HashMap<EndpointId, String>>,
     pub following: Mutex<HashSet<String>>,
-    pub recording_name: Mutex<Option<String>>,
     pub recovery: Mutex<Option<String>>,
     pub notice: Mutex<String>,
     pub free_bytes: AtomicU64,
@@ -90,7 +92,6 @@ impl Core {
             "name": *self.name.lock().unwrap(),
             "share": self.share.load(Ordering::Relaxed),
             "limit_mbps": *self.limit_mbps.lock().unwrap(),
-            "last_members": *self.last_members.lock().unwrap(),
             "removed": *self.removed.lock().unwrap(),
             "audio_process": *self.audio_process.lock().unwrap(),
             "keep_days": *self.keep_days.lock().unwrap(),
@@ -114,10 +115,6 @@ impl Core {
         self.peers.lock().unwrap().iter().filter_map(|p| p.conn.clone()).collect()
     }
 
-    fn save_peers(&self) {
-        let ids: Vec<String> = self.peers.lock().unwrap().iter().map(|p| p.id.to_string()).collect();
-        let _ = std::fs::write(self.dir.join("peers.txt"), ids.join("\n"));
-    }
 }
 
 fn path_kind(conn: &Connection) -> (&'static str, u64) {
@@ -129,18 +126,13 @@ fn path_kind(conn: &Connection) -> (&'static str, u64) {
     ("none", 0)
 }
 
-fn latest_rec(records: &[Value]) -> Option<(String, i64)> {
-    let r = records.iter().rev().find(|r| r["k"] == "rec")?;
-    Some((r["name"].as_str()?.to_string(), r["start_us"].as_i64()?))
-}
-
 fn latest_notes(records: &[Value], from: &str, who: &str) -> Vec<Value> {
     let mut notes: Vec<Value> = Vec::new();
     for r in records {
         let id = r["id"].as_i64().or_else(|| r["t_us"].as_i64()).unwrap_or(0);
         let existing = notes.iter().position(|n| n["id"] == id);
         match r["k"].as_str() {
-            Some("note") => notes.push(json!({"id": id, "from": from, "who": who, "t_us": r["t_us"], "at_us": r["at_us"].as_i64().unwrap_or(id), "text": r["text"], "deleted": false})),
+            Some("note") => notes.push(json!({"id": id, "from": from, "who": who, "t_us": r["t_us"], "at_us": r["at_us"].as_i64().unwrap_or(id), "text": r["text"], "set": r["set"], "deleted": false})),
             Some("note_edit") => { if let Some(i) = existing { notes[i]["text"] = r["text"].clone(); } }
             Some("note_del") => { if let Some(i) = existing { notes[i]["deleted"] = json!(true); } }
             Some("note_restore") => { if let Some(i) = existing { notes[i]["deleted"] = json!(false); } }
@@ -155,38 +147,11 @@ fn size(path: PathBuf) -> u64 {
     std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
 }
 
-pub fn add_peer_id(core: &Arc<Core>, id: &str) -> Result<(), String> {
-    let id: EndpointId = id.trim().parse().map_err(|_| "That is not a valid ID. Copy it again from the other person.".to_string())?;
-    if id == core.ep.id() {
-        return Err("that is your own ID".into());
-    }
-    if core.has_peer(&id) {
-        return Ok(());
-    }
-    let announce = core.ready.load(Ordering::Relaxed);
-    core.peers.lock().unwrap().push(Peer { id, name: String::new(), conn: None, incoming: None, offset_us: None, failures: 0, announce, info: None });
-    core.save_peers();
-    tauri::async_runtime::spawn(net::dial_loop(core.clone(), id));
-    Ok(())
-}
-
-fn start_recording_now(core: &Core, audio_pid: u32, audio_name: &str) -> Result<(), String> {
-    let mut slot = core.recorder.lock().unwrap();
-    if slot.is_some() {
-        return Err("already recording".into());
-    }
-    let recorder = record::Recorder::start(&core.dir, audio_pid, audio_name).map_err(|e| e.to_string())?;
-    *core.recording_name.lock().unwrap() = Some(recorder.name.clone());
-    *slot = Some(recorder);
-    Ok(())
-}
-
-fn stop_recording_now(core: &Core) {
-    if let Some(recorder) = core.recorder.lock().unwrap().take() {
-        recorder.stop();
-        *core.recording_name.lock().unwrap() = None;
-        core.append_log(&json!({"k": "rec_end", "t_us": now_us()}));
-    }
+pub fn audio_target(wanted: &str) -> (String, u32) {
+    processes()
+        .into_iter()
+        .find(|(name, _)| if wanted.is_empty() { name.to_lowercase().starts_with("r5apex") } else { name.eq_ignore_ascii_case(wanted) })
+        .unwrap_or_default()
 }
 
 fn pid_of(name: &str) -> Option<u32> {
@@ -219,21 +184,21 @@ async fn list_processes() -> Vec<String> {
 
 #[tauri::command]
 async fn state(core: State<'_, Arc<Core>>) -> Result<Value, String> {
+    let core = core.inner().clone();
     let free = core.free_bytes.load(Ordering::Relaxed);
     if free > 0 && free < (1 << 30) && core.recorder.lock().unwrap().is_some() {
-        stop_recording_now(&core);
+        room::stop_set(&core);
         *core.notice.lock().unwrap() = "Recording stopped: the disk is almost full.".into();
     }
     let dead = core.recorder.lock().unwrap().as_mut().is_some_and(|r| r.is_dead());
     if dead {
         tracing::warn!("recording stopped on its own");
-        stop_recording_now(&core);
+        room::stop_set(&core);
     }
+    let room_id = core.active_room_id();
     let own = core.own_log();
-    let mine = latest_rec(&own).map(|(name, start_us)| {
-        json!({"path": core.dir.join(&name), "start_us": start_us, "size": size(core.dir.join(&name))})
-    });
     let mut notes: Vec<Value> = latest_notes(&own, "me", "me");
+    let my_id = core.ep.id().to_string();
     let snapshot: Vec<(EndpointId, String, Option<Connection>, Option<Connection>, Option<i64>, Option<(String, u32)>, u32)> = core
         .peers
         .lock()
@@ -241,21 +206,12 @@ async fn state(core: State<'_, Arc<Core>>) -> Result<Value, String> {
         .iter()
         .map(|p| (p.id, p.name.clone(), p.conn.clone(), p.incoming.clone(), p.offset_us, p.info.clone(), p.failures))
         .collect();
+    let mut logs: Vec<(String, String, i64, Vec<Value>)> = vec![("me".into(), my_id.clone(), 0, own)];
     let mut peers = Vec::new();
     for (id, name, conn, incoming, offset_us, info, failures) in snapshot {
         let theirs = log::read(&core.peer_dir(&id).join("log.bin"));
-        let rec = latest_rec(&theirs).map(|(name, start_us)| {
-            let path = core.peer_dir(&id).join(&name);
-            json!({"path": path, "start_us": start_us, "size": size(path.clone())})
-        });
         let who = if name.is_empty() { short(&id) } else { format!("{name} ({})", short(&id)) };
         notes.extend(latest_notes(&theirs, &id.to_string(), &who));
-        let last = |kind: &str| theirs.iter().rposition(|r| r["k"] == kind);
-        let recording = match (last("rec"), last("rec_end")) {
-            (Some(start), Some(end)) => start > end,
-            (Some(_), None) => true,
-            _ => false,
-        };
         let alive = conn.iter().chain(incoming.iter()).find(|c| c.close_reason().is_none());
         let message = info.as_ref().filter(|(_, proto)| *proto != PROTOCOL).map(|(version, proto)| {
             format!("peer has version {version} (protocol {proto}, ours {PROTOCOL}), update needed")
@@ -271,28 +227,53 @@ async fn state(core: State<'_, Arc<Core>>) -> Result<Value, String> {
             "offset_us": offset_us,
             "version": info.map(|(version, _)| version),
             "message": message,
-            "rec": rec,
-            "recording": recording,
         }));
+        logs.push((id.to_string(), id.to_string(), offset_us.unwrap_or(0), theirs));
     }
+    let mut sets: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    for (key, owner, offset, records) in &logs {
+        for (i, r) in records.iter().enumerate() {
+            let (Some(set), true) = (r["set"].as_str(), r["k"] == "rec" && r["room"] == room_id.as_str()) else { continue };
+            let path = core.set_dir(&room_id, set).join(format!("{owner}.mp4"));
+            let ended = records[i..].iter().any(|e| e["k"] == "rec_end" && e["set"] == set);
+            sets.entry(set.to_string()).or_default().push(json!({
+                "key": key, "start_us": r["start_us"], "offset_us": offset, "size": size(path.clone()), "path": path,
+                "recording": !ended, "by": r["by"], "meta": {"encoder": r["encoder"], "width": r["width"], "height": r["height"]},
+            }));
+        }
+    }
+    let sets: Vec<Value> = sets
+        .into_iter()
+        .rev()
+        .map(|(id, players)| {
+            let start = players.iter().filter_map(|p| Some(p["start_us"].as_i64()? - p["offset_us"].as_i64()?)).min().unwrap_or(0);
+            let live = players.iter().any(|p| p["recording"] == true);
+            json!({"id": id, "start_us": start, "live": live, "by": players[0]["by"], "players": players})
+        })
+        .collect();
     notes.sort_by_key(|n| n["t_us"].as_i64());
+    let rooms = core.rooms.lock().unwrap();
+    let room_list: Vec<Value> = rooms.list.iter().map(|r| json!({"id": r.id, "name": r.name, "active": rooms.active.as_deref() == Some(&r.id), "members": r.members.len()})).collect();
+    drop(rooms);
     Ok(json!({
         "version": VERSION,
         "ffmpeg": core.ffmpeg_status.lock().unwrap().clone(),
-        "id": core.ep.id().to_string(),
+        "id": my_id,
         "name": core.name.lock().unwrap().clone(),
         "share": core.share.load(Ordering::Relaxed),
         "audio_process": core.audio_process.lock().unwrap().clone(),
         "keep_days": *core.keep_days.lock().unwrap(),
         "invites": core.invites.lock().unwrap().len(),
         "limit_mbps": *core.limit_mbps.lock().unwrap(),
-        "can_rejoin": !core.last_members.lock().unwrap().is_empty(),
         "recovery": core.recovery.lock().unwrap().clone(),
         "notice": core.notice.lock().unwrap().clone(),
         "free_bytes": free,
         "previous_version": core.previous_version,
         "recording": core.recorder.lock().unwrap().is_some(),
-        "mine": mine,
+        "active_set": core.active_set_json(),
+        "room": core.active_room().map(|r| json!({"id": r.id, "name": r.name})),
+        "rooms": room_list,
+        "sets": sets,
         "peers": peers,
         "notes": notes,
     }))
@@ -330,61 +311,32 @@ async fn save_report(core: State<'_, Arc<Core>>, include_addresses: bool, audio_
     .map_err(|e| e.to_string())?
 }
 
-pub fn start_recording_named(core: &Core, audio_process: &str) -> Result<(), String> {
-    if !record::ffmpeg_present() {
-        return Err("The video tool is still downloading. Wait a minute and try again.".into());
-    }
-    let found = processes().into_iter().find(|(name, _)| if audio_process.is_empty() { name.to_lowercase().starts_with("r5apex") } else { name.eq_ignore_ascii_case(&audio_process) });
-    let (name, pid) = found.unwrap_or_default();
-    start_recording_now(core, pid, &name)
-}
-
 #[tauri::command]
 async fn start_recording(core: State<'_, Arc<Core>>) -> Result<(), String> {
-    let name = core.audio_process.lock().unwrap().clone();
-    start_recording_named(&core, &name)
+    room::start_set(&core)
 }
 
 #[tauri::command]
 async fn stop_recording(core: State<'_, Arc<Core>>) -> Result<(), String> {
-    stop_recording_now(&core);
+    room::stop_set(&core);
     Ok(())
 }
 
 #[tauri::command]
-fn add_peer(core: State<Arc<Core>>, id: String) -> Result<(), String> {
-    add_peer_id(&core, &id)
-}
-
-#[tauri::command]
 fn remove_peer(core: State<Arc<Core>>, id: String) {
-    if let Ok(id) = id.parse::<EndpointId>() {
-        core.removed.lock().unwrap().insert(id.to_string());
-        core.save_settings();
-        let removed: Vec<Peer> = {
-            let mut peers = core.peers.lock().unwrap();
-            let (gone, kept): (Vec<Peer>, Vec<Peer>) = std::mem::take(&mut *peers).into_iter().partition(|p| p.id == id);
-            *peers = kept;
-            gone
-        };
-        for peer in removed {
-            for conn in peer.conn.iter().chain(peer.incoming.iter()) {
-                conn.close(2u32.into(), b"removed");
-            }
-        }
-        core.save_peers();
-    }
+    room::remove_member(&core, &id);
 }
 
 #[tauri::command]
 fn create_invite(core: State<Arc<Core>>, reuse: bool) -> String {
+    let room = core.active_room_id();
     if reuse {
-        if let Some(token) = core.invites.lock().unwrap().last() {
+        if let Some((token, _)) = core.invites.lock().unwrap().iter().rev().find(|(_, r)| *r == room) {
             return format!("ezh-{}-{token}", core.ep.id());
         }
     }
-    let token: String = SecretKey::generate().to_bytes()[..8].iter().map(|b| format!("{b:02x}")).collect();
-    core.invites.lock().unwrap().push(token.clone());
+    let token = room::random_hex(8);
+    core.invites.lock().unwrap().push((token.clone(), room));
     format!("ezh-{}-{token}", core.ep.id())
 }
 
@@ -406,37 +358,44 @@ fn set_keep_days(core: State<Arc<Core>>, days: Option<u32>) {
 }
 
 #[tauri::command]
+fn create_room(core: State<Arc<Core>>, name: String) -> Result<String, String> {
+    if core.recorder.lock().unwrap().is_some() {
+        return Err("Stop recording before switching rooms.".into());
+    }
+    Ok(room::create_room(&core, &name))
+}
+
+#[tauri::command]
 fn join_room(core: State<Arc<Core>>, code: String) -> Result<(), String> {
     let bad = || "That invite code is not valid. Ask for a new one.".to_string();
     let text: String = code.split_whitespace().collect();
     let (id, token) = text.strip_prefix("ezh-").and_then(|t| t.split_once('-')).ok_or_else(bad)?;
     let peer: EndpointId = id.parse().map_err(|_| bad())?;
+    if core.recorder.lock().unwrap().is_some() {
+        return Err("Stop recording before switching rooms.".into());
+    }
     core.removed.lock().unwrap().remove(id);
-    add_peer_id(&core, id)?;
+    let pending = format!("pending-{token}");
+    {
+        let mut rooms = core.rooms.lock().unwrap();
+        rooms.list.retain(|r| r.id != pending);
+        rooms.list.push(room::Room { id: pending.clone(), name: "Joining...".into(), members: vec![core.ep.id().to_string(), id.to_string()] });
+        rooms.active = Some(pending.clone());
+    }
+    core.save_rooms();
     core.pending_join.lock().unwrap().insert(peer, token.to_string());
+    room::apply_active(&core);
     Ok(())
 }
 
 #[tauri::command]
-fn leave_room(core: State<Arc<Core>>) {
-    let peers = std::mem::take(&mut *core.peers.lock().unwrap());
-    *core.last_members.lock().unwrap() = peers.iter().map(|p| p.id.to_string()).collect();
-    for peer in &peers {
-        for conn in peer.conn.iter().chain(peer.incoming.iter()) {
-            conn.close(2u32.into(), b"left");
-        }
-    }
-    core.save_peers();
-    core.save_settings();
+fn switch_room(core: State<Arc<Core>>, id: String) -> Result<(), String> {
+    room::switch_room(&core, &id)
 }
 
 #[tauri::command]
-fn rejoin(core: State<Arc<Core>>) {
-    let ids = core.last_members.lock().unwrap().clone();
-    for id in ids {
-        core.removed.lock().unwrap().remove(&id);
-        let _ = add_peer_id(&core, &id);
-    }
+fn leave_room(core: State<Arc<Core>>, id: String) {
+    room::leave_room(&core, &id);
 }
 
 #[tauri::command]
@@ -497,7 +456,7 @@ fn reset(core: State<Arc<Core>>, everything: bool, confirm: String) -> Result<()
     if everything && confirm != "RESET" {
         return Err("Type RESET to confirm.".into());
     }
-    stop_recording_now(&core);
+    room::stop_set(core.inner());
     data::reset(&core.dir, everything);
     core.app.restart()
 }
@@ -513,17 +472,17 @@ fn dismiss_recovery(core: State<Arc<Core>>) {
 }
 
 #[tauri::command]
-fn add_note(core: State<Arc<Core>>, text: String, at_us: i64) {
+fn add_note(core: State<Arc<Core>>, text: String, at_us: i64, set: String) {
     let text: String = text.chars().filter(|c| !c.is_control()).take(NOTE_MAX).collect();
     if text.trim().is_empty() {
         return;
     }
-    core.append_log(&json!({"k": "note", "t_us": now_us(), "at_us": at_us, "text": text}));
+    core.append_log(&json!({"k": "note", "t_us": now_us(), "at_us": at_us, "set": set, "text": text}));
 }
 
 #[tauri::command]
-async fn control(core: State<'_, Arc<Core>>, cmd: String, wall_us: i64) -> Result<(), String> {
-    net::send_control(&core, &cmd, wall_us).await;
+async fn control(core: State<'_, Arc<Core>>, cmd: String, wall_us: i64, set: String) -> Result<(), String> {
+    net::send_control(&core, &cmd, wall_us, &set).await;
     Ok(())
 }
 
@@ -561,22 +520,20 @@ async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
     };
     let ep = Endpoint::builder(presets::N0).secret_key(key).alpns(vec![ALPN.to_vec()]).bind().await?;
     std::fs::write(dir.join("id.txt"), ep.id().to_string())?;
-    let saved: Vec<EndpointId> = std::fs::read_to_string(dir.join("peers.txt"))
-        .unwrap_or_default()
-        .lines()
-        .filter_map(|l| l.trim().parse().ok())
-        .collect();
+    let rooms: room::Rooms = std::fs::read_to_string(dir.join("rooms.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
     let settings: Value = std::fs::read_to_string(dir.join("settings.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
     let name = settings["name"].as_str().map(clean_name).unwrap_or_else(|| "player".into());
     Ok(Arc::new(Core {
         dir,
         ep,
         app,
-        peers: Mutex::new(saved.iter().map(|id| Peer { id: *id, name: String::new(), conn: None, incoming: None, offset_us: None, failures: 0, announce: false, info: None }).collect()),
+        peers: Mutex::new(Vec::new()),
+        rooms: Mutex::new(rooms),
+        active_set: Mutex::new(None),
+        tz_offset_s: data::tz_offset_seconds(),
         name: Mutex::new(name),
         share: AtomicBool::new(settings["share"].as_bool().unwrap_or(true)),
         limit_mbps: Mutex::new(settings["limit_mbps"].as_f64()),
-        last_members: Mutex::new(settings["last_members"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default()),
         invites: Mutex::new(Vec::new()),
         audio_process: Mutex::new(settings["audio_process"].as_str().unwrap_or_default().to_string()),
         keep_days: Mutex::new(settings["keep_days"].as_u64().map(|d| d as u32)),
@@ -584,7 +541,6 @@ async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
         removed: Mutex::new(settings["removed"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default()),
         pending_join: Mutex::new(HashMap::new()),
         following: Mutex::new(HashSet::new()),
-        recording_name: Mutex::new(None),
         recovery: Mutex::new(recovery),
         notice: Mutex::new(String::new()),
         free_bytes: AtomicU64::new(0),
@@ -618,10 +574,7 @@ fn main() {
                 std::thread::sleep(Duration::from_secs(3600));
             });
             tauri::async_runtime::spawn(net::accept_loop(core.clone()));
-            let saved: Vec<EndpointId> = core.peers.lock().unwrap().iter().map(|p| p.id).collect();
-            for id in saved {
-                tauri::async_runtime::spawn(net::dial_loop(core.clone(), id));
-            }
+            room::apply_active(&core);
             let free_core = core.clone();
             std::thread::spawn(move || loop {
                 free_core.free_bytes.store(data::free_bytes(&free_core.dir), Ordering::Relaxed);
@@ -643,29 +596,9 @@ fn main() {
                 }
                 record::encoder_results();
             });
-            let args: Vec<String> = std::env::args().collect();
-            let arg = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
-            for (i, a) in args.iter().enumerate() {
-                if a == "--peer" {
-                    if let Some(id) = args.get(i + 1) {
-                        add_peer_id(&core, id)?;
-                    }
-                }
-            }
-            if let Some(seconds) = arg("--record").and_then(|s| s.parse::<u64>().ok()) {
-                let pid = arg("--audio-pid").and_then(|s| s.parse().ok()).unwrap_or(0);
-                std::thread::spawn(move || {
-                    if let Err(e) = start_recording_now(&core, pid, "") {
-                        eprintln!("record failed: {e}");
-                        return;
-                    }
-                    std::thread::sleep(Duration::from_secs(seconds));
-                    stop_recording_now(&core);
-                });
-            }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug_text, save_report, start_recording, stop_recording, add_peer, remove_peer, create_invite, join_room, leave_room, rejoin, set_share, set_limit, cancel_invites, set_audio_process, set_keep_days, note_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_note, control])
+        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug_text, save_report, start_recording, stop_recording, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, set_share, set_limit, cancel_invites, set_audio_process, set_keep_days, note_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_note, control])
         .run(tauri::generate_context!())
         .expect("failed to run");
 }

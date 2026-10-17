@@ -9,7 +9,7 @@ use tauri::menu::{Menu, MenuBuilder, MenuItem, MenuItemBuilder, SubmenuBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{App, AppHandle, Emitter, Manager};
 
-use crate::{stop_recording_now, Core, VERSION};
+use crate::{room, Core, VERSION};
 
 const REPO: &str = "https://github.com/hrs23/ez-hanseikai";
 const TRAY_POLL: Duration = Duration::from_secs(1);
@@ -64,7 +64,7 @@ fn exit_app(app: &AppHandle, core: &Arc<Core>) {
         if !message("Recording is running. Stop recording and exit?", "OKCancel") {
             return;
         }
-        stop_recording_now(core);
+        room::stop_set(core);
     }
     app.exit(0);
 }
@@ -94,10 +94,9 @@ fn import_identity(app: &AppHandle, core: &Core) {
 
 pub fn toggle_recording(core: &Arc<Core>) {
     if core.recorder.lock().unwrap().is_some() {
-        stop_recording_now(core);
+        room::stop_set(core);
     } else {
-        let name = core.audio_process.lock().unwrap().clone();
-        let _ = crate::start_recording_named(core, &name);
+        let _ = room::start_set(core);
     }
 }
 

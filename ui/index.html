@@ -10,18 +10,17 @@
 <header>
   <img src="logo.svg" alt="">
   <b id="appname"></b>
+  <nav class="tabs"><button id="tabrecord" class="on">Record</button><button id="tabplayer">Player</button></nav>
   <button id="rec" class="primary">Record</button>
   <span id="recinfo" class="small muted"></span>
-  <span id="chips"></span>
   <span class="spacer"></span>
   <span id="update" class="small"></span>
-  <button id="roombtn">Room</button>
+  <button id="roombtn">Rooms</button>
 </header>
 <div id="notice" class="notice" hidden></div>
 <div id="roompop" class="pop" hidden>
-  <div id="members"></div>
-  <div class="row"><button id="invite">Create invite</button><button id="rejoin" hidden>Rejoin</button><button id="leave2">Leave</button></div>
-  <div class="row" id="invitebox" hidden><input id="code" class="id" readonly><button id="copycode">Copy</button></div>
+  <div id="roomlist"></div>
+  <div class="row"><button id="newroom">Create room</button></div>
   <div class="row"><input id="joincode" class="id" placeholder="paste an invite"><button id="join">Join</button></div>
   <div id="roomerr" class="small fail"></div>
 </div>
@@ -36,6 +35,18 @@
 </div>
 <div id="reviewwrap">
   <div id="review">
+    <aside id="side">
+      <div id="siderecord">
+        <h3 id="roomtitle"></h3>
+        <div id="members"></div>
+        <div class="row"><button id="invite">Create invite</button><button id="cancelinvite" hidden>Cancel invite</button></div>
+        <div class="row" id="invitebox" hidden><input id="code" class="id" readonly><button id="copycode">Copy</button></div>
+      </div>
+      <div id="sideplayer" hidden>
+        <h3>Recordings</h3>
+        <div id="setlist"></div>
+      </div>
+    </aside>
     <div id="stage">
       <div id="onboard" class="onboard">
         <h2>Watch your team's screens together</h2>
@@ -43,12 +54,17 @@
         <div class="row"><button id="invite2" class="primary">Create a room</button></div>
         <div class="row"><input id="joincode2" class="id" placeholder="or paste an invite"><button id="join2">Join</button></div>
         <div id="roomerr2" class="small fail"></div>
-        <div id="invitebox2" class="row" hidden><input id="code2" class="id" readonly><button id="copycode2">Copy</button></div>
+      </div>
+      <div id="toolbar" class="toolbar" hidden>
+        <div id="views" class="views"></div>
+        <span class="spacer"></span>
+        <button id="wp" class="toggle on" title="Watch Party: play, pause and seek together">Watch Party</button>
       </div>
       <div id="videos" class="videos"></div>
       <div id="empty" class="empty">Press Record. Everyone's recordings appear here.</div>
     </div>
     <aside id="notes">
+      <h3 id="noteshead">Notes</h3>
       <div id="notelist"></div>
       <form id="noteform"><input id="note" placeholder="note at this time" autocomplete="off"><button class="primary">Add</button></form>
     </aside>
@@ -56,16 +72,16 @@
   <div id="transport">
     <div id="timeline"><div class="track"></div><div class="fill"></div><div class="head"></div></div>
     <div class="controls">
-      <button id="back" title="Back 5 s">-5</button>
       <button id="play" class="primary">Play</button>
-      <button id="fwd" title="Forward 5 s">+5</button>
       <span id="clock" class="muted"></span>
+      <span class="skips"><button id="back60">-1m</button><button id="back">-5s</button><button id="fwd">+5s</button><button id="fwd60">+1m</button></span>
+      <span class="spacer"></span>
+      <span id="who"></span>
+      <button id="undo" hidden>Undo</button>
       <select id="speed" title="Speed"><option value="0.5">0.5x</option><option value="0.75">0.75x</option><option value="1" selected>1x</option><option value="1.25">1.25x</option><option value="1.5">1.5x</option><option value="2">2x</option></select>
       <input id="volume" type="range" min="0" max="1" step="0.05" value="1" title="Volume" style="width:90px">
       <button id="live" title="Follow the newest part">Live</button>
       <button id="full" title="Full screen">Full screen</button>
-      <span id="who"></span>
-      <button id="undo" hidden>Undo</button>
     </div>
   </div>
 </div>
