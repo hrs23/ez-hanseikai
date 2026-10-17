@@ -93,11 +93,15 @@ pub fn text(core: &Core) -> String {
     out.push_str(&format!("address {:?}\n", core.ep.addr()));
     out.push_str(&format!("home relay {:?}\n", core.ep.home_relay_status().get()));
     out.push_str(&format!("net report {:?}\n", core.ep.net_report().get()));
-    let conns = [("outgoing", core.conn.lock().unwrap().clone()), ("incoming", core.incoming.lock().unwrap().clone())];
-    for (label, conn) in conns {
-        match conn {
-            Some(conn) => describe(&conn, label, &mut out),
-            None => out.push_str(&format!("{label} connection: none\n")),
+    let peers: Vec<(String, Option<Connection>, Option<Connection>)> =
+        core.peers.lock().unwrap().iter().map(|p| (p.id.to_string(), p.conn.clone(), p.incoming.clone())).collect();
+    for (id, conn, incoming) in peers {
+        out.push_str(&format!("peer {id}\n"));
+        for (label, conn) in [("outgoing", conn), ("incoming", incoming)] {
+            match conn {
+                Some(conn) => describe(&conn, label, &mut out),
+                None => out.push_str(&format!("{label} connection: none\n")),
+            }
         }
     }
     out.push_str("events\n");
@@ -150,7 +154,8 @@ pub fn report(core: &Core, include_addresses: bool, check: &str) -> std::io::Res
     out.push_str(&format!("encoder {}\n", crate::record::encoder()));
     out.push_str(&format!("ffmpeg {}\n", command_line(&crate::record::ffmpeg().to_string_lossy(), &["-version"]).lines().next().unwrap_or("")));
     out.push_str(&format!("iroh {}\n\n", "1.3.0"));
-    out.push_str(&format!("peer {:?}\n\nenvironment check\n{check}\n\n", core.peer_info.lock().unwrap()));
+    let infos: Vec<String> = core.peers.lock().unwrap().iter().map(|p| format!("{} {:?}", crate::short(&p.id), p.info)).collect();
+    out.push_str(&format!("peers {}\n\nenvironment check\n{check}\n\n", infos.join(", ")));
     out.push_str(&text(core));
     out.push_str("\nrecent log\n");
     out.push_str(&recent.join("\n"));

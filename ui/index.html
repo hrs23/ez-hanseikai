@@ -8,7 +8,7 @@
   input, button, select { background: #222; color: #eee; border: 1px solid #444; padding: 4px 8px; font: inherit; }
   button { cursor: pointer; }
   .row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
-  .videos { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .videos { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 8px; }
   video { width: 100%; background: #000; }
   .id { width: 24em; font-family: monospace; }
   #status { color: #8c8; }
@@ -23,9 +23,9 @@
   <span>Your ID</span><input class="id" id="id" readonly><button id="copy">Copy</button>
 </div>
 <div class="row">
-  <span>Peer ID</span><input class="id" id="peer" placeholder="paste the other person's ID"><button id="set">Connect</button>
-  <span id="status"></span><span id="peermsg" style="color:#e99"></span>
+  <span>Add peer</span><input class="id" id="peer" placeholder="paste the other person's ID"><button id="set">Connect</button>
 </div>
+<div id="peers"></div>
 <div class="row">
   <span>Game sound from</span><select id="proc"></select>
   <button id="rec">Record</button><span id="recstate"></span>
@@ -34,9 +34,9 @@
   <button id="play">Play</button><button id="pause">Pause</button>
   <input id="seek" type="range" min="0" max="0" step="0.1" value="0" style="width:40%">
   <span id="time"></span>
-  <button id="live">Peer live</button>
+  
 </div>
-<div class="videos"><div><div>You</div><video id="a" muted></video></div><div><div>Peer</div><video id="b"></video></div></div>
+<div class="videos" id="videos"></div>
 <div class="row"><input id="note" placeholder="note" size="40"><button id="addnote">Add note</button></div>
 <div id="notes"></div>
 <details open><summary>Check</summary>
@@ -50,26 +50,45 @@
 <script>
 const { invoke, convertFileSrc } = window.__TAURI__.core;
 const $ = (id) => document.getElementById(id);
-const a = $("a"), b = $("b");
 let st = null;
-let live = false;
+const live = new Set();
 const sec = (us) => us / 1e6;
+const tiles = {};
 
-function delta() {
-  if (!st || !st.mine || !st.peer_rec) return 0;
-  return sec(st.mine.start_us + (st.offset_us || 0) - st.peer_rec.start_us);
+function tile(key, title) {
+  if (tiles[key]) return tiles[key];
+  const box = document.createElement("div");
+  const head = document.createElement("div");
+  const video = document.createElement("video");
+  video.muted = key === "me";
+  head.textContent = title + " ";
+  if (key !== "me") {
+    const button = document.createElement("button");
+    button.textContent = "Live";
+    button.onclick = () => { live.add(key); if (video.duration) { video.currentTime = Math.max(0, video.duration - 1.5); video.play(); } };
+    head.append(button);
+  }
+  box.append(head, video);
+  $("videos").append(box);
+  return (tiles[key] = { box, video, head });
 }
-function reload(v, rec, resume) {
+const a = tile("me", "You").video;
+
+function delta(peer) {
+  if (!st || !st.mine || !peer.rec) return 0;
+  return sec(st.mine.start_us + (peer.offset_us || 0) - peer.rec.start_us);
+}
+function reload(v, rec, mode) {
   const t = v.currentTime;
   v.dataset.size = rec.size;
   v.dataset.retry = Date.now();
   v.load();
   v.onloadedmetadata = () => {
-    if (resume === "live") { v.currentTime = Math.max(0, v.duration - 1.5); v.play(); }
+    if (mode === "live") { v.currentTime = Math.max(0, v.duration - 1.5); v.play(); }
     else v.currentTime = t;
   };
 }
-function source(v, rec) {
+function source(v, rec, isLive) {
   if (!rec || !rec.size) return;
   const src = convertFileSrc(rec.path);
   if (v.dataset.src !== src) { v.dataset.src = src; v.src = src; v.dataset.size = rec.size; return; }
@@ -77,20 +96,27 @@ function source(v, rec) {
   const settled = v.dataset.seen === String(rec.size);
   v.dataset.seen = rec.size;
   const stuck = v.error && Date.now() - Number(v.dataset.retry || 0) > 3000;
-  const grown = rec.size > loaded + 300000 && (v.paused || (v === b && live));
+  const grown = rec.size > loaded + 300000 && (v.paused || isLive);
   const final = settled && rec.size !== loaded && v.paused;
-  if (stuck || grown || final) reload(v, rec, v === b && live ? "live" : "");
+  if (stuck || grown || final) reload(v, rec, isLive ? "live" : "");
+}
+function peerVideos() {
+  return st.peers.filter((p) => tiles[p.id]).map((p) => ({ peer: p, video: tiles[p.id].video }));
 }
 function seekTo(pos) {
   a.currentTime = Math.max(0, pos);
-  b.currentTime = Math.max(0, pos + delta());
+  for (const { peer, video } of peerVideos()) video.currentTime = Math.max(0, pos + delta(peer));
 }
 function wallOf(pos) { return Math.round(st.mine.start_us + pos * 1e6); }
-function posOf(wall) { return sec(wall - (st.offset_us || 0) - st.mine.start_us); }
+function posOf(wall, from) {
+  const peer = st.peers.find((p) => p.id === from);
+  return sec(wall - ((peer && peer.offset_us) || 0) - st.mine.start_us);
+}
 function apply(cmd, pos) {
-  live = false;
-  if (cmd === "play") { seekTo(pos); a.play(); b.play(); }
-  else if (cmd === "pause") { a.pause(); b.pause(); seekTo(pos); }
+  live.clear();
+  const all = [a, ...peerVideos().map((x) => x.video)];
+  if (cmd === "play") { seekTo(pos); all.forEach((v) => v.play()); }
+  else if (cmd === "pause") { all.forEach((v) => v.pause()); seekTo(pos); }
   else if (cmd === "seek") seekTo(pos);
 }
 function send(cmd, pos) {
@@ -98,14 +124,13 @@ function send(cmd, pos) {
   if (st && st.mine) invoke("control", { cmd, wallUs: wallOf(pos) }).catch(() => {});
 }
 window.__TAURI__.event.listen("control", (e) => {
-  if (st && st.mine) apply(e.payload.cmd, posOf(e.payload.wall_us));
+  if (st && st.mine) apply(e.payload.cmd, posOf(e.payload.wall_us, e.payload.from));
 });
 $("play").onclick = () => send("play", a.currentTime);
 $("pause").onclick = () => send("pause", a.currentTime);
 $("seek").onchange = (e) => send("seek", parseFloat(e.target.value));
-$("live").onclick = () => { live = true; if (b.duration) { b.currentTime = Math.max(0, b.duration - 1.5); b.play(); } };
 $("copy").onclick = () => navigator.clipboard.writeText($("id").value);
-$("set").onclick = () => invoke("set_peer", { id: $("peer").value }).catch((e) => alert(e));
+$("set").onclick = () => invoke("add_peer", { id: $("peer").value }).then(() => { $("peer").value = ""; }).catch((e) => alert(e));
 $("rec").onclick = () => st && st.recording
   ? invoke("stop_recording")
   : invoke("start_recording", { audioProcess: $("proc").value }).catch((e) => alert(e));
@@ -114,19 +139,43 @@ $("report").onclick = () => invoke("save_report", { includeAddresses: $("addr").
 a.ontimeupdate = () => {
   $("seek").value = a.currentTime;
   $("time").textContent = a.currentTime.toFixed(1) + " s";
-  if (!a.paused && Math.abs(b.currentTime - (a.currentTime + delta())) > 0.4) b.currentTime = Math.max(0, a.currentTime + delta());
+  if (a.paused) return;
+  for (const { peer, video } of peerVideos()) {
+    if (!video.paused && Math.abs(video.currentTime - (a.currentTime + delta(peer))) > 0.4) video.currentTime = Math.max(0, a.currentTime + delta(peer));
+  }
 };
 async function refresh() {
   st = await invoke("state");
   $("id").value = st.id;
   $("version").textContent = "v" + st.version;
   $("ffmpeg").textContent = st.ffmpeg;
-  $("peermsg").textContent = st.peer_message ? "  " + st.peer_message : "";
-  if (document.activeElement !== $("peer")) $("peer").value = st.peer || "";
-  $("status").textContent = st.peer ? (st.connected ? "connected" : "connecting...") + (st.offset_us != null ? `, clock offset ${(st.offset_us / 1000).toFixed(1)} ms` : "") : "";
   $("rec").textContent = st.recording ? "Stop" : "Record";
-  $("recstate").textContent = (st.mine ? `you ${(st.mine.size / 1e6).toFixed(1)} MB` : "") + (st.peer_rec ? `  peer ${(st.peer_rec.size / 1e6).toFixed(1)} MB` : "");
-  source(a, st.mine); source(b, st.peer_rec);
+  const rows = document.createDocumentFragment();
+  for (const p of st.peers) {
+    const row = document.createElement("div");
+    row.className = "row";
+    const state = p.connected ? `connected (${p.path})` : "connecting...";
+    const offset = p.offset_us != null ? `, clock offset ${(p.offset_us / 1000).toFixed(1)} ms` : "";
+    const version = p.version ? `, v${p.version}` : "";
+    const size = p.rec ? `, recording ${(p.rec.size / 1e6).toFixed(1)} MB` : "";
+    const label = document.createElement("span");
+    label.textContent = `${p.short}: ${state}${offset}${version}${size}`;
+    label.className = p.connected ? "ok" : "warn";
+    const warn = document.createElement("span");
+    warn.textContent = p.message || "";
+    warn.className = "fail";
+    const remove = document.createElement("button");
+    remove.textContent = "Remove";
+    remove.onclick = () => invoke("remove_peer", { id: p.id });
+    row.append(label, warn, remove);
+    rows.append(row);
+  }
+  $("peers").replaceChildren(rows);
+  $("recstate").textContent = st.mine ? `you ${(st.mine.size / 1e6).toFixed(1)} MB` : "";
+  source(a, st.mine, false);
+  const ids = new Set(st.peers.map((p) => p.id));
+  for (const key of Object.keys(tiles)) if (key !== "me" && !ids.has(key)) { tiles[key].box.remove(); delete tiles[key]; }
+  for (const p of st.peers) source(tile(p.id, p.short).video, p.rec, live.has(p.id));
   if (a.duration) $("seek").max = a.duration;
   $("notes").innerHTML = st.notes.map((n) => `<div>${n.who}: ${n.text.replace(/</g, "&lt;")}</div>`).join("");
 }

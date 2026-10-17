@@ -1,14 +1,15 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use iroh::endpoint::{Connection, RecvStream, SendStream};
+use iroh::EndpointId;
 use serde_json::{json, Value};
 use tauri::Emitter;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::time::{sleep, timeout};
 
-use crate::{debug, log, now_us, Core, ALPN, PROTOCOL, VERSION};
+use crate::{debug, log, now_us, short, Core, ALPN, PROTOCOL, VERSION};
 
 const CHUNK: u64 = 16 << 20;
 
@@ -22,14 +23,13 @@ async fn request(conn: &Connection, req: &Value) -> Result<Vec<u8>> {
     .await?
 }
 
-pub async fn send_control(core: &Arc<Core>, cmd: &str, wall_us: i64) -> Result<()> {
-    let conn = core.conn.lock().unwrap().clone();
-    let Some(conn) = conn else { bail!("no peer connected") };
-    request(&conn, &json!({"t": "ctl", "cmd": cmd, "wall_us": wall_us})).await?;
-    Ok(())
+pub async fn send_control(core: &Arc<Core>, cmd: &str, wall_us: i64) {
+    for conn in core.connections() {
+        let _ = request(&conn, &json!({"t": "ctl", "cmd": cmd, "wall_us": wall_us})).await;
+    }
 }
 
-async fn handle(core: Arc<Core>, mut send: SendStream, mut recv: RecvStream) -> Result<()> {
+async fn handle(core: Arc<Core>, from: EndpointId, mut send: SendStream, mut recv: RecvStream) -> Result<()> {
     let req: Value = serde_json::from_slice(&recv.read_to_end(4096).await?)?;
     match req["t"].as_str() {
         Some("pull") => {
@@ -46,13 +46,14 @@ async fn handle(core: Arc<Core>, mut send: SendStream, mut recv: RecvStream) -> 
         }
         Some("hello") => {
             let version = req["app"].as_str().unwrap_or("unknown").to_string();
-            *core.peer_info.lock().unwrap() = Some((version, req["proto"].as_u64().unwrap_or(0) as u32));
+            let proto = req["proto"].as_u64().unwrap_or(0) as u32;
+            core.update_peer(&from, |p| p.info = Some((version, proto)));
             send.write_all(&serde_json::to_vec(&json!({"app": VERSION, "proto": PROTOCOL}))?).await?;
         }
         Some("ping") => send.write_all(&now_us().to_le_bytes()).await?,
         Some("ctl") => {
             let wall = req["wall_us"].as_i64().unwrap_or(0);
-            let _ = core.app.emit("control", json!({"cmd": req["cmd"], "wall_us": wall}));
+            let _ = core.app.emit("control", json!({"cmd": req["cmd"], "wall_us": wall, "from": from.to_string()}));
             send.write_all(b"ok").await?;
         }
         _ => {}
@@ -61,7 +62,7 @@ async fn handle(core: Arc<Core>, mut send: SendStream, mut recv: RecvStream) -> 
     Ok(())
 }
 
-fn watch_paths(core: &Arc<Core>, conn: &Connection, label: &'static str) {
+fn watch_paths(core: &Arc<Core>, conn: &Connection, label: String) {
     let core = core.clone();
     let mut events = conn.path_events();
     let started = std::time::Instant::now();
@@ -86,21 +87,22 @@ pub async fn accept_loop(core: Arc<Core>) {
         tokio::spawn(async move {
             let Ok(accepting) = incoming.accept() else { return };
             let Ok(conn) = accepting.await else { return };
-            if Some(conn.remote_id()) != *core.peer.lock().unwrap() {
+            let from = conn.remote_id();
+            if !core.has_peer(&from) {
                 conn.close(1u32.into(), b"unknown peer");
                 return;
             }
-            *core.incoming.lock().unwrap() = Some(conn.clone());
-            watch_paths(&core, &conn, "incoming");
+            core.update_peer(&from, |p| p.incoming = Some(conn.clone()));
+            watch_paths(&core, &conn, format!("{} incoming", short(&from)));
             while let Ok((send, recv)) = conn.accept_bi().await {
-                tokio::spawn(handle(core.clone(), send, recv));
+                tokio::spawn(handle(core.clone(), from, send, recv));
             }
         });
     }
 }
 
-async fn pull(core: &Core, conn: &Connection, name: &str) -> Result<()> {
-    let dir = core.dir.join("peer");
+async fn pull(core: &Core, id: &EndpointId, conn: &Connection, name: &str) -> Result<()> {
+    let dir = core.peer_dir(id);
     tokio::fs::create_dir_all(&dir).await?;
     let path = dir.join(name);
     let from = tokio::fs::metadata(&path).await.map(|m| m.len()).unwrap_or(0);
@@ -113,7 +115,7 @@ async fn pull(core: &Core, conn: &Connection, name: &str) -> Result<()> {
     Ok(())
 }
 
-async fn measure(core: &Core, conn: &Connection, samples: &mut Vec<(i64, i64)>) -> Result<()> {
+async fn measure(core: &Core, id: &EndpointId, conn: &Connection, samples: &mut Vec<(i64, i64)>) -> Result<()> {
     let t0 = now_us();
     let reply = request(conn, &json!({"t": "ping"})).await?;
     let t3 = now_us();
@@ -123,56 +125,62 @@ async fn measure(core: &Core, conn: &Connection, samples: &mut Vec<(i64, i64)>) 
         samples.remove(0);
     }
     let (rtt, offset) = *samples.iter().min().unwrap();
-    *core.offset_us.lock().unwrap() = Some(offset);
-    core.append_log(&json!({"k": "offset", "t_us": t3, "rtt_us": rtt, "offset_us": offset}));
+    core.update_peer(id, |p| p.offset_us = Some(offset));
+    core.append_log(&json!({"k": "offset", "peer": short(id), "t_us": t3, "rtt_us": rtt, "offset_us": offset}));
     Ok(())
 }
 
-async fn sync(core: &Arc<Core>, conn: &Connection) -> Result<()> {
+async fn sync(core: &Arc<Core>, id: &EndpointId, conn: &Connection) -> Result<()> {
     let mut samples = Vec::new();
     let mut tick = 0u32;
     loop {
         if tick < 5 || tick % 30 == 0 {
-            measure(core, conn, &mut samples).await?;
+            measure(core, id, conn, &mut samples).await?;
         }
         tick += 1;
-        pull(core, conn, "log.bin").await?;
-        let peer_log = log::read(&core.dir.join("peer").join("log.bin"));
+        pull(core, id, conn, "log.bin").await?;
+        let peer_log = log::read(&core.peer_dir(id).join("log.bin"));
         let latest = peer_log.iter().rev().find(|r| r["k"] == "rec");
         if let Some(name) = latest.and_then(|r| r["name"].as_str()) {
-            pull(core, conn, name).await?;
+            pull(core, id, conn, name).await?;
         }
         sleep(Duration::from_secs(1)).await;
     }
 }
 
-pub async fn dial_loop(core: Arc<Core>) {
+pub async fn dial_loop(core: Arc<Core>, id: EndpointId) {
     loop {
         sleep(Duration::from_secs(2)).await;
-        let Some(peer) = *core.peer.lock().unwrap() else { continue };
+        if !core.has_peer(&id) {
+            return;
+        }
         let dialing = std::time::Instant::now();
-        let conn = match timeout(Duration::from_secs(15), core.ep.connect(peer, ALPN)).await {
+        let conn = match timeout(Duration::from_secs(15), core.ep.connect(id, ALPN)).await {
             Ok(Ok(conn)) => conn,
             other => {
-                debug::event(&core, dialing, format!("connect failed: {:?}", other.map(|r| r.map(|_| ()))));
+                debug::event(&core, dialing, format!("{} connect failed: {:?}", short(&id), other.map(|r| r.map(|_| ()))));
                 continue;
             }
         };
-        debug::event(&core, dialing, "connected".into());
-        *core.conn.lock().unwrap() = Some(conn.clone());
-        watch_paths(&core, &conn, "outgoing");
+        debug::event(&core, dialing, format!("{} connected", short(&id)));
+        core.update_peer(&id, |p| p.conn = Some(conn.clone()));
+        watch_paths(&core, &conn, format!("{} outgoing", short(&id)));
         let hello = request(&conn, &json!({"t": "hello", "app": VERSION, "proto": PROTOCOL})).await;
+        let mut compatible = true;
         if let Ok(reply) = hello.and_then(|r| Ok(serde_json::from_slice::<Value>(&r)?)) {
             let proto = reply["proto"].as_u64().unwrap_or(0) as u32;
-            *core.peer_info.lock().unwrap() = Some((reply["app"].as_str().unwrap_or("unknown").to_string(), proto));
+            let version = reply["app"].as_str().unwrap_or("unknown").to_string();
+            core.update_peer(&id, |p| p.info = Some((version, proto)));
             if proto != PROTOCOL {
-                debug::event(&core, dialing, format!("peer protocol {proto} differs from ours {PROTOCOL}"));
+                debug::event(&core, dialing, format!("{} protocol {proto} differs from ours {PROTOCOL}", short(&id)));
                 sleep(Duration::from_secs(10)).await;
-                *core.conn.lock().unwrap() = None;
-                continue;
+                compatible = false;
             }
         }
-        let _ = sync(&core, &conn).await;
-        *core.conn.lock().unwrap() = None;
+        if compatible {
+            let _ = sync(&core, &id, &conn).await;
+        }
+        core.update_peer(&id, |p| p.conn = None);
+        conn.close(0u32.into(), b"done");
     }
 }
