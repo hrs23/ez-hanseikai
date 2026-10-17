@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>EZ Hanseikai</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #111; color: #eee; display: grid; place-items: center; height: 100vh; margin: 0; }
+  p { color: #888; }
+</style>
+</head>
+<body>
+<main>
+  <h1>EZ Hanseikai</h1>
+  <p id="info"></p>
+</main>
+<script>
+  window.__TAURI__.core.invoke("info").then((s) => {
+    document.getElementById("info").textContent = s;
+  });
+</script>
+</body>
+</html>

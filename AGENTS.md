@@ -1,0 +1,4 @@
+- Keep it simple: as few settings, files and features as the job needs.
+- Keep the docs minimal: only what you need to run or change the app, in README.md and `docs/`.
+- Never touch the game process, so anti-cheat has nothing to object to: capture the screen with Windows Graphics Capture and game sound with per-process audio capture, never inject code, draw overlays or read game memory, and detect game events only from the captured picture and sound.
+- The repository is public, so write everything in English and never commit secrets, personal data, real recordings or notes, or private hostnames and addresses. Use made-up examples.

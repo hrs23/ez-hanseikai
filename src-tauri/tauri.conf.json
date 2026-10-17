@@ -1,0 +1,19 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "EZ Hanseikai",
+  "version": "0.0.0",
+  "identifier": "dev.ez-hanseikai.app",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      { "title": "EZ Hanseikai", "width": 960, "height": 600 }
+    ]
+  },
+  "bundle": {
+    "active": false,
+    "icon": ["icons/icon.ico"]
+  }
+}
