@@ -88,7 +88,7 @@ function reload(v, rec) {
   const t = v.currentTime;
   v.dataset.size = rec.size;
   v.dataset.retry = Date.now();
-  v.load();
+  v.src = v.dataset.src + "?r=" + Date.now();
   v.onloadedmetadata = () => { v.currentTime = t; };
 }
 function source(v, rec) {
