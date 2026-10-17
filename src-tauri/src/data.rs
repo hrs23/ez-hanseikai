@@ -60,3 +60,23 @@ pub fn reset(dir: &Path, everything: bool) {
         }
     }
 }
+
+pub fn delete_old(core: &crate::Core) {
+    let Some(days) = *core.keep_days.lock().unwrap() else { return };
+    let limit = std::time::Duration::from_secs(days as u64 * 86400);
+    let active = core.recording_name.lock().unwrap().clone();
+    let mut dirs = vec![core.dir.clone()];
+    if let Ok(entries) = std::fs::read_dir(core.dir.join("peer")) {
+        dirs.extend(entries.flatten().map(|e| e.path()));
+    }
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let old = entry.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age > limit);
+            if name.starts_with("rec-") && name.ends_with(".mp4") && Some(&name) != active.as_ref() && old {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+}

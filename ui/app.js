@@ -295,7 +295,6 @@ function renderRoom() {
     el("span", { className: "dot " + (p.connected ? p.path : p.failures > 2 ? "bad" : "") }),
     el("span", { textContent: label(p) + (p.message ? ` - ${p.message}` : "") }),
     el("button", { textContent: "Remove", onclick: () => invoke("remove_peer", { id: p.id }) }))));
-  $("leave").hidden = !inRoom;
   $("rejoin").hidden = inRoom || !st.can_rejoin;
   $("roombtn").textContent = inRoom ? `Room (${st.peers.length + 1})` : "Room";
   $("onboard").hidden = inRoom;
@@ -305,9 +304,10 @@ async function refresh() {
   st = await invoke("state");
   if (!ready) { ready = true; invoke("ui_ready"); }
   for (const id of ["name", "name2"]) if (document.activeElement !== $(id)) $(id).value = st.name;
-  $("version").textContent = "v" + st.version;
   $("share").checked = st.share;
   if (document.activeElement !== $("limit")) $("limit").value = st.limit_mbps || "";
+  if (document.activeElement !== $("keepdays")) $("keepdays").value = st.keep_days || "";
+  if (document.activeElement !== $("proc")) $("proc").value = st.audio_process;
   const warnings = [st.notice, st.ffmpeg, st.free_bytes && st.free_bytes < LOW_DISK ? `Low disk space: ${gb(st.free_bytes)} free` : ""].filter(Boolean);
   $("notice").textContent = warnings.join(" ");
   $("notice").hidden = !warnings.length;
@@ -380,7 +380,7 @@ async function fillProcesses() {
   const names = await invoke("list_processes");
   const current = $("proc").value;
   $("proc").replaceChildren(el("option", { value: "", textContent: "Game sound: automatic" }), ...names.map((n) => el("option", { textContent: n })));
-  $("proc").value = current;
+  $("proc").value = current || (st ? st.audio_process : "");
 }
 async function refreshDebug() {
   if (!$("debugpage").hidden) {
@@ -402,12 +402,12 @@ function wake() {
 document.addEventListener("mousemove", wake);
 document.addEventListener("fullscreenchange", wake);
 
-function closePops() { for (const id of ["roompop", "gear", "helpbox"]) $(id).hidden = true; }
+function closePops() { for (const id of ["roompop", "settings", "helpbox"]) $(id).hidden = true; }
 function pop(id) { const open = $(id).hidden; closePops(); $(id).hidden = !open; }
 
-const record = () => (st && st.recording ? invoke("stop_recording") : invoke("start_recording", { audioProcess: $("proc").value }).catch((e) => { $("notice").textContent = e; $("notice").hidden = false; }));
+const record = () => (st && st.recording ? invoke("stop_recording") : invoke("start_recording").catch((e) => { $("notice").textContent = e; $("notice").hidden = false; }));
 const showCode = (code) => { for (const [box, input] of [["invitebox", "code"], ["invitebox2", "code2"]]) { $(box).hidden = false; $(input).value = code; } };
-const createInvite = () => invoke("create_invite").then(showCode);
+const createInvite = () => invoke("create_invite", { reuse: false }).then(showCode);
 const join = (field, err) => invoke("join_room", { code: $(field).value }).then(() => { $(field).value = ""; $(err).textContent = ""; closePops(); }).catch((e) => { $(err).textContent = e; });
 
 $("rec").onclick = record;
@@ -435,22 +435,21 @@ $("noteform").onsubmit = (e) => {
   $("note").blur();
 };
 $("roombtn").onclick = () => pop("roompop");
-$("gearbtn").onclick = () => pop("gear");
-$("helpbtn").onclick = () => pop("helpbox");
 $("invite").onclick = createInvite;
 $("invite2").onclick = createInvite;
 $("copycode").onclick = () => navigator.clipboard.writeText($("code").value);
 $("copycode2").onclick = () => navigator.clipboard.writeText($("code2").value);
 $("join").onclick = () => join("joincode", "roomerr");
 $("join2").onclick = () => join("joincode2", "roomerr2");
-$("leave").onclick = () => invoke("leave_room");
+$("leave2").onclick = () => invoke("leave_room");
 $("rejoin").onclick = () => invoke("rejoin");
+$("closesettings").onclick = closePops;
+$("proc").onchange = () => invoke("set_audio_process", { name: $("proc").value });
+$("keepdays").onchange = () => invoke("set_keep_days", { days: $("keepdays").value ? Number($("keepdays").value) : null });
 $("name").onchange = () => invoke("set_name", { name: $("name").value });
 $("name2").onchange = () => invoke("set_name", { name: $("name2").value });
 $("share").onchange = () => invoke("set_share", { on: $("share").checked });
 $("limit").onchange = () => invoke("set_limit", { mbps: $("limit").value ? Number($("limit").value) : null });
-$("checkupdate").onclick = () => checkUpdate(true);
-$("opendebug").onclick = () => { closePops(); $("debugpage").hidden = false; renderInfo(); runCheck(); refreshDebug(); };
 $("closedebug").onclick = () => { $("debugpage").hidden = true; };
 $("report").onclick = () => invoke("save_report", { includeAddresses: $("addr").checked, audioProcess: $("proc").value }).then((p) => { $("reportpath").textContent = p; }).catch((e) => { $("reportpath").textContent = String(e); });
 $("runcheck").onclick = runCheck;
@@ -500,11 +499,40 @@ document.addEventListener("keydown", (e) => {
   else if (k === "q") stepNote(-1);
   else if (k === "e") stepNote(1);
   else if (k === "u") $("undo").click();
-  else if (e.key === "?") $("helpbtn").click();
+  else if (e.key === "?") pop("helpbox");
   else return;
   e.preventDefault();
 });
 
+function openDebug() { closePops(); $("debugpage").hidden = false; renderInfo(); runCheck(); refreshDebug(); }
+function focusPlayer(delta) {
+  const n = keys().length;
+  view = view === 0 ? (delta > 0 ? 1 : n) : ((view - 1 + delta + n) % n) + 1;
+  lastSingle = view;
+  applyView();
+}
+function flash(text) {
+  $("notice").textContent = text;
+  $("notice").hidden = false;
+  setTimeout(() => { $("notice").hidden = true; }, 5000);
+}
+const menuActions = {
+  "settings": () => { closePops(); $("settings").hidden = false; },
+  "create-room": () => { closePops(); $("roompop").hidden = false; createInvite(); },
+  "join-room": () => { closePops(); $("roompop").hidden = false; $("joincode").focus(); },
+  "copy-invite": () => invoke("create_invite", { reuse: true }).then((code) => { showCode(code); navigator.clipboard.writeText(code); flash("Invite code copied"); }),
+  "cancel-invite": () => invoke("cancel_invites").then(() => { for (const b of ["invitebox", "invitebox2"]) $(b).hidden = true; flash("Invite cancelled"); }),
+  "leave-room": () => invoke("leave_room"),
+  "fullscreen": toggleFull,
+  "all-players": () => { view = 0; applyView(); },
+  "next-player": () => focusPlayer(1),
+  "prev-player": () => focusPlayer(-1),
+  "shortcuts": () => { closePops(); $("helpbox").hidden = false; },
+  "debug": openDebug,
+  "update": () => checkUpdate(true),
+};
+window.__TAURI__.event.listen("menu", (e) => { if (menuActions[e.payload]) menuActions[e.payload](); });
+window.__TAURI__.event.listen("joined", (e) => flash(`${e.payload} joined`));
 setInterval(tick, TICK_MS);
 setInterval(() => refresh().catch(() => {}), 1000);
 setInterval(() => refreshDebug().catch(() => {}), 2000);

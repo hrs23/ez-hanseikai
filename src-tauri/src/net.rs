@@ -48,6 +48,14 @@ fn learn_members(core: &Arc<Core>, list: &Value) {
     }
 }
 
+fn announce_join(core: &Core, id: &EndpointId, name: &str) {
+    let first = core.update_peer(id, |p| std::mem::take(&mut p.announce) && p.info.is_none()).unwrap_or(false);
+    if first {
+        let shown = if name.is_empty() { short(id) } else { name.to_string() };
+        let _ = core.app.emit("joined", shown);
+    }
+}
+
 fn bytes_per_sec(core: &Core) -> Option<f64> {
     core.limit_mbps.lock().unwrap().map(|mbps| mbps * 125_000.0)
 }
@@ -113,6 +121,7 @@ async fn handle(core: Arc<Core>, from: EndpointId, mut send: SendStream, mut rec
             let version = req["app"].as_str().unwrap_or("unknown").to_string();
             let proto = req["proto"].as_u64().unwrap_or(0) as u32;
             let name = crate::clean_name(req["name"].as_str().unwrap_or_default());
+            announce_join(&core, &from, &name);
             core.update_peer(&from, |p| {
                 p.info = Some((version, proto));
                 p.name = name;
@@ -266,6 +275,7 @@ async fn hello(core: &Arc<Core>, id: &EndpointId, conn: &Connection) -> bool {
     let proto = reply["proto"].as_u64().unwrap_or(0) as u32;
     let version = reply["app"].as_str().unwrap_or("unknown").to_string();
     let name = crate::clean_name(reply["name"].as_str().unwrap_or_default());
+    announce_join(core, id, &name);
     core.update_peer(id, |p| {
         p.info = Some((version, proto));
         p.name = name;

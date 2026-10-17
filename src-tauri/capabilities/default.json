@@ -5,6 +5,7 @@
   ],
   "permissions": [
     "core:default",
-    "updater:default"
+    "updater:default",
+    "window-state:default"
   ]
 }

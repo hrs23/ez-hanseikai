@@ -6,6 +6,7 @@ mod debug;
 mod log;
 mod net;
 mod record;
+mod shell;
 
 use std::path::PathBuf;
 use std::collections::{HashMap, HashSet};
@@ -42,6 +43,7 @@ pub struct Peer {
     pub incoming: Option<Connection>,
     pub offset_us: Option<i64>,
     pub failures: u32,
+    pub announce: bool,
     pub info: Option<(String, u32)>,
 }
 
@@ -55,6 +57,9 @@ pub struct Core {
     pub limit_mbps: Mutex<Option<f64>>,
     pub last_members: Mutex<Vec<String>>,
     pub invites: Mutex<Vec<String>>,
+    pub audio_process: Mutex<String>,
+    pub keep_days: Mutex<Option<u32>>,
+    pub ready: AtomicBool,
     pub removed: Mutex<HashSet<String>>,
     pub pending_join: Mutex<HashMap<EndpointId, String>>,
     pub following: Mutex<HashSet<String>>,
@@ -87,6 +92,8 @@ impl Core {
             "limit_mbps": *self.limit_mbps.lock().unwrap(),
             "last_members": *self.last_members.lock().unwrap(),
             "removed": *self.removed.lock().unwrap(),
+            "audio_process": *self.audio_process.lock().unwrap(),
+            "keep_days": *self.keep_days.lock().unwrap(),
         });
         let _ = std::fs::write(self.dir.join("settings.json"), value.to_string());
     }
@@ -156,7 +163,8 @@ pub fn add_peer_id(core: &Arc<Core>, id: &str) -> Result<(), String> {
     if core.has_peer(&id) {
         return Ok(());
     }
-    core.peers.lock().unwrap().push(Peer { id, name: String::new(), conn: None, incoming: None, offset_us: None, failures: 0, info: None });
+    let announce = core.ready.load(Ordering::Relaxed);
+    core.peers.lock().unwrap().push(Peer { id, name: String::new(), conn: None, incoming: None, offset_us: None, failures: 0, announce, info: None });
     core.save_peers();
     tauri::async_runtime::spawn(net::dial_loop(core.clone(), id));
     Ok(())
@@ -274,6 +282,9 @@ async fn state(core: State<'_, Arc<Core>>) -> Result<Value, String> {
         "id": core.ep.id().to_string(),
         "name": core.name.lock().unwrap().clone(),
         "share": core.share.load(Ordering::Relaxed),
+        "audio_process": core.audio_process.lock().unwrap().clone(),
+        "keep_days": *core.keep_days.lock().unwrap(),
+        "invites": core.invites.lock().unwrap().len(),
         "limit_mbps": *core.limit_mbps.lock().unwrap(),
         "can_rejoin": !core.last_members.lock().unwrap().is_empty(),
         "recovery": core.recovery.lock().unwrap().clone(),
@@ -319,14 +330,19 @@ async fn save_report(core: State<'_, Arc<Core>>, include_addresses: bool, audio_
     .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
-async fn start_recording(core: State<'_, Arc<Core>>, audio_process: String) -> Result<(), String> {
+pub fn start_recording_named(core: &Core, audio_process: &str) -> Result<(), String> {
     if !record::ffmpeg_present() {
         return Err("The video tool is still downloading. Wait a minute and try again.".into());
     }
     let found = processes().into_iter().find(|(name, _)| if audio_process.is_empty() { name.to_lowercase().starts_with("r5apex") } else { name.eq_ignore_ascii_case(&audio_process) });
     let (name, pid) = found.unwrap_or_default();
-    start_recording_now(&core, pid, &name)
+    start_recording_now(core, pid, &name)
+}
+
+#[tauri::command]
+async fn start_recording(core: State<'_, Arc<Core>>) -> Result<(), String> {
+    let name = core.audio_process.lock().unwrap().clone();
+    start_recording_named(&core, &name)
 }
 
 #[tauri::command]
@@ -361,10 +377,32 @@ fn remove_peer(core: State<Arc<Core>>, id: String) {
 }
 
 #[tauri::command]
-fn create_invite(core: State<Arc<Core>>) -> String {
+fn create_invite(core: State<Arc<Core>>, reuse: bool) -> String {
+    if reuse {
+        if let Some(token) = core.invites.lock().unwrap().last() {
+            return format!("ezh-{}-{token}", core.ep.id());
+        }
+    }
     let token: String = SecretKey::generate().to_bytes()[..8].iter().map(|b| format!("{b:02x}")).collect();
     core.invites.lock().unwrap().push(token.clone());
     format!("ezh-{}-{token}", core.ep.id())
+}
+
+#[tauri::command]
+fn cancel_invites(core: State<Arc<Core>>) {
+    core.invites.lock().unwrap().clear();
+}
+
+#[tauri::command]
+fn set_audio_process(core: State<Arc<Core>>, name: String) {
+    *core.audio_process.lock().unwrap() = name;
+    core.save_settings();
+}
+
+#[tauri::command]
+fn set_keep_days(core: State<Arc<Core>>, days: Option<u32>) {
+    *core.keep_days.lock().unwrap() = days.filter(|d| *d > 0);
+    core.save_settings();
 }
 
 #[tauri::command]
@@ -534,12 +572,15 @@ async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
         dir,
         ep,
         app,
-        peers: Mutex::new(saved.iter().map(|id| Peer { id: *id, name: String::new(), conn: None, incoming: None, offset_us: None, failures: 0, info: None }).collect()),
+        peers: Mutex::new(saved.iter().map(|id| Peer { id: *id, name: String::new(), conn: None, incoming: None, offset_us: None, failures: 0, announce: false, info: None }).collect()),
         name: Mutex::new(name),
         share: AtomicBool::new(settings["share"].as_bool().unwrap_or(true)),
         limit_mbps: Mutex::new(settings["limit_mbps"].as_f64()),
         last_members: Mutex::new(settings["last_members"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default()),
         invites: Mutex::new(Vec::new()),
+        audio_process: Mutex::new(settings["audio_process"].as_str().unwrap_or_default().to_string()),
+        keep_days: Mutex::new(settings["keep_days"].as_u64().map(|d| d as u32)),
+        ready: AtomicBool::new(false),
         removed: Mutex::new(settings["removed"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default()),
         pending_join: Mutex::new(HashMap::new()),
         following: Mutex::new(HashSet::new()),
@@ -559,9 +600,23 @@ async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .setup(|app| {
             let core = tauri::async_runtime::block_on(init(app.handle().clone()))?;
             app.manage(core.clone());
+            shell::setup(app, core.clone())?;
+            core.ready.store(true, Ordering::Relaxed);
+            let keep_core = core.clone();
+            std::thread::spawn(move || loop {
+                data::delete_old(&keep_core);
+                std::thread::sleep(Duration::from_secs(3600));
+            });
             tauri::async_runtime::spawn(net::accept_loop(core.clone()));
             let saved: Vec<EndpointId> = core.peers.lock().unwrap().iter().map(|p| p.id).collect();
             for id in saved {
@@ -610,7 +665,7 @@ fn main() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug_text, save_report, start_recording, stop_recording, add_peer, remove_peer, create_invite, join_room, leave_room, rejoin, set_share, set_limit, note_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_note, control])
+        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug_text, save_report, start_recording, stop_recording, add_peer, remove_peer, create_invite, join_room, leave_room, rejoin, set_share, set_limit, cancel_invites, set_audio_process, set_keep_days, note_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_note, control])
         .run(tauri::generate_context!())
         .expect("failed to run");
 }

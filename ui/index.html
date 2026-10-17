@@ -16,28 +16,24 @@
   <span class="spacer"></span>
   <span id="update" class="small"></span>
   <button id="roombtn">Room</button>
-  <button id="helpbtn" title="Shortcuts">?</button>
-  <button id="gearbtn" title="Settings" aria-label="Settings">&#9881;</button>
 </header>
 <div id="notice" class="notice" hidden></div>
 <div id="roompop" class="pop" hidden>
   <div id="members"></div>
-  <div class="row"><button id="invite">Create invite</button><button id="rejoin" hidden>Rejoin</button><button id="leave" hidden>Leave</button></div>
+  <div class="row"><button id="invite">Create invite</button><button id="rejoin" hidden>Rejoin</button><button id="leave2">Leave</button></div>
   <div class="row" id="invitebox" hidden><input id="code" class="id" readonly><button id="copycode">Copy</button></div>
   <div class="row"><input id="joincode" class="id" placeholder="paste an invite"><button id="join">Join</button></div>
   <div id="roomerr" class="small fail"></div>
 </div>
-<aside id="gear" class="pop side" hidden>
-  <h3>You</h3>
-  <div class="row"><input id="name" maxlength="24" placeholder="name"></div>
-  <h3>Recording</h3>
-  <div class="row"><select id="proc" title="Game sound from"></select></div>
+<div id="settings" class="pop modal" hidden>
+  <h3>Settings</h3>
+  <label class="field">Name<input id="name" maxlength="24"></label>
+  <label class="field">Game sound<select id="proc" title="Game sound from"></select></label>
   <label class="row"><input type="checkbox" id="share"> Share my recordings</label>
-  <div class="row"><input id="limit" type="number" min="0" step="1" placeholder="no limit"><span class="small muted">Mbit/s</span></div>
-  <h3>App</h3>
-  <div class="row"><button id="checkupdate">Check for updates</button><span id="version" class="small muted"></span></div>
-  <div class="row"><button id="opendebug">Debug page</button></div>
-</aside>
+  <label class="field">Speed limit (Mbit/s)<input id="limit" type="number" min="0" step="1" placeholder="no limit"></label>
+  <label class="field">Delete recordings after (days)<input id="keepdays" type="number" min="0" step="1" placeholder="never"></label>
+  <div class="row"><button id="closesettings" class="primary">Done</button></div>
+</div>
 <div id="reviewwrap">
   <div id="review">
     <div id="stage">
