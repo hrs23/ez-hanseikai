@@ -136,6 +136,7 @@ fn start_recording_now(core: &Core, audio_pid: u32) -> Result<(), String> {
 fn stop_recording_now(core: &Core) {
     if let Some(recorder) = core.recorder.lock().unwrap().take() {
         recorder.stop();
+        core.append_log(&json!({"k": "rec_end", "t_us": now_us()}));
     }
 }
 
@@ -186,7 +187,7 @@ async fn state(core: State<'_, Arc<Core>>) -> Result<Value, String> {
     let mut notes: Vec<Value> = own
         .iter()
         .filter(|r| r["k"] == "note")
-        .map(|r| json!({"who": "me", "t_us": r["t_us"], "text": r["text"]}))
+        .map(|r| json!({"from": "me", "who": "me", "t_us": r["t_us"], "at_us": r["at_us"].as_i64().unwrap_or_else(|| r["t_us"].as_i64().unwrap_or(0)), "text": r["text"]}))
         .collect();
     let snapshot: Vec<(EndpointId, String, Option<Connection>, Option<Connection>, Option<i64>, Option<(String, u32)>, u32)> = core
         .peers
@@ -203,8 +204,15 @@ async fn state(core: State<'_, Arc<Core>>) -> Result<Value, String> {
             json!({"path": path, "start_us": start_us, "size": size(path.clone())})
         });
         for r in theirs.iter().filter(|r| r["k"] == "note") {
-            notes.push(json!({"who": if name.is_empty() { short(&id) } else { format!("{name} ({})", short(&id)) }, "t_us": r["t_us"], "text": r["text"]}));
+            let who = if name.is_empty() { short(&id) } else { format!("{name} ({})", short(&id)) };
+            notes.push(json!({"from": id.to_string(), "who": who, "t_us": r["t_us"], "at_us": r["at_us"].as_i64().unwrap_or_else(|| r["t_us"].as_i64().unwrap_or(0)), "text": r["text"]}));
         }
+        let last = |kind: &str| theirs.iter().rposition(|r| r["k"] == kind);
+        let recording = match (last("rec"), last("rec_end")) {
+            (Some(start), Some(end)) => start > end,
+            (Some(_), None) => true,
+            _ => false,
+        };
         let alive = conn.iter().chain(incoming.iter()).find(|c| c.close_reason().is_none());
         let message = info.as_ref().filter(|(_, proto)| *proto != PROTOCOL).map(|(version, proto)| {
             format!("peer has version {version} (protocol {proto}, ours {PROTOCOL}), update needed")
@@ -221,6 +229,7 @@ async fn state(core: State<'_, Arc<Core>>) -> Result<Value, String> {
             "version": info.map(|(version, _)| version),
             "message": message,
             "rec": rec,
+            "recording": recording,
         }));
     }
     notes.sort_by_key(|n| n["t_us"].as_i64());
@@ -357,8 +366,12 @@ fn dismiss_recovery(core: State<Arc<Core>>) {
 }
 
 #[tauri::command]
-fn add_note(core: State<Arc<Core>>, text: String) {
-    core.append_log(&json!({"k": "note", "t_us": now_us(), "text": text}));
+fn add_note(core: State<Arc<Core>>, text: String, at_us: i64) {
+    let text: String = text.chars().filter(|c| !c.is_control()).take(500).collect();
+    if text.trim().is_empty() {
+        return;
+    }
+    core.append_log(&json!({"k": "note", "t_us": now_us(), "at_us": at_us, "text": text}));
 }
 
 #[tauri::command]

@@ -9,18 +9,21 @@
 <body>
 <header>
   <img src="logo.svg" alt="">
-  <b id="appname"></b><span id="version" class="muted"></span>
-  <span id="update" class="small"></span>
-  <span id="ffmpeg" class="warn small"></span>
+  <b id="appname"></b><span id="version" class="muted small"></span>
+  <span id="chips"></span>
   <span class="spacer"></span>
-  <button id="checkupdate">Check for updates</button>
+  <span id="update" class="small"></span><span id="ffmpeg" class="warn small"></span>
+  <button id="rec2" class="primary">Record</button>
+  <button id="helpbtn" title="Shortcuts">?</button>
 </header>
-<div id="app">
-  <aside>
+<details id="setup" open>
+  <summary>Setup</summary>
+  <div id="setupbody">
     <section>
       <h3>You</h3>
       <div class="row"><input id="name" maxlength="24" placeholder="name"></div>
       <div class="row"><input id="id" class="id" readonly><button id="copy">Copy</button></div>
+      <button id="checkupdate">Check for updates</button>
     </section>
     <section>
       <h3>Peers</h3>
@@ -35,40 +38,60 @@
       <div id="notice" class="small warn"></div>
     </section>
     <section>
-      <h3>Notes</h3>
-      <div class="row"><input id="note" placeholder="note"><button id="addnote">Add</button></div>
-      <div id="notes"></div>
+      <details class="fold"><summary id="checksummary">Check</summary>
+        <div class="row"><button id="runcheck">Run check</button></div>
+        <div id="checks" class="small"></div>
+      </details>
+      <details class="fold"><summary>Network</summary>
+        <div class="row"><button id="report">Save report</button><label class="small"><input type="checkbox" id="addr"> include addresses and name</label></div>
+        <div id="reportpath" class="small muted"></div>
+        <pre id="debug"></pre>
+      </details>
+      <details class="fold"><summary>Files</summary>
+        <div id="datainfo" class="small muted"></div>
+        <div class="row"><button id="openfolder">Open data folder</button><button id="resetopen">Reset...</button></div>
+        <div id="resetpanel" class="panel small" hidden>
+          <label><input type="radio" name="level" value="settings" checked> Reset settings and cache: deletes the downloaded video tool, logs, reports, the peer list and your name. Keeps recordings and your ID.</label><br>
+          <label><input type="radio" name="level" value="all"> Reset everything: also deletes all recordings and your identity key. Your ID will change. This cannot be undone.</label>
+          <div class="row" style="margin-top:8px"><input id="confirm" placeholder="type RESET" hidden></div>
+          <div class="row"><button id="openfolder2">Open data folder first</button><button id="doreset" class="danger">Reset</button><button id="resetcancel">Cancel</button></div>
+          <div id="reseterr" class="fail"></div>
+        </div>
+      </details>
     </section>
-    <details><summary id="checksummary">Check</summary>
-      <div class="row"><button id="runcheck">Run check</button></div>
-      <div id="checks" class="small"></div>
-    </details>
-    <details><summary>Network</summary>
-      <div class="row"><button id="report">Save report</button><label class="small"><input type="checkbox" id="addr"> include addresses and name</label></div>
-      <div id="reportpath" class="small muted"></div>
-      <pre id="debug"></pre>
-    </details>
-    <details><summary>Files</summary>
-      <div id="datainfo" class="small muted"></div>
-      <div class="row"><button id="openfolder">Open data folder</button><button id="resetopen">Reset...</button></div>
-      <div id="resetpanel" class="panel small" hidden>
-        <label><input type="radio" name="level" value="settings" checked> Reset settings and cache: deletes the downloaded video tool, logs, reports, the peer list and your name. Keeps recordings and your ID.</label><br>
-        <label><input type="radio" name="level" value="all"> Reset everything: also deletes all recordings and your identity key. Your ID will change. This cannot be undone.</label>
-        <div class="row" style="margin-top:8px"><input id="confirm" placeholder="type RESET" hidden></div>
-        <div class="row"><button id="openfolder2">Open data folder first</button><button id="doreset" class="danger">Reset</button><button id="resetcancel">Cancel</button></div>
-        <div id="reseterr" class="fail"></div>
-      </div>
-    </details>
-  </aside>
-  <main>
+  </div>
+</details>
+<div id="review">
+  <div id="stage">
     <div id="videos" class="videos"></div>
     <div id="empty" class="empty">Add a peer and record. Everyone's recordings appear here.</div>
-    <div class="bar">
-      <button id="play">Play</button><button id="pause">Pause</button>
-      <input id="seek" type="range" min="0" max="0" step="0.1" value="0">
-      <span id="time" class="small muted"></span>
-    </div>
-  </main>
+  </div>
+  <aside id="notes">
+    <div id="notelist"></div>
+    <form id="noteform"><input id="note" placeholder="note at this time" autocomplete="off"><button class="primary">Add</button></form>
+  </aside>
+</div>
+<div id="transport">
+  <div id="timeline"><div class="track"></div><div class="fill"></div><div class="head"></div></div>
+  <div class="controls">
+    <button id="back" title="Back 5 s">-5</button>
+    <button id="play" class="primary">Play</button>
+    <button id="fwd" title="Forward 5 s">+5</button>
+    <span id="clock" class="muted"></span>
+    <select id="speed" title="Speed"><option value="0.5">0.5x</option><option value="1" selected>1x</option><option value="1.5">1.5x</option><option value="2">2x</option></select>
+    <input id="volume" type="range" min="0" max="1" step="0.05" value="1" title="Volume" style="width:90px">
+    <button id="live" title="Follow the newest part">Live</button>
+    <span id="who"></span>
+    <button id="undo" hidden>Undo seek</button>
+  </div>
+</div>
+<div id="helpbox" hidden>
+  <div><span>Play / pause</span><kbd>Space</kbd></div>
+  <div><span>Back / forward 5 s</span><kbd>&larr; &rarr;</kbd></div>
+  <div><span>All players</span><kbd>0</kbd></div>
+  <div><span>One player</span><kbd>1-9</kbd></div>
+  <div><span>Add a note</span><kbd>N</kbd></div>
+  <div><span>Undo seek</span><kbd>U</kbd></div>
 </div>
 <div id="recovery" hidden>
   <div class="box">
