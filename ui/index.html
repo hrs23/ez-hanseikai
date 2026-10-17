@@ -10,6 +10,7 @@
   .videos { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   video { width: 100%; background: #000; }
   #id { width: 26em; }
+  #debug { color: #8c8; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
   #notes { color: #aaa; font-size: 13px; }
 </style>
 </head>
@@ -31,6 +32,10 @@
 <div class="videos"><video id="a" muted></video><video id="b"></video></div>
 <div class="row"><input id="note" placeholder="note" size="40"><button id="addnote">Add note</button></div>
 <div id="notes"></div>
+<details><summary>Network</summary>
+  <div class="row"><button id="report">Save report</button><label><input type="checkbox" id="addr"> include addresses</label><span id="reportpath"></span></div>
+  <pre id="debug"></pre>
+</details>
 <script>
 const { invoke, convertFileSrc } = window.__TAURI__.core;
 const $ = (id) => document.getElementById(id);
@@ -45,7 +50,10 @@ function delta() {
 function source(v, rec) {
   if (!rec || !rec.size) return;
   const src = convertFileSrc(rec.path);
-  if (v.dataset.src !== src) { v.dataset.src = src; v.src = src; }
+  if (v.dataset.src !== src) { v.dataset.src = src; v.src = src; v.dataset.size = rec.size; }
+  else if (v.paused && rec.size > Number(v.dataset.size) + 500000) {
+    const t = v.currentTime; v.dataset.size = rec.size; v.load(); v.currentTime = t;
+  }
 }
 function seekTo(pos) {
   a.currentTime = Math.max(0, pos);
@@ -89,6 +97,11 @@ async function refresh() {
   if (a.duration) $("seek").max = a.duration;
   $("notes").innerHTML = st.notes.map((n) => `<div>${n.who}: ${n.text.replace(/</g, "&lt;")}</div>`).join("");
 }
+$("report").onclick = () => invoke("save_report", { includeAddresses: $("addr").checked }).then((p) => { $("reportpath").textContent = p; }).catch((e) => alert(e));
+async function refreshDebug() {
+  if ($("debug").parentElement.open) $("debug").textContent = await invoke("debug_text");
+}
+setInterval(() => refreshDebug().catch(() => {}), 2000);
 setInterval(() => refresh().catch(() => {}), 1000);
 refresh();
 </script>

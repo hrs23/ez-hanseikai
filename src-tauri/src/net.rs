@@ -8,7 +8,7 @@ use tauri::Emitter;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::time::{sleep, timeout};
 
-use crate::{log, now_us, Core, ALPN};
+use crate::{debug, log, now_us, Core, ALPN};
 
 const CHUNK: u64 = 16 << 20;
 
@@ -56,6 +56,25 @@ async fn handle(core: Arc<Core>, mut send: SendStream, mut recv: RecvStream) -> 
     Ok(())
 }
 
+fn watch_paths(core: &Arc<Core>, conn: &Connection, label: &'static str) {
+    let core = core.clone();
+    let mut events = conn.path_events();
+    let started = std::time::Instant::now();
+    tokio::spawn(async move {
+        use tokio_stream::StreamExt;
+        let mut direct = false;
+        while let Some(event) = events.next().await {
+            if let iroh::endpoint::PathEvent::Selected { remote_addr, .. } = &event {
+                if remote_addr.is_ip() && !direct {
+                    direct = true;
+                    debug::event(&core, started, format!("{label}: switched to a direct path"));
+                }
+            }
+            debug::event(&core, started, format!("{label}: {event:?}"));
+        }
+    });
+}
+
 pub async fn accept_loop(core: Arc<Core>) {
     while let Some(incoming) = core.ep.accept().await {
         let core = core.clone();
@@ -66,6 +85,8 @@ pub async fn accept_loop(core: Arc<Core>) {
                 conn.close(1u32.into(), b"unknown peer");
                 return;
             }
+            *core.incoming.lock().unwrap() = Some(conn.clone());
+            watch_paths(&core, &conn, "incoming");
             while let Ok((send, recv)) = conn.accept_bi().await {
                 tokio::spawn(handle(core.clone(), send, recv));
             }
@@ -124,8 +145,17 @@ pub async fn dial_loop(core: Arc<Core>) {
     loop {
         sleep(Duration::from_secs(2)).await;
         let Some(peer) = *core.peer.lock().unwrap() else { continue };
-        let Ok(Ok(conn)) = timeout(Duration::from_secs(15), core.ep.connect(peer, ALPN)).await else { continue };
+        let dialing = std::time::Instant::now();
+        let conn = match timeout(Duration::from_secs(15), core.ep.connect(peer, ALPN)).await {
+            Ok(Ok(conn)) => conn,
+            other => {
+                debug::event(&core, dialing, format!("connect failed: {:?}", other.map(|r| r.map(|_| ()))));
+                continue;
+            }
+        };
+        debug::event(&core, dialing, "connected".into());
         *core.conn.lock().unwrap() = Some(conn.clone());
+        watch_paths(&core, &conn, "outgoing");
         let _ = sync(&core, &conn).await;
         *core.conn.lock().unwrap() = None;
     }

@@ -83,7 +83,12 @@ pub struct Recorder {
     audio: JoinHandle<()>,
 }
 
-fn encoder() -> &'static str {
+pub fn encoder() -> &'static str {
+    static CHOSEN: std::sync::OnceLock<&str> = std::sync::OnceLock::new();
+    CHOSEN.get_or_init(probe_encoder)
+}
+
+fn probe_encoder() -> &'static str {
     for name in ["h264_nvenc", "h264_amf"] {
         let ok = Command::new("ffmpeg")
             .args(["-v", "quiet", "-f", "lavfi", "-i", "nullsrc=s=256x256", "-frames:v", "1", "-c:v", name, "-f", "null", "-"])

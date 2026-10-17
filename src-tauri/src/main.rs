@@ -1,12 +1,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod debug;
 mod log;
 mod net;
 mod record;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use iroh::endpoint::{presets, Connection};
 use iroh::{Endpoint, EndpointId, SecretKey};
@@ -25,6 +26,9 @@ pub struct Core {
     pub app: AppHandle,
     pub peer: Mutex<Option<EndpointId>>,
     pub conn: Mutex<Option<Connection>>,
+    pub incoming: Mutex<Option<Connection>>,
+    pub events: Mutex<Vec<String>>,
+    pub started: Instant,
     pub offset_us: Mutex<Option<i64>>,
     pub recorder: Mutex<Option<record::Recorder>>,
     log_lock: Mutex<()>,
@@ -107,6 +111,16 @@ fn state(core: State<Arc<Core>>) -> Value {
 }
 
 #[tauri::command]
+fn debug_text(core: State<Arc<Core>>) -> String {
+    debug::text(&core)
+}
+
+#[tauri::command]
+fn save_report(core: State<Arc<Core>>, include_addresses: bool) -> Result<String, String> {
+    debug::report(&core, include_addresses).map(|p| p.display().to_string()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn start_recording(core: State<Arc<Core>>, audio_pid: u32) -> Result<(), String> {
     start_recording_now(&core, audio_pid)
 }
@@ -134,6 +148,7 @@ async fn control(core: State<'_, Arc<Core>>, cmd: String, wall_us: i64) -> Resul
 async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
     let dir = app.path().app_data_dir()?;
     std::fs::create_dir_all(dir.join("peer"))?;
+    debug::init(&dir);
     log::repair(&dir.join("log.bin"));
     log::repair(&dir.join("peer").join("log.bin"));
     let key_path = dir.join("key.bin");
@@ -154,6 +169,9 @@ async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
         app,
         peer: Mutex::new(peer),
         conn: Mutex::new(None),
+        incoming: Mutex::new(None),
+        events: Mutex::new(Vec::new()),
+        started: Instant::now(),
         offset_us: Mutex::new(None),
         recorder: Mutex::new(None),
         log_lock: Mutex::new(()),
@@ -185,7 +203,7 @@ fn main() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![state, start_recording, stop_recording, set_peer, add_note, control])
+        .invoke_handler(tauri::generate_handler![state, debug_text, save_report, start_recording, stop_recording, set_peer, add_note, control])
         .run(tauri::generate_context!())
         .expect("failed to run");
 }

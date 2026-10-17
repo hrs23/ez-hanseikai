@@ -1,0 +1,154 @@
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
+
+use iroh::endpoint::Connection;
+use iroh::Watcher;
+use regex::Regex;
+use tracing_subscriber::fmt::MakeWriter;
+use tracing_subscriber::EnvFilter;
+
+use crate::Core;
+
+const MAX_LOG: u64 = 2 << 20;
+
+#[derive(Clone)]
+struct RollingFile {
+    path: PathBuf,
+    file: Arc<Mutex<File>>,
+}
+
+impl RollingFile {
+    fn open(path: PathBuf) -> std::io::Result<Self> {
+        let file = OpenOptions::new().create(true).append(true).open(&path)?;
+        Ok(Self { path, file: Arc::new(Mutex::new(file)) })
+    }
+}
+
+impl Write for RollingFile {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut file = self.file.lock().unwrap();
+        if file.metadata().map(|m| m.len()).unwrap_or(0) > MAX_LOG {
+            let _ = fs::rename(&self.path, self.path.with_extension("old.txt"));
+            *file = OpenOptions::new().create(true).append(true).open(&self.path)?;
+        }
+        file.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.lock().unwrap().flush()
+    }
+}
+
+impl<'a> MakeWriter<'a> for RollingFile {
+    type Writer = RollingFile;
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+pub fn init(dir: &Path) {
+    let Ok(writer) = RollingFile::open(dir.join("log.txt")) else { return };
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn,ez_hanseikai=debug,iroh=info"));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(writer)
+        .with_ansi(false)
+        .with_timer(tracing_subscriber::fmt::time::uptime())
+        .init();
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        tracing::error!("panic: {info}\n{}", std::backtrace::Backtrace::force_capture());
+        previous(info);
+    }));
+}
+
+fn describe(conn: &Connection, label: &str, out: &mut String) {
+    out.push_str(&format!("{label} connection to {}\n", conn.remote_id().fmt_short()));
+    for path in conn.paths().iter() {
+        let kind = if path.is_relay() { "relay" } else if path.is_ip() { "direct" } else { "other" };
+        out.push_str(&format!(
+            "  path {kind}{} remote {:?} rtt {:?}\n    {:?}\n",
+            if path.is_selected() { " (selected)" } else { "" },
+            path.remote_addr(),
+            path.rtt(),
+            path.stats()
+        ));
+    }
+    out.push_str(&format!("  {:?}\n", conn.stats()));
+}
+
+pub fn text(core: &Core) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("endpoint id {}\n", core.ep.id()));
+    out.push_str(&format!("bound sockets {:?}\n", core.ep.bound_sockets()));
+    out.push_str(&format!("address {:?}\n", core.ep.addr()));
+    out.push_str(&format!("home relay {:?}\n", core.ep.home_relay_status().get()));
+    out.push_str(&format!("net report {:?}\n", core.ep.net_report().get()));
+    let conns = [("outgoing", core.conn.lock().unwrap().clone()), ("incoming", core.incoming.lock().unwrap().clone())];
+    for (label, conn) in conns {
+        match conn {
+            Some(conn) => describe(&conn, label, &mut out),
+            None => out.push_str(&format!("{label} connection: none\n")),
+        }
+    }
+    out.push_str("events\n");
+    for line in core.events.lock().unwrap().iter() {
+        out.push_str(&format!("  {line}\n"));
+    }
+    out
+}
+
+pub fn event(core: &Core, since: Instant, line: String) {
+    let line = format!("+{:.2}s {line}", since.elapsed().as_secs_f64());
+    tracing::info!("{line}");
+    let mut events = core.events.lock().unwrap();
+    events.push(line);
+    if events.len() > 60 {
+        events.remove(0);
+    }
+}
+
+fn command_line(program: &str, args: &[&str]) -> String {
+    Command::new(program)
+        .args(args)
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_else(|e| format!("unavailable: {e}"))
+}
+
+fn redact(text: &str) -> String {
+    let patterns = [
+        (r"https?://[^\s/\x22,)]+", "<host>"),
+        (r"\b\d{1,3}(?:\.\d{1,3}){3}\b", "<ip>"),
+        (r"\[?[0-9a-fA-F]{0,4}(?::[0-9a-fA-F]{0,4}){3,7}\]?", "<ip6>"),
+        (r"\b[0-9a-f]{64}\b", "<id>"),
+    ];
+    let mut text = text.to_string();
+    for (pattern, replacement) in patterns {
+        text = Regex::new(pattern).unwrap().replace_all(&text, replacement).into_owned();
+    }
+    text
+}
+
+pub fn report(core: &Core, include_addresses: bool) -> std::io::Result<PathBuf> {
+    let log = fs::read_to_string(core.dir.join("log.txt")).unwrap_or_default();
+    let recent: Vec<&str> = log.lines().rev().take(400).collect();
+    let recent: Vec<&str> = recent.into_iter().rev().collect();
+    let mut out = String::new();
+    out.push_str(&format!("ez-hanseikai {} on {} {}\n", env!("CARGO_PKG_VERSION"), std::env::consts::OS, command_line("cmd", &["/c", "ver"])));
+    out.push_str(&format!("gpu {}\n", command_line("powershell", &["-NoProfile", "-Command", "(Get-CimInstance Win32_VideoController).Name -join ', '"])));
+    out.push_str(&format!("encoder {}\n", crate::record::encoder()));
+    out.push_str(&format!("ffmpeg {}\n", command_line("ffmpeg", &["-version"]).lines().next().unwrap_or("")));
+    out.push_str(&format!("iroh {}\n\n", "1.3.0"));
+    out.push_str(&text(core));
+    out.push_str("\nrecent log\n");
+    out.push_str(&recent.join("\n"));
+    let out = if include_addresses { out } else { redact(&out) };
+    let path = core.dir.join("report.txt");
+    fs::write(&path, out)?;
+    Ok(path)
+}
