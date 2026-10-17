@@ -89,6 +89,7 @@ struct Flags {
 struct Capture {
     flags: Flags,
     buffer: Vec<u8>,
+    last: Instant,
 }
 
 impl GraphicsCaptureApiHandler for Capture {
@@ -96,7 +97,7 @@ impl GraphicsCaptureApiHandler for Capture {
     type Error = Err;
 
     fn new(ctx: Context<Self::Flags>) -> Result<Self, Self::Error> {
-        Ok(Self { flags: ctx.flags, buffer: Vec::new() })
+        Ok(Self { flags: ctx.flags, buffer: Vec::new(), last: Instant::now() - Duration::from_secs(1) })
     }
 
     fn on_frame_arrived(&mut self, frame: &mut Frame, control: InternalCaptureControl) -> Result<(), Self::Error> {
@@ -105,6 +106,10 @@ impl GraphicsCaptureApiHandler for Capture {
             control.stop();
             return Ok(());
         }
+        if self.last.elapsed() < Duration::from_millis(30) {
+            return Ok(());
+        }
+        self.last = Instant::now();
         let buffer = frame.buffer()?;
         let data = buffer.as_nopadding_buffer(&mut self.buffer);
         if !shared.started.swap(true, Ordering::Relaxed) {

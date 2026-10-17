@@ -32,6 +32,7 @@ pub struct Peer {
     pub conn: Option<Connection>,
     pub incoming: Option<Connection>,
     pub offset_us: Option<i64>,
+    pub failures: u32,
     pub info: Option<(String, u32)>,
 }
 
@@ -79,16 +80,13 @@ impl Core {
     }
 }
 
-fn path_kind(conn: &Connection) -> &'static str {
-    if conn.close_reason().is_some() {
-        return "closed";
-    }
+fn path_kind(conn: &Connection) -> (&'static str, u64) {
     for path in conn.paths().iter() {
         if path.is_selected() {
-            return if path.is_ip() { "direct" } else { "relay" };
+            return (if path.is_ip() { "direct" } else { "relay" }, path.rtt().as_millis() as u64);
         }
     }
-    "none"
+    ("none", 0)
 }
 
 fn latest_rec(records: &[Value]) -> Option<(String, i64)> {
@@ -101,14 +99,14 @@ fn size(path: PathBuf) -> u64 {
 }
 
 fn add_peer_id(core: &Arc<Core>, id: &str) -> Result<(), String> {
-    let id: EndpointId = id.trim().parse().map_err(|e| format!("{e}"))?;
+    let id: EndpointId = id.trim().parse().map_err(|_| "That is not a valid ID. Copy it again from the other person.".to_string())?;
     if id == core.ep.id() {
         return Err("that is your own ID".into());
     }
     if core.has_peer(&id) {
         return Ok(());
     }
-    core.peers.lock().unwrap().push(Peer { id, conn: None, incoming: None, offset_us: None, info: None });
+    core.peers.lock().unwrap().push(Peer { id, conn: None, incoming: None, offset_us: None, failures: 0, info: None });
     core.save_peers();
     tauri::async_runtime::spawn(net::dial_loop(core.clone(), id));
     Ok(())
@@ -173,15 +171,15 @@ async fn state(core: State<'_, Arc<Core>>) -> Result<Value, String> {
         .filter(|r| r["k"] == "note")
         .map(|r| json!({"who": "me", "t_us": r["t_us"], "text": r["text"]}))
         .collect();
-    let snapshot: Vec<(EndpointId, Option<Connection>, Option<Connection>, Option<i64>, Option<(String, u32)>)> = core
+    let snapshot: Vec<(EndpointId, Option<Connection>, Option<Connection>, Option<i64>, Option<(String, u32)>, u32)> = core
         .peers
         .lock()
         .unwrap()
         .iter()
-        .map(|p| (p.id, p.conn.clone(), p.incoming.clone(), p.offset_us, p.info.clone()))
+        .map(|p| (p.id, p.conn.clone(), p.incoming.clone(), p.offset_us, p.info.clone(), p.failures))
         .collect();
     let mut peers = Vec::new();
-    for (id, conn, incoming, offset_us, info) in snapshot {
+    for (id, conn, incoming, offset_us, info, failures) in snapshot {
         let theirs = log::read(&core.peer_dir(&id).join("log.bin"));
         let rec = latest_rec(&theirs).map(|(name, start_us)| {
             let path = core.peer_dir(&id).join(&name);
@@ -198,7 +196,9 @@ async fn state(core: State<'_, Arc<Core>>) -> Result<Value, String> {
             "id": id.to_string(),
             "short": short(&id),
             "connected": alive.is_some(),
-            "path": alive.map(path_kind),
+            "path": alive.map(|c| path_kind(c).0),
+            "rtt_ms": alive.map(|c| path_kind(c).1),
+            "failures": failures,
             "offset_us": offset_us,
             "version": info.map(|(version, _)| version),
             "message": message,
@@ -251,7 +251,13 @@ async fn save_report(core: State<'_, Arc<Core>>, include_addresses: bool, audio_
 
 #[tauri::command]
 async fn start_recording(core: State<'_, Arc<Core>>, audio_process: String) -> Result<(), String> {
-    start_recording_now(&core, pid_of(&audio_process).unwrap_or(0))
+    if !record::ffmpeg_present() {
+        return Err("The video tool is still downloading. Wait a minute and try again.".into());
+    }
+    let pid = pid_of(&audio_process).or_else(|| {
+        processes().into_iter().find(|(name, _)| name.to_lowercase().starts_with("r5apex")).map(|(_, pid)| pid)
+    });
+    start_recording_now(&core, pid.unwrap_or(0))
 }
 
 #[tauri::command]
@@ -313,7 +319,7 @@ async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
         dir,
         ep,
         app,
-        peers: Mutex::new(saved.iter().map(|id| Peer { id: *id, conn: None, incoming: None, offset_us: None, info: None }).collect()),
+        peers: Mutex::new(saved.iter().map(|id| Peer { id: *id, conn: None, incoming: None, offset_us: None, failures: 0, info: None }).collect()),
         ffmpeg_status: Mutex::new(String::new()),
         events: Mutex::new(Vec::new()),
         started: Instant::now(),

@@ -158,12 +158,16 @@ pub async fn dial_loop(core: Arc<Core>, id: EndpointId) {
         let conn = match timeout(Duration::from_secs(15), core.ep.connect(id, ALPN)).await {
             Ok(Ok(conn)) => conn,
             other => {
+                core.update_peer(&id, |p| p.failures += 1);
                 debug::event(&core, dialing, format!("{} connect failed: {:?}", short(&id), other.map(|r| r.map(|_| ()))));
                 continue;
             }
         };
         debug::event(&core, dialing, format!("{} connected", short(&id)));
-        core.update_peer(&id, |p| p.conn = Some(conn.clone()));
+        core.update_peer(&id, |p| {
+            p.conn = Some(conn.clone());
+            p.failures = 0;
+        });
         watch_paths(&core, &conn, format!("{} outgoing", short(&id)));
         let hello = request(&conn, &json!({"t": "hello", "app": VERSION, "proto": PROTOCOL})).await;
         let mut compatible = true;

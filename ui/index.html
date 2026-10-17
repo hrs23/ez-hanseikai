@@ -39,7 +39,7 @@
 <div class="videos" id="videos"></div>
 <div class="row"><input id="note" placeholder="note" size="40"><button id="addnote">Add note</button></div>
 <div id="notes"></div>
-<details open><summary>Check</summary>
+<details><summary id="checksummary">Check</summary>
   <div class="row"><button id="runcheck">Run check</button></div>
   <div id="checks"></div>
 </details>
@@ -154,15 +154,12 @@ async function refresh() {
   for (const p of st.peers) {
     const row = document.createElement("div");
     row.className = "row";
-    const state = p.connected ? `connected (${p.path})` : "connecting...";
-    const offset = p.offset_us != null ? `, clock offset ${(p.offset_us / 1000).toFixed(1)} ms` : "";
-    const version = p.version ? `, v${p.version}` : "";
-    const size = p.rec ? `, recording ${(p.rec.size / 1e6).toFixed(1)} MB` : "";
+    const state = p.connected ? `${p.path === "direct" ? "direct" : "via relay"}, ${p.rtt_ms} ms` : p.failures > 2 ? "not reachable" : "connecting...";
     const label = document.createElement("span");
-    label.textContent = `${p.short}: ${state}${offset}${version}${size}`;
+    label.textContent = `${p.short}: ${state}`;
     label.className = p.connected ? "ok" : "warn";
     const warn = document.createElement("span");
-    warn.textContent = p.message || "";
+    warn.textContent = p.message || (!p.connected && p.failures > 2 ? "Is their app open? If Windows asked about the firewall, it must be allowed." : "");
     warn.className = "fail";
     const remove = document.createElement("button");
     remove.textContent = "Remove";
@@ -207,6 +204,9 @@ setTimeout(() => checkUpdate(false), 4000);
 async function runCheck() {
   $("checks").textContent = "checking...";
   const lines = await invoke("check", { audioProcess: $("proc").value });
+  const bad = lines.filter((l) => l.level === "fail").length;
+  const warn = lines.filter((l) => l.level === "warn").length;
+  $("checksummary").textContent = bad ? `Check: ${bad} problem(s)` : warn ? `Check: ${warn} warning(s)` : "Check: OK";
   $("checks").innerHTML = lines.map((l) => `<div class="${l.level}">${{ ok: "OK", warn: "WARN", fail: "FAIL", info: "" }[l.level]} ${l.text.replace(/</g, "&lt;")}</div>`).join("");
 }
 $("runcheck").onclick = () => runCheck().catch((e) => alert(e));
