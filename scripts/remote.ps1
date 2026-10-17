@@ -1,4 +1,4 @@
-param([string]$AppArgs = "")
+param([string]$AppArgs = "", [switch]$Installer)
 $ErrorActionPreference = "Stop"
 $env:Path += ";$env:USERPROFILE\.cargo\bin"
 $root = Join-Path $env:USERPROFILE "ezh"
@@ -13,7 +13,15 @@ Get-ChildItem $root -Force | Where-Object { $_.Name -ne "node_modules" } | ForEa
 }
 Expand-Archive (Join-Path $env:USERPROFILE "ezh.zip") $root -Force
 Set-Location $root
-& (Join-Path $root "scripts\build-installer.ps1")
+if ($Installer) {
+    & (Join-Path $root "scripts\build-installer.ps1")
+} else {
+    $release = Join-Path $root "src-tauri\target\release"
+    New-Item -ItemType Directory -Force $release | Out-Null
+    Copy-Item (Get-Command ffmpeg).Source (Join-Path $release "ffmpeg.exe") -Force
+    npm install --no-audit --no-fund | Out-Null
+    npx tauri build --no-bundle
+}
 if ($LASTEXITCODE -ne 0) { exit 1 }
 $exe = Join-Path $root "src-tauri\target\release\ez-hanseikai.exe"
 schtasks /Create /TN ezh-run /TR "`"$exe`" $AppArgs" /SC ONCE /ST 00:00 /IT /F | Out-Null
