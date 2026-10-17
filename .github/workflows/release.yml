@@ -37,6 +37,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release download "$GITHUB_REF_NAME" --pattern latest.json
+          gh release download "$GITHUB_REF_NAME" --pattern latest.json --clobber
           gh release view updater >/dev/null 2>&1 || gh release create updater --prerelease --title "Update manifest" --notes "Rolling manifest read by the in-app updater."
           gh release upload updater latest.json --clobber
