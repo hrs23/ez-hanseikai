@@ -9,11 +9,26 @@
   "app": {
     "withGlobalTauri": true,
     "windows": [
-      { "title": "EZ Hanseikai", "width": 960, "height": 600 }
-    ]
+      {
+        "title": "EZ Hanseikai",
+        "width": 960,
+        "height": 600
+      }
+    ],
+    "security": {
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$APPDATA/**"
+        ]
+      },
+      "csp": null
+    }
   },
   "bundle": {
     "active": false,
-    "icon": ["icons/icon.ico"]
+    "icon": [
+      "icons/icon.ico"
+    ]
   }
 }

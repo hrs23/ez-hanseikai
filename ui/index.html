@@ -4,19 +4,93 @@
 <meta charset="utf-8">
 <title>EZ Hanseikai</title>
 <style>
-  body { font-family: system-ui, sans-serif; background: #111; color: #eee; display: grid; place-items: center; height: 100vh; margin: 0; }
-  p { color: #888; }
+  body { font-family: system-ui, sans-serif; background: #111; color: #eee; margin: 0; padding: 12px; }
+  input, button { background: #222; color: #eee; border: 1px solid #444; padding: 4px 8px; }
+  .row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+  .videos { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  video { width: 100%; background: #000; }
+  #id { width: 26em; }
+  #notes { color: #aaa; font-size: 13px; }
 </style>
 </head>
 <body>
-<main>
-  <h1>EZ Hanseikai</h1>
-  <p id="info"></p>
-</main>
+<div class="row">
+  <span>You</span><input id="id" readonly>
+  <span>Peer</span><input id="peer" placeholder="peer id"><button id="set">Connect</button>
+  <span id="link"></span>
+</div>
+<div class="row">
+  <input id="pid" size="6" placeholder="audio pid">
+  <button id="rec">Record</button><span id="recstate"></span>
+</div>
+<div class="row">
+  <button id="play">Play</button><button id="pause">Pause</button>
+  <input id="seek" type="range" min="0" max="0" step="0.1" value="0" style="width:40%">
+  <span id="time"></span>
+</div>
+<div class="videos"><video id="a" muted></video><video id="b"></video></div>
+<div class="row"><input id="note" placeholder="note" size="40"><button id="addnote">Add note</button></div>
+<div id="notes"></div>
 <script>
-  window.__TAURI__.core.invoke("info").then((s) => {
-    document.getElementById("info").textContent = s;
-  });
+const { invoke, convertFileSrc } = window.__TAURI__.core;
+const $ = (id) => document.getElementById(id);
+const a = $("a"), b = $("b");
+let st = null;
+const sec = (us) => us / 1e6;
+
+function delta() {
+  if (!st || !st.mine || !st.peer_rec) return 0;
+  return sec(st.mine.start_us + (st.offset_us || 0) - st.peer_rec.start_us);
+}
+function source(v, rec) {
+  if (!rec || !rec.size) return;
+  const src = convertFileSrc(rec.path);
+  if (v.dataset.src !== src) { v.dataset.src = src; v.src = src; }
+}
+function seekTo(pos) {
+  a.currentTime = Math.max(0, pos);
+  b.currentTime = Math.max(0, pos + delta());
+}
+function wallOf(pos) { return Math.round(st.mine.start_us + pos * 1e6); }
+function posOf(wall) { return sec(wall - (st.offset_us || 0) - st.mine.start_us); }
+function apply(cmd, pos) {
+  if (cmd === "play") { seekTo(pos); a.play(); b.play(); }
+  else if (cmd === "pause") { a.pause(); b.pause(); seekTo(pos); }
+  else if (cmd === "seek") seekTo(pos);
+}
+function send(cmd, pos) {
+  apply(cmd, pos);
+  if (st && st.mine) invoke("control", { cmd, wallUs: wallOf(pos) }).catch(() => {});
+}
+window.__TAURI__.event.listen("control", (e) => {
+  if (st && st.mine) apply(e.payload.cmd, posOf(e.payload.wall_us));
+});
+$("play").onclick = () => send("play", a.currentTime);
+$("pause").onclick = () => send("pause", a.currentTime);
+$("seek").onchange = (e) => send("seek", parseFloat(e.target.value));
+$("set").onclick = () => invoke("set_peer", { id: $("peer").value }).catch((e) => alert(e));
+$("rec").onclick = () => st && st.recording
+  ? invoke("stop_recording")
+  : invoke("start_recording", { audioPid: parseInt($("pid").value || "0") }).catch((e) => alert(e));
+$("addnote").onclick = () => { invoke("add_note", { text: $("note").value }); $("note").value = ""; };
+a.ontimeupdate = () => {
+  $("seek").value = a.currentTime;
+  $("time").textContent = a.currentTime.toFixed(1) + " s";
+  if (!a.paused && Math.abs(b.currentTime - (a.currentTime + delta())) > 0.4) b.currentTime = Math.max(0, a.currentTime + delta());
+};
+async function refresh() {
+  st = await invoke("state");
+  $("id").value = st.id;
+  if (document.activeElement !== $("peer")) $("peer").value = st.peer || "";
+  $("link").textContent = st.peer ? (st.connected ? "connected" : "connecting") + (st.offset_us != null ? `, offset ${(st.offset_us / 1000).toFixed(1)} ms` : "") : "";
+  $("rec").textContent = st.recording ? "Stop" : "Record";
+  $("recstate").textContent = (st.mine ? `mine ${(st.mine.size / 1e6).toFixed(1)} MB` : "") + (st.peer_rec ? `  peer ${(st.peer_rec.size / 1e6).toFixed(1)} MB` : "");
+  source(a, st.mine); source(b, st.peer_rec);
+  if (a.duration) $("seek").max = a.duration;
+  $("notes").innerHTML = st.notes.map((n) => `<div>${n.who}: ${n.text.replace(/</g, "&lt;")}</div>`).join("");
+}
+setInterval(() => refresh().catch(() => {}), 1000);
+refresh();
 </script>
 </body>
 </html>

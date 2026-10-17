@@ -1,13 +1,191 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod log;
+mod net;
+mod record;
+
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use iroh::endpoint::{presets, Connection};
+use iroh::{Endpoint, EndpointId, SecretKey};
+use serde_json::{json, Value};
+use tauri::{AppHandle, Manager, State};
+
+pub const ALPN: &[u8] = b"ez-hanseikai/0";
+
+pub fn now_us() -> i64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros() as i64
+}
+
+pub struct Core {
+    pub dir: PathBuf,
+    pub ep: Endpoint,
+    pub app: AppHandle,
+    pub peer: Mutex<Option<EndpointId>>,
+    pub conn: Mutex<Option<Connection>>,
+    pub offset_us: Mutex<Option<i64>>,
+    pub recorder: Mutex<Option<record::Recorder>>,
+    log_lock: Mutex<()>,
+}
+
+impl Core {
+    pub fn append_log(&self, record: &Value) {
+        let _guard = self.log_lock.lock().unwrap();
+        let _ = log::append(&self.dir.join("log.bin"), record);
+    }
+
+    fn own_log(&self) -> Vec<Value> {
+        log::read(&self.dir.join("log.bin"))
+    }
+
+    fn peer_log(&self) -> Vec<Value> {
+        log::read(&self.dir.join("peer").join("log.bin"))
+    }
+}
+
+fn latest_rec(records: &[Value]) -> Option<(String, i64)> {
+    let r = records.iter().rev().find(|r| r["k"] == "rec")?;
+    Some((r["name"].as_str()?.to_string(), r["start_us"].as_i64()?))
+}
+
+fn size(path: PathBuf) -> u64 {
+    std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+}
+
+fn set_peer_id(core: &Core, id: &str) -> Result<(), String> {
+    let peer: EndpointId = id.trim().parse().map_err(|e| format!("{e}"))?;
+    std::fs::write(core.dir.join("peer.txt"), peer.to_string()).map_err(|e| e.to_string())?;
+    *core.peer.lock().unwrap() = Some(peer);
+    Ok(())
+}
+
+fn start_recording_now(core: &Core, audio_pid: u32) -> Result<(), String> {
+    let mut slot = core.recorder.lock().unwrap();
+    if slot.is_some() {
+        return Err("already recording".into());
+    }
+    *slot = Some(record::Recorder::start(&core.dir, audio_pid).map_err(|e| e.to_string())?);
+    Ok(())
+}
+
+fn stop_recording_now(core: &Core) {
+    if let Some(recorder) = core.recorder.lock().unwrap().take() {
+        recorder.stop();
+    }
+}
+
 #[tauri::command]
-fn info() -> String {
-    format!("core {} on {}", env!("CARGO_PKG_VERSION"), std::env::consts::OS)
+fn state(core: State<Arc<Core>>) -> Value {
+    let own = core.own_log();
+    let theirs = core.peer_log();
+    let mine = latest_rec(&own).map(|(name, start_us)| {
+        json!({"path": core.dir.join(&name), "start_us": start_us, "size": size(core.dir.join(&name))})
+    });
+    let peer = latest_rec(&theirs).map(|(name, start_us)| {
+        let path = core.dir.join("peer").join(&name);
+        json!({"path": path, "start_us": start_us, "size": size(path.clone())})
+    });
+    let mut notes: Vec<Value> = Vec::new();
+    for (who, records) in [("me", &own), ("peer", &theirs)] {
+        for r in records.iter().filter(|r| r["k"] == "note") {
+            notes.push(json!({"who": who, "t_us": r["t_us"], "text": r["text"]}));
+        }
+    }
+    notes.sort_by_key(|n| n["t_us"].as_i64());
+    json!({
+        "id": core.ep.id().to_string(),
+        "peer": core.peer.lock().unwrap().map(|p| p.to_string()),
+        "connected": core.conn.lock().unwrap().is_some(),
+        "recording": core.recorder.lock().unwrap().is_some(),
+        "offset_us": *core.offset_us.lock().unwrap(),
+        "mine": mine,
+        "peer_rec": peer,
+        "notes": notes,
+    })
+}
+
+#[tauri::command]
+fn start_recording(core: State<Arc<Core>>, audio_pid: u32) -> Result<(), String> {
+    start_recording_now(&core, audio_pid)
+}
+
+#[tauri::command]
+fn stop_recording(core: State<Arc<Core>>) {
+    stop_recording_now(&core)
+}
+
+#[tauri::command]
+fn set_peer(core: State<Arc<Core>>, id: String) -> Result<(), String> {
+    set_peer_id(&core, &id)
+}
+
+#[tauri::command]
+fn add_note(core: State<Arc<Core>>, text: String) {
+    core.append_log(&json!({"k": "note", "t_us": now_us(), "text": text}));
+}
+
+#[tauri::command]
+async fn control(core: State<'_, Arc<Core>>, cmd: String, wall_us: i64) -> Result<(), String> {
+    net::send_control(&core, &cmd, wall_us).await.map_err(|e| e.to_string())
+}
+
+async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
+    let dir = app.path().app_data_dir()?;
+    std::fs::create_dir_all(dir.join("peer"))?;
+    log::repair(&dir.join("log.bin"));
+    log::repair(&dir.join("peer").join("log.bin"));
+    let key_path = dir.join("key.bin");
+    let key = match std::fs::read(&key_path).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()) {
+        Some(bytes) => SecretKey::from_bytes(&bytes),
+        None => {
+            let key = SecretKey::generate();
+            std::fs::write(&key_path, key.to_bytes())?;
+            key
+        }
+    };
+    let ep = Endpoint::builder(presets::N0).secret_key(key).alpns(vec![ALPN.to_vec()]).bind().await?;
+    std::fs::write(dir.join("id.txt"), ep.id().to_string())?;
+    let peer = std::fs::read_to_string(dir.join("peer.txt")).ok().and_then(|s| s.trim().parse().ok());
+    Ok(Arc::new(Core {
+        dir,
+        ep,
+        app,
+        peer: Mutex::new(peer),
+        conn: Mutex::new(None),
+        offset_us: Mutex::new(None),
+        recorder: Mutex::new(None),
+        log_lock: Mutex::new(()),
+    }))
 }
 
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![info])
+        .setup(|app| {
+            let core = tauri::async_runtime::block_on(init(app.handle().clone()))?;
+            app.manage(core.clone());
+            tauri::async_runtime::spawn(net::accept_loop(core.clone()));
+            tauri::async_runtime::spawn(net::dial_loop(core.clone()));
+            let args: Vec<String> = std::env::args().collect();
+            let arg = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
+            if let Some(id) = arg("--peer") {
+                set_peer_id(&core, &id)?;
+            }
+            if let Some(seconds) = arg("--record").and_then(|s| s.parse::<u64>().ok()) {
+                let pid = arg("--audio-pid").and_then(|s| s.parse().ok()).unwrap_or(0);
+                std::thread::spawn(move || {
+                    if let Err(e) = start_recording_now(&core, pid) {
+                        eprintln!("record failed: {e}");
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_secs(seconds));
+                    stop_recording_now(&core);
+                });
+            }
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![state, start_recording, stop_recording, set_peer, add_note, control])
         .run(tauri::generate_context!())
         .expect("failed to run");
 }
