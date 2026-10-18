@@ -39,7 +39,10 @@ pub fn repair_logs(dir: &Path) {
     for room in std::fs::read_dir(dir.join("rooms")).into_iter().flatten().flatten() {
         log::repair(&room.path().join("pending.bin"));
         for file in std::fs::read_dir(room.path().join("logs")).into_iter().flatten().flatten() {
-            log::repair(&file.path());
+            let path = file.path();
+            if path.extension().is_some_and(|e| e == "bin") && path.file_stem().is_some_and(|s| s.to_string_lossy().parse::<iroh::EndpointId>().is_ok()) {
+                log::repair(&path);
+            }
         }
     }
 }
@@ -60,7 +63,7 @@ pub fn leftovers(dir: &Path, rooms: &HashSet<String>, exporting: bool, now: Syst
     for entry in std::fs::read_dir(dir.join("rooms")).into_iter().flatten().flatten() {
         let (id, path) = (entry.file_name().to_string_lossy().to_string(), entry.path());
         let left = !rooms.contains(&id) && id != room::SOLO;
-        if left && !holds(&path, "m4s") && !holds(&path.join("logs"), "bin") && !path.join("pending.bin").exists() {
+        if left && !holds(&path, "m4s") && !holds(&path, "mp4") && !holds(&path.join("logs"), "bin") && !path.join("pending.bin").exists() {
             out.push(path);
         }
     }
@@ -520,7 +523,7 @@ mod tests {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, b"x").unwrap();
         };
-        for p in ["rooms/active/logs/a.bin", "rooms/other/b/1/v/000001.m4s", "rooms/gone/b/1/v/verified.json", "rooms/kept/logs/a.bin", "rooms/waiting/pending.bin", "rooms/held/b/1/v/000001.m4s", "export/label-0.txt", "report.txt", "key.bin", "rooms/solo/b/1/v/verified.json"] {
+        for p in ["rooms/active/logs/a.bin", "rooms/other/b/1/v/000001.m4s", "rooms/gone/b/1/v/verified.json", "rooms/kept/logs/a.bin", "rooms/waiting/pending.bin", "rooms/held/b/1/v/000001.m4s", "export/label-0.txt", "report.txt", "key.bin", "rooms/solo/b/1/v/verified.json", "rooms/old/sets/s1/set.json", "rooms/old/sets/s1/a.mp4", "rooms/oldlive/live/a.mp4", "rec-1.mp4", "log.bin", "peer.txt", "peers.txt", "peer/a/log.bin", "legacy/x.bin"] {
             touch(p);
         }
         let rooms: HashSet<String> = ["active".to_string(), "other".to_string()].into();

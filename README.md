@@ -24,14 +24,14 @@ Work in progress. See [the design](docs/design.md).
 ## Install
 
 1. Download `EZ.Hanseikai_<version>_x64-setup.exe` from [Releases](https://github.com/hrs23/ez-hanseikai/releases) and run it. It is unsigned, so SmartScreen warns: More info, then Run anyway. It installs for your Windows user only and needs no admin rights.
-2. Start the app. Allow it through the firewall when Windows asks. On first run it downloads ffmpeg.
+2. Start the app. Allow it through the firewall when Windows asks. On first run it downloads ffmpeg, and keeps retrying until that works.
 3. Enter your name. One player presses Create room, which copies an invite code to send; the others paste it and press Join, and a member approves them (the invite icon beside Members makes more). Then press Start session.
 
 Requires Windows 10 version 2004 or later, or Windows 11.
 
 ## Update
 
-The app checks for a new version at start, every four hours while it runs and when its window comes back from the tray (or Help > Check for updates), and shows it above the page with Install. During a session it offers to install after the session instead. Updates are signed and checked before they install. An older version may not read data from a newer one, so going back means starting with an empty data folder.
+The app checks for a new version at start, every four hours while it runs and when its window comes back from the tray (or Help > Check for updates), and shows it above the page with Install. During a session it offers to install after the session instead, and it never installs while a session records or an export runs. Updates are signed and checked before they install. An older version may not read data from a newer one, so going back means starting with an empty data folder.
 
 ## Uninstall
 
@@ -58,7 +58,7 @@ Data lives in `%LOCALAPPDATA%\dev.ez-hanseikai.app`; File > Open data folder ope
 9. No hard-coded numbers without a reason; keep the needed ones in one place.
 10. Logic comes with automated tests, kept in plain functions that run without the network, capture or UI.
 11. The repository is public: English only, made-up examples, and no secrets, personal data, real recordings or private addresses.
-12. While in early development, breaking changes are fine: the latest version only has to work with its own data, so add no migration or compatibility code for older versions.
+12. While in early development, breaking changes are fine and no migration code is added: the latest version only has to work with its own data. It must still start and work when files from older versions are present, ignoring what it does not understand and never deleting them.
 
 ## Development
 

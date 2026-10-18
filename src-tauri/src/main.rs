@@ -794,9 +794,9 @@ async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
     }
     let ep = builder.bind().await?;
     std::fs::write(dir.join("id.txt"), ep.id().to_string())?;
-    let rooms: room::Rooms = read_json(&dir.join("rooms.json"));
+    let rooms = room::read_rooms(&read_json(&dir.join("rooms.json")));
     data::repair_logs(&dir);
-    let settings: Value = read_json(&dir.join("settings.json"));
+    let settings = clean_settings(read_json(&dir.join("settings.json")));
     Ok(Arc::new(Core {
         dir,
         ep,
@@ -839,6 +839,28 @@ async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
         writing: Mutex::new(HashSet::new()),
         indexes: Mutex::new(HashMap::new()),
     }))
+}
+
+pub fn clean_settings(mut settings: Value) -> Value {
+    if !settings.is_object() {
+        settings = json!({});
+    }
+    if !settings["limit_mbps"].as_f64().is_some_and(|v| v.is_finite() && v > 0.0) {
+        settings["limit_mbps"] = Value::Null;
+    }
+    if !settings["keep_days"].as_u64().is_some_and(|d| d > 0 && d <= u32::MAX as u64) {
+        settings["keep_days"] = Value::Null;
+    }
+    if !sources::valid(&settings["source"]) {
+        settings["source"] = Value::Null;
+    }
+    if !settings["language"].as_str().is_some_and(|l| ["", "en", "ja"].contains(&l)) {
+        settings["language"] = json!("");
+    }
+    if !settings["quality"].as_str().is_some_and(|q| record::QUALITIES.iter().any(|(id, _)| *id == q)) {
+        settings["quality"] = Value::Null;
+    }
+    settings
 }
 
 fn main() {
@@ -928,6 +950,26 @@ mod tests {
         assert!(out[0]["width"].is_null());
         assert_eq!((out[1]["width"].as_u64(), out[1]["height"].as_u64()), (Some(2560), Some(1440)));
         assert!(out[2]["width"].is_null());
+    }
+
+    #[test]
+    fn settings_from_older_versions_fall_back_to_defaults() {
+        let old = clean_settings(json!({"name": "Ren", "limit_mbps": 0, "keep_days": 0, "source": "display:1", "language": "fr", "quality": "ultra", "obs_port": 4455}));
+        assert_eq!(old["name"], "Ren");
+        assert!(old["limit_mbps"].is_null() && old["keep_days"].is_null() && old["source"].is_null() && old["quality"].is_null());
+        assert_eq!(old["language"], "");
+        let kept = clean_settings(json!({"limit_mbps": 8.5, "keep_days": 30, "source": {"kind": "display", "index": 1}, "language": "ja", "quality": "high"}));
+        assert_eq!((kept["limit_mbps"].as_f64(), kept["keep_days"].as_u64(), kept["language"].as_str(), kept["quality"].as_str()), (Some(8.5), Some(30), Some("ja"), Some("high")));
+        assert_eq!(kept["source"]["index"], 1);
+        assert_eq!(clean_settings(json!([1, 2])), clean_settings(json!({})));
+    }
+
+    #[test]
+    fn rooms_from_older_versions_keep_what_still_reads() {
+        let rooms = room::read_rooms(&json!({"active": "aa11", "list": [{"id": "aa11", "name": "Team", "members": ["x"]}, {"id": "bb22", "title": "old shape"}, {"id": "../x", "name": "bad", "members": []}], "version": 3}));
+        assert_eq!(rooms.list.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["aa11"]);
+        assert_eq!(rooms.active.as_deref(), Some("aa11"));
+        assert!(room::read_rooms(&json!("rooms")).list.is_empty());
     }
 
     #[test]

@@ -66,6 +66,11 @@ pub struct Rooms {
     pub list: Vec<Room>,
 }
 
+pub fn read_rooms(value: &Value) -> Rooms {
+    let list: Vec<Room> = value["list"].as_array().into_iter().flatten().filter_map(|r| serde_json::from_value(r.clone()).ok()).filter(|r: &Room| valid_id(&r.id)).collect();
+    Rooms { active: value["active"].as_str().map(String::from), list }
+}
+
 #[derive(Clone)]
 pub struct ActiveSet {
     pub id: String,
