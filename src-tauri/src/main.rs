@@ -228,7 +228,10 @@ impl Core {
     }
 
     pub fn room_log(&self, room: &str, id: &str) -> Arc<Vec<Value>> {
-        let path = self.log_path(room, id);
+        self.read_log(self.log_path(room, id))
+    }
+
+    fn read_log(&self, path: PathBuf) -> Arc<Vec<Value>> {
         let mut cache = self.logs.lock().unwrap();
         let entry = cache.entry(path.clone()).or_default();
         let len = file_len(&path);
@@ -246,7 +249,9 @@ impl Core {
     }
 
     pub fn own_log(&self, room: &str) -> Arc<Vec<Value>> {
-        self.room_log(room, &self.me())
+        let own = self.room_log(room, &self.me());
+        let pending = self.read_log(self.pending_path(room));
+        if pending.is_empty() { own } else { Arc::new(own.iter().chain(pending.iter()).cloned().collect()) }
     }
 
     pub fn save_settings(&self) {
