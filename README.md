@@ -56,7 +56,8 @@ Data lives in `%LOCALAPPDATA%\dev.ez-hanseikai.app`; the app's Files section ope
 7. Nothing is lost by a crash, a dropped connection or someone's delete, and everything resumes on its own.
 8. Efficiency and simplicity come before the lowest delay; a few seconds of lag is fine.
 9. No hard-coded numbers without a reason; keep the needed ones in one place.
-10. The repository is public: English only, made-up examples, and no secrets, personal data, real recordings or private addresses.
+10. Logic comes with automated tests, kept in plain functions that run without the network, capture or UI.
+11. The repository is public: English only, made-up examples, and no secrets, personal data, real recordings or private addresses.
 
 ## Development
 
