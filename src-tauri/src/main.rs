@@ -4,6 +4,7 @@ mod audio;
 mod check;
 mod data;
 mod debug;
+mod download;
 mod export;
 mod ffmpeg;
 mod jobs;
@@ -12,6 +13,7 @@ mod media;
 mod net;
 mod party;
 mod plugins;
+mod proc;
 mod record;
 mod room;
 mod shell;
@@ -33,8 +35,7 @@ use tauri::{AppHandle, Manager, State};
 pub const ALPN: &[u8] = b"ez-hanseikai/0";
 pub const PROTOCOL: u32 = 4;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const NO_WINDOW: u32 = 0x08000000;
-pub const BELOW_NORMAL: u32 = 0x00004000;
+pub use proc::{BELOW_NORMAL, NO_WINDOW};
 const NOTE_MAX: usize = 500;
 const BOARD_MAX: usize = 4000;
 const VALUES_MAX: usize = 32 << 10;
@@ -701,9 +702,8 @@ fn set_hotkey(core: State<Arc<Core>>, keys: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn retry_ffmpeg(core: State<Arc<Core>>) {
-    let core = core.inner().clone();
-    std::thread::spawn(move || prepare_ffmpeg(&core));
+fn retry_ffmpeg() {
+    ffmpeg::retry();
 }
 
 #[tauri::command]
@@ -813,19 +813,6 @@ async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
     }))
 }
 
-fn prepare_ffmpeg(core: &Core) {
-    if !ffmpeg::present() {
-        *core.ffmpeg_status.lock().unwrap() = "downloading".into();
-        tracing::info!("downloading ffmpeg");
-        let result = ffmpeg::download();
-        *core.ffmpeg_status.lock().unwrap() = if result.is_ok() { String::new() } else { "failed".into() };
-        if let Err(e) = result {
-            tracing::warn!("ffmpeg download failed: {e}");
-        }
-    }
-    ffmpeg::probe_encoders();
-}
-
 fn main() {
     if let Some(code) = plugins::child() {
         std::process::exit(code);
@@ -883,7 +870,7 @@ fn main() {
                 std::thread::sleep(DISK_EVERY);
             });
             let c = core.clone();
-            std::thread::spawn(move || prepare_ffmpeg(&c));
+            std::thread::spawn(move || ffmpeg::prepare(&c.ffmpeg_status));
             let c = core.clone();
             std::thread::spawn(move || jobs::worker(c));
             Ok(())

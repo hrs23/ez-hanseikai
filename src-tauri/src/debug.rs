@@ -459,7 +459,7 @@ fn recording_json(core: &Core, since: u64) -> Value {
         "usable": usable,
         "mine": *core.codecs.lock().unwrap(),
         "candidates": candidates,
-        "ffmpeg": {"path": ffmpeg::path().display().to_string(), "present": ffmpeg::present(), "status": core.ffmpeg_status.lock().unwrap().clone()},
+        "ffmpeg": {"path": ffmpeg::path().display().to_string(), "present": ffmpeg::present(), "status": core.ffmpeg_status.lock().unwrap().clone(), "error": ffmpeg::failure()},
         "cuts": CUTS.lock().unwrap().since(since),
         "stderr": FFMPEG.lock().unwrap().since(0),
         "recording": core.active_set_json(),

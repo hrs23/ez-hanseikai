@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 use serde_json::Value;
 
 use super::{ffmpeg, Download, Found, Job, Output, Plugin};
-use crate::{BELOW_NORMAL, NO_WINDOW};
+use crate::proc::{IDLE, NO_WINDOW};
 
 pub const PLUGIN: Plugin = Plugin {
     id: "transcribe",
@@ -34,7 +34,8 @@ const EXTRACT_SHARE: f64 = 0.1;
 
 fn model(settings: &Value) -> (&'static str, &'static str, &'static str, u64) {
     let name = settings["model"].as_str().unwrap_or_default();
-    MODEL_FILES.iter().copied().find(|m| m.0 == name).unwrap_or(MODEL_FILES[1])
+    let default = PLUGIN.options[0].1[0];
+    MODEL_FILES.iter().copied().find(|m| m.0 == name).or_else(|| MODEL_FILES.iter().copied().find(|m| m.0 == default)).unwrap_or(MODEL_FILES[0])
 }
 
 fn needs(settings: &Value) -> Vec<Download> {
@@ -69,6 +70,10 @@ pub fn percent(line: &str) -> Option<f64> {
     rest.trim().trim_end_matches('%').trim().parse::<f64>().ok().map(|p| p / 100.0)
 }
 
+pub fn threads(cores: usize) -> usize {
+    (cores / 2).max(1)
+}
+
 fn run(job: &Job, progress: &mut dyn FnMut(f64)) -> Result<Output, String> {
     if job.voice.parts.is_empty() {
         return Ok(Output::default());
@@ -83,7 +88,7 @@ fn run(job: &Job, progress: &mut dyn FnMut(f64)) -> Result<Output, String> {
     }
     progress(EXTRACT_SHARE);
     let (_, file, _, _) = model(&job.settings);
-    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).to_string();
+    let threads = threads(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)).to_string();
     let base = job.work.join("voice");
     let mut child = Command::new(job.dir.join(TOOL_DIR).join("whisper-cli.exe"))
         .arg("-m")
@@ -95,7 +100,7 @@ fn run(job: &Job, progress: &mut dyn FnMut(f64)) -> Result<Output, String> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
-        .creation_flags(NO_WINDOW | BELOW_NORMAL)
+        .creation_flags(NO_WINDOW | IDLE)
         .spawn()
         .map_err(|e| e.to_string())?;
     for line in BufReader::new(child.stderr.take().unwrap()).lines().map_while(Result::ok) {
@@ -127,6 +132,12 @@ mod tests {
             {"offsets": {"from": 6000, "to": 7000}, "text": "   "}
         ]});
         assert_eq!(segments(&out), vec![Found { kind: "speech".into(), from_s: Some(1.0), to_s: Some(2.5), text: "Push left now.".into(), ..Default::default() }]);
+    }
+
+    #[test]
+    fn whisper_leaves_half_the_cores_free() {
+        assert_eq!(threads(16), 8);
+        assert_eq!(threads(1), 1);
     }
 
     #[test]

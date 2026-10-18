@@ -15,6 +15,7 @@ use crate::room::{self, File, Log, Seg, SERIES};
 use crate::{ffmpeg, hex, now_us, party, stream, Core};
 
 const CHECK: Duration = Duration::from_secs(2);
+const EMIT_EVERY: Duration = Duration::from_millis(250);
 const SETTINGS_HASH_BYTES: usize = 6;
 const CLAIM_SETTLE: Duration = Duration::from_secs(2 * crate::net::LOG_SYNC.as_secs());
 
@@ -268,22 +269,37 @@ fn series(core: &Core, room: &str, f: &File, capture: &str, series: &str) -> Opt
     (pieces.len() == count + 1).then(|| pieces.into_iter().map(|p| p.path).collect())
 }
 
-pub fn inputs(core: &Core, room: &str, logs: &[Log]) -> Vec<Input> {
+pub fn inputs(core: &Core, room: &str, logs: &[Log], locate: impl Fn(&str) -> bool) -> Vec<Input> {
     let mut out = Vec::new();
     for set in room::sets(core, room, logs) {
         for f in set.files.iter().filter(|f| f.end_us.is_some()) {
             for capture in f.captures() {
                 let segs: Vec<&Seg> = f.segs.iter().filter(|s| s.capture == capture && s.series == SERIES[0]).collect();
                 let Some((start_us, end_us)) = span(&segs, f.offset_us) else { continue };
-                let (v, m) = (series(core, room, f, capture, SERIES[0]), series(core, room, f, capture, SERIES[1]));
-                let here = v.as_ref().is_some_and(|v| !v.is_empty()) && m.is_some();
-                let at = |parts: Option<Vec<PathBuf>>, stream: &str| Media { parts: parts.unwrap_or_default(), stream: stream.into() };
                 let file = format!("{}/{}/{capture}", set.id, f.owner);
-                out.push(Input { file, set: set.id.clone(), owner: f.owner.clone(), start_us, end_us, here, picture: at(v.clone(), "v:0"), sound: at(v, "a:0"), voice: at(m, "a:0") });
+                let mut input = Input { set: set.id.clone(), owner: f.owner.clone(), start_us, end_us, ..Default::default() };
+                if locate(&file) {
+                    let (v, m) = (series(core, room, f, capture, SERIES[0]), series(core, room, f, capture, SERIES[1]));
+                    input.here = v.as_ref().is_some_and(|v| !v.is_empty()) && m.is_some();
+                    let at = |parts: Option<Vec<PathBuf>>, stream: &str| Media { parts: parts.unwrap_or_default(), stream: stream.into() };
+                    (input.picture, input.sound, input.voice) = (at(v.clone(), "v:0"), at(v, "a:0"), at(m, "a:0"));
+                }
+                input.file = file;
+                out.push(input);
             }
         }
     }
     out
+}
+
+pub fn open(file: &str, me: &str, prefixes: &[String], tracks: &HashMap<String, Track>) -> bool {
+    prefixes.iter().any(|p| tracks.get(&format!("{p}{file}")).is_none_or(|t| t.done.is_empty() && !matches!(t.last.get(me), Some(Status::Failed(_)))))
+}
+
+fn snapshot(core: &Core, room: &str) -> (Vec<Log>, BTreeMap<String, Config>, HashMap<String, Track>) {
+    let logs = room::logs(core, room);
+    let (configs, tracks) = (configs(&logs, None), tracks(&logs, None));
+    (logs, configs, tracks)
 }
 
 fn plugin_dir(core: &Core, id: &str) -> PathBuf {
@@ -331,11 +347,14 @@ pub fn worker(core: Arc<Core>) {
 
 fn tick(core: &Arc<Core>) {
     let room = core.active_room_id();
-    let logs = room::logs(core, &room);
-    let configs = configs(&logs, None);
-    let tracks = tracks(&logs, None);
-    let inputs = inputs(core, &room, &logs);
-    let pick = next(&core.me(), &online(core), recording(core), &bundled(), |id, s| ready(core, id, s), &configs, &tracks, &inputs);
+    let (logs, configs, tracks) = snapshot(core, &room);
+    let prefixes = current(&logs, None);
+    if prefixes.is_empty() {
+        return;
+    }
+    let me = core.me();
+    let inputs = inputs(core, &room, &logs, |file| open(file, &me, &prefixes, &tracks));
+    let pick = next(&me, &online(core), recording(core), &bundled(), |id, s| ready(core, id, s), &configs, &tracks, &inputs);
     let Some(pick) = pick else { return };
     let (Some(plugin), Some(config)) = (plugins::find(&pick.plugin), configs.get(&pick.plugin)) else { return };
     work(core, &room, plugin, config, &pick.key, &inputs[pick.input]);
@@ -384,21 +403,21 @@ fn stale(core: &Core, room: &str, plugin: &Plugin, key: &str) -> bool {
 }
 
 fn watch(core: &Core, room: &str, plugin: &Plugin, key: &str, job: &plugins::Job) -> Option<Result<Output, String>> {
-    let mut child = match plugins::spawn(job) {
+    let mut process = match plugins::spawn(job) {
         Ok(c) => c,
         Err(e) => return Some(Err(e.to_string())),
     };
-    let rx = plugins::replies(child.stdout.take().unwrap());
-    let mut checked = Instant::now();
+    let rx = plugins::replies(process.child.stdout.take().unwrap());
+    let (mut checked, mut emitted) = (Instant::now(), Instant::now());
     loop {
         if checked.elapsed() >= CHECK {
             checked = Instant::now();
             if CANCEL.swap(false, Ordering::Relaxed) {
-                plugins::kill(&mut child);
+                process.kill();
                 return Some(Err("Cancelled".into()));
             }
             if stale(core, room, plugin, key) {
-                plugins::kill(&mut child);
+                process.kill();
                 return None;
             }
         }
@@ -407,19 +426,22 @@ fn watch(core: &Core, room: &str, plugin: &Plugin, key: &str, job: &plugins::Job
                 if let Some(r) = RUNNING.lock().unwrap().as_mut() {
                     r.progress = p;
                 }
-                emit(core);
+                if emitted.elapsed() >= EMIT_EVERY {
+                    emitted = Instant::now();
+                    emit(core);
+                }
             }
             Ok(Reply::Done(output)) => {
-                let _ = child.wait();
-                return Some(Ok(output));
+                let _ = process.child.wait();
+                return (!stale(core, room, plugin, key)).then_some(Ok(output));
             }
             Ok(Reply::Failed(e)) => {
-                let _ = child.wait();
+                let _ = process.child.wait();
                 return Some(Err(e));
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => {
-                let _ = child.wait();
+                let _ = process.child.wait();
                 return Some(Err("The plugin stopped without a result.".into()));
             }
         }
@@ -436,15 +458,14 @@ fn finish(core: &Arc<Core>, room: &str, plugin: &Plugin, key: &str, run: i64, in
     party::send(core);
 }
 
-#[tauri::command]
-pub fn room_plugins(core: State<Arc<Core>>) -> Vec<Value> {
-    let configs = configs(&room::logs(&core, &core.active_room_id()), None);
+fn plugins_json(core: &Core) -> Vec<Value> {
+    let configs = configs(&room::logs(core, &core.active_room_id()), None);
     plugins::ALL
         .iter()
         .map(|p| {
             let config = configs.get(p.id);
             let settings = config.map_or_else(|| plugins::normalize(p, &Value::Null), |c| c.settings.clone());
-            let missing = plugins::missing(p, &plugin_dir(&core, p.id), &settings);
+            let missing = plugins::missing(p, &plugin_dir(core, p.id), &settings);
             let mut v = plugins::manifest(p);
             v["on"] = json!(config.is_some_and(|c| c.on));
             v["room_version"] = json!(config.map(|c| c.version.clone()));
@@ -454,6 +475,12 @@ pub fn room_plugins(core: State<Arc<Core>>) -> Vec<Value> {
             v
         })
         .collect()
+}
+
+#[tauri::command]
+pub async fn room_plugins(core: State<'_, Arc<Core>>) -> Result<Vec<Value>, String> {
+    let core = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || plugins_json(&core)).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -472,22 +499,28 @@ pub async fn prepare_plugin(core: State<'_, Arc<Core>>, id: String) -> Result<()
     tauri::async_runtime::spawn_blocking(move || plugins::missing(plugin, &dir, &settings).iter().try_for_each(|d| plugins::fetch(&dir, d))).await.map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
-pub fn jobs(core: State<Arc<Core>>) -> Value {
+fn jobs_json(core: &Core) -> Value {
     let room = core.active_room_id();
-    let logs = room::logs(&core, &room);
-    let tracks = tracks(&logs, None);
-    let (me, online) = (core.me(), online(&core));
+    let (logs, configs, tracks) = snapshot(core, &room);
+    let (me, online) = (core.me(), online(core));
+    let on: Vec<(&String, &Config, String)> = configs.iter().filter(|(_, c)| c.on).map(|(id, c)| (id, c, prefix(id, c))).collect();
+    let prefixes: Vec<String> = on.iter().map(|(_, _, p)| p.clone()).collect();
+    let inputs = if on.is_empty() { Vec::new() } else { inputs(core, &room, &logs, |file| open(file, &me, &prefixes, &tracks)) };
     let mut list = Vec::new();
-    for (id, config) in configs(&logs, None).iter().filter(|(_, c)| c.on) {
-        let prefix = prefix(id, config);
-        for input in inputs(&core, &room, &logs) {
+    for (id, config, prefix) in &on {
+        for input in &inputs {
             let key = format!("{prefix}{}", input.file);
             let (state, by, error) = state(tracks.get(&key), &me, &online);
             list.push(json!({"job": key, "plugin": id, "version": config.version, "set": input.set, "owner": input.owner, "here": input.here, "state": state, "by": by, "error": error}));
         }
     }
     json!({"jobs": list, "running": running_json(), "tags": tag_names(&logs, core.party.lock().unwrap().caps().as_ref())})
+}
+
+#[tauri::command]
+pub async fn jobs(core: State<'_, Arc<Core>>) -> Result<Value, String> {
+    let core = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || jobs_json(&core)).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]

@@ -8,20 +8,13 @@ use std::sync::mpsc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::{BELOW_NORMAL, NO_WINDOW};
+pub use crate::download::{fetch, present, Download};
+use crate::proc::{self, Process, IDLE, NO_WINDOW};
 
 mod apex;
 mod transcribe;
 
 pub const FLAG: &str = "--plugin";
-
-pub struct Download {
-    pub url: String,
-    pub sha256: &'static str,
-    pub size: u64,
-    pub dest: String,
-    pub pick: &'static [&'static str],
-}
 
 pub struct Plugin {
     pub id: &'static str,
@@ -105,56 +98,8 @@ pub fn manifest(plugin: &Plugin) -> Value {
     json!({"id": plugin.id, "name": plugin.name, "version": plugin.version, "live": plugin.live, "options": options})
 }
 
-pub fn present(dir: &Path, d: &Download) -> bool {
-    match d.pick.first() {
-        Some(first) => dir.join(&d.dest).join(first).exists(),
-        None => dir.join(&d.dest).exists(),
-    }
-}
-
 pub fn missing(plugin: &Plugin, dir: &Path, settings: &Value) -> Vec<Download> {
     (plugin.needs)(settings).into_iter().filter(|d| !present(dir, d)).collect()
-}
-
-pub fn fetch(dir: &Path, d: &Download) -> Result<(), String> {
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let part = dir.join(format!("{}.part", d.dest.replace(['/', '\\'], "_")));
-    let place = if d.pick.is_empty() {
-        format!("Move-Item -Force $part '{}'", dir.join(&d.dest).display())
-    } else {
-        let names = d.pick.iter().map(|p| format!("$_.Name -like '{p}'")).collect::<Vec<_>>().join(" -or ");
-        format!(
-            "$out = '{out}'; New-Item -ItemType Directory -Force $out | Out-Null; \
-             Add-Type -AssemblyName System.IO.Compression.FileSystem; \
-             $z = [IO.Compression.ZipFile]::OpenRead($part); \
-             $first = $null; \
-             foreach ($e in ($z.Entries | Where-Object {{ {names} }})) {{ if ($e.Name -eq '{first}') {{ $first = $e }} else {{ [IO.Compression.ZipFileExtensions]::ExtractToFile($e, (Join-Path $out $e.Name), $true) }} }}; \
-             if ($first) {{ [IO.Compression.ZipFileExtensions]::ExtractToFile($first, (Join-Path $out $first.Name), $true) }}; \
-             $z.Dispose(); Remove-Item $part",
-            out = dir.join(&d.dest).display(),
-            first = d.pick[0]
-        )
-    };
-    let script = format!(
-        "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; \
-         $part = '{part}'; \
-         Invoke-WebRequest -UseBasicParsing -Uri '{url}' -OutFile $part; \
-         if ((Get-FileHash $part -Algorithm SHA256).Hash.ToLower() -ne '{sha}') {{ Remove-Item $part; throw 'checksum mismatch' }}; \
-         {place}",
-        part = part.display(),
-        url = d.url,
-        sha = d.sha256
-    );
-    let out = Command::new("powershell")
-        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &script])
-        .creation_flags(NO_WINDOW)
-        .output()
-        .map_err(|e| e.to_string())?;
-    if out.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
-    }
 }
 
 pub fn child() -> Option<i32> {
@@ -167,8 +112,9 @@ pub fn child() -> Option<i32> {
         let plugin = find(&job.plugin).ok_or("unknown plugin")?;
         let mut stdout = std::io::stdout();
         (plugin.run)(&job, &mut |p| {
-            let _ = writeln!(stdout, "{}", json!({"progress": p}));
-            let _ = stdout.flush();
+            if writeln!(stdout, "{}", json!({"progress": p})).and_then(|_| stdout.flush()).is_err() {
+                std::process::exit(1);
+            }
         })
     });
     let line = match result {
@@ -179,19 +125,15 @@ pub fn child() -> Option<i32> {
     Some(0)
 }
 
-pub fn spawn(job: &Job) -> std::io::Result<Child> {
-    let mut child = Command::new(std::env::current_exe()?)
-        .arg(FLAG)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .creation_flags(NO_WINDOW | BELOW_NORMAL)
-        .spawn()?;
+pub fn spawn(job: &Job) -> std::io::Result<Process> {
+    let mut process = proc::spawn(Command::new(std::env::current_exe()?).arg(FLAG).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()), IDLE)?;
     let text = serde_json::to_string(job).unwrap_or_default();
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(text.as_bytes())?;
+    let written = process.child.stdin.take().map_or(Ok(()), |mut stdin| stdin.write_all(text.as_bytes()));
+    if let Err(e) = written {
+        process.kill();
+        return Err(e);
     }
-    Ok(child)
+    Ok(process)
 }
 
 pub fn reply(line: &str) -> Option<Reply> {
@@ -219,12 +161,6 @@ pub fn replies(stdout: ChildStdout) -> mpsc::Receiver<Reply> {
     rx
 }
 
-pub fn kill(child: &mut Child) {
-    let _ = Command::new("taskkill").args(["/PID", &child.id().to_string(), "/T", "/F"]).creation_flags(NO_WINDOW).status();
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
 pub fn ffmpeg(job: &Job, media: &Media, before: &[&str], after: &[String], stdout: Stdio, stderr: Stdio) -> std::io::Result<Child> {
     let piped = media.parts.len() != 1;
     let input = if piped { "pipe:0".into() } else { media.parts[0].display().to_string() };
@@ -236,7 +172,7 @@ pub fn ffmpeg(job: &Job, media: &Media, before: &[&str], after: &[String], stdou
         .stdin(if piped { Stdio::piped() } else { Stdio::null() })
         .stdout(stdout)
         .stderr(stderr)
-        .creation_flags(NO_WINDOW | BELOW_NORMAL)
+        .creation_flags(NO_WINDOW | IDLE)
         .spawn()?;
     if piped {
         let mut stdin = child.stdin.take().unwrap();
@@ -276,12 +212,8 @@ pub fn keyframes(job: &Job, filter: &str, width: usize, height: usize, mut each:
     let (tx, times) = mpsc::channel();
     std::thread::spawn(move || {
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-            if line.contains("Parsed_showinfo") {
-                if let Some(t) = pts_time(&line) {
-                    if tx.send(t).is_err() {
-                        break;
-                    }
-                }
+            if line.contains("Parsed_showinfo") && line.contains("pts_time:") && tx.send(pts_time(&line)).is_err() {
+                break;
             }
         }
     });
@@ -289,7 +221,9 @@ pub fn keyframes(job: &Job, filter: &str, width: usize, height: usize, mut each:
     let mut frame = vec![0u8; width * height * 3];
     while stdout.read_exact(&mut frame).is_ok() {
         let Ok(t) = times.recv() else { break };
-        each(t, &frame);
+        if let Some(t) = t {
+            each(t, &frame);
+        }
     }
     let status = child.wait().map_err(|e| e.to_string())?;
     if status.success() { Ok(()) } else { Err(format!("ffmpeg stopped with {status}")) }
@@ -341,6 +275,7 @@ mod tests {
         let line = "[Parsed_showinfo_3 @ 0000] n:   4 pts:  12288 pts_time:4.0    duration:512";
         assert_eq!(pts_time(line), Some(4.0));
         assert_eq!(pts_time("frame= 10"), None);
+        assert_eq!(pts_time("[Parsed_showinfo_3 @ 0000] n:   5 pts:NOPTS pts_time:NOPTS duration:512"), None);
     }
 
     #[test]
