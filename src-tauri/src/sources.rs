@@ -6,8 +6,6 @@ use windows_capture::window::Window;
 
 use crate::Core;
 
-const GAME_EXE: &str = "r5apex";
-
 #[derive(Clone, Copy)]
 pub enum Item {
     Window(Window),
@@ -20,10 +18,6 @@ pub struct Found {
     pub kind: &'static str,
     pub name: String,
     pub game: (String, u32),
-}
-
-pub fn is_game(exe: &str) -> bool {
-    exe.to_lowercase().starts_with(GAME_EXE)
 }
 
 pub fn processes() -> Vec<(String, u32)> {
@@ -45,7 +39,10 @@ pub fn processes() -> Vec<(String, u32)> {
 }
 
 pub fn audio_target(wanted: &str) -> (String, u32) {
-    processes().into_iter().find(|(name, _)| if wanted.is_empty() { is_game(name) } else { name.eq_ignore_ascii_case(wanted) }).unwrap_or_default()
+    if wanted.is_empty() {
+        return Default::default();
+    }
+    processes().into_iter().find(|(name, _)| name.eq_ignore_ascii_case(wanted)).unwrap_or_default()
 }
 
 pub fn pid_of(name: &str) -> Option<u32> {
@@ -64,6 +61,12 @@ fn minimized(w: &Window) -> bool {
     unsafe { ::windows::Win32::UI::WindowsAndMessaging::IsIconic(::windows::Win32::Foundation::HWND(w.as_raw_hwnd())) }.as_bool()
 }
 
+fn title(w: &Window) -> String {
+    let mut buf = [0u16; 512];
+    let len = unsafe { ::windows::Win32::UI::WindowsAndMessaging::InternalGetWindowText(::windows::Win32::Foundation::HWND(w.as_raw_hwnd()), &mut buf) };
+    String::from_utf16_lossy(&buf[..len.max(0) as usize]).trim().to_string()
+}
+
 fn windows() -> Vec<(Window, String, String, u32)> {
     let names: HashMap<u32, String> = processes().into_iter().map(|(name, pid)| (pid, name)).collect();
     let own = std::process::id();
@@ -72,7 +75,7 @@ fn windows() -> Vec<(Window, String, String, u32)> {
         .into_iter()
         .filter_map(|w| {
             let pid = w.process_id().ok().filter(|p| *p != own)?;
-            let title = w.title().ok().map(|t| t.trim().to_string()).filter(|t| !t.is_empty())?;
+            let title = Some(title(&w)).filter(|t| !t.is_empty())?;
             if w.width().ok()? <= 0 || w.height().ok()? <= 0 || cloaked(&w) {
                 return None;
             }
@@ -82,9 +85,7 @@ fn windows() -> Vec<(Window, String, String, u32)> {
 }
 
 pub fn list() -> Vec<Value> {
-    let mut list: Vec<(Window, String, String, u32)> = windows().into_iter().filter(|w| !minimized(&w.0)).collect();
-    list.sort_by_key(|w| !is_game(&w.1));
-    let windows = list.into_iter().map(|(_, exe, title, _)| json!({"id": {"kind": "window", "exe": exe, "title": title}, "name": format!("{title} (window)")}));
+    let windows = windows().into_iter().filter(|w| !minimized(&w.0)).map(|(_, exe, title, _)| json!({"id": {"kind": "window", "exe": exe, "title": title}, "name": format!("{title} (window)")}));
     let displays = Monitor::enumerate().unwrap_or_default().into_iter().enumerate().map(|(i, m)| {
         let size = m.width().and_then(|w| Ok((w, m.height()?))).map(|(w, h)| format!(" ({w}x{h})")).unwrap_or_default();
         json!({"id": {"kind": "display", "index": i + 1}, "name": format!("Display {}{size}", i + 1)})
@@ -106,16 +107,17 @@ pub fn valid(source: &Value) -> bool {
     }
 }
 
-pub fn find(core: &Core, source: &Value) -> Option<Found> {
+pub fn same_window<'a, T>(list: &'a [(T, String, String, u32)], exe: &str, title: &str, key: impl Fn(&T) -> usize, last: Option<usize>) -> Option<&'a (T, String, String, u32)> {
+    let exe_matches = |w: &&(T, String, String, u32)| w.1.eq_ignore_ascii_case(exe);
+    list.iter().filter(exe_matches).find(|w| w.2 == title).or_else(|| list.iter().filter(exe_matches).find(|w| Some(key(&w.0)) == last))
+}
+
+pub fn find(core: &Core, source: &Value, last: Option<usize>) -> Option<Found> {
     match source["kind"].as_str()? {
         "window" => {
             let (exe, title) = (source["exe"].as_str()?, source["title"].as_str()?);
             let list = windows();
-            let (w, exe, title, pid) = list
-                .iter()
-                .find(|w| w.1.eq_ignore_ascii_case(exe) && w.2 == title)
-                .or_else(|| list.iter().find(|w| w.1.eq_ignore_ascii_case(exe)))?
-                .clone();
+            let (w, exe, title, pid) = same_window(&list, exe, title, |w| w.as_raw_hwnd() as usize, last)?.clone();
             Some(Found { item: Item::Window(w), key: w.as_raw_hwnd() as usize, kind: "window", name: format!("{title} ({exe})"), game: (exe, pid) })
         }
         "display" => {
@@ -125,5 +127,23 @@ pub fn find(core: &Core, source: &Value) -> Option<Found> {
             Some(Found { item: Item::Display(monitor), key: monitor.as_raw_hmonitor() as usize, kind: "display", name: format!("Display {index}"), game })
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn window(key: usize, exe: &str, title: &str) -> (usize, String, String, u32) {
+        (key, exe.into(), title.into(), 1)
+    }
+
+    #[test]
+    fn a_closed_window_is_never_replaced_by_another_window_of_the_same_program() {
+        let list = vec![window(1, "browser.exe", "Private mail"), window(2, "game.exe", "Game - loading")];
+        assert!(same_window(&list, "browser.exe", "Team stats", |k| *k, Some(9)).is_none());
+        assert_eq!(same_window(&list, "BROWSER.exe", "Private mail", |k| *k, None).unwrap().0, 1);
+        assert_eq!(same_window(&list, "game.exe", "Game", |k| *k, Some(2)).unwrap().0, 2);
+        assert!(same_window(&list, "game.exe", "Game", |k| *k, Some(1)).is_none());
     }
 }

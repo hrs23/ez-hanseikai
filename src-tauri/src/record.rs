@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
-use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
@@ -25,14 +24,15 @@ use crate::audio::{self, Audio, CHANNELS, SAMPLE_RATE};
 use crate::ffmpeg::{self, FRAGMENTED};
 use crate::room::{part_of, seg_name, INIT, SERIES};
 use crate::sources::{self, Found, Item};
-use crate::{data, debug, hex, media, merge, now_us, read_json, write_whole, Core, BELOW_NORMAL, NO_WINDOW};
+use crate::proc::{self, Process, BELOW_NORMAL};
+use crate::{data, debug, hex, media, merge, now_us, read_json, write_whole, Core};
 
 pub type Err = Box<dyn std::error::Error + Send + Sync>;
 
 pub const FPS: u32 = 30;
 pub const FRAGMENTS_PER_SEGMENT: u32 = 4;
 const H264_BITS_PER_PIXEL: f64 = 0.2;
-const AUDIO_BITRATE: &str = "128k";
+pub const AUDIO_KBPS: u32 = 128;
 const QUEUE_SIZE: &str = "512";
 const VOICE_FRAGMENT_US: &str = "1000000";
 const FRAME_GAP: Duration = Duration::from_millis(30);
@@ -56,6 +56,8 @@ const FINISH_WAIT: Duration = Duration::from_secs(10);
 const CUT_WAIT: Duration = Duration::from_secs(3);
 const PROBE_WAIT: Duration = Duration::from_secs(2);
 const POLL: Duration = Duration::from_millis(20);
+const RENAME_TRIES: u32 = 10;
+const RENAME_GAP: Duration = Duration::from_millis(50);
 pub const APP: usize = 0;
 pub const MIC: usize = 1;
 const TEST_SIZE: (u32, u32) = (1280, 720);
@@ -92,6 +94,7 @@ struct Open {
     size: u64,
     t_us: i64,
     count: u32,
+    stopped: bool,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -106,8 +109,9 @@ impl Watch {
     fn fed(&mut self, now: Instant) {
         if self.fed.is_none_or(|t| now.saturating_duration_since(t) > FEED_GAP) {
             self.owed = Some(now);
+        } else {
+            self.owed.get_or_insert(now);
         }
-        self.owed.get_or_insert(now);
         self.fed = Some(now);
         self.writing = true;
     }
@@ -159,7 +163,7 @@ pub struct Sink {
     encoder: &'static str,
     codec: &'static str,
     meta: Value,
-    child: Mutex<Child>,
+    child: Mutex<Process>,
     frame: Mutex<Option<Arc<Vec<u8>>>>,
     ready: Condvar,
     watch: Mutex<Watch>,
@@ -207,6 +211,7 @@ pub struct Engine {
     strikes: Mutex<(&'static str, u32)>,
     retry_at: Mutex<Instant>,
     rec_lock: Mutex<()>,
+    finishing: Mutex<Vec<JoinHandle<()>>>,
 }
 
 impl Engine {
@@ -229,6 +234,7 @@ impl Engine {
             strikes: Mutex::new(("", 0)),
             retry_at: Mutex::new(Instant::now()),
             rec_lock: Mutex::new(()),
+            finishing: Mutex::new(Vec::new()),
         }
     }
 
@@ -361,13 +367,12 @@ fn encode_command(size: (u32, u32), out: (u32, u32), kbps: u32, chosen: (&str, &
     }
     command
         .args(["-force_key_frames", "expr:gte(t,n_forced*1)"])
-        .args(["-c:a", "aac", "-b:a", AUDIO_BITRATE, "-metadata:s:a:0", "title=Game"])
+        .args(["-c:a", "aac", "-b:a", &format!("{AUDIO_KBPS}k"), "-metadata:s:a:0", "title=Game"])
         .args(["-movflags", &format!("{FRAGMENTED}+skip_trailer"), "-f", "mp4", &format!("tcp://127.0.0.1:{}", outputs[0])])
-        .args(["-map", "2:a", "-c:a", "aac", "-b:a", AUDIO_BITRATE, "-metadata:s:a:0", "title=Microphone"])
+        .args(["-map", "2:a", "-c:a", "aac", "-b:a", &format!("{AUDIO_KBPS}k"), "-metadata:s:a:0", "title=Microphone"])
         .args(["-movflags", "empty_moov+default_base_moof+skip_trailer", "-frag_duration", VOICE_FRAGMENT_US, "-f", "mp4", &format!("tcp://127.0.0.1:{}", outputs[1])])
         .stdin(Stdio::piped())
-        .stderr(Stdio::piped())
-        .creation_flags(NO_WINDOW | BELOW_NORMAL);
+        .stderr(Stdio::piped());
     command
 }
 
@@ -406,6 +411,16 @@ fn log_cap(core: &Core, room: &str, capture: &str, cap: &Value) {
     core.append_log(room, &record);
 }
 
+fn finish_part(path: &Path) -> bool {
+    for _ in 0..RENAME_TRIES {
+        if std::fs::rename(part_of(path), path).is_ok() {
+            return true;
+        }
+        thread::sleep(RENAME_GAP);
+    }
+    false
+}
+
 fn seg_record(capture: &str, series: &str, n: u32, set: &str, t_us: i64, d_us: i64, size: u64, sha256: &str) -> Value {
     json!({"k": "seg", "capture": capture, "series": series, "n": n, "set": set, "t_us": t_us, "d_us": d_us, "size": size, "sha256": sha256})
 }
@@ -427,8 +442,9 @@ impl Sink {
         let listeners = [TcpListener::bind("127.0.0.1:0")?, TcpListener::bind("127.0.0.1:0")?];
         let outputs = [TcpListener::bind("127.0.0.1:0")?, TcpListener::bind("127.0.0.1:0")?];
         let port = |l: &TcpListener| l.local_addr().map(|a| a.port());
-        let mut child = encode_command(size, out, kbps, chosen, [port(&listeners[0])?, port(&listeners[1])?], [port(&outputs[0])?, port(&outputs[1])?]).spawn()?;
-        if let Some(stderr) = child.stderr.take() {
+        let mut command = encode_command(size, out, kbps, chosen, [port(&listeners[0])?, port(&listeners[1])?], [port(&outputs[0])?, port(&outputs[1])?]);
+        let mut child = proc::spawn(&mut command, BELOW_NORMAL)?;
+        if let Some(stderr) = child.child.stderr.take() {
             thread::spawn(move || {
                 use std::io::BufRead;
                 for line in std::io::BufReader::new(stderr).lines().map_while(Result::ok) {
@@ -442,7 +458,7 @@ impl Sink {
             "source_kind": names.kind, "source": names.source, "width": out.0, "height": out.1, "fps": FPS, "kbps": kbps,
             "encoder": chosen.0, "codec": chosen.1, "audio": names.game, "mic": names.mic, "version": crate::VERSION,
         });
-        let stdin = child.stdin.take();
+        let stdin = child.child.stdin.take();
         let sink = Arc::new(Self {
             room,
             capture,
@@ -555,7 +571,14 @@ impl Sink {
         }
         series.last_us = t_us;
         let Some(open) = series.open.as_mut() else { return };
+        if open.stopped {
+            return;
+        }
         if open.file.write_all(bytes).is_err() {
+            open.stopped = true;
+            if open.file.set_len(open.size).is_err() {
+                open.count = 0;
+            }
             self.dead.store(true, Ordering::Relaxed);
             return;
         }
@@ -576,7 +599,7 @@ impl Sink {
         if let Some(set) = &set {
             ensure_rec(core, &self.room, set, t_us, &self.meta);
         }
-        series.open = Some(Open { n, set, file, hasher: Sha256::new(), size: 0, t_us, count: 0 });
+        series.open = Some(Open { n, set, file, hasher: Sha256::new(), size: 0, t_us, count: 0, stopped: false });
     }
 
     fn close(&self, core: &Core, which: usize, series: &mut Series, next_us: Option<i64>) {
@@ -586,8 +609,16 @@ impl Sink {
         let path = dir.join(seg_name(open.n));
         let d_us = next_us.map_or(series.last_us - open.t_us + series.step_us.max(0), |next| next - open.t_us);
         debug::cut(&self.capture, SERIES[which], open.n, open.set.as_deref(), open.size, open.count, d_us);
-        let kept = std::fs::rename(part_of(&path), &path).is_ok();
-        if let Some(set) = open.set.as_ref().filter(|_| kept) {
+        if open.stopped && open.count == 0 {
+            let _ = std::fs::remove_file(part_of(&path));
+            let _ = std::fs::remove_file(dir.join(OPEN));
+            return;
+        }
+        if !finish_part(&path) {
+            tracing::warn!("could not finish {}", path.display());
+            return;
+        }
+        if let Some(set) = &open.set {
             let sha = hex(&open.hasher.finalize());
             if !self.cap_logged.swap(true, Ordering::Relaxed) {
                 log_cap(core, &self.room, &self.capture, &read_json(&self.dir.join(CAP)));
@@ -678,14 +709,13 @@ impl Sink {
         {
             let mut child = self.child.lock().unwrap();
             while Instant::now() < deadline && !exited {
-                exited = matches!(child.try_wait(), Ok(Some(_)));
+                exited = child.exited();
                 thread::sleep(POLL);
             }
             if !exited {
                 tracing::warn!("ffmpeg did not finish in time, killing it");
-                let _ = child.kill();
-                let _ = child.wait();
             }
+            child.kill();
         }
         for reader in self.readers.lock().unwrap().drain(..) {
             let _ = reader.join();
@@ -753,16 +783,22 @@ fn current_sink(core: &Arc<Core>, canvas: Option<(u32, u32)>) -> Option<Arc<Sink
     });
     if let Some((dead, changed)) = stale.filter(|(dead, changed)| *dead || *changed) {
         let old = slot.take().unwrap();
-        if dead && !changed {
-            e.encoder_died(&old);
+        if dead {
+            old.child.lock().unwrap().kill();
+            if !changed {
+                e.encoder_died(&old);
+            }
         }
-        thread::spawn(move || old.finish());
+        e.finishing.lock().unwrap().push(thread::spawn(move || old.finish()));
     }
     if slot.is_none() {
         let (room, size) = (want?, canvas?);
-        if Instant::now() < *e.retry_at.lock().unwrap() {
+        let mut finishing = e.finishing.lock().unwrap();
+        finishing.retain(|h| !h.is_finished());
+        if !finishing.is_empty() || Instant::now() < *e.retry_at.lock().unwrap() {
             return None;
         }
+        drop(finishing);
         match Sink::start(core, room, size) {
             Ok(sink) => *slot = Some(sink),
             Err(err) => e.failed(false, &err.to_string()),
@@ -1009,9 +1045,9 @@ fn meters(core: Arc<Core>) {
     }
 }
 
-fn rescan(core: &Core, source: &Value) -> Option<Found> {
+fn rescan(core: &Core, source: &Value, last: Option<usize>) -> Option<Found> {
     let e = &core.engine;
-    let found = sources::find(core, source);
+    let found = sources::find(core, source, last);
     e.source_lost.store(!source.is_null() && found.is_none(), Ordering::Relaxed);
     let mut names = e.names.lock().unwrap();
     names.kind = found.as_ref().map(|f| f.kind.to_string()).unwrap_or_default();
@@ -1057,16 +1093,17 @@ fn check_sink(core: &Core) {
     let Some(sink) = e.sink.lock().unwrap().clone() else { return };
     let (watch, now) = (*sink.watch.lock().unwrap(), Instant::now());
     let mut child = sink.child.lock().unwrap();
-    if matches!(child.try_wait(), Ok(Some(_))) {
+    if child.exited() {
         sink.dead.store(true, Ordering::Relaxed);
     } else if watch.stalled(now) {
         tracing::warn!("{} produced nothing for {} s, stopping it", sink.encoder, STALL_AFTER.as_secs());
         sink.dead.store(true, Ordering::Relaxed);
-        let _ = child.kill();
+        child.kill();
     }
     drop(child);
     if watch.working(now) {
-        e.status.lock().unwrap().clear();
+        let fallback = sink.encoder == ffmpeg::FALLBACK.0 && !ffmpeg::dropped().is_empty();
+        *e.status.lock().unwrap() = if fallback { "The hardware video encoders failed, so the CPU encodes (libx264) for now.".into() } else { String::new() };
     }
     if watch.stable(now) {
         e.failures.store(0, Ordering::Relaxed);
@@ -1101,7 +1138,7 @@ pub fn supervise(core: Arc<Core>) {
             let source = e.source.lock().unwrap().clone();
             let ended = e.video.lock().unwrap().as_ref().is_some_and(|v| v.control.is_finished());
             if ended || scanned.as_ref().is_none_or(|(s, at)| *s != source || at.elapsed() > RESCAN_EVERY) {
-                found = rescan(&core, &source);
+                found = rescan(&core, &source, found.as_ref().map(|f| f.key));
                 scanned = Some((source, Instant::now()));
             }
             audio::ensure(&core, APP, found.as_ref().map_or(0, |f| f.game.1).to_string());

@@ -314,7 +314,7 @@ impl Core {
 #[tauri::command]
 async fn list_processes() -> Vec<String> {
     let mut names: Vec<String> = sources::processes().into_iter().map(|(name, _)| name).collect();
-    names.sort_by_key(|n| (!n.to_lowercase().contains("apex"), n.to_lowercase()));
+    names.sort_by_key(|n| n.to_lowercase());
     names.dedup();
     names
 }
