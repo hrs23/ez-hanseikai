@@ -117,3 +117,5 @@ File > Export set writes one video on this PC, like a screen recording of the Pl
 - Keeping only the parts of old sets around notes and events instead of deleting them whole.
 - A storage view: free space and the space each set uses.
 - A jobs view: plugin jobs with progress, retry and cancel.
+- Thin connections: send in order of importance (logs and notes, sound, live picture, then history); members who already have a file pass it on, so a slow uploader sends each piece once; history slows down by itself when round trips grow; the room menu shows each member's speed and time left. Optional later: a smaller live picture while a slow member is present, and receiving only the sets one opens.
+- Health check: Room > Check connections tests every pair of members (direct or relay, round trip, upload and download speed with a short transfer) and each member's capture, encoder, microphone and free space, and shows everyone the same table, with what to do for each problem.
