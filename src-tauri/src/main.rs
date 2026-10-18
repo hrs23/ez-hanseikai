@@ -8,6 +8,7 @@ mod export;
 mod ffmpeg;
 mod log;
 mod net;
+mod party;
 mod record;
 mod room;
 mod shell;
@@ -26,7 +27,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, State};
 
 pub const ALPN: &[u8] = b"ez-hanseikai/0";
-pub const PROTOCOL: u32 = 1;
+pub const PROTOCOL: u32 = 2;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const NO_WINDOW: u32 = 0x08000000;
 pub const BELOW_NORMAL: u32 = 0x00004000;
@@ -95,11 +96,12 @@ pub struct Peer {
     pub live: Option<String>,
     pub have: HashSet<String>,
     pub gone: HashSet<String>,
+    pub asks: Vec<Value>,
 }
 
 impl Peer {
     pub fn new(id: EndpointId, name: String) -> Self {
-        Self { id, name, conn: None, incoming: None, offset_us: None, failures: 0, announce: true, codecs: default_codecs(), info: None, sharing: false, live: None, have: HashSet::new(), gone: HashSet::new() }
+        Self { id, name, conn: None, incoming: None, offset_us: None, failures: 0, announce: true, codecs: default_codecs(), info: None, sharing: false, live: None, have: HashSet::new(), gone: HashSet::new(), asks: Vec::new() }
     }
 }
 
@@ -118,7 +120,6 @@ pub struct Core {
     pub audio_process: Mutex<String>,
     pub keep_days: Mutex<Option<u32>>,
     pub codecs: Mutex<Vec<String>>,
-    pub removed: Mutex<HashSet<String>>,
     pub following: Mutex<HashSet<String>>,
     pub recovery: Mutex<Option<String>>,
     pub notice: Mutex<String>,
@@ -134,30 +135,65 @@ pub struct Core {
     pub layout: Mutex<Value>,
     pub export: Mutex<Option<export::Running>>,
     pub log_lock: Mutex<()>,
+    pub recovered: Mutex<HashSet<String>>,
+    pub wake: tokio::sync::Notify,
+    pub focus: Mutex<Option<String>>,
+    pub asks: Mutex<Vec<room::Ask>>,
+    pub party: Mutex<party::Party>,
     logs: Mutex<HashMap<PathBuf, (Arc<Vec<Value>>, u64)>>,
     pub jsons: Mutex<HashMap<PathBuf, Value>>,
 }
 
 impl Core {
-    pub fn append_log(&self, record: &Value) {
+    pub fn me(&self) -> String {
+        self.ep.id().to_string()
+    }
+
+    pub fn log_path(&self, room: &str, id: &str) -> PathBuf {
+        self.dir.join("rooms").join(room).join("logs").join(format!("{id}.bin"))
+    }
+
+    fn pending_path(&self, room: &str) -> PathBuf {
+        self.dir.join("rooms").join(room).join("pending.bin")
+    }
+
+    fn log_ready(&self, room: &str) -> bool {
+        file_len(&self.log_path(room, &self.me())) > 0
+            || self.recovered.lock().unwrap().contains(room)
+            || !self.rooms.lock().unwrap().list.iter().any(|r| r.id == room && r.members.len() > 1)
+    }
+
+    pub fn append_log(&self, room: &str, record: &Value) {
         let _guard = self.log_lock.lock().unwrap();
-        let _ = log::append(&self.dir.join("log.bin"), record);
+        let path = if self.log_ready(room) { self.log_path(room, &self.me()) } else { self.pending_path(room) };
+        if log::append(&path, record).is_ok() && path == self.log_path(room, &self.me()) {
+            self.recovered.lock().unwrap().remove(room);
+        }
     }
 
-    pub fn log_path(&self, id: &EndpointId) -> PathBuf {
-        if *id == self.ep.id() { self.dir.join("log.bin") } else { self.peer_dir(id).join("log.bin") }
+    pub fn settle(&self, room: &str) {
+        let pending = self.pending_path(room);
+        let _guard = self.log_lock.lock().unwrap();
+        if !pending.exists() || !self.log_ready(room) {
+            return;
+        }
+        let own = self.log_path(room, &self.me());
+        for record in log::scan(&pending, 0).0 {
+            let _ = log::append(&own, &record);
+        }
+        let _ = std::fs::remove_file(pending);
+        self.recovered.lock().unwrap().remove(room);
     }
 
-    pub fn log(&self, id: &EndpointId) -> Arc<Vec<Value>> {
-        let path = self.log_path(id);
+    pub fn log(&self, path: &Path) -> Arc<Vec<Value>> {
         let mut cache = self.logs.lock().unwrap();
-        let entry = cache.entry(path.clone()).or_default();
-        let len = file_len(&path);
+        let entry = cache.entry(path.to_path_buf()).or_default();
+        let len = file_len(path);
         if len < entry.1 {
             *entry = Default::default();
         }
         if len > entry.1 {
-            let (more, used) = log::scan(&path, entry.1);
+            let (more, used) = log::scan(path, entry.1);
             if !more.is_empty() {
                 Arc::make_mut(&mut entry.0).extend(more);
             }
@@ -166,8 +202,12 @@ impl Core {
         entry.0.clone()
     }
 
-    pub fn own_log(&self) -> Arc<Vec<Value>> {
-        self.log(&self.ep.id())
+    pub fn room_log(&self, room: &str, id: &str) -> Arc<Vec<Value>> {
+        self.log(&self.log_path(room, id))
+    }
+
+    pub fn own_log(&self, room: &str) -> Arc<Vec<Value>> {
+        self.room_log(room, &self.me())
     }
 
     pub fn save_settings(&self) {
@@ -177,7 +217,6 @@ impl Core {
             "limit_mbps": *self.limit_mbps.lock().unwrap(),
             "audio_process": *self.audio_process.lock().unwrap(),
             "keep_days": *self.keep_days.lock().unwrap(),
-            "removed": *self.removed.lock().unwrap(),
             "deleted_sets": *self.deleted.lock().unwrap(),
             "source": self.engine.source.lock().unwrap().clone(),
             "mic": self.engine.mic.lock().unwrap().clone(),
@@ -185,10 +224,6 @@ impl Core {
             "layout": *self.layout.lock().unwrap(),
         });
         let _ = std::fs::write(self.dir.join("settings.json"), value.to_string());
-    }
-
-    pub fn peer_dir(&self, id: &EndpointId) -> PathBuf {
-        self.dir.join("peer").join(short(id))
     }
 
     pub fn has_peer(&self, id: &EndpointId) -> bool {
@@ -391,6 +426,8 @@ fn create_invite(core: State<Arc<Core>>, reuse: bool) -> String {
 #[tauri::command]
 fn cancel_invites(core: State<Arc<Core>>) {
     core.invites.lock().unwrap().clear();
+    core.asks.lock().unwrap().clear();
+    net::broadcast(&core, net::asks_message(&core));
 }
 
 #[tauri::command]
@@ -443,19 +480,21 @@ fn set_limit(core: State<Arc<Core>>, mbps: Option<f64>) {
 }
 
 #[tauri::command]
-fn note_action(core: State<Arc<Core>>, kind: String, id: i64, text: String) {
+fn event_action(core: State<Arc<Core>>, kind: String, id: i64, text: String) {
     let kind = match kind.as_str() {
-        "edit" => "note_edit",
-        "delete" => "note_del",
-        "restore" => "note_restore",
+        "edit" => "event_edit",
+        "delete" => "event_del",
+        "restore" => "event_restore",
         _ => return,
     };
-    core.append_log(&json!({"k": kind, "id": id, "t_us": now_us(), "text": clean_note(&text)}));
+    let text = clean_note(&text);
+    core.append_log(&core.active_room_id(), &json!({"k": kind, "id": id, "t_us": now_us(), "text": text, "tags": room::tags(&text)}));
+    party::send(&core);
 }
 
 #[tauri::command]
 fn log_layout(core: State<Arc<Core>>, layout: Value) {
-    core.append_log(&json!({"k": "layout", "t_us": now_us(), "layout": layout}));
+    core.append_log(&core.active_room_id(), &json!({"k": "layout", "t_us": now_us(), "layout": layout}));
 }
 
 #[tauri::command]
@@ -508,12 +547,32 @@ fn add_note(core: State<Arc<Core>>, text: String, at_us: i64) {
         return;
     }
     let id = now_us();
-    core.append_log(&json!({"k": "note", "id": id, "t_us": id, "room": core.active_room_id(), "at_us": at_us, "text": text}));
+    core.append_log(&core.active_room_id(), &json!({"k": "event", "id": id, "t_us": id, "kind": "note", "target": {"t_us": at_us}, "text": text, "tags": room::tags(&text)}));
+    party::send(&core);
 }
 
 #[tauri::command]
-fn control(core: State<Arc<Core>>, cmd: String, wall_us: i64, set: String, sent_us: i64, origin: String) {
-    net::broadcast(&core, json!({"t": "ctl", "cmd": cmd, "wall_us": wall_us, "set": set, "sent_us": sent_us, "origin": origin}));
+fn answer_ask(core: State<Arc<Core>>, id: String, approve: bool) {
+    net::answer(&core, &id, approve);
+}
+
+#[tauri::command]
+fn focus_set(core: State<Arc<Core>>, set: Option<String>) {
+    *core.focus.lock().unwrap() = set;
+}
+
+#[tauri::command]
+fn party_on(core: State<Arc<Core>>, on: bool, view: Value) {
+    let me = core.me();
+    core.party.lock().unwrap().turn(on, &me, &view, &core.active_room_id());
+    party::send(&core);
+}
+
+#[tauri::command]
+fn party_act(core: State<Arc<Core>>, view: Value) {
+    let me = core.me();
+    core.party.lock().unwrap().act(&me, &view, now_us());
+    party::send(&core);
 }
 
 async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
@@ -525,10 +584,9 @@ async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
             dir
         }
     };
-    std::fs::create_dir_all(dir.join("peer"))?;
+    std::fs::create_dir_all(&dir)?;
     debug::init(&dir);
     ffmpeg::set_data_dir(dir.clone());
-    log::repair(&dir.join("log.bin"));
     let marker = dir.join("running.marker");
     let mut recovery = marker.exists().then(|| "The app did not start properly last time.".to_string());
     let _ = std::fs::write(&marker, VERSION);
@@ -544,6 +602,9 @@ async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
             }
         }
     } else {
+        if dir.join("rooms.json").exists() || dir.join("settings.json").exists() {
+            recovery = Some("key.bin was missing, so this PC now has a new identity. Import your identity (File menu) to keep your old one.".into());
+        }
         let key = SecretKey::generate();
         std::fs::write(&key_path, key.to_bytes())?;
         key
@@ -555,6 +616,8 @@ async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
     let ep = builder.bind().await?;
     std::fs::write(dir.join("id.txt"), ep.id().to_string())?;
     let rooms: room::Rooms = read_json(&dir.join("rooms.json"));
+    data::split_old_logs(&dir, &ep.id().to_string(), &rooms.list);
+    data::repair_logs(&dir);
     let settings: Value = read_json(&dir.join("settings.json"));
     Ok(Arc::new(Core {
         dir,
@@ -571,7 +634,6 @@ async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
         audio_process: Mutex::new(settings["audio_process"].as_str().unwrap_or_default().to_string()),
         keep_days: Mutex::new(settings["keep_days"].as_u64().map(|d| d as u32)),
         codecs: Mutex::new(default_codecs()),
-        removed: Mutex::new(strings(&settings["removed"])),
         following: Mutex::new(HashSet::new()),
         recovery: Mutex::new(recovery),
         notice: Mutex::new(String::new()),
@@ -587,6 +649,11 @@ async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
         layout: Mutex::new(settings["layout"].clone()),
         export: Mutex::new(None),
         log_lock: Mutex::new(()),
+        recovered: Mutex::new(HashSet::new()),
+        wake: tokio::sync::Notify::new(),
+        focus: Mutex::new(None),
+        asks: Mutex::new(Vec::new()),
+        party: Mutex::new(party::Party::default()),
         logs: Mutex::new(HashMap::new()),
         jsons: Mutex::new(HashMap::new()),
     }))
@@ -626,6 +693,7 @@ fn main() {
             let c = core.clone();
             std::thread::spawn(move || data::keeper(c, unhashed));
             tauri::async_runtime::spawn(net::accept_loop(core.clone()));
+            tauri::async_runtime::spawn(party::repeat(core.clone()));
             room::apply_active(&core);
             let c = core.clone();
             std::thread::spawn(move || record::supervise(c));
@@ -638,7 +706,7 @@ fn main() {
             std::thread::spawn(move || prepare_ffmpeg(&c));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug_text, save_report, start_recording, stop_recording, delete_set, open_set_folder, export_set, cancel_export, set_layout, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, set_share, set_limit, set_codecs, cancel_invites, list_sources, set_source, use_display, list_mics, set_mic, set_mix, set_audio_process, set_keep_days, note_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_note, control])
+        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug_text, save_report, start_recording, stop_recording, delete_set, open_set_folder, export_set, cancel_export, set_layout, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, set_share, set_limit, set_codecs, cancel_invites, list_sources, set_source, use_display, list_mics, set_mic, set_mix, set_audio_process, set_keep_days, event_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_note, answer_ask, focus_set, party_on, party_act])
         .run(tauri::generate_context!())
         .expect("failed to run");
 }

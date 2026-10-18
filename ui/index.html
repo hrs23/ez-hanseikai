@@ -16,6 +16,7 @@
   <span id="timer" class="timer"></span>
   <span id="starter" class="muted"></span>
 </header>
+<div id="asks" class="asks" hidden></div>
 <div id="notice" class="notice" hidden><span id="noticetext"></span><button id="updatebtn" class="primary" hidden>Update</button><button id="exportcancel" hidden>Cancel</button></div>
 
 <main id="recordtab" class="tab">
@@ -62,6 +63,7 @@
       <div id="views" class="seg" role="group" aria-label="View"></div>
       <button id="layoutplay" class="icon layoutbtn" aria-label="Change layout" aria-haspopup="true"></button>
       <span class="spacer"></span>
+      <span id="partystatus" class="muted partystatus"></span>
       <button id="wp" class="pill" aria-pressed="true">Watch Party</button>
       <button id="notestoggle" class="notestoggle" aria-expanded="false">Notes</button>
     </div>
@@ -89,6 +91,7 @@
   </section>
   <aside id="notes" class="col notes">
     <h3 id="noteshead">Notes</h3>
+    <input id="filter" type="search" placeholder="Filter" autocomplete="off" aria-label="Filter notes">
     <div id="notelist" class="notelist"></div>
     <form id="noteform"><input id="note" placeholder="Note at this time" autocomplete="off" aria-label="Note at this time"></form>
   </aside>

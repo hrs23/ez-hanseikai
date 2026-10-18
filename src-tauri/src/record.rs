@@ -337,7 +337,7 @@ impl Sink {
         if self.start.set(Instant::now()).is_ok() && self.target.set.is_some() {
             let mut record = json!({"k": "rec", "start_us": now_us()});
             merge(&mut record, &self.meta);
-            core.append_log(&record);
+            core.append_log(&self.target.room, &record);
             if let Some(active) = core.active_set.lock().unwrap().clone() {
                 crate::room::write_set_json(core, &active, false);
             }
