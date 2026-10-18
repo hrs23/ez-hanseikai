@@ -58,6 +58,7 @@ Data lives in `%LOCALAPPDATA%\dev.ez-hanseikai.app`; the app's Files section ope
 9. No hard-coded numbers without a reason; keep the needed ones in one place.
 10. Logic comes with automated tests, kept in plain functions that run without the network, capture or UI.
 11. The repository is public: English only, made-up examples, and no secrets, personal data, real recordings or private addresses.
+12. While in early development, breaking changes are fine: the latest version only has to work with its own data, so add no migration or compatibility code for older versions.
 
 ## Development
 
