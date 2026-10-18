@@ -40,7 +40,9 @@ const DIAL_S = DIAL_RETRY_S + CONNECT_TIMEOUT_S;
 const SYNC_ROUND_S = LOG_SYNC_S * HELLO_EVERY;
 const FRAGMENT_S = SEGMENT_S / FRAGMENTS_PER_SEGMENT;
 const CRASH_AFTER_FRAGMENTS = FRAGMENTS_PER_SEGMENT / 2;
-const PORTS = { a: 9311, b: 9312, c: 9313 };
+const PORT_BASE = Number(process.env.E2E_PORT_BASE || 9311);
+const PORTS = { a: PORT_BASE, b: PORT_BASE + 1, c: PORT_BASE + 2 };
+const OLD_ROOM = "0ld0r00m";
 const NAMES = { a: "Ann", b: "Ben", c: "Cal" };
 
 const within = (s) => s * RUNNER_SLOWDOWN;
@@ -144,9 +146,53 @@ async function evaluate(app, expression) {
 const invoke = (app, cmd, args = {}) => evaluate(app, `window.__TAURI__.core.invoke(${JSON.stringify(cmd)}, ${JSON.stringify(args)})`);
 const state = (app) => invoke(app, "state");
 
+function frame(record) {
+  const body = Buffer.from(JSON.stringify(record));
+  const head = Buffer.alloc(8);
+  head.writeUInt32LE(body.length, 0);
+  head.writeUInt32LE(crc32(body), 4);
+  return Buffer.concat([head, body]);
+}
+
+function crc32(bytes) {
+  let crc = ~0;
+  for (const b of bytes) {
+    crc ^= b;
+    for (let i = 0; i < 8; i++) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+  }
+  return ~crc >>> 0;
+}
+
+function oldFiles() {
+  const room = path.join("rooms", OLD_ROOM);
+  return {
+    "rec-20260101-000000.mp4": "old recording",
+    "log.bin": frame({ k: "note", text: "old note", t_us: 1 }),
+    "peer.txt": "old peer",
+    "peers.txt": "old peers",
+    [path.join("peer", "a1b2", "log.bin")]: frame({ k: "file", set: "s1", size: 1 }),
+    [path.join("legacy", "notes.json")]: "[]",
+    [path.join(room, "sets", "s1", "set.json")]: JSON.stringify({ id: "s1", players: ["someone"] }),
+    [path.join(room, "sets", "s1", "someone.mp4")]: "old member file",
+    [path.join(room, "live", "someone.mp4")]: "old live file",
+    [path.join(room, "logs", "someone.bin")]: Buffer.concat([frame({ k: "rec", set: "s1", room: OLD_ROOM, start_us: 1 }), frame({ k: "file", set: "s1", size: 15 }), frame({ k: "note", text: "hi" })]),
+  };
+}
+
+function seedOld(dir) {
+  for (const [name, body] of Object.entries(oldFiles())) {
+    fs.mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
+    fs.writeFileSync(path.join(dir, name), body);
+  }
+  fs.writeFileSync(path.join(dir, "log.old.txt"), "old log");
+  fs.writeFileSync(path.join(dir, "settings.json"), JSON.stringify({ limit_mbps: 0, keep_days: 0, source: "display:1", language: "xx", quality: "ultra", obs_port: 4455 }));
+  fs.writeFileSync(path.join(dir, "rooms.json"), JSON.stringify({ active: null, list: [{ id: "oldshape", title: "from an older version" }] }));
+}
+
 function start(key) {
   const home = path.join(OUT, "apps", key);
   const app = apps[key] || { key, name: NAMES[key], data: path.join(home, "data") };
+  if (key === "c" && !apps[key]) seedOld(app.data);
   fs.mkdirSync(app.data, { recursive: true });
   const env = {
     ...process.env,
@@ -564,6 +610,13 @@ async function scenario(ctx) {
     check(decode.ok && !decode.err, `export does not decode cleanly: ${decode.err.slice(0, 400)}`);
     ctx.notes.push(`export of ${duration.toFixed(1)} s with streams ${kinds.join(" ")}`);
     ffmpeg("ffmpeg", ["-v", "error", "-y", "-ss", String(duration / 2), "-i", file, "-frames:v", "1", path.join(OUT, "export-frame.png")]);
+  });
+
+  await step("C kept every file of an older version it found in its data folder", async () => {
+    for (const [name, body] of Object.entries(oldFiles())) {
+      const file = path.join(apps.c.data, name);
+      check(fs.existsSync(file) && fs.readFileSync(file).equals(Buffer.from(body)), `${name} was changed or removed`);
+    }
   });
 
   await step("removing C for the whole room stops it fetching", async () => {
