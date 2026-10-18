@@ -586,7 +586,8 @@ impl Sink {
         let path = dir.join(seg_name(open.n));
         let d_us = next_us.map_or(series.last_us - open.t_us + series.step_us.max(0), |next| next - open.t_us);
         debug::cut(&self.capture, SERIES[which], open.n, open.set.as_deref(), open.size, open.count, d_us);
-        if let Some(set) = &open.set {
+        let kept = std::fs::rename(part_of(&path), &path).is_ok();
+        if let Some(set) = open.set.as_ref().filter(|_| kept) {
             let sha = hex(&open.hasher.finalize());
             if !self.cap_logged.swap(true, Ordering::Relaxed) {
                 log_cap(core, &self.room, &self.capture, &read_json(&self.dir.join(CAP)));
@@ -594,7 +595,6 @@ impl Sink {
             data::mark(core, &self.dir, &format!("{}/{}", SERIES[which], seg_name(open.n)), open.size, true);
             core.append_log(&self.room, &seg_record(&self.capture, SERIES[which], open.n, set, open.t_us, d_us, open.size, &sha));
         }
-        let _ = std::fs::rename(part_of(&path), &path);
         let _ = std::fs::remove_file(dir.join(OPEN));
     }
 
