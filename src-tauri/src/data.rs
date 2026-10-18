@@ -173,8 +173,15 @@ pub fn checked(core: &Core, dir: &Path, name: &str, size: u64) -> Option<bool> {
     })
 }
 
+fn forget_deleted(core: &Core, path: &Path) {
+    if !path.exists() {
+        core.jsons.lock().unwrap().remove(path);
+    }
+}
+
 pub fn mark(core: &Core, dir: &Path, name: &str, size: u64, ok: bool) {
     let _guard = CHECKS_LOCK.lock().unwrap();
+    forget_deleted(core, &dir.join(CHECKS));
     let mut all = core.with_json(&dir.join(CHECKS), |v| if v.is_object() { v.clone() } else { json!({}) });
     all[name] = json!({"size": size, "ok": ok});
     core.write_json(&dir.join(CHECKS), all);
@@ -182,6 +189,7 @@ pub fn mark(core: &Core, dir: &Path, name: &str, size: u64, ok: bool) {
 
 fn unmark(core: &Core, dir: &Path, name: &str) {
     let _guard = CHECKS_LOCK.lock().unwrap();
+    forget_deleted(core, &dir.join(CHECKS));
     let mut all = core.with_json(&dir.join(CHECKS), |v| v.clone());
     if let Some(map) = all.as_object_mut() {
         if map.remove(name).is_some() {
