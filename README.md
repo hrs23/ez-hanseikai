@@ -12,6 +12,7 @@ Work in progress. See [the design](docs/design.md).
 - Never touches the game: it only captures the screen and the game's sound, never injects code, draws overlays or reads game memory.
 - No cloud: recordings and notes go straight to your teammates and stay on your PCs.
 - Nothing is lost by one person's delete: everyone keeps their own copy.
+- Analysis is done by plugins that only read the recordings; each can be turned on or off on its own.
 - Free and open source.
 
 ## Install
