@@ -81,12 +81,12 @@ impl Party {
         merge_heads(&mut self.heads, heads);
     }
 
-    pub fn turn(&mut self, on: bool, me: &str, view: &Value, room: &str) {
+    pub fn turn(&mut self, on: bool, me: &str, view: &Value, room: &str, now_us: i64) {
         self.on = on;
         self.sent = None;
         if on {
             self.enter(room);
-            self.shared = shared_from(view, 0, 0, me);
+            self.shared = shared_from(view, 0, -now_us, me);
         }
     }
 
@@ -167,8 +167,10 @@ impl Party {
         out
     }
 
-    pub fn viewers(&self, now: Instant) -> usize {
-        1 + self.viewers.values().filter(|v| now.duration_since(v.seen) < SEEN && v.set == self.shared["set"]).count()
+    pub fn watching(&self, now: Instant) -> Vec<String> {
+        let mut out: Vec<String> = self.viewers.iter().filter(|(_, v)| now.duration_since(v.seen) < SEEN && v.set == self.shared["set"]).map(|(id, _)| id.clone()).collect();
+        out.sort();
+        out
     }
 }
 
@@ -227,7 +229,7 @@ pub fn state_json(core: &Core, own: &Heads) -> Value {
     let now = Instant::now();
     let me = core.me();
     let status = party.status(&me, own, progress, now);
-    json!({"on": true, "shared": party.shared, "status": status, "viewers": party.viewers(now), "typing": party.typists(now)})
+    json!({"on": true, "shared": party.shared, "status": status, "watching": party.watching(now), "typing": party.typists(now)})
 }
 
 pub async fn repeat(core: Arc<Core>) {
@@ -255,7 +257,7 @@ mod tests {
 
     fn party(me: &str) -> Party {
         let mut p = Party::default();
-        p.turn(true, me, &view("s1", 0), "r");
+        p.turn(true, me, &view("s1", 0), "r", 1_000);
         p
     }
 
@@ -291,6 +293,43 @@ mod tests {
         assert!(new.receive("a", &old.message("r", &Heads::new(), (None, false), Instant::now()), 0, "r", Instant::now()));
         assert_eq!(new.shared["set"], "s2");
         assert!(!old.receive("z", &new.message("r", &Heads::new(), (None, false), Instant::now()), 0, "r", Instant::now()));
+    }
+
+    #[test]
+    fn turning_on_joins_the_party_without_moving_it() {
+        let mut first = Party::default();
+        first.turn(true, "z", &view("s1", 0), "r", 1_000);
+        let mut joiner = Party::default();
+        joiner.turn(true, "a", &view("s7", 0), "r", 5_000);
+        assert!(joiner.receive("z", &first.message("r", &Heads::new(), (None, false), Instant::now()), 0, "r", Instant::now()));
+        assert_eq!(joiner.shared["set"], "s1");
+        assert!(!first.receive("a", &joiner.message("r", &Heads::new(), (None, false), Instant::now()), 0, "r", Instant::now()));
+        assert_eq!(first.shared["set"], "s1");
+        joiner.act("a", &view("s7", 0), 6_000);
+        assert!(first.receive("a", &joiner.message("r", &Heads::new(), (None, false), Instant::now()), 0, "r", Instant::now()));
+        assert_eq!(first.shared["set"], "s7");
+    }
+
+    #[test]
+    fn rejoining_takes_the_running_state_again() {
+        let (mut a, mut b) = (party("a"), party("b"));
+        a.act("a", &view("s2", 0), 10);
+        b.receive("a", &a.message("r", &Heads::new(), (None, false), Instant::now()), 0, "r", Instant::now());
+        a.turn(false, "a", &Value::Null, "r", 20);
+        b.act("b", &view("s3", 0), 30);
+        a.turn(true, "a", &view("s1", 0), "r", 40);
+        assert!(a.receive("b", &b.message("r", &Heads::new(), (None, false), Instant::now()), 0, "r", Instant::now()));
+        assert_eq!(a.shared["set"], "s3");
+    }
+
+    #[test]
+    fn watching_lists_others_on_the_same_session() {
+        let mut a = party("a");
+        a.receive("c", &json!({"room": "r", "shared": {"seq": 0, "set": "s1"}}), 0, "r", Instant::now());
+        a.receive("b", &json!({"room": "r", "shared": {"seq": 0, "set": "s1"}}), 0, "r", Instant::now());
+        a.receive("d", &json!({"room": "r", "shared": {"seq": 0, "set": "s9"}}), 0, "r", Instant::now());
+        assert_eq!(a.watching(Instant::now()), vec!["b".to_string(), "c".to_string()]);
+        assert!(a.watching(Instant::now() + SEEN).is_empty());
     }
 
     #[test]
@@ -348,7 +387,7 @@ mod tests {
     fn other_rooms_and_off_are_ignored() {
         let mut a = party("a");
         assert!(!a.receive("b", &json!({"room": "other", "shared": {"seq": 9}}), 0, "r", Instant::now()));
-        a.turn(false, "a", &Value::Null, "r");
+        a.turn(false, "a", &Value::Null, "r", 2_000);
         assert!(!a.receive("b", &json!({"room": "r", "shared": {"seq": 9}}), 0, "r", Instant::now()));
         assert!(a.caps().is_none());
     }

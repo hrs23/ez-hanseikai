@@ -675,7 +675,7 @@ fn focus_set(core: State<Arc<Core>>, set: Option<String>) {
 #[tauri::command]
 fn party_on(core: State<Arc<Core>>, on: bool, view: Value) {
     let me = core.me();
-    core.party.lock().unwrap().turn(on, &me, &view, &core.active_room_id());
+    core.party.lock().unwrap().turn(on, &me, &view, &core.active_room_id(), now_us());
     party::send(&core);
 }
 
