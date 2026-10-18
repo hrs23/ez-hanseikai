@@ -2,6 +2,7 @@
 - Keep the docs minimal: only what you need to run or change the app, in README.md and `docs/`.
 - Never touch the game process, so anti-cheat has nothing to object to: capture the screen with Windows Graphics Capture and game sound with per-process audio capture, never inject code, draw overlays or read game memory, and detect game events only from the captured picture and sound.
 - The repository is public, so write everything in English and never commit secrets, personal data, real recordings or notes, or private hostnames and addresses. Use made-up examples.
-- Everyday features that any review needs live in the app; game- or purpose-specific analysis lives in plugins.
+- Everyday features that any review needs live in the app; game-specific analysis lives in plugins.
 - Plugins are self-contained: each one runs as its own program, reads only recordings and set information, writes only events, depends on no other plugin and can be turned on or off on its own. The app knows nothing about any plugin's internals and shows every plugin's events the same way.
 - One mechanism per job: notes, markers and plugin results are all events; the UI shows each action and piece of information in one place, with no explanatory text.
+- Avoid hard-coded numbers; keep the ones you need in one place, with the reason.
