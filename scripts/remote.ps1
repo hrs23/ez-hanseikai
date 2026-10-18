@@ -1,4 +1,4 @@
-param([string]$AppArgs = "", [switch]$Installer)
+param([switch]$Installer)
 $ErrorActionPreference = "Stop"
 $env:Path += ";$env:USERPROFILE\.cargo\bin"
 $root = Join-Path $env:USERPROFILE "ezh"
@@ -24,7 +24,7 @@ if ($Installer) {
 }
 if ($LASTEXITCODE -ne 0) { exit 1 }
 $exe = Join-Path $root "src-tauri\target\release\ez-hanseikai.exe"
-schtasks /Create /TN ezh-run /TR "`"$exe`" $AppArgs" /SC ONCE /ST 00:00 /IT /F | Out-Null
+schtasks /Create /TN ezh-run /TR "`"$exe`"" /SC ONCE /ST 00:00 /IT /F | Out-Null
 schtasks /Run /TN ezh-run | Out-Null
 Start-Sleep 5
 schtasks /Delete /TN ezh-run /F | Out-Null

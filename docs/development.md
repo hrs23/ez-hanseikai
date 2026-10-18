@@ -18,7 +18,7 @@ Releases do not contain ffmpeg: the app downloads a pinned build into its data f
 
 To run a second instance on one PC for testing, set `EZH_DIR` to a folder inside the app data folder (it holds that instance's identity key, recordings and log) and, for a separate WebView2 profile, `WEBVIEW2_USER_DATA_FOLDER`.
 
-To try a change on another Windows PC over SSH without pushing: `scripts/deploy.sh <user@host>`. It sends the working tree, builds, and starts the app. `APP_ARGS="--peer <id> --record 20 --audio-pid <pid>"` connects to a peer and records for 20 seconds. Set `SCRIPT=capture.ps1`, `audio.ps1` or `record.ps1` to also run a screen capture, a per-process audio capture or a combined recording check. `record-run.ps1 -TargetPid <pid>` records a running app instead of the test tone.
+To try a change on another Windows PC over SSH without pushing: `scripts/deploy.sh <user@host>`. It sends the working tree, builds, and starts the app.
 
 A deploy builds without an installer (`tauri build --no-bundle`); set `INSTALLER=1` to also build the installer.
 
