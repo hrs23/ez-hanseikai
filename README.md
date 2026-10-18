@@ -2,7 +2,7 @@
 
 Team reviews made ez.
 
-A Windows app for recording and reviewing team games together. Each player records their own screen and game sound; recordings and notes reach the others while they are still recording, so the team can review the last match while the next one records.
+A Windows app for recording and reviewing sessions together, made for team games and usable for anything people do on their own screens at the same time. Each person records their own screen, app sound and voice; recordings and notes reach the others while they are still recording, so the team can review the last match while the next one records.
 
 Work in progress. See [the design](docs/design.md).
 
