@@ -67,13 +67,14 @@ Part of the app. Drag on a paused frame to draw: pen, arrow and a fading laser, 
 
 - Analysis only: a plugin reads recordings (picture and sound) and set information and writes events. It has no UI; the app shows every plugin's events the same way.
 - Self-contained: its own program, depending on no other plugin and turned on or off on its own. The app knows nothing about its internals.
-- Chosen per room with their settings. One member, the room's analysis member (the creator, or the next by a fixed order), runs them for everyone and shares the results through its log, so everyone sees the same version and settings. Each person only chooses which results to show.
+- Chosen per room with their settings, so everyone gets results from the same plugin versions and settings. Each person only chooses which results to show.
+- Members share the work: a job is one plugin version and settings on one file, and any member that holds the file and is idle claims it in its log, runs it and shares the results there. Each member takes its own recording first. A claim that is not finished in time can be taken by another member; a job done twice gives the same result and is shown once.
 - Jobs run per set file after recording by default, pause while recording, resume, and skip inputs already done by the same version. A light plugin may be allowed to run while recording.
 - Official plugins only, kept in this repository and bundled.
 
 ## Transcription (planned)
 
-A plugin that turns voice into range events with Whisper on the analysis member's PC, with a choice of models. Shown as subtitles on the video (switchable) and as a conversation list that scrolls with playback and seeks on click.
+A plugin that turns voice into range events with Whisper on whichever member runs the job, with a choice of models. Shown as subtitles on the video (switchable) and as a conversation list that scrolls with playback and seeks on click.
 
 ## Export
 
@@ -95,7 +96,7 @@ File > Export set writes one video on this PC, like a screen recording of the Pl
 - Per-member receive volume and mute.
 - Events beyond notes: targets, tags, filtering and search.
 - Drawing.
-- Plugins and the analysis member; first an Apex plugin for match boundaries, jumping between events and chapters.
+- Plugins and shared jobs; first an Apex plugin for match boundaries, jumping between events and chapters.
 - Transcription.
 - Cleanup of leftovers from rooms left and sets deleted, and of old reports.
 - Sync state as a colour in the top bar, with per-member connection, live delay and progress in the room menu.
