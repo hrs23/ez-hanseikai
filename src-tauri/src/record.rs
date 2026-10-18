@@ -212,7 +212,7 @@ pub struct Engine {
 impl Engine {
     pub fn new(settings: &Value) -> Self {
         Self {
-            source: Mutex::new(settings["source"].clone()),
+            source: Mutex::new(if settings["source"].is_null() { sources::primary_display() } else { settings["source"].clone() }),
             mic: Mutex::new(settings["mic"].as_str().unwrap_or_default().to_string()),
             mix: Mutex::new(if settings["mix"].is_object() { settings["mix"].clone() } else { json!({}) }),
             quality: Mutex::new(settings["quality"].as_str().unwrap_or(QUALITIES[1].0).to_string()),
