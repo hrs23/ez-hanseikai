@@ -354,7 +354,12 @@ fn numbers(dir: &Path) -> Vec<u32> {
     out
 }
 
+fn changed_since(path: &Path, since: SystemTime) -> bool {
+    std::fs::metadata(path).and_then(|m| m.modified()).is_ok_and(|t| t >= since)
+}
+
 fn clean_media(core: &Core) {
+    let since = SystemTime::now() - KEEP_EVERY;
     let me = core.me();
     let active = core.active_room_id();
     let own_live = core.engine.live().map(|(room, capture, _)| (room, capture));
@@ -380,7 +385,8 @@ fn clean_media(core: &Core) {
                 let dir = owner.path().join(&capture);
                 let live = room == active && if id == me { own_live.as_ref() == Some(&(room.clone(), capture.clone())) } else { newest.as_ref() == Some(&capture) };
                 let any_kept = kept.keys().any(|(o, c, _)| *o == id && *c == capture);
-                if !any_kept && !live && !writing.iter().any(|w| w.starts_with(&dir)) {
+                let fresh = SERIES.iter().any(|series| changed_since(&dir.join(series), since));
+                if !any_kept && !live && !fresh && !writing.iter().any(|w| w.starts_with(&dir)) {
                     if std::fs::remove_dir_all(&dir).is_ok() {
                         debug::event(core, core.started, format!("removed {}", dir.strip_prefix(&core.dir).unwrap_or(&dir).display()));
                     }
@@ -394,7 +400,7 @@ fn clean_media(core: &Core) {
                     let live_from = live.then(|| present.last().copied().unwrap_or(0).saturating_sub(LIVE_KEEP - 1));
                     for n in doomed(&present, keep, live_from) {
                         let path = sdir.join(seg_name(n));
-                        if writing.contains(&path) {
+                        if writing.contains(&path) || changed_since(&path, since) {
                             continue;
                         }
                         let _ = std::fs::remove_file(part_of(&path));
