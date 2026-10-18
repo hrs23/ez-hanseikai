@@ -75,7 +75,7 @@ pub fn bitrate_kbps(width: u32, factor: f64) -> u32 {
     let pixels = width as f64 * width as f64 * WIDE.1 as f64 / WIDE.0 as f64;
     (pixels * FPS as f64 * H264_BITS_PER_PIXEL * factor / 1000.0).round() as u32
 }
-const OPEN: &str = "open.json";
+pub const OPEN: &str = "open.json";
 pub const CAP: &str = "cap.json";
 
 #[derive(Default)]

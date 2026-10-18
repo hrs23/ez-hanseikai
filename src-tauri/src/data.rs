@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::room::{self, part_of, seg_name, File, Seg, Set, INIT, SERIES};
-use crate::{debug, file_len, hex, log, now_us, read_json, short, Core};
+use crate::{debug, file_len, hex, log, now_us, read_json, record, short, Core};
 
 pub const LOW_SHARE: f64 = 0.10;
 pub const FULL_SHARE: f64 = 0.01;
@@ -385,7 +385,7 @@ fn clean_media(core: &Core) {
                 let dir = owner.path().join(&capture);
                 let live = room == active && if id == me { own_live.as_ref() == Some(&(room.clone(), capture.clone())) } else { newest.as_ref() == Some(&capture) };
                 let any_kept = kept.keys().any(|(o, c, _)| *o == id && *c == capture);
-                let fresh = SERIES.iter().any(|series| changed_since(&dir.join(series), since));
+                let fresh = SERIES.iter().any(|series| changed_since(&dir.join(series), since) || dir.join(series).join(record::OPEN).exists());
                 if !any_kept && !live && !fresh && !writing.iter().any(|w| w.starts_with(&dir)) {
                     if std::fs::remove_dir_all(&dir).is_ok() {
                         debug::event(core, core.started, format!("removed {}", dir.strip_prefix(&core.dir).unwrap_or(&dir).display()));
@@ -400,7 +400,7 @@ fn clean_media(core: &Core) {
                     let live_from = live.then(|| present.last().copied().unwrap_or(0).saturating_sub(LIVE_KEEP - 1));
                     for n in doomed(&present, keep, live_from) {
                         let path = sdir.join(seg_name(n));
-                        if writing.contains(&path) || changed_since(&path, since) {
+                        if writing.contains(&path) || changed_since(&path, since) || changed_since(&part_of(&path), since) {
                             continue;
                         }
                         let _ = std::fs::remove_file(part_of(&path));
