@@ -15,12 +15,14 @@ mod apex;
 mod transcribe;
 
 pub const FLAG: &str = "--plugin";
+pub const LINE_MAX: usize = 16 << 20;
 
 pub struct Plugin {
     pub id: &'static str,
     pub name: &'static str,
     pub version: &'static str,
     pub live: bool,
+    pub per_set: bool,
     pub options: &'static [(&'static str, &'static [&'static str])],
     pub needs: fn(&Value) -> Vec<Download>,
     pub run: fn(&Job, &mut dyn FnMut(f64)) -> Result<Output, String>,
@@ -95,7 +97,7 @@ pub fn normalize(plugin: &Plugin, settings: &Value) -> Value {
 
 pub fn manifest(plugin: &Plugin) -> Value {
     let options: Value = plugin.options.iter().map(|(key, choices)| json!({"key": key, "choices": choices, "default": choices[0]})).collect();
-    json!({"id": plugin.id, "name": plugin.name, "version": plugin.version, "live": plugin.live, "options": options})
+    json!({"id": plugin.id, "name": plugin.name, "version": plugin.version, "live": plugin.live, "per_set": plugin.per_set, "options": options})
 }
 
 pub fn missing(plugin: &Plugin, dir: &Path, settings: &Value) -> Vec<Download> {
@@ -147,14 +149,27 @@ pub fn reply(line: &str) -> Option<Reply> {
     serde_json::from_value(v["output"].clone()).ok().map(Reply::Done)
 }
 
+pub fn read_line(reader: &mut impl BufRead, max: usize) -> Option<Result<String, String>> {
+    let mut line = Vec::new();
+    match reader.take(max as u64 + 1).read_until(b'\n', &mut line) {
+        Ok(0) | Err(_) => None,
+        Ok(_) if line.len() > max => Some(Err("The plugin wrote more than the app reads in one line.".into())),
+        Ok(_) => Some(Ok(String::from_utf8_lossy(&line).trim_end().to_string())),
+    }
+}
+
 pub fn replies(stdout: ChildStdout) -> mpsc::Receiver<Reply> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if let Some(r) = reply(&line) {
-                if tx.send(r).is_err() {
-                    break;
-                }
+        let mut reader = BufReader::new(stdout);
+        while let Some(line) = read_line(&mut reader, LINE_MAX) {
+            let r = match line {
+                Ok(line) => reply(&line),
+                Err(e) => Some(Reply::Failed(e)),
+            };
+            let stop = matches!(r, Some(Reply::Failed(_)));
+            if r.is_some_and(|r| tx.send(r).is_err()) || stop {
+                break;
             }
         }
     });
@@ -268,6 +283,16 @@ mod tests {
         let done = reply(r#"{"output": {"events": [{"kind": "x", "at_s": 2.0}]}}"#);
         assert_eq!(done, Some(Reply::Done(Output { events: vec![Found { kind: "x".into(), at_s: Some(2.0), ..Default::default() }], tags: BTreeMap::new() })));
         assert_eq!(reply("noise"), None);
+    }
+
+    #[test]
+    fn reply_lines_are_capped() {
+        let mut short = std::io::Cursor::new(b"{\"progress\": 0.5}\nnext\n".to_vec());
+        assert_eq!(read_line(&mut short, 32), Some(Ok("{\"progress\": 0.5}".to_string())));
+        assert_eq!(read_line(&mut short, 32), Some(Ok("next".to_string())));
+        assert_eq!(read_line(&mut short, 32), None);
+        let mut long = std::io::Cursor::new(vec![b'x'; 100]);
+        assert!(read_line(&mut long, 32).unwrap().is_err());
     }
 
     #[test]

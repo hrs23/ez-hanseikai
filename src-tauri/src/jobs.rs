@@ -18,6 +18,8 @@ const CHECK: Duration = Duration::from_secs(2);
 const EMIT_EVERY: Duration = Duration::from_millis(250);
 const SETTINGS_HASH_BYTES: usize = 6;
 const CLAIM_SETTLE: Duration = Duration::from_secs(2 * crate::net::LOG_SYNC.as_secs());
+const STOP_WAIT: Duration = Duration::from_secs(10);
+pub const UNFINISHED_MAX: u32 = 2;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Config {
@@ -39,6 +41,7 @@ pub struct Track {
     pub done: Vec<(String, i64)>,
     pub last: BTreeMap<String, Status>,
     pub tags: Vec<((String, i64), Value)>,
+    pub unfinished: BTreeMap<String, u32>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -72,6 +75,8 @@ pub struct Running {
 
 static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
 static CANCEL: AtomicBool = AtomicBool::new(false);
+static STOP: AtomicBool = AtomicBool::new(false);
+static WORKING: AtomicBool = AtomicBool::new(false);
 
 fn capped<'a>(logs: &'a [Log], caps: Option<&'a HashMap<String, u64>>) -> impl Iterator<Item = (&'a Log, &'a [Value])> {
     logs.iter().map(move |log| {
@@ -111,10 +116,12 @@ pub fn tracks(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> HashMap<Stri
                 Some("claim") => Status::Claimed(run),
                 Some("done") => Status::Done(run),
                 Some("fail") => Status::Failed(r["error"].as_str().unwrap_or_default().to_string()),
-                Some("retry" | "yield") => Status::Retry,
+                Some("retry" | "yield" | "stop") => Status::Retry,
                 _ => continue,
             };
             let track = out.entry(key.to_string()).or_default();
+            let unfinished = track.unfinished.entry(log.owner.clone()).or_default();
+            *unfinished = if matches!(status, Status::Claimed(_)) { *unfinished + 1 } else { 0 };
             if status == Status::Done(run) {
                 track.done.push((log.owner.clone(), run));
                 track.tags.push(((log.owner.clone(), run), r["tags"].clone()));
@@ -125,15 +132,42 @@ pub fn tracks(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> HashMap<Stri
     out
 }
 
+pub fn chosen(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> HashMap<String, String> {
+    let mut counts: HashMap<(String, String), u64> = HashMap::new();
+    for (log, records) in capped(logs, caps) {
+        for r in records.iter().filter(|r| r["k"] == "seg" && r["series"] == SERIES[0]) {
+            let (Some(set), Some(capture)) = (r["set"].as_str(), r["capture"].as_str()) else { continue };
+            *counts.entry((set.to_string(), format!("{set}/{}/{capture}", log.owner))).or_default() += 1;
+        }
+    }
+    let mut out: HashMap<String, (u64, String)> = HashMap::new();
+    for ((set, file), n) in counts {
+        let better = out.get(&set).is_none_or(|(m, f)| (n, Reverse(&file)) > (*m, Reverse(f)));
+        if better {
+            out.insert(set, (n, file));
+        }
+    }
+    out.into_iter().map(|(set, (_, file))| (set, file)).collect()
+}
+
+fn once(plugin: &str) -> bool {
+    plugins::find(plugin).is_some_and(|p| p.per_set)
+}
+
+pub fn counts(plugin: &str, file: &str, chosen: &HashMap<String, String>) -> bool {
+    !once(plugin) || file.split('/').next().is_some_and(|set| chosen.get(set).is_some_and(|f| f == file))
+}
+
 fn current(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> Vec<String> {
     configs(logs, caps).iter().filter(|(_, c)| c.on).map(|(id, c)| prefix(id, c)).collect()
 }
 
 fn winners(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> Vec<((String, i64), Value)> {
     let prefixes = current(logs, caps);
+    let chosen = chosen(logs, caps);
     tracks(logs, caps)
         .into_iter()
-        .filter(|(key, _)| prefixes.iter().any(|p| key.starts_with(p.as_str())))
+        .filter(|(key, _)| prefixes.iter().any(|p| key.strip_prefix(p.as_str()).is_some_and(|file| counts(p.split('@').next().unwrap_or_default(), file, &chosen))))
         .filter_map(|(_, t)| {
             let best = t.done.iter().min()?.clone();
             let tags = t.tags.into_iter().find(|(w, _)| *w == best).map(|(_, v)| v).unwrap_or(Value::Null);
@@ -181,6 +215,7 @@ pub fn next(
     ready: impl Fn(&str, &Value) -> bool,
     configs: &BTreeMap<String, Config>,
     tracks: &HashMap<String, Track>,
+    chosen: &HashMap<String, String>,
     inputs: &[Input],
 ) -> Option<Pick> {
     let mut picks = Vec::new();
@@ -190,7 +225,7 @@ pub fn next(
             continue;
         }
         let prefix = prefix(id, config);
-        for (i, input) in inputs.iter().enumerate().filter(|(_, input)| input.here) {
+        for (i, input) in inputs.iter().enumerate().filter(|(_, input)| input.here && counts(id, &input.file, chosen)) {
             let key = format!("{prefix}{}", input.file);
             let track = tracks.get(&key);
             if track.is_some_and(|t| !t.done.is_empty()) {
@@ -209,6 +244,16 @@ pub fn next(
         }
     }
     picks.into_iter().min_by(|a, b| a.0.cmp(&b.0)).map(|(_, p)| p)
+}
+
+pub fn unfinished(me: &str, tracks: &HashMap<String, Track>) -> Vec<(String, i64)> {
+    tracks
+        .iter()
+        .filter_map(|(key, t)| match t.last.get(me) {
+            Some(Status::Claimed(run)) if t.done.is_empty() && t.unfinished.get(me).copied().unwrap_or(0) >= UNFINISHED_MAX => Some((key.clone(), *run)),
+            _ => None,
+        })
+        .collect()
 }
 
 pub fn state(track: Option<&Track>, me: &str, online: &HashSet<String>) -> (String, Value, Value) {
@@ -349,15 +394,21 @@ fn tick(core: &Arc<Core>) {
     let room = core.active_room_id();
     let (logs, configs, tracks) = snapshot(core, &room);
     let prefixes = current(&logs, None);
-    if prefixes.is_empty() {
+    if prefixes.is_empty() || !core.process_jobs.load(Ordering::Relaxed) || STOP.load(Ordering::Relaxed) {
         return;
     }
     let me = core.me();
+    for (key, run) in unfinished(&me, &tracks) {
+        tracing::warn!("job {key} stopped twice without finishing, marking it failed");
+        core.append_log(&room, &job_record("fail", &key, run, json!({"error": "Stopped twice without finishing."})));
+    }
     let inputs = inputs(core, &room, &logs, |file| open(file, &me, &prefixes, &tracks));
-    let pick = next(&me, &online(core), recording(core), &bundled(), |id, s| ready(core, id, s), &configs, &tracks, &inputs);
+    let pick = next(&me, &online(core), recording(core), &bundled(), |id, s| ready(core, id, s), &configs, &tracks, &chosen(&logs, None), &inputs);
     let Some(pick) = pick else { return };
     let (Some(plugin), Some(config)) = (plugins::find(&pick.plugin), configs.get(&pick.plugin)) else { return };
+    WORKING.store(true, Ordering::Relaxed);
     work(core, &room, plugin, config, &pick.key, &inputs[pick.input]);
+    WORKING.store(false, Ordering::Relaxed);
 }
 
 fn work(core: &Arc<Core>, room: &str, plugin: &'static Plugin, config: &Config, key: &str, input: &Input) {
@@ -369,7 +420,12 @@ fn work(core: &Arc<Core>, room: &str, plugin: &'static Plugin, config: &Config, 
         core.append_log(room, &job_record("yield", key, run, about));
         return;
     }
+    if STOP.load(Ordering::Relaxed) {
+        core.append_log(room, &job_record("stop", key, run, about));
+        return;
+    }
     CANCEL.store(false, Ordering::Relaxed);
+    tracing::info!("job {key} started on {}", input.file);
     *RUNNING.lock().unwrap() = Some(Running { room: room.into(), key: key.into(), plugin: plugin.id.into(), file: input.file.clone(), run, progress: 0.0 });
     emit(core);
     let work = work_root(core).join(run.to_string());
@@ -387,10 +443,24 @@ fn work(core: &Arc<Core>, room: &str, plugin: &'static Plugin, config: &Config, 
         work: work.clone(),
     };
     let outcome = watch(core, room, plugin, key, &job);
+    let about = json!({"plugin": plugin.id, "version": plugin.version, "file": input.file});
     match outcome {
-        Some(Ok(output)) => finish(core, room, plugin, key, run, input, &output),
-        Some(Err(error)) => core.append_log(room, &job_record("fail", key, run, json!({"plugin": plugin.id, "version": plugin.version, "file": input.file, "error": error}))),
-        None => {}
+        Some(Ok(output)) => {
+            tracing::info!("job {key} done with {} events", output.events.len());
+            finish(core, room, plugin, key, run, input, &output)
+        }
+        Some(Err(error)) => {
+            tracing::warn!("job {key} failed: {error}");
+            let mut record = job_record("fail", key, run, about);
+            record["error"] = json!(error);
+            core.append_log(room, &record);
+        }
+        None => {
+            if RUNNING.lock().unwrap().is_some() {
+                tracing::info!("job {key} stopped");
+                core.append_log(room, &job_record("stop", key, run, about));
+            }
+        }
     }
     let _ = std::fs::remove_dir_all(work);
     *RUNNING.lock().unwrap() = None;
@@ -399,7 +469,7 @@ fn work(core: &Arc<Core>, room: &str, plugin: &'static Plugin, config: &Config, 
 
 fn stale(core: &Core, room: &str, plugin: &Plugin, key: &str) -> bool {
     let logs = room::logs(core, room);
-    core.active_room_id() != room || (recording(core) && !plugin.live) || !current(&logs, None).iter().any(|p| key.starts_with(p.as_str()))
+    core.active_room_id() != room || !core.process_jobs.load(Ordering::Relaxed) || (recording(core) && !plugin.live) || !current(&logs, None).iter().any(|p| key.starts_with(p.as_str()))
 }
 
 fn watch(core: &Core, room: &str, plugin: &Plugin, key: &str, job: &plugins::Job) -> Option<Result<Output, String>> {
@@ -416,7 +486,7 @@ fn watch(core: &Core, room: &str, plugin: &Plugin, key: &str, job: &plugins::Job
                 process.kill();
                 return Some(Err("Cancelled".into()));
             }
-            if stale(core, room, plugin, key) {
+            if STOP.load(Ordering::Relaxed) || stale(core, room, plugin, key) {
                 process.kill();
                 return None;
             }
@@ -506,9 +576,10 @@ fn jobs_json(core: &Core) -> Value {
     let on: Vec<(&String, &Config, String)> = configs.iter().filter(|(_, c)| c.on).map(|(id, c)| (id, c, prefix(id, c))).collect();
     let prefixes: Vec<String> = on.iter().map(|(_, _, p)| p.clone()).collect();
     let inputs = if on.is_empty() { Vec::new() } else { inputs(core, &room, &logs, |file| open(file, &me, &prefixes, &tracks)) };
+    let chosen = chosen(&logs, None);
     let mut list = Vec::new();
     for (id, config, prefix) in &on {
-        for input in &inputs {
+        for input in inputs.iter().filter(|i| counts(id, &i.file, &chosen)) {
             let key = format!("{prefix}{}", input.file);
             let (state, by, error) = state(tracks.get(&key), &me, &online);
             list.push(json!({"job": key, "plugin": id, "version": config.version, "set": input.set, "owner": input.owner, "here": input.here, "state": state, "by": by, "error": error}));
@@ -532,6 +603,21 @@ pub fn retry_job(core: State<Arc<Core>>, job: String) {
 pub fn cancel_job() {
     if RUNNING.lock().unwrap().is_some() {
         CANCEL.store(true, Ordering::Relaxed);
+    }
+}
+
+pub fn stop_now(core: &Core) {
+    STOP.store(true, Ordering::Relaxed);
+    let Some(r) = RUNNING.lock().unwrap().take() else { return };
+    tracing::info!("job {} stopped", r.key);
+    core.append_log(&r.room, &job_record("stop", &r.key, r.run, json!({"plugin": r.plugin, "file": r.file})));
+}
+
+pub fn stop_and_wait(core: &Core) {
+    stop_now(core);
+    let started = Instant::now();
+    while WORKING.load(Ordering::Relaxed) && started.elapsed() < STOP_WAIT {
+        std::thread::sleep(EMIT_EVERY);
     }
 }
 
@@ -563,7 +649,7 @@ mod tests {
 
     fn pick(me: &str, online: &[&str], recording: bool, logs: &[Log], inputs: &[Input]) -> Option<String> {
         let online: HashSet<String> = online.iter().map(|s| s.to_string()).collect();
-        next(me, &online, recording, &BUNDLED, |_, _| true, &configs(logs, None), &tracks(logs, None), inputs).map(|p| inputs[p.input].file.clone())
+        next(me, &online, recording, &BUNDLED, |_, _| true, &configs(logs, None), &tracks(logs, None), &HashMap::new(), inputs).map(|p| inputs[p.input].file.clone())
     }
 
     fn base_logs(extra_a: Vec<Value>, extra_b: Vec<Value>) -> Vec<Log> {
@@ -629,8 +715,8 @@ mod tests {
         let online = HashSet::new();
         let live = [("transcribe", "1.0.0", true)];
         let logs = base_logs(vec![], vec![]);
-        assert!(next("a", &online, true, &live, |_, _| true, &configs(&logs, None), &tracks(&logs, None), &inputs).is_some());
-        assert!(next("a", &online, false, &live, |_, _| false, &configs(&logs, None), &tracks(&logs, None), &inputs).is_none());
+        assert!(next("a", &online, true, &live, |_, _| true, &configs(&logs, None), &tracks(&logs, None), &HashMap::new(), &inputs).is_some());
+        assert!(next("a", &online, false, &live, |_, _| false, &configs(&logs, None), &tracks(&logs, None), &HashMap::new(), &inputs).is_none());
     }
 
     #[test]
@@ -662,6 +748,31 @@ mod tests {
         let mut retried = failed;
         Arc::make_mut(&mut retried[0].records).push(job_record("retry", &key("s1/a"), 0, Value::Null));
         assert_eq!(pick("a", &[], false, &retried, &inputs).as_deref(), Some("s1/a"));
+    }
+
+    #[test]
+    fn a_job_stopped_twice_without_finishing_fails_and_a_stop_on_purpose_does_not_count() {
+        let claim = |run| job_record("claim", &key("s1/a"), run, Value::Null);
+        let once = base_logs(vec![claim(1)], vec![]);
+        assert!(unfinished("a", &tracks(&once, None)).is_empty());
+        let twice = base_logs(vec![claim(1), claim(2)], vec![]);
+        assert_eq!(unfinished("a", &tracks(&twice, None)), vec![(key("s1/a"), 2)]);
+        assert!(unfinished("b", &tracks(&twice, None)).is_empty());
+        let stopped = base_logs(vec![claim(1), job_record("stop", &key("s1/a"), 1, Value::Null), claim(2)], vec![]);
+        assert!(unfinished("a", &tracks(&stopped, None)).is_empty());
+        let inputs = [input("s1", "a", 10, true)];
+        assert_eq!(pick("a", &[], false, &stopped, &inputs).as_deref(), Some("s1/a"));
+    }
+
+    #[test]
+    fn a_plugin_for_the_whole_set_reads_the_longest_file_once() {
+        let seg = |set: &str, n: u32, capture: &str| json!({"k": "seg", "series": "v", "set": set, "n": n, "capture": capture});
+        let logs = vec![log("a", 0, vec![seg("s1", 1, "1"), seg("s1", 2, "1"), seg("s2", 1, "3")]), log("b", 0, vec![seg("s1", 1, "2"), seg("s1", 2, "2"), seg("s1", 3, "2"), seg("s2", 1, "4")])];
+        let chosen = chosen(&logs, None);
+        assert_eq!(chosen["s1"], "s1/b/2");
+        assert_eq!(chosen["s2"], "s2/a/3");
+        assert!(counts("apex-matches", "s1/b/2", &chosen) && !counts("apex-matches", "s1/a/1", &chosen));
+        assert!(counts("transcribe", "s1/a/1", &chosen));
     }
 
     fn plugin_event(run: i64, id: i64) -> Value {

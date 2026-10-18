@@ -189,7 +189,7 @@ pub struct Core {
     pub party: Mutex<party::Party>,
     pub language: Mutex<String>,
     pub hotkey: Mutex<String>,
-    pub hid_once: AtomicBool,
+    pub process_jobs: AtomicBool,
     logs: Mutex<HashMap<PathBuf, (Arc<Vec<Value>>, u64)>>,
     pub jsons: Mutex<HashMap<PathBuf, Value>>,
     pub writing: Mutex<HashSet<PathBuf>>,
@@ -276,7 +276,7 @@ impl Core {
             "language": *self.language.lock().unwrap(),
             "layout": *self.layout.lock().unwrap(),
             "hotkey": *self.hotkey.lock().unwrap(),
-            "hid_once": self.hid_once.load(Ordering::Relaxed),
+            "process_jobs": self.process_jobs.load(Ordering::Relaxed),
         });
         let _ = write_whole(&self.dir.join("settings.json"), value.to_string().as_bytes());
     }
@@ -508,8 +508,15 @@ async fn install_update(core: State<'_, Arc<Core>>) -> Result<(), String> {
     let update = core.app.updater().map_err(|e| e.to_string())?.check().await.map_err(|e| e.to_string())?.ok_or("No update is available.")?;
     let bytes = update.download(|_, _| {}, || {}).await.map_err(|e| e.to_string())?;
     update_allowed(&core)?;
-    jobs::cancel_job();
-    update.install(bytes).map_err(|e| e.to_string())
+    tracing::info!("installing version {}", update.version);
+    let c = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || jobs::stop_and_wait(&c)).await.map_err(|e| e.to_string())?;
+    data::unlock(&core.dir);
+    let installed = update.install(bytes).map_err(|e| e.to_string());
+    if installed.is_err() {
+        let _ = data::lock(&core.dir);
+    }
+    installed
 }
 
 #[tauri::command]
@@ -623,6 +630,12 @@ async fn leave_room(core: State<'_, Arc<Core>>, id: String) -> Result<(), String
 #[tauri::command]
 fn set_share(core: State<Arc<Core>>, on: bool) {
     core.share.store(on, Ordering::Relaxed);
+    core.save_settings();
+}
+
+#[tauri::command]
+fn set_process_jobs(core: State<Arc<Core>>, on: bool) {
+    core.process_jobs.store(on, Ordering::Relaxed);
     core.save_settings();
 }
 
@@ -847,7 +860,7 @@ async fn init(app: AppHandle, dir: PathBuf, left_lock: bool) -> Result<Arc<Core>
         party: Mutex::new(party::Party::default()),
         language: Mutex::new(settings["language"].as_str().unwrap_or_default().to_string()),
         hotkey: Mutex::new(settings["hotkey"].as_str().filter(|h| shell::hotkey(h).is_some()).unwrap_or(shell::DEFAULT_HOTKEY).to_string()),
-        hid_once: AtomicBool::new(settings["hid_once"].as_bool().unwrap_or(false)),
+        process_jobs: AtomicBool::new(settings["process_jobs"].as_bool().unwrap_or(true)),
         logs: Mutex::new(HashMap::new()),
         jsons: Mutex::new(HashMap::new()),
         writing: Mutex::new(HashSet::new()),

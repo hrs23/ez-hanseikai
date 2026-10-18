@@ -1030,6 +1030,7 @@ pub fn state_json(core: &Core) -> Value {
         "keep_days": *core.keep_days.lock().unwrap(),
         "invites": core.invites.lock().unwrap().len(),
         "limit_mbps": *core.limit_mbps.lock().unwrap(),
+        "process_jobs": core.process_jobs.load(Ordering::Relaxed),
         "recovery": core.recovery.lock().unwrap().clone(),
         "notice": core.notice.lock().unwrap().clone(),
         "disk": {"free": core.free_bytes.load(Ordering::Relaxed), "low": core.disk_low()},

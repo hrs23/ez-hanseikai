@@ -1563,6 +1563,7 @@ function openSettings() {
   if (st) {
     $("name").value = st.name;
     $("language").value = st.language;
+    $("jobshere").checked = st.process_jobs;
     $("hotkey").textContent = st.hotkey;
     $("hotkeyerr").hidden = true;
   }
@@ -1693,6 +1694,7 @@ $("renameinput").onkeydown = (e) => { if (e.key === "Enter" && !composing(e)) $(
 $("keepdays").onchange = () => run("set_keep_days", { days: $("keepdays").value ? Number($("keepdays").value) : null });
 $("name").onchange = () => run("set_name", { name: $("name").value });
 $("language").onchange = () => run("set_language", { language: $("language").value });
+$("jobshere").onchange = () => run("set_process_jobs", { on: $("jobshere").checked });
 $("hotkey").onclick = () => {
   listening = true;
   $("hotkey").classList.add("listening");
