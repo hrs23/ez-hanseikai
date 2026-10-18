@@ -491,6 +491,8 @@ async function scenario(ctx) {
     const pending = path.join(roomDir(c, ctx.room), "pending.bin");
     await waitFor("C holds its whole log again", within(DIAL_S + SYNC_ROUND_S * 2), () => fileSize(logFile(c, ctx.room, c.id)) >= copy.length && !fs.existsSync(pending));
     check(fs.readFileSync(logFile(c, ctx.room, c.id)).subarray(0, copy.length).equals(copy), "C's restored log differs from A's copy of it");
+    const all = [a, b, c];
+    await allSee(all, "everyone connected again", within(DIAL_S * 2), (st, app) => connected(st, all.filter((x) => x !== app).map((x) => x.id)));
     const id = await invoke(c, "add_event", { kind: "note", text: "After the restore", target: {}, values: null });
     await allSee([a, b], "C's note written after the restore", within(REQUEST_TIMEOUT_S + DIAL_S + LOG_SYNC_S), (st) => st.events.some((e) => e.key === `${c.id}/${id}`));
   });
