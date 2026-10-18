@@ -482,8 +482,30 @@ async fn stop_recording(core: State<'_, Arc<Core>>) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn delete_set(core: State<Arc<Core>>, room: String, set: String) -> Result<(), String> {
-    room::delete_set(&core, &room, &set)
+async fn delete_set(core: State<'_, Arc<Core>>, room: String, set: String) -> Result<(), String> {
+    let core = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || room::delete_set(&core, &room, &set)).await.map_err(|e| e.to_string())?
+}
+
+fn update_allowed(core: &Core) -> Result<(), String> {
+    if core.active_set.lock().unwrap().is_some() {
+        return Err("Stop recording before updating.".into());
+    }
+    if core.export.lock().unwrap().is_some() {
+        return Err("Wait for the export to finish before updating.".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn install_update(core: State<'_, Arc<Core>>) -> Result<(), String> {
+    use tauri_plugin_updater::UpdaterExt;
+    update_allowed(&core)?;
+    let update = core.app.updater().map_err(|e| e.to_string())?.check().await.map_err(|e| e.to_string())?.ok_or("No update is available.")?;
+    let bytes = update.download(|_, _| {}, || {}).await.map_err(|e| e.to_string())?;
+    update_allowed(&core)?;
+    jobs::cancel_job();
+    update.install(bytes).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -648,13 +670,19 @@ async fn data_info(core: State<'_, Arc<Core>>) -> Result<Value, String> {
 }
 
 #[tauri::command]
-fn reset(core: State<Arc<Core>>, everything: bool, confirm: String) -> Result<(), String> {
+async fn reset(core: State<'_, Arc<Core>>, everything: bool, confirm: String) -> Result<(), String> {
     if everything && confirm != "RESET" {
         return Err("Type RESET to confirm.".into());
     }
-    room::stop_set(core.inner());
-    data::reset(&core.dir, everything);
-    core.app.restart()
+    let core = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        room::stop_set(&core);
+        export::cancel(&core);
+        data::reset(&core.dir, everything);
+        core.app.restart()
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -875,7 +903,7 @@ fn main() {
             std::thread::spawn(move || jobs::worker(c));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug::debug_view, debug::debug_report, debug::set_report_sharing, save_report, start_recording, stop_recording, delete_set, open_set_folder, export_set, cancel_export, set_layout, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, set_share, set_limit, set_codecs, cancel_invites, list_sources, set_source, use_display, list_mics, set_mic, set_mix, set_audio_process, set_keep_days, event_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_event, answer_ask, focus_set, party_on, party_act, jobs::room_plugins, jobs::set_room_plugin, jobs::prepare_plugin, jobs::jobs, jobs::retry_job, jobs::cancel_job, set_quality, set_language, rename_room, check_room, draw, party_typing, open_debug, mark, set_hotkey, retry_ffmpeg])
+        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug::debug_view, debug::debug_report, debug::set_report_sharing, save_report, start_recording, stop_recording, delete_set, open_set_folder, export_set, cancel_export, set_layout, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, set_share, set_limit, set_codecs, cancel_invites, list_sources, set_source, use_display, list_mics, set_mic, set_mix, set_audio_process, set_keep_days, event_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_event, answer_ask, focus_set, party_on, party_act, jobs::room_plugins, jobs::set_room_plugin, jobs::prepare_plugin, jobs::jobs, jobs::retry_job, jobs::cancel_job, install_update, set_quality, set_language, rename_room, check_room, draw, party_typing, open_debug, mark, set_hotkey, retry_ffmpeg])
         .run(tauri::generate_context!())
         .expect("failed to run");
 }

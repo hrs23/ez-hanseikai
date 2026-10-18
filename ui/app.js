@@ -1225,7 +1225,7 @@ async function installUpdate() {
   installAfter = false;
   updateText = t("Installing {version}… The app will restart.", { version: update.version });
   renderNotices();
-  await update.downloadAndInstall().catch((e) => { warn(e); updateText = ""; fail(t("The update failed")); renderNotices(); });
+  await invoke("install_update").catch((e) => { warn(e); updateText = ""; available = update; fail(e); renderNotices(); });
 }
 
 function renderCapture() {

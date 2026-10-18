@@ -442,7 +442,7 @@ pub fn setup(app: &tauri::App, core: Arc<Core>) -> tauri::Result<()> {
             "import-identity" => dialog(import_identity),
             "exit" => dialog(exit_app),
             "show" => show_window(app),
-            "toggle-recording" => toggle_recording(core),
+            "toggle-recording" => dialog(|_, core| toggle_recording(core)),
             "mark" => marked(core),
             "debug" => open_debug(app),
             "github" => open_url(REPO),
