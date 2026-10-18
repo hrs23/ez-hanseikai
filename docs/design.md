@@ -18,6 +18,9 @@ One key per person, made on first start; its public half is the person's ID ever
 
 - Without a room, the Record tab shows Create room, Join with a code and recent rooms. The top bar shows the room name and who is online; the room menu switches, invites, lists members and leaves.
 - Invite codes work once, only while the inviter's app runs, and can be cancelled. Any member can invite, and rename the room (planned). Joined rooms stay in the list; one is open at a time.
+- A room is meant to be kept and reused, so its history builds up; a new room starts with its own empty history.
+- Joining needs approval (planned): someone using a code asks to join, every member online sees "<name> wants to join: Approve / Decline", and nothing of the room is sent until a member approves.
+- Any member can remove a member for the whole room (planned): everyone stops sending to them from then on, and everyone sees who removed whom. What they already received stays with them.
 - Leaving a room removes it from this PC only.
 
 ## Live and recording
