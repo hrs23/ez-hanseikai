@@ -11,16 +11,10 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tauri::Emitter;
-use windows_capture::capture::{CaptureControl, Context, GraphicsCaptureApiHandler};
-use windows_capture::frame::Frame;
-use windows_capture::graphics_capture_api::InternalCaptureControl;
-use windows_capture::monitor::Monitor;
-use windows_capture::settings::{
-    ColorFormat, CursorCaptureSettings, DirtyRegionSettings, DrawBorderSettings, GraphicsCaptureItemType,
-    MinimumUpdateIntervalSettings, SecondaryWindowSettings, Settings,
-};
+use windows_capture::capture::CaptureControl;
 
 use crate::audio::{self, Audio, CHANNELS, SAMPLE_RATE};
+use crate::capture::{start_capture, Capture};
 use crate::ffmpeg::{self, FRAGMENTED};
 use crate::room::{part_of, seg_name, INIT, SERIES};
 use crate::sources::{self, Found, Item};
@@ -30,12 +24,12 @@ use crate::{data, debug, hex, media, merge, now_us, read_json, write_whole, Core
 pub type Err = Box<dyn std::error::Error + Send + Sync>;
 
 pub const FPS: u32 = 30;
+pub(crate) const FRAME_GAP: Duration = Duration::from_millis(30);
 pub const FRAGMENTS_PER_SEGMENT: u32 = 4;
 const H264_BITS_PER_PIXEL: f64 = 0.2;
 pub const AUDIO_KBPS: u32 = 128;
 const QUEUE_SIZE: &str = "512";
 const VOICE_FRAGMENT_US: &str = "1000000";
-const FRAME_GAP: Duration = Duration::from_millis(30);
 const REPEAT_AFTER: Duration = Duration::from_millis(250);
 const REPEAT_POLL: Duration = Duration::from_millis(100);
 const PCM_FRAME_BYTES: u64 = 4;
@@ -54,7 +48,6 @@ const FEED_GAP: Duration = Duration::from_secs(2);
 const DROP_AFTER: u32 = 3;
 const FINISH_WAIT: Duration = Duration::from_secs(10);
 const CUT_WAIT: Duration = Duration::from_secs(3);
-const PROBE_WAIT: Duration = Duration::from_secs(2);
 const POLL: Duration = Duration::from_millis(20);
 const RENAME_TRIES: u32 = 10;
 const RENAME_GAP: Duration = Duration::from_millis(50);
@@ -205,8 +198,8 @@ pub struct Engine {
     pub audio: [Mutex<Option<Audio>>; 2],
     pub peaks: [AtomicU32; 2],
     video: Mutex<Option<Video>>,
-    canvas: Mutex<Option<(u32, u32)>>,
-    last: Mutex<(Arc<Vec<u8>>, (u32, u32), Instant)>,
+    pub(crate) canvas: Mutex<Option<(u32, u32)>>,
+    pub(crate) last: Mutex<(Arc<Vec<u8>>, (u32, u32), Instant)>,
     failures: AtomicU32,
     strikes: Mutex<(&'static str, u32)>,
     retry_at: Mutex<Instant>,
@@ -350,14 +343,17 @@ fn encode_command(size: (u32, u32), out: (u32, u32), kbps: u32, chosen: (&str, &
     } else {
         command
             .args(["-use_wallclock_as_timestamps", "1", "-thread_queue_size", QUEUE_SIZE])
-            .args(["-f", "rawvideo", "-pix_fmt", "bgra", "-video_size", &format!("{}x{}", size.0, size.1), "-i", "-"]);
+            .args(["-f", "rawvideo", "-pix_fmt", "nv12", "-video_size", &format!("{}x{}", out.0, out.1), "-i", "-"]);
         for port in inputs {
             command.args(["-thread_queue_size", QUEUE_SIZE, "-f", "s16le", "-ar", &rate, "-ac", &channels, "-i", &format!("tcp://127.0.0.1:{port}")]);
         }
     }
+    command.args(["-map", "0:v", "-map", "1:a"]);
+    if crate::test_mode() {
+        command.args(["-vf", &format!("scale={}:{}:flags=fast_bilinear,format=yuv420p", out.0, out.1)]);
+    }
     command
-        .args(["-map", "0:v", "-map", "1:a"])
-        .args(["-vf", &format!("scale={}:{}:flags=fast_bilinear,format=yuv420p", out.0, out.1), "-r", &fps])
+        .args(["-r", &fps, "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv"])
         .args(["-c:v", chosen.0, "-bf", "0", "-g", &fps, "-b:v", &format!("{kbps}k")]);
     if chosen.0 == ffmpeg::FALLBACK.0 {
         command.args(["-preset", "ultrafast"]);
@@ -629,7 +625,11 @@ impl Sink {
         let _ = std::fs::remove_file(dir.join(OPEN));
     }
 
-    fn write_video(&self, frame: Arc<Vec<u8>>) {
+    pub(crate) fn out(&self) -> (u32, u32) {
+        self.out
+    }
+
+    pub(crate) fn write_video(&self, frame: Arc<Vec<u8>>) {
         if self.closed.load(Ordering::Relaxed) {
             return;
         }
@@ -769,14 +769,14 @@ pub fn debug_json(core: &Core) -> Value {
     })
 }
 
-fn current_sink(core: &Arc<Core>, canvas: Option<(u32, u32)>) -> Option<Arc<Sink>> {
+pub(crate) fn current_sink(core: &Arc<Core>, canvas: Option<(u32, u32)>) -> Option<Arc<Sink>> {
     let e = &core.engine;
     let want = want(core);
     let usable = usable_codecs(core);
     let recording = core.active_set.lock().unwrap().is_some();
     let mut slot = e.sink.lock().unwrap();
     let stale = slot.as_ref().map(|sink| {
-        let resized = !recording && canvas.is_some_and(|c| c != sink.size);
+        let resized = !recording && canvas.is_some_and(|c| scaled(c, quality_width(&sink.quality)) != sink.out);
         let codec = ffmpeg::pick(&usable).0 != sink.encoder && (!recording || !usable.iter().any(|c| c == sink.codec));
         let requality = !recording && *e.quality.lock().unwrap() != sink.quality;
         (sink.dead.load(Ordering::Relaxed), resized || codec || requality || want.as_deref() != Some(sink.room.as_str()))
@@ -885,136 +885,6 @@ pub fn recover(core: &Core) {
     }
 }
 
-fn fit(src: &[u8], (w, h): (u32, u32), (cw, ch): (u32, u32), out: &mut Vec<u8>) {
-    out.clear();
-    out.resize((cw * ch * 4) as usize, 0);
-    let scale = (cw as f64 / w as f64).min(ch as f64 / h as f64);
-    let (dw, dh) = (((w as f64 * scale) as u32).clamp(1, cw) as usize, ((h as f64 * scale) as u32).clamp(1, ch) as usize);
-    let (ox, oy) = ((cw as usize - dw) / 2, (ch as usize - dh) / 2);
-    let (w, h) = (w as usize, h as usize);
-    for y in 0..dh {
-        let row = y * h / dh * w * 4;
-        let base = ((oy + y) * cw as usize + ox) * 4;
-        for x in 0..dw {
-            let from = row + x * w / dw * 4;
-            out[base + x * 4..base + x * 4 + 4].copy_from_slice(&src[from..from + 4]);
-        }
-    }
-}
-
-struct Probe(Arc<AtomicBool>);
-
-impl GraphicsCaptureApiHandler for Probe {
-    type Flags = Arc<AtomicBool>;
-    type Error = Err;
-
-    fn new(ctx: Context<Self::Flags>) -> Result<Self, Self::Error> {
-        Ok(Self(ctx.flags))
-    }
-
-    fn on_frame_arrived(&mut self, _frame: &mut Frame, _control: InternalCaptureControl) -> Result<(), Self::Error> {
-        self.0.store(true, Ordering::Relaxed);
-        Ok(())
-    }
-}
-
-struct Capture {
-    core: Arc<Core>,
-    raw: Vec<u8>,
-    fitted: Vec<u8>,
-    last: Instant,
-}
-
-impl GraphicsCaptureApiHandler for Capture {
-    type Flags = Arc<Core>;
-    type Error = Err;
-
-    fn new(ctx: Context<Self::Flags>) -> Result<Self, Self::Error> {
-        Ok(Self { core: ctx.flags, raw: Vec::new(), fitted: Vec::new(), last: Instant::now() - FRAME_GAP })
-    }
-
-    fn on_frame_arrived(&mut self, frame: &mut Frame, _control: InternalCaptureControl) -> Result<(), Self::Error> {
-        let (w, h) = (frame.width(), frame.height());
-        debug::frame(debug::ARRIVED);
-        if self.last.elapsed() < FRAME_GAP || w < 2 || h < 2 {
-            return Ok(());
-        }
-        debug::frame(debug::TAKEN);
-        self.last = Instant::now();
-        let buffer = frame.buffer()?;
-        let data = buffer.as_nopadding_buffer(&mut self.raw);
-        let e = &self.core.engine;
-        let canvas = *e.canvas.lock().unwrap().get_or_insert((w & !1, h & !1));
-        let sink = current_sink(&self.core, Some(canvas));
-        let size = sink.as_ref().map_or(canvas, |s| s.size);
-        let same = (w, h) == size;
-        if !same {
-            fit(data, (w, h), size, &mut self.fitted);
-        }
-        let frame = Arc::new(if same { data.to_vec() } else { std::mem::take(&mut self.fitted) });
-        if let Some(sink) = &sink {
-            sink.write_video(frame.clone());
-        }
-        *e.last.lock().unwrap() = (frame, size, Instant::now());
-        Ok(())
-    }
-}
-
-fn settings<F, T: TryInto<GraphicsCaptureItemType>>(item: T, border: DrawBorderSettings, flags: F) -> Settings<F, T> {
-    Settings::new(
-        item,
-        CursorCaptureSettings::Default,
-        border,
-        SecondaryWindowSettings::Default,
-        MinimumUpdateIntervalSettings::Default,
-        DirtyRegionSettings::Default,
-        ColorFormat::Bgra8,
-        flags,
-    )
-}
-
-type Started<H> = (Option<String>, Result<CaptureControl<H, Err>, String>);
-
-fn start_capture<H, T>(item: T, flags: H::Flags) -> Started<H>
-where
-    H: GraphicsCaptureApiHandler<Error = Err> + Send + 'static,
-    H::Flags: Send + Clone,
-    T: TryInto<GraphicsCaptureItemType> + Send + Copy + 'static,
-{
-    match H::start_free_threaded(settings(item, DrawBorderSettings::WithoutBorder, flags.clone())) {
-        Ok(control) => (None, Ok(control)),
-        Err(e) => (Some(e.to_string()), H::start_free_threaded(settings(item, DrawBorderSettings::Default, flags)).map_err(|e| e.to_string())),
-    }
-}
-
-pub fn check_capture() -> Vec<(&'static str, String)> {
-    let mut lines = Vec::new();
-    let got = Arc::new(AtomicBool::new(false));
-    let Ok(primary) = Monitor::primary() else {
-        return vec![("fail", "no display found".to_string())];
-    };
-    let (refused, control) = start_capture::<Probe, _>(primary, got.clone());
-    if let Some(e) = refused {
-        lines.push(("warn", format!("capture without border was refused ({e}); falling back to the default border")));
-    }
-    match control {
-        Err(e) => lines.push(("fail", format!("screen capture could not start: {e}"))),
-        Ok(control) => {
-            let until = Instant::now() + PROBE_WAIT;
-            while !got.load(Ordering::Relaxed) && Instant::now() < until {
-                thread::sleep(POLL);
-            }
-            let _ = control.stop();
-            if got.load(Ordering::Relaxed) {
-                lines.push(("ok", "screen capture started and a frame arrived".into()));
-            } else {
-                lines.push(("warn", format!("screen capture started but no frame arrived in {} s (idle or locked screen)", PROBE_WAIT.as_secs())));
-            }
-        }
-    }
-    lines
-}
-
 fn repeat(core: Arc<Core>) {
     loop {
         thread::sleep(REPEAT_POLL);
@@ -1024,7 +894,7 @@ fn repeat(core: Arc<Core>) {
         if last.0.is_empty() || last.2.elapsed() < REPEAT_AFTER {
             continue;
         }
-        if let Some(sink) = sink.filter(|s| s.size == last.1) {
+        if let Some(sink) = sink.filter(|s| s.out == last.1) {
             debug::frame(debug::REPEATED);
             sink.write_video(last.0.clone());
         }

@@ -4,7 +4,7 @@ use iroh::Watcher;
 use serde_json::{json, Value};
 use wasapi::{initialize_mta, AudioClient, DeviceEnumerator, Direction};
 
-use crate::{audio, debug, ffmpeg, record, Core};
+use crate::{audio, capture, debug, ffmpeg, Core};
 
 fn line(level: &str, text: impl Into<String>) -> Value {
     json!({"level": level, "text": text.into()})
@@ -66,7 +66,7 @@ pub fn run(core: &Arc<Core>, audio_pid: Option<u32>) -> Vec<Value> {
         Ok(version) => lines.push(line("ok", format!("WebView2 runtime {version}"))),
         Err(e) => lines.push(line("fail", format!("WebView2 runtime missing: {e}"))),
     }
-    for (level, text) in record::check_capture() {
+    for (level, text) in capture::check_capture() {
         lines.push(line(level, text));
     }
     lines.extend(audio_lines(audio_pid));
