@@ -575,13 +575,15 @@ pub fn first_record(data: &[u8]) -> Option<u64> {
     Some(log::HEADER as u64 + u32::from_le_bytes(data.get(..4)?.try_into().ok()?) as u64)
 }
 
-pub fn restored(own_len: u64, more: bool, reported: u64) -> bool {
-    !more && reported <= own_len
+pub fn restored(own_len: u64, more: bool, reported: Option<u64>) -> bool {
+    !more && reported.is_some_and(|r| r <= own_len)
 }
 
-fn reported(core: &Core, room: &str, of: &str) -> u64 {
+fn reported(core: &Core, room: &str, of: &str) -> Option<u64> {
     let key = format!("{room}/{of}");
-    core.peers.lock().unwrap().iter().filter(|p| p.conn.is_some()).filter_map(|p| p.logs.get(&key).copied()).max().unwrap_or(0)
+    let peers = core.peers.lock().unwrap();
+    let heard: Vec<u64> = peers.iter().filter(|p| p.conn.is_some()).filter_map(|p| p.logs.get(&key).copied()).collect();
+    (heard.len() == peers.len() || core.started.elapsed() > RETRY + CONNECT_TIMEOUT).then(|| heard.into_iter().max().unwrap_or(0))
 }
 
 async fn pull_log(core: &Core, room: &str, of: &str, conn: &Connection) -> Result<()> {
@@ -909,11 +911,12 @@ mod tests {
 
     #[test]
     fn own_log_is_restored_only_when_no_member_holds_more() {
-        assert!(restored(0, false, 0));
-        assert!(!restored(0, false, 10));
-        assert!(!restored(PULL_MAX, true, PULL_MAX));
-        assert!(restored(500, false, 500));
-        assert!(!restored(500, false, 501));
+        assert!(restored(0, false, Some(0)));
+        assert!(!restored(0, false, Some(10)));
+        assert!(!restored(PULL_MAX, true, Some(PULL_MAX)));
+        assert!(restored(500, false, Some(500)));
+        assert!(!restored(500, false, Some(501)));
+        assert!(!restored(500, false, None));
     }
 
     #[test]
