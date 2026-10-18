@@ -34,6 +34,11 @@ const KEYFRAME_DECODE_SPEED = 10;
 const EXPORT_SPEED = 0.5;
 const SEEK_TO_S = 5;
 const LOG_TAIL_LINES = 15;
+const STEADY_S = 20;
+const APPROVAL_WAIT_S = LOG_SYNC_S * 3;
+const SOURCE = { kind: "display", index: 1 };
+const MODEL_BYTES = { base: 147_951_465, medium: 1_533_763_059 };
+const WHISPER_BYTES = 8_573_270;
 const LOG_LINE_CHARS = 200;
 
 const DIAL_S = DIAL_RETRY_S + CONNECT_TIMEOUT_S;
@@ -240,12 +245,30 @@ async function attach(app) {
   return app;
 }
 
+async function share(app) {
+  check(!(await state(app)).capture.source, `${app.key} starts with a capture source`);
+  await invoke(app, "set_source", { source: SOURCE });
+}
+
 async function launch(key) {
   const app = await attach(start(key));
   await invoke(app, "set_name", { name: app.name });
   await invoke(app, "set_quality", { id: "light" });
+  await share(app);
   say(`${key} is ${app.id.slice(0, 10)}`);
   return app;
+}
+
+async function connects(app, peer, since = 0) {
+  const view = await invoke(app, "debug_view", { tab: "connections", since, set: null, addresses: false });
+  return view.events.filter((e) => e.text.startsWith(peer.id.slice(0, 10)) && e.text.includes(": connected")).length;
+}
+
+function bytes(n) {
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  while (n >= 1000 && i < units.length - 1) { n /= 1000; i++; }
+  return `${n.toFixed(i && n < 10 ? 1 : 0)} ${units[i]}`;
 }
 
 function kill(app, tree = true) {
@@ -407,10 +430,24 @@ async function scenario(ctx) {
     const code = await invoke(a, "create_invite", { reuse: false });
     await invoke(b, "join_room", { code });
     await waitFor("A sees B asking to join", within(DIAL_S * 2), async () => (await state(a)).asks.some((x) => x.id === b.id));
+    await sleep(APPROVAL_WAIT_S * 1000);
     await invoke(a, "answer_ask", { id: b.id, approve: true });
     await allSee([a, b], "in the room and connected", within(DIAL_S * 2), (st, app) => st.room?.id === ctx.room && !st.room.pending && connected(st, [a, b].filter((x) => x !== app).map((x) => x.id)));
     const names = (await state(b)).names;
     check(names[a.id] === a.name, `B knows A as ${names[a.id]}`);
+    const dials = await connects(b, a);
+    check(dials === 1, `B connected to A ${dials} times while waiting for approval`);
+  });
+
+  await step("a second app on A's data folder exits and leaves A running", async () => {
+    const env = { ...process.env, EZH_TEST: String(PORT_BASE + 3), EZH_DIR: a.data, WEBVIEW2_USER_DATA_FOLDER: path.join(OUT, "apps", "a2", "webview") };
+    const second = spawn(EXE, [], { env, stdio: "ignore", windowsHide: true });
+    const code = await withTimeout(new Promise((done) => second.on("exit", done)), CALL_S, "the second app");
+    check(code === 0, `the second app exited with ${code}`);
+    const starts = fs.readFileSync(path.join(a.data, "log.txt"), "utf8").split("\n").filter((l) => l.includes(" started, process ")).length;
+    check(starts === 1, `A's log shows ${starts} starts`);
+    const st = await state(a);
+    check(connected(st, [b.id]), "A lost B when a second app started");
   });
 
   await step("Record on A starts the set on B", async () => {
@@ -444,6 +481,19 @@ async function scenario(ctx) {
     await allSee([b, c], "A's live picture available", within(SEGMENT_S + LOG_SYNC_S), (st) => st.peers.find((p) => p.id === a.id)?.live);
   });
 
+  await step("connections stay up without redialing", async () => {
+    const all = [a, b, c];
+    const since = Date.now() * 1000;
+    await sleep(STEADY_S * 1000);
+    for (const app of all) {
+      for (const peer of all.filter((x) => x !== app)) {
+        const n = await connects(app, peer, since);
+        check(n === 0, `${app.key} connected to ${peer.key} ${n} times in ${STEADY_S} s`);
+      }
+      check(connected(await state(app), all.filter((x) => x !== app).map((x) => x.id)), `${app.key} lost a peer`);
+    }
+  });
+
   await step("a note with a tag, its edit and its deletion reach everyone", async () => {
     const id = await invoke(b, "add_event", { kind: "note", text: "Rotate early #rotate", target: { t_us: Date.now() * 1000 }, values: null });
     const key = `${b.id}/${id}`;
@@ -474,6 +524,9 @@ async function scenario(ctx) {
     ctx.notes.push(`killed B with open segments ${brief(open)}`);
     start("b");
     await attach(b);
+    const recovery = (await state(b)).recovery;
+    check(recovery === "The app restarted after a problem.", `B says ${brief(recovery)} after the crash`);
+    await share(b);
     await waitFor("B logged its recovered segments and ended its part", within(COLD_START_S), () => {
       const own = logOf(b, ctx.room, b.id);
       const logged = open.every((o) => own.some((r) => r.k === "seg" && r.set === ctx.set && r.capture === capture && r.series === o.series && r.n === o.n));
@@ -534,6 +587,7 @@ async function scenario(ctx) {
     fs.rmSync(logFile(c, ctx.room, c.id));
     start("c");
     await attach(c);
+    await share(c);
     const pending = path.join(roomDir(c, ctx.room), "pending.bin");
     await waitFor("C holds its whole log again", within(DIAL_S + SYNC_ROUND_S * 2), () => fileSize(logFile(c, ctx.room, c.id)) >= copy.length && !fs.existsSync(pending));
     check(fs.readFileSync(logFile(c, ctx.room, c.id)).subarray(0, copy.length).equals(copy), "C's restored log differs from A's copy of it");
@@ -543,16 +597,15 @@ async function scenario(ctx) {
     await allSee([a, b], "C's note written after the restore", within(REQUEST_TIMEOUT_S + DIAL_S + LOG_SYNC_S), (st) => st.events.some((e) => e.key === `${c.id}/${id}`));
   });
 
-  await step("an Apex matches job per file is claimed once and finished", async () => {
+  await step("an Apex matches job for the set is claimed once and finished", async () => {
     const all = [a, b, c];
     const sizes = Object.fromEntries(all.map((owner) => [owner.key, fileSize(logFile(owner, ctx.room, owner.id))]));
     await waitFor("every member pulls every log again", within(REQUEST_TIMEOUT_S + DIAL_S + LOG_SYNC_S), () => all.every((holder) => all.every((owner) => fileSize(logFile(holder, ctx.room, owner.id)) >= sizes[owner.key])));
     await invoke(a, "set_room_plugin", { id: PLUGIN, on: true, settings: {} });
-    const files = new Set(all.flatMap((owner) => segsOf(logOf(owner, ctx.room, owner.id), ctx.set, "v").map((s) => `${owner.id}/${s.capture}`)));
-    const seconds = within(files.size * (JOB_CHECK_S + LOG_SYNC_S + ctx.durationS / KEYFRAME_DECODE_SPEED));
-    await Promise.all(all.map((app) => waitFor(`${app.key}: all ${files.size} jobs done`, seconds, async () => {
+    const seconds = within(JOB_CHECK_S + LOG_SYNC_S + ctx.durationS / KEYFRAME_DECODE_SPEED);
+    await Promise.all(all.map((app) => waitFor(`${app.key}: the set's one job done`, seconds, async () => {
       const jobs = (await invoke(app, "jobs")).jobs.filter((j) => j.plugin === PLUGIN && j.set === ctx.set);
-      return jobs.length === files.size && jobs.every((j) => j.state === "done");
+      return jobs.length === 1 && jobs[0].state === "done";
     })));
     await sleep(LOG_SYNC_S * 2 * 1000);
     const runs = all.flatMap((owner) => logOf(a, ctx.room, owner.id).filter((r) => r.k === "job" && r.plugin === PLUGIN).map((r) => ({ ...r, by: owner.key })));
@@ -563,9 +616,27 @@ async function scenario(ctx) {
       check(claims.length === 1 && done.length === 1 && claims[0].run === done[0].run, `job ${key}: ${claims.length} claims kept, ${yielded.length} yielded, ${done.length} done`);
       check(done[0].events === 0, `job ${key} found ${done[0].events} matches in the test picture`);
     }
-    ctx.notes.push(`${files.size} plugin jobs, each run once (${runs.filter((r) => r.state === "yield").length} later claims yielded)`);
+    check(new Set(runs.map((r) => r.job)).size === 1, `the set had ${new Set(runs.map((r) => r.job)).size} Apex jobs`);
+    ctx.notes.push(`one plugin job run once (${runs.filter((r) => r.state === "yield").length} later claims yielded)`);
     const shown = (await state(b)).events.filter((e) => e.plugin);
     check(!shown.length, `plugin events shown: ${brief(shown)}`);
+  });
+
+  await step("the transcription download follows the chosen model", async () => {
+    await evaluate(b, `go("room"); pollPlugins(); true`);
+    for (const [model, size] of Object.entries(MODEL_BYTES)) {
+      const shown = `[...$("pluginlist").querySelectorAll(".plug")].find((p) => p.querySelector("b").textContent === t("Transcription"))`;
+      await waitFor("B shows the transcription card", within(UI_REFRESH_S * 5), () => evaluate(b, `!!${shown}`));
+      await evaluate(b, `(() => { const s = ${shown}.querySelectorAll("select")[0]; s.value = ${JSON.stringify(model)}; s.dispatchEvent(new Event("change")); return true; })()`);
+      const text = bytes(size + WHISPER_BYTES);
+      await waitFor(`B's card offers ${text}`, within(LOG_SYNC_S * 2), () => evaluate(b, `${shown}.querySelector(".here").textContent.includes(${JSON.stringify(text)})`));
+      for (const app of [b, a]) {
+        await waitFor(`${app.key} offers the ${model} model`, within(LOG_SYNC_S * 2), async () => {
+          const p = (await invoke(app, "room_plugins")).find((x) => x.id === "transcribe");
+          return p.settings.model === model && p.download_bytes === size + WHISPER_BYTES;
+        });
+      }
+    }
   });
 
   await step("Watch Party converges on a seek and a play", async () => {
