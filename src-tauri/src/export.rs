@@ -125,8 +125,10 @@ pub fn start(core: &Arc<Core>, room_id: &str, set_id: &str, mut path: PathBuf) -
         .args((0..names.len()).flat_map(|i| ["-map".to_string(), format!("[p{i}]")]))
         .args(["-c:v", encoder, "-b:v", &format!("{VIDEO_KBPS}k"), "-g", &KEYFRAME_EVERY.to_string(), "-r", &FPS.to_string()])
         .args(if encoder == "libx264" { ["-preset", "veryfast"] } else { ["-v", "error"] })
-        .args(["-c:a", "aac", "-b:a", &format!("{AUDIO_KBPS}k"), "-metadata:s:a:0", "title=Mix"])
-        .args(names.iter().enumerate().flat_map(|(i, n)| [format!("-metadata:s:a:{}", i + 1), format!("title={n}")]))
+        .args(["-c:a", "aac", "-b:a", &format!("{AUDIO_KBPS}k")])
+        .args(std::iter::once("Mix").chain(names.iter().map(String::as_str)).enumerate().flat_map(|(i, n)| {
+            [format!("-metadata:s:a:{i}"), format!("title={n}"), format!("-metadata:s:a:{i}"), format!("handler_name={n}")]
+        }))
         .args(["-t", &format!("{total:.3}"), "-movflags", "frag_keyframe+empty_moov+default_base_moof", "-f", "mp4"])
         .arg(&path)
         .stdin(Stdio::null())

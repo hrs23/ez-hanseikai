@@ -813,12 +813,16 @@ fn cloaked(w: &Window) -> bool {
     got.is_ok() && value != 0
 }
 
+fn minimized(w: &Window) -> bool {
+    unsafe { ::windows::Win32::UI::WindowsAndMessaging::IsIconic(::windows::Win32::Foundation::HWND(w.as_raw_hwnd())) }.as_bool()
+}
+
 fn is_game(exe: &str) -> bool {
     exe.to_lowercase().starts_with("r5apex")
 }
 
 pub fn list_sources() -> Vec<Value> {
-    let mut list: Vec<(Window, String, String, u32)> = windows();
+    let mut list: Vec<(Window, String, String, u32)> = windows().into_iter().filter(|w| !minimized(&w.0)).collect();
     list.sort_by_key(|w| !is_game(&w.1));
     let windows = list.into_iter().map(|(_, exe, title, _)| json!({"id": {"kind": "window", "exe": exe, "title": title}, "name": format!("{title} (window)")}));
     let displays = Monitor::enumerate().unwrap_or_default().into_iter().enumerate().map(|(i, m)| {
