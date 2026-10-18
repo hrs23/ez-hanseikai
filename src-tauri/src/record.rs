@@ -53,6 +53,7 @@ const RENAME_TRIES: u32 = 10;
 const RENAME_GAP: Duration = Duration::from_millis(50);
 pub const APP: usize = 0;
 pub const MIC: usize = 1;
+pub const MIX_KEYS: [&str; 2] = ["app", "mic"];
 const TEST_SIZE: (u32, u32) = (1280, 720);
 const TEST_TONES_HZ: [u32; 2] = [440, 880];
 
@@ -210,9 +211,9 @@ pub struct Engine {
 impl Engine {
     pub fn new(settings: &Value) -> Self {
         Self {
-            source: Mutex::new(if settings["source"].is_null() { sources::primary_display() } else { settings["source"].clone() }),
+            source: Mutex::new(Value::Null),
             mic: Mutex::new(settings["mic"].as_str().unwrap_or_default().to_string()),
-            mix: Mutex::new(if settings["mix"].is_object() { settings["mix"].clone() } else { json!({}) }),
+            mix: Mutex::new(starting_mix(&settings["mix"])),
             quality: Mutex::new(settings["quality"].as_str().unwrap_or(QUALITIES[1].0).to_string()),
             source_lost: AtomicBool::new(false),
             status: Mutex::new(String::new()),
@@ -231,14 +232,9 @@ impl Engine {
         }
     }
 
-    pub fn mix_key(&self, track: usize) -> String {
-        if track == APP { "app".into() } else { format!("mic:{}", self.names.lock().unwrap().mic_id) }
-    }
-
     pub fn gain(&self, track: usize) -> (f32, bool) {
-        let key = self.mix_key(track);
         let mix = self.mix.lock().unwrap();
-        (mix[&key]["volume"].as_f64().unwrap_or(1.0) as f32, mix[&key]["muted"].as_bool().unwrap_or(false))
+        (mix[MIX_KEYS[track]]["volume"].as_f64().unwrap_or(1.0) as f32, mix[MIX_KEYS[track]]["muted"].as_bool().unwrap_or(false))
     }
 
     pub fn live(&self) -> Option<(String, String, [u32; 2])> {
@@ -275,11 +271,18 @@ impl Engine {
     }
 }
 
+pub fn starting_mix(saved: &Value) -> Value {
+    let mut mix = json!({});
+    for key in MIX_KEYS {
+        mix[key] = json!({"volume": saved[key]["volume"].as_f64().filter(|v| (0.0..=1.0).contains(v)).unwrap_or(1.0), "muted": key == MIX_KEYS[MIC] || saved[key]["muted"] == true});
+    }
+    mix
+}
+
 pub fn capture_json(core: &Core, live: Option<Value>) -> Value {
     let e = &core.engine;
-    let mix = |track| {
-        let key = e.mix_key(track);
-        let m = e.mix.lock().unwrap()[&key].clone();
+    let mix = |track: usize| {
+        let m = e.mix.lock().unwrap()[MIX_KEYS[track]].clone();
         json!({"volume": m["volume"].as_f64().unwrap_or(1.0), "muted": m["muted"].as_bool().unwrap_or(false)})
     };
     json!({
@@ -313,7 +316,7 @@ fn quality_json(core: &Core) -> Value {
 
 fn want(core: &Core) -> Option<String> {
     let e = &core.engine;
-    if (e.source.lock().unwrap().is_null() && !crate::test_mode()) || core.disk_full() {
+    if e.source.lock().unwrap().is_null() || core.disk_full() {
         return None;
     }
     if let Some(s) = core.active_set.lock().unwrap().as_ref() {
@@ -1024,6 +1027,13 @@ pub fn supervise(core: Arc<Core>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_start_has_the_microphone_muted_and_keeps_the_volumes() {
+        let mix = starting_mix(&json!({"app": {"volume": 0.4, "muted": true}, "mic": {"volume": 0.7, "muted": false}, "game": {"volume": 0.45}, "mic:{6844}": {"volume": 0.55}}));
+        assert_eq!(mix, json!({"app": {"volume": 0.4, "muted": true}, "mic": {"volume": 0.7, "muted": true}}));
+        assert_eq!(starting_mix(&Value::Null), json!({"app": {"volume": 1.0, "muted": false}, "mic": {"volume": 1.0, "muted": true}}));
+    }
 
     #[test]
     fn presets_scale_down_only_and_keep_even_sizes() {

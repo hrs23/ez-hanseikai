@@ -269,7 +269,6 @@ impl Core {
             "audio_process": *self.audio_process.lock().unwrap(),
             "keep_days": *self.keep_days.lock().unwrap(),
             "deleted_sets": *self.deleted.lock().unwrap(),
-            "source": self.engine.source.lock().unwrap().clone(),
             "mic": self.engine.mic.lock().unwrap().clone(),
             "mix": self.engine.mix.lock().unwrap().clone(),
             "quality": self.engine.quality.lock().unwrap().clone(),
@@ -353,15 +352,14 @@ fn set_source(core: State<Arc<Core>>, source: Value) -> Result<(), String> {
     if !sources::valid(&source) || source.is_null() {
         return Err("That capture source is not available.".into());
     }
+    tracing::info!("capture source chosen: {}", source["kind"]);
     *core.engine.source.lock().unwrap() = source;
-    core.save_settings();
     Ok(())
 }
 
 #[tauri::command]
 fn use_display(core: State<Arc<Core>>) {
     *core.engine.source.lock().unwrap() = sources::primary_display();
-    core.save_settings();
 }
 
 #[tauri::command]
@@ -382,8 +380,7 @@ fn set_mix(core: State<Arc<Core>>, kind: String, volume: f64, muted: bool) -> Re
         "mic" => record::MIC,
         _ => return Err(format!("unknown kind {kind}")),
     };
-    let key = core.engine.mix_key(track);
-    core.engine.mix.lock().unwrap()[&key] = json!({"volume": volume.clamp(0.0, 1.0), "muted": muted});
+    core.engine.mix.lock().unwrap()[record::MIX_KEYS[track]] = json!({"volume": volume.clamp(0.0, 1.0), "muted": muted});
     core.save_settings();
     Ok(())
 }

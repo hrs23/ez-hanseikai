@@ -1280,7 +1280,7 @@ async function fillSources() {
   const option = (s) => el("option", { value: JSON.stringify(s.id), textContent: s.id.kind === "display" ? t("Display {n}", { n: s.id.index }) + (s.width ? ` · ${s.width} × ${s.height}` : "") : s.id.title });
   const wins = list.filter((s) => s.id.kind === "window");
   const disps = list.filter((s) => s.id.kind === "display");
-  $("source").replaceChildren(el("optgroup", { label: t("Windows") }, ...wins.map(option)), el("optgroup", { label: t("Displays") }, ...disps.map(option)));
+  $("source").replaceChildren(el("option", { value: "", textContent: t("Choose what to capture"), disabled: true, hidden: true }), el("optgroup", { label: t("Windows") }, ...wins.map(option)), el("optgroup", { label: t("Displays") }, ...disps.map(option)));
   if (st) { delete sigs.sourceicon; renderCapture(); }
 }
 async function fillMics() {
