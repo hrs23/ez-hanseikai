@@ -202,7 +202,7 @@ impl Core {
         self.dir.join("rooms").join(room).join("pending.bin")
     }
 
-    fn log_ready(&self, room: &str) -> bool {
+    pub fn log_ready(&self, room: &str) -> bool {
         !self.rooms.lock().unwrap().list.iter().any(|r| r.id == room && r.members.len() > 1)
             || (file_len(&self.log_path(room, &self.me())) > 0 && !self.pending_path(room).exists())
     }

@@ -375,7 +375,7 @@ fn clean_media(core: &Core) {
         }
         for owner in std::fs::read_dir(core.dir.join("rooms").join(&room)).into_iter().flatten().flatten() {
             let id = owner.file_name().to_string_lossy().to_string();
-            if id.parse::<iroh::EndpointId>().is_err() {
+            if id.parse::<iroh::EndpointId>().is_err() || (id == me && !core.log_ready(&room)) {
                 continue;
             }
             let mut captures: Vec<String> = std::fs::read_dir(owner.path()).into_iter().flatten().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
@@ -388,6 +388,7 @@ fn clean_media(core: &Core) {
                 let fresh = SERIES.iter().any(|series| changed_since(&dir.join(series), since) || dir.join(series).join(record::OPEN).exists());
                 if !any_kept && !live && !fresh && !writing.iter().any(|w| w.starts_with(&dir)) {
                     if std::fs::remove_dir_all(&dir).is_ok() {
+                        core.jsons.lock().unwrap().remove(&dir.join(CHECKS));
                         debug::event(core, core.started, format!("removed {}", dir.strip_prefix(&core.dir).unwrap_or(&dir).display()));
                     }
                     continue;
@@ -405,6 +406,7 @@ fn clean_media(core: &Core) {
                         }
                         let _ = std::fs::remove_file(part_of(&path));
                         let _ = std::fs::remove_file(path);
+                        unmark(core, &dir, &format!("{series}/{}", seg_name(n)));
                     }
                 }
             }
