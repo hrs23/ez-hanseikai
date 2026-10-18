@@ -8,7 +8,7 @@ pub const PLUGIN: Plugin = Plugin { id: "apex-matches", name: "Apex matches", ve
 
 const W: usize = 64;
 const H: usize = 36;
-const SCALE: &str = "scale=64:36:flags=area";
+const SCALE: &str = "crop='min(iw,ih*16/9)':'min(ih,iw*9/16)',scale=64:36:flags=area";
 const TOP_GRAY: (usize, usize) = (3, 12);
 const BOTTOM_GRAY: (usize, usize) = (22, 34);
 const TOP_GRAY_MAX: f64 = 4.0;
@@ -109,6 +109,27 @@ mod tests {
         assert!(!frame(1.0, &picture(|x, y| if y < 10 { (150, 150) } else { banner(x, y) })).result);
         assert!(!frame(1.0, &picture(|x, y| if x < 20 { banner(x, y) } else { (128, 128) })).result);
         assert!(!frame(1.0, &picture(|_, _| (120, 155))).result);
+    }
+
+    fn noisy(paint: impl Fn(usize, usize) -> (u8, u8)) -> impl Fn(usize, usize) -> (u8, u8) {
+        move |x, y| {
+            let (u, v) = paint(x, y);
+            let wobble = ((x * 7 + y * 3) % 5) as i16 - 2;
+            ((u as i16 + wobble) as u8, (v as i16 - wobble) as u8)
+        }
+    }
+
+    #[test]
+    fn the_banner_counts_anywhere_in_its_band_and_with_some_noise() {
+        for row in [BANNER_ROWS.0, BANNER_ROWS.1 - 1] {
+            assert!(frame(1.0, &picture(noisy(move |_, y| if y == row { (120, 155) } else { (128, 128) }))).result, "row {row}");
+        }
+        assert!(!frame(1.0, &picture(|_, y| if y == BANNER_ROWS.0 - 2 { (120, 155) } else { (128, 128) })).result);
+    }
+
+    #[test]
+    fn wide_and_tall_pictures_are_cut_to_the_sixteen_by_nine_middle_first() {
+        assert!(SCALE.starts_with("crop='min(iw,ih*16/9)':'min(ih,iw*9/16)',"));
     }
 
     fn frames(marks: &str, step: f64) -> Vec<Frame> {
