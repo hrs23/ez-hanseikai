@@ -11,8 +11,8 @@ use crate::proc::{IDLE, NO_WINDOW};
 pub const PLUGIN: Plugin = Plugin {
     id: "transcribe",
     name: "Transcription",
-    version: "1.0.0",
-    live: false,
+    version: "1.1.0",
+    live: false, per_set: false,
     options: &[("model", &["small", "base", "medium", "large-v3-turbo"]), ("language", &["auto", "en", "ja", "ko", "zh", "es", "fr", "de", "pt", "ru"])],
     needs,
     run,
@@ -31,6 +31,10 @@ const MODEL_FILES: [(&str, &str, &str, u64); 4] = [
 ];
 const RATE: &str = "16000";
 const EXTRACT_SHARE: f64 = 0.1;
+const SILENCE: &str = "silencedetect=noise=-45dB:d=1";
+const LEVEL: &str = "speechnorm=e=6.25:r=0.00001:l=1";
+const SOUND_MIN_S: f64 = 0.25;
+const REPEAT_LOOKBACK: usize = 3;
 
 fn model(settings: &Value) -> (&'static str, &'static str, &'static str, u64) {
     let name = settings["model"].as_str().unwrap_or_default();
@@ -52,17 +56,47 @@ pub fn noise(text: &str) -> bool {
     t.is_empty() || wrapped
 }
 
-pub fn segments(json: &Value) -> Vec<Found> {
-    json["transcription"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|s| {
-            let text = s["text"].as_str()?.trim();
-            let (from, to) = (s["offsets"]["from"].as_f64()?, s["offsets"]["to"].as_f64()?);
-            (!noise(text) && to > from).then(|| Found { kind: "speech".into(), from_s: Some(from / 1000.0), to_s: Some(to / 1000.0), text: text.to_string(), ..Default::default() })
-        })
-        .collect()
+pub fn silences(log: &str) -> Vec<(f64, f64)> {
+    let mut out = Vec::new();
+    let mut start = None;
+    for line in log.lines() {
+        let value = |key: &str| line.split(key).nth(1)?.split_whitespace().next()?.parse::<f64>().ok();
+        if let Some(s) = value("silence_start:") {
+            start = Some(s.max(0.0));
+        } else if let Some(e) = value("silence_end:") {
+            out.push((start.take().unwrap_or(0.0), e));
+        }
+    }
+    if let Some(s) = start {
+        out.push((s, f64::INFINITY));
+    }
+    out
+}
+
+fn sound(from: f64, to: f64, silences: &[(f64, f64)]) -> f64 {
+    let quiet: f64 = silences.iter().map(|(a, b)| (to.min(*b) - from.max(*a)).max(0.0)).sum();
+    to - from - quiet
+}
+
+fn same_text(a: &str, b: &str) -> bool {
+    let plain = |t: &str| t.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect::<String>();
+    plain(a) == plain(b)
+}
+
+pub fn segments(json: &Value, silences: &[(f64, f64)]) -> Vec<Found> {
+    let mut out: Vec<Found> = Vec::new();
+    for s in json["transcription"].as_array().into_iter().flatten() {
+        let (Some(text), Some(from), Some(to)) = (s["text"].as_str().map(str::trim), s["offsets"]["from"].as_f64(), s["offsets"]["to"].as_f64()) else { continue };
+        let (from, to) = (from / 1000.0, to / 1000.0);
+        if noise(text) || to <= from || sound(from, to, silences) < SOUND_MIN_S {
+            continue;
+        }
+        if out.iter().rev().take(REPEAT_LOOKBACK).any(|f| same_text(&f.text, text)) {
+            continue;
+        }
+        out.push(Found { kind: "speech".into(), from_s: Some(from), to_s: Some(to), text: text.to_string(), ..Default::default() });
+    }
+    out
 }
 
 pub fn percent(line: &str) -> Option<f64> {
@@ -80,12 +114,14 @@ fn run(job: &Job, progress: &mut dyn FnMut(f64)) -> Result<Output, String> {
     }
     std::fs::create_dir_all(&job.work).map_err(|e| e.to_string())?;
     let wav = job.work.join("voice.wav");
-    let after = ["-vn", "-ac", "1", "-ar", RATE, "-c:a", "pcm_s16le"].iter().map(|s| s.to_string()).chain([wav.display().to_string()]).collect::<Vec<_>>();
-    let out = ffmpeg(job, &job.voice, &["-v", "error"], &after, Stdio::null(), Stdio::piped()).and_then(|c| c.wait_with_output()).map_err(|e| e.to_string())?;
+    let filters = format!("{SILENCE},{LEVEL}");
+    let after = ["-vn", "-af", &filters, "-ac", "1", "-ar", RATE, "-c:a", "pcm_s16le"].iter().map(|s| s.to_string()).chain([wav.display().to_string()]).collect::<Vec<_>>();
+    let out = ffmpeg(job, &job.voice, &["-v", "info", "-nostats"], &after, Stdio::null(), Stdio::piped()).and_then(|c| c.wait_with_output()).map_err(|e| e.to_string())?;
+    let log = String::from_utf8_lossy(&out.stderr);
     if !out.status.success() {
-        let error = String::from_utf8_lossy(&out.stderr);
-        return if error.contains("matches no streams") { Ok(Output::default()) } else { Err(error.trim().lines().last().unwrap_or_default().to_string()) };
+        return if log.contains("matches no streams") { Ok(Output::default()) } else { Err(log.trim().lines().last().unwrap_or_default().to_string()) };
     }
+    let silences = silences(&log);
     progress(EXTRACT_SHARE);
     let (_, file, _, _) = model(&job.settings);
     let threads = threads(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)).to_string();
@@ -95,7 +131,7 @@ fn run(job: &Job, progress: &mut dyn FnMut(f64)) -> Result<Output, String> {
         .arg(job.dir.join(file))
         .arg("-f")
         .arg(&wav)
-        .args(["-l", job.settings["language"].as_str().unwrap_or("auto"), "-t", &threads, "-oj", "-pp", "-of"])
+        .args(["-l", job.settings["language"].as_str().unwrap_or("auto"), "-t", &threads, "-mc", "0", "-oj", "-pp", "-of"])
         .arg(&base)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -114,7 +150,7 @@ fn run(job: &Job, progress: &mut dyn FnMut(f64)) -> Result<Output, String> {
     }
     let bytes = std::fs::read(base.with_extension("json")).map_err(|e| e.to_string())?;
     let json: Value = serde_json::from_str(&String::from_utf8_lossy(&bytes)).map_err(|e| e.to_string())?;
-    Ok(Output { events: segments(&json), tags: BTreeMap::new() })
+    Ok(Output { events: segments(&json, &silences), tags: BTreeMap::new() })
 }
 
 #[cfg(test)]
@@ -131,7 +167,33 @@ mod tests {
             {"offsets": {"from": 5000, "to": 5000}, "text": "zero"},
             {"offsets": {"from": 6000, "to": 7000}, "text": "   "}
         ]});
-        assert_eq!(segments(&out), vec![Found { kind: "speech".into(), from_s: Some(1.0), to_s: Some(2.5), text: "Push left now.".into(), ..Default::default() }]);
+        assert_eq!(segments(&out, &[]), vec![Found { kind: "speech".into(), from_s: Some(1.0), to_s: Some(2.5), text: "Push left now.".into(), ..Default::default() }]);
+    }
+
+    #[test]
+    fn silences_are_read_from_ffmpeg() {
+        let log = "[silencedetect @ 0x1] silence_start: 2.5\n[silencedetect @ 0x1] silence_end: 10 | silence_duration: 7.5\nsize=1kB\n[silencedetect @ 0x1] silence_start: 30.25";
+        assert_eq!(silences(log), vec![(2.5, 10.0), (30.25, f64::INFINITY)]);
+        assert!(silences("nothing").is_empty());
+    }
+
+    #[test]
+    fn lines_in_silence_and_repeats_are_dropped() {
+        let line = |from: i64, to: i64, text: &str| json!({"offsets": {"from": from, "to": to}, "text": text});
+        let out = json!({"transcription": [
+            line(0, 2000, "Push left now."),
+            line(2000, 4000, "push left now"),
+            line(4000, 6000, "Rotate."),
+            line(10000, 30000, "Thanks for watching."),
+            line(31000, 33000, "Thanks for watching."),
+            line(40000, 42000, "Push left now."),
+            line(44000, 46000, "Go."),
+            line(48000, 50000, "Back."),
+            line(52000, 54000, "Push left now."),
+            line(60000, 68000, "Hold."),
+        ]});
+        let texts: Vec<String> = segments(&out, &[(9.0, 30.5), (61.0, 70.0)]).into_iter().map(|f| f.text).collect();
+        assert_eq!(texts, ["Push left now.", "Rotate.", "Thanks for watching.", "Go.", "Back.", "Push left now.", "Hold."]);
     }
 
     #[test]
