@@ -38,6 +38,8 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
           workspaces: src-tauri
+          shared-key: release-build
+          save-if: false
       - if: steps.version.outputs.new == 'true'
         run: npm ci
       - if: steps.version.outputs.new == 'true'
