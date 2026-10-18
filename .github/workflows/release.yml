@@ -27,7 +27,9 @@ jobs:
           else
             echo "new=true" >> "$GITHUB_OUTPUT"
           fi
+          case "$tag" in *-*) stable=false ;; *) stable=true ;; esac
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "stable=$stable" >> "$GITHUB_OUTPUT"
       - if: steps.version.outputs.new == 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
@@ -53,16 +55,19 @@ jobs:
           releaseCommitish: ${{ github.event.workflow_run.head_sha }}
           releaseName: EZ Hanseikai ${{ steps.version.outputs.tag }}
           releaseBody: |
-            Pre-release. The installer is unsigned, so Windows SmartScreen warns: choose More info, then Run anyway. It installs for the current user only. ffmpeg is not included; the app downloads it on first run.
+            The installer is unsigned, so Windows SmartScreen warns: choose More info, then Run anyway. It installs for the current user only. ffmpeg is not included; the app downloads it on first run.
           releaseDraft: false
-          prerelease: true
-      - name: Publish the update manifest
+          prerelease: ${{ steps.version.outputs.stable != 'true' }}
+      - name: Publish the update manifests
         if: steps.version.outputs.new == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.version.outputs.tag }}
+          STABLE: ${{ steps.version.outputs.stable }}
         run: |
           gh release download "$TAG" --pattern latest.json --clobber
-          gh release view updater >/dev/null 2>&1 || gh release create updater --prerelease --title "Update manifest" --notes "Rolling manifest read by the in-app updater."
-          gh release upload updater latest.json --clobber
+          gh release view updater >/dev/null 2>&1 || gh release create updater --prerelease --title "Update manifests" --notes "Rolling manifests read by the in-app updater: latest.json for the stable channel, latest-beta.json for the beta channel."
+          cp latest.json latest-beta.json
+          gh release upload updater latest-beta.json --clobber
+          if [ "$STABLE" = true ]; then gh release upload updater latest.json --clobber; fi
