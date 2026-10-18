@@ -623,11 +623,11 @@ async function scenario(ctx) {
   });
 
   await step("the transcription download follows the chosen model", async () => {
-    await evaluate(b, `go("room"); pollPlugins(); true`);
+    await evaluate(b, `roomTab = "plugins"; go("room"); pollPlugins(); true`);
     for (const [model, size] of Object.entries(MODEL_BYTES)) {
-      const shown = `[...$("pluginlist").querySelectorAll(".plug")].find((p) => p.querySelector("b").textContent === t("Transcription"))`;
+      const shown = `[...$("roomtab").querySelectorAll(".plug")].find((p) => p.querySelector("b").textContent === t("Transcription"))`;
       await waitFor("B shows the transcription card", within(UI_REFRESH_S * 5), () => evaluate(b, `!!${shown}`));
-      await evaluate(b, `(() => { const s = ${shown}.querySelectorAll("select")[0]; s.value = ${JSON.stringify(model)}; s.dispatchEvent(new Event("change")); return true; })()`);
+      await evaluate(b, `(() => { const s = ${shown}.querySelector(".field select"); s.value = ${JSON.stringify(model)}; s.dispatchEvent(new Event("change")); return true; })()`);
       const text = bytes(size + WHISPER_BYTES);
       await waitFor(`B's card offers ${text}`, within(LOG_SYNC_S * 2), () => evaluate(b, `${shown}.querySelector(".here").textContent.includes(${JSON.stringify(text)})`));
       for (const app of [b, a]) {
@@ -663,6 +663,31 @@ async function scenario(ctx) {
     await evaluate(a, `act("pause", nowM()); true`);
   });
 
+  await step("a session started while watching together records voices and the Watch Party", async () => {
+    const all = [a, b, c];
+    await allSee(all, "watching the set together", within(PARTY_REPEAT_S + UI_REFRESH_S * 2), (st) => st.party.on && st.party.shared.set === ctx.set);
+    check(await evaluate(a, `startState() === "review"`), "A's start button does not offer to record the review");
+    await invoke(a, "start_recording");
+    ctx.review = (await state(a)).active_set.id;
+    await allSee(all, "recording the review voice only", within(LOG_SYNC_S * 2), (st) => st.active_set?.id === ctx.review && st.active_set.voice === true);
+    await waitFor(`A logs ${SEGMENTS_AFTER_RESTART} voice segments of the review`, within(SEGMENT_S * (SEGMENTS_AFTER_RESTART + 2)), () => segsOf(logOf(a, ctx.room, a.id), ctx.review, "m").length >= SEGMENTS_AFTER_RESTART);
+    await evaluate(c, `act("seek", ${SEEK_TO_S * 2}); true`);
+    await waitFor("C logs its seek as a party record", within(LOG_SYNC_S * 2), () => logOf(c, ctx.room, c.id).some((r) => r.k === "party" && r.set === ctx.review && r.shared.set === ctx.set));
+    await invoke(a, "stop_recording");
+    await allSee(all, "the review ended", within(LOG_SYNC_S * 2), (st) => !st.active_set && setOf(st, ctx.review) && !setOf(st, ctx.review).live);
+    for (const app of all) {
+      const own = logOf(app, ctx.room, app.id);
+      check(segsOf(own, ctx.review, "m").length > 0 && segsOf(own, ctx.review, "v").length === 0, `${app.key} recorded ${segsOf(own, ctx.review, "v").length} picture and ${segsOf(own, ctx.review, "m").length} voice segments in the review`);
+    }
+    check(logOf(a, ctx.room, a.id).some((r) => r.k === "party" && r.set === ctx.review), "A did not log what was watched when the review started");
+    await allSee(all, "two party records in the review", within(SYNC_ROUND_S * 2), (st) => (setOf(st, ctx.review)?.party || []).length >= 2);
+    await waitFor("A sees a review session", within(UI_REFRESH_S * 3), () => evaluate(a, `isReview(setById(${JSON.stringify(ctx.review)}))`));
+    await evaluate(a, `openSession(${JSON.stringify(ctx.review)}); setReview(false, reviewTotal()); true`);
+    await waitFor("A replays the watched session at the seek", within(UI_REFRESH_S * 3), () => evaluate(a, `review?.id === ${JSON.stringify(ctx.review)} && selected === ${JSON.stringify(ctx.set)} && Math.abs(nowM() - ${SEEK_TO_S * 2}) < ${JUMP_MIN_S}`));
+    await evaluate(a, `endReview(); openSession(${JSON.stringify(ctx.set)}); true`);
+    ctx.notes.push(`review session with ${(await state(a)).sets.find((s) => s.id === ctx.review).party.length} party records replayed`);
+  });
+
   await step("export the set on A to a playable file", async () => {
     await evaluate(a, `window.e2eExport = null; window.__TAURI__.event.listen("export", (e) => { if (e.payload.done) window.e2eExport = e.payload; }).then(() => true)`);
     const started = await invoke(a, "export_set", { room: ctx.room, set: ctx.set });
@@ -681,6 +706,26 @@ async function scenario(ctx) {
     check(decode.ok && !decode.err, `export does not decode cleanly: ${decode.err.slice(0, 400)}`);
     ctx.notes.push(`export of ${duration.toFixed(1)} s with streams ${kinds.join(" ")}`);
     ffmpeg("ffmpeg", ["-v", "error", "-y", "-ss", String(duration / 2), "-i", file, "-frames:v", "1", path.join(OUT, "export-frame.png")]);
+  });
+
+  await step("a deleted session stays listed and comes back with Download", async () => {
+    const preview = await evaluate(b, `JSON.stringify(deletePreview([setById(${JSON.stringify(ctx.review)})], st.id))`);
+    const parts = JSON.parse(preview)[0];
+    check(parts.players.length === 3 && parts.players.every((p) => p.bytes > 0), `the delete preview lists ${brief(parts)}`);
+    await invoke(b, "delete_set", { room: ctx.room, set: ctx.review });
+    await waitFor("B lists the review as not on this PC", within(UI_REFRESH_S * 3), async () => { const st = await state(b); return !setOf(st, ctx.review) && st.gone.some((g) => g.id === ctx.review); });
+    const gone = logOf(a, ctx.room, b.id).filter((r) => r.k === "seg" && r.set === ctx.review);
+    check(gone.every((r) => !fs.existsSync(path.join(roomDir(b, ctx.room), b.id, r.capture, r.series, segName(r.n)))), "B kept its own review segments after deleting them");
+    await invoke(b, "restore_set", { room: ctx.room, set: ctx.review });
+    await waitFor("B fetches the review again", within((SEGMENT_S + SYNC_ROUND_S) * 3), async () => setOf(await state(b), ctx.review)?.all_verified);
+  });
+
+  await step("the update channel is kept in the settings", async () => {
+    check((await state(b)).channel === "stable", "the channel does not start as stable");
+    await invoke(b, "set_channel", { channel: "beta" });
+    check(readJson(path.join(b.data, "settings.json")).channel === "beta", "settings.json does not keep the beta channel");
+    check(await invoke(b, "check_update").then(() => true, (e) => String(e).length > 0), "checking the beta channel failed");
+    await invoke(b, "set_channel", { channel: "stable" });
   });
 
   await step("C kept every file of an older version it found in its data folder", async () => {
@@ -702,6 +747,15 @@ async function scenario(ctx) {
     check(fileSize(logFile(c, ctx.room, a.id)) === before, "C still received A's log after its removal");
     const st = await state(c);
     check(!st.events.some((e) => e.key === key), "C shows a note written after its removal");
+  });
+
+  await step("B leaves the room, keeps it and enters it again", async () => {
+    await invoke(b, "leave_room", { id: ctx.room });
+    const left = await state(b);
+    check(!left.room && left.rooms.some((r) => r.id === ctx.room), `B's rooms after leaving: ${brief(left.rooms)}`);
+    check(fs.existsSync(logFile(b, ctx.room, b.id)), "B lost its log by leaving");
+    await invoke(b, "switch_room", { id: ctx.room });
+    await allSee([a, b], "A and B connected again", within(DIAL_S * 2), (st, app) => st.room?.id === ctx.room && connected(st, [a, b].filter((x) => x !== app).map((x) => x.id)));
   });
 }
 

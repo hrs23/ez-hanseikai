@@ -6,9 +6,11 @@ import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 
 const ui = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "ui");
-const source = ["util.js", "i18n.js", "layout.js", "events.js"].map((f) => fs.readFileSync(path.join(ui, f), "utf8")).join("\n");
-const context = vm.createContext({ window: { __TAURI__: { core: {} } }, document: {}, console, Intl, Date });
-const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, setLanguage: (l) => { language = l; } })`, context);
+const read = (f) => fs.readFileSync(path.join(ui, f), "utf8");
+const source = ["util.js", "i18n.js", "layout.js", "events.js", "review.js"].map(read).join("\n");
+const context = vm.createContext({ window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date });
+const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, flowAt, flowBands, flowSteps, isReview, voiceOnly, deletePreview, oldSessions, rateOf, liveEdge, netState, summaryLines, leftText, JA, setLanguage: (l) => { language = l; } })`, context);
+const plain = (v) => JSON.parse(JSON.stringify(v));
 
 const moment = (m, extra = {}) => ({ role: "moment", m, plugin: { id: "apex-matches" }, tags: ["match"], ...extra });
 
@@ -18,8 +20,8 @@ test("match ends come only from plugin moments tagged match", () => {
 });
 
 test("matches run between consecutive ends, with the open one only while recording", () => {
-  assert.deepEqual(JSON.parse(JSON.stringify(ui$.matchChapters([100, 300], 500, false))), [{ m: 0, end: 100, n: 1 }, { m: 100, end: 300, n: 2 }]);
-  assert.deepEqual(JSON.parse(JSON.stringify(ui$.matchChapters([100, 300], 500, true))).at(-1), { m: 300, end: 500, n: 3 });
+  assert.deepEqual(plain(ui$.matchChapters([100, 300], 500, false)), [{ m: 0, end: 100, n: 1 }, { m: 100, end: 300, n: 2 }]);
+  assert.deepEqual(plain(ui$.matchChapters([100, 300], 500, true)).at(-1), { m: 300, end: 500, n: 3 });
   assert.equal(ui$.matchChapters([], 500, true).length, 0);
 });
 
@@ -47,6 +49,7 @@ test("days read as today, yesterday or a date", () => {
   ui$.setLanguage("ja");
   assert.equal(ui$.dayLabel("2026-10-17", now, "ja"), "昨日");
   assert.equal(ui$.dayLabel("2026-10-15", now, "ja"), "10月15日");
+  ui$.setLanguage("en");
 });
 
 test("shortcuts need Ctrl or Alt and read like the native menu", () => {
@@ -56,4 +59,84 @@ test("shortcuts need Ctrl or Alt and read like the native menu", () => {
   assert.equal(key("Digit5", { ctrlKey: true }), "Ctrl+5");
   assert.equal(key("KeyM", { shiftKey: true }), null);
   assert.equal(key("ControlLeft", { ctrlKey: true }), null);
+});
+
+const S = 1e6;
+const party = (t, set, wall, playing, by = "a") => ({ t_us: t, by, shared: { set, wall_us: wall, at_us: t, playing, rate: 1, mode: "grid", order: [] } });
+const flow = [party(100 * S, "s1", 1000 * S, true), party(130 * S, "s1", 1030 * S, false, "b"), party(160 * S, "s1", 1200 * S, true), party(200 * S, "s2", 50 * S, true, "b")];
+
+test("a review replays what the Watch Party watched at each moment", () => {
+  assert.deepEqual(plain(ui$.flowAt(flow, 90 * S)), { set: "s1", playing: false, wall_us: 1000 * S, rate: 1, focus: null, mode: "grid", slots: 0, order: [], by: "a", at: 100 * S });
+  assert.equal(ui$.flowAt(flow, 110 * S).wall_us, 1010 * S);
+  const paused = ui$.flowAt(flow, 150 * S);
+  assert.equal(paused.playing, false);
+  assert.equal(paused.wall_us, 1030 * S);
+  assert.equal(ui$.flowAt(flow, 170 * S).wall_us, 1210 * S);
+  assert.equal(ui$.flowAt(flow, 260 * S).set, "s2");
+  assert.equal(ui$.flowAt([], 1), null);
+});
+
+test("the bands under a review's seekbar show which session was watched", () => {
+  assert.deepEqual(plain(ui$.flowBands(flow, 90 * S, 300 * S)), [{ set: "s1", from: 90 * S, to: 200 * S }, { set: "s2", from: 200 * S, to: 300 * S }]);
+  assert.deepEqual(plain(ui$.flowBands(flow, 140 * S, 180 * S)), [{ set: "s1", from: 140 * S, to: 180 * S }]);
+});
+
+test("what was shown lists openings, plays, pauses and jumps", () => {
+  assert.deepEqual(plain(ui$.flowSteps(flow).map((s) => [s.kind, s.by])), [["open", "a"], ["pause", "b"], ["play", "a"], ["open", "b"]]);
+  const seek = [party(0, "s1", 0, false), party(10 * S, "s1", 1 * S, false), party(20 * S, "s1", 90 * S, false)];
+  assert.deepEqual(plain(ui$.flowSteps(seek).map((s) => s.kind)), ["open", "seek"]);
+});
+
+test("a review session has voices only and Watch Party records", () => {
+  const voice = { players: [{ parts: [{ m: {} }] }], party: [flow[0]] };
+  assert.equal(ui$.isReview(voice), true);
+  assert.equal(ui$.isReview({ ...voice, party: [] }), false);
+  assert.equal(ui$.isReview({ players: [{ parts: [{ v: {}, m: {} }] }], party: [flow[0]] }), false);
+  assert.equal(ui$.voiceOnly({ players: [] }), false);
+});
+
+test("the delete preview lists every part and warns when nobody else has one", () => {
+  const set = { id: "s1", progress: { have: 30 }, players: [{ owner: "me", have: 10, verified_by: ["me", "b"] }, { owner: "b", have: 20, verified_by: ["me"] }, { owner: "c", have: 0, verified_by: [] }] };
+  assert.deepEqual(plain(ui$.deletePreview([set], "me")), [{ id: "s1", bytes: 30, players: [{ owner: "me", bytes: 10, alone: false }, { owner: "b", bytes: 20, alone: true }] }]);
+  const sets = ["s5", "s4", "s3", "s2", "s1"].map((id) => ({ id, live: false, progress: { have: id === "s2" ? 0 : 1 } }));
+  assert.deepEqual([...ui$.oldSessions(sets, 2)], ["s3", "s1"]);
+});
+
+test("receiving speed and the live edge", () => {
+  assert.equal(ui$.rateOf([{ t: 0, have: 0 }, { t: 1000, have: 10 }], 1000), null);
+  assert.equal(ui$.rateOf([{ t: 0, have: 0 }, { t: 2000, have: 4000 }], 2000), 2000);
+  assert.equal(ui$.rateOf([{ t: 0, have: 0 }, { t: 2000, have: 4000 }], 60000), null);
+  assert.deepEqual(plain(ui$.liveEdge(100, 98)), { behind: 2, at: true });
+  assert.deepEqual(plain(ui$.liveEdge(100, 50)), { behind: 50, at: false });
+  assert.equal(ui$.leftText(30), "30 s left");
+  assert.equal(ui$.leftText(150), "3 min left");
+});
+
+test("the connection badge shows a relay when any member uses one", () => {
+  assert.equal(ui$.netState([{ connected: false }]), null);
+  assert.equal(ui$.netState([{ connected: true, path: "direct" }]), "direct");
+  assert.equal(ui$.netState([{ connected: true, path: "direct" }, { connected: true, path: "relay" }]), "relay");
+});
+
+test("the diagnostics overview marks problems", () => {
+  const st = {
+    version: "0.9.0", names: { a: "Aki" }, sets: [{ progress: { have: 1, total: 2, stuck: true } }],
+    peers: [{ id: "a", connected: true, path: "relay", rtt_ms: 80, version: "0.8.2" }],
+    capture: { source: null, source_lost: false, status: "", mix: { mic: { muted: true } }, quality: { fps: 30, codec: "h264" } },
+    disk: { free: 1e9, hours_left: 2, low: true, full: false },
+  };
+  const levels = Object.fromEntries(ui$.summaryLines(st, 1).map((l) => [l.key, l.level]));
+  assert.deepEqual(levels, { Connections: "warn", Capture: "info", Microphone: "info", Transfers: "warn", Storage: "warn", Versions: "warn", Plugins: "fail" });
+});
+
+test("every fixed text has a Japanese translation", () => {
+  const used = new Set();
+  for (const f of ["app.js", "side.js", "pages.js", "review.js", "events.js", "util.js", "draw.js"]) {
+    const s = read(f);
+    for (const m of s.matchAll(/\bt\(\s*"((?:[^"\\]|\\.)*)"/g)) used.add(JSON.parse(`"${m[1]}"`));
+    for (const m of s.matchAll(/\bt\([^)]*\?\s*"((?:[^"\\]|\\.)*)"\s*:\s*"((?:[^"\\]|\\.)*)"/g)) { used.add(JSON.parse(`"${m[1]}"`)); used.add(JSON.parse(`"${m[2]}"`)); }
+  }
+  for (const m of read("index.html").matchAll(/data-t(?:-title|-placeholder|-label)?="([^"]*)"/g)) used.add(m[1]);
+  const missing = [...used].filter((k) => !(k in ui$.JA));
+  assert.deepEqual(missing, []);
 });
