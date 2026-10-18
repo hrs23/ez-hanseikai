@@ -32,6 +32,7 @@ One key per person, made on first start; its public half is the person's ID ever
 ## Data
 
 - Each person writes their own append-only files: their recordings and their log. The logs are the source of truth; a torn last record is dropped on start.
+- One log per person per room (planned; today one log per person holds all rooms, tagged by room). Members receive only that room's logs, and everyone keeps every member's log of the room, so the room survives anyone leaving. A person on a new PC with an imported key first gets their own log back from the others, then writes.
 - A set is a folder, `rooms/<room>/sets/<local start time>/`, with `<member-id>.mp4` for every member and `set.json`, which keeps the recorder's tile order and layout as the set's default.
 - Log record kinds include `rec`, `rec_end`, `file`, `file_bad`, `note`, `note_edit`, `note_del`, `note_restore`, `offset` and `layout`. Unknown kinds are kept and ignored. Edits and deletions are new records.
 
