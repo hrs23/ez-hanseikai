@@ -19,7 +19,6 @@ Work in progress. See [the design](docs/design.md).
 9. Analysis is done by plugins that only read the recordings; each can be turned on or off on its own.
 10. Free and open source.
 
-
 ## Install
 
 1. Download `EZ.Hanseikai_<version>_x64-setup.exe` from [Releases](https://github.com/hrs23/ez-hanseikai/releases) and run it. It is unsigned, so SmartScreen warns: More info, then Run anyway. It installs for your Windows user only and needs no admin rights.
