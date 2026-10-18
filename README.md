@@ -11,13 +11,15 @@ Work in progress. See [the design](docs/design.md).
 1. Made for team reviews: a squad watches its own matches together from everyone's view, not for clips or social sharing.
 2. Everyone sees the same thing: while watching together, playback, layout, notes and analysis results match for all.
 3. No busywork: everyone's recordings are collected and lined up automatically, with no manual syncing.
-4. Any game: the app uses only the picture and sound, so it works with any game; game-specific features come from plugins.
-5. Simple: as few settings, screens and features as the job needs.
-6. Never touches the game: it only captures the screen and the game's sound, never injects code, draws overlays or reads game memory.
-7. No cloud: recordings and notes go straight to your teammates and stay on your PCs.
-8. Nothing is lost by one person's delete: everyone keeps their own copy.
-9. Analysis is done by plugins that only read the recordings; each can be turned on or off on its own.
-10. Free and open source.
+4. For people who trust each other: room members are trusted, and outsiders are kept out (encrypted connections, members only, one-time invites); the app does not try to defend a room against its own members.
+5. No one is required: everyone holds everything, so the room keeps working when anyone leaves or is offline.
+6. Any game: the app uses only the picture and sound, so it works with any game; game-specific features come from plugins.
+7. Simple: as few settings, screens and features as the job needs.
+8. Never touches the game: it only captures the screen and the game's sound, never injects code, draws overlays or reads game memory.
+9. No cloud: recordings and notes go straight to your teammates and stay on your PCs.
+10. Nothing is lost by one person's delete: everyone keeps their own copy.
+11. Analysis is done by plugins that only read the recordings; each can be turned on or off on its own.
+12. Free and open source.
 
 ## Install
 
