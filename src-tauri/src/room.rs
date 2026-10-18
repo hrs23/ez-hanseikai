@@ -107,6 +107,14 @@ fn civil(days: i64) -> (i64, i64, i64) {
     (yoe + era * 400 + i64::from(m <= 2), m, d)
 }
 
+pub fn wall_clock(now_us: i64, tz_offset_s: i64) -> String {
+    let local = now_us + tz_offset_s * 1_000_000;
+    let secs = local.div_euclid(1_000_000);
+    let (y, m, d) = civil(secs.div_euclid(86400));
+    let rest = secs.rem_euclid(86400);
+    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.{:03}", rest / 3600, rest % 3600 / 60, rest % 60, local.rem_euclid(1_000_000) / 1000)
+}
+
 pub fn set_id_for(now_us: i64, tz_offset_s: i64) -> String {
     let secs = now_us / 1_000_000 + tz_offset_s;
     let (y, m, d) = civil(secs.div_euclid(86400));
@@ -517,12 +525,16 @@ pub fn begin_set(core: &Arc<Core>, set: &str, by: &str, start_us: i64) -> Result
         }
         *slot = Some(active);
     }
+    tracing::info!("session {set} started by {by}");
     Ok(())
 }
 
 pub fn end_set(core: &Arc<Core>, stop: bool, only: Option<&str>) {
     let Some(active) = record::end_set(core, only) else { return };
     core.append_log(&active.room, &json!({"k": "rec_end", "set": active.id, "room": active.room, "t_us": now_us(), "stop": stop}));
+    let own = core.own_log(&active.room);
+    let count = |series: &str| own.iter().filter(|r| r["k"] == "seg" && r["set"] == active.id.as_str() && r["series"] == series).count();
+    tracing::info!("session {} ended{}: {} picture and {} voice segments", active.id, if stop { " by a stop" } else { "" }, count(SERIES[0]), count(SERIES[1]));
 }
 
 pub fn joined(records: &[Value], set: &str) -> bool {
@@ -1124,6 +1136,12 @@ mod tests {
         assert!(!stuck(&some, &[&all], &sets[0], f));
         assert!(stuck(&some, &[&some], &sets[0], f));
         assert!(!stuck(&all, &[], &sets[0], f));
+    }
+
+    #[test]
+    fn log_lines_carry_the_local_wall_clock() {
+        assert_eq!(wall_clock(1_760_801_895_123_456, 9 * 3600), "2025-10-19T00:38:15.123");
+        assert_eq!(wall_clock(0, -3600), "1969-12-31T23:00:00.000");
     }
 
     #[test]

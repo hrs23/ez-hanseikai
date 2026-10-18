@@ -454,6 +454,7 @@ impl Sink {
             "source_kind": names.kind, "source": names.source, "width": out.0, "height": out.1, "fps": FPS, "kbps": kbps,
             "encoder": chosen.0, "codec": chosen.1, "audio": names.game, "mic": names.mic, "version": crate::VERSION,
         });
+        tracing::info!("capture {capture} started: {} {}x{} at {kbps} kbit/s from a {}", chosen.0, out.0, out.1, names.kind);
         let stdin = child.child.stdin.take();
         let sink = Arc::new(Self {
             room,

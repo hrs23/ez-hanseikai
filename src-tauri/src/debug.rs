@@ -19,7 +19,9 @@ use tracing_subscriber::EnvFilter;
 use crate::room::{self, SERIES};
 use crate::{check, data, ffmpeg, net, now_us, party, record, short, sources, Core, NO_WINDOW};
 
-const MAX_LOG: u64 = 2 << 20;
+const MAX_LOG: u64 = 10 << 20;
+pub const LOG_FILES: [&str; 3] = ["log.txt", "log.old.txt", "log.older.txt"];
+const CRASH: &str = "crash.txt";
 const EVENTS_KEPT: usize = 500;
 const TRANSFERS_KEPT: usize = 1500;
 const CUTS_KEPT: usize = 120;
@@ -81,15 +83,23 @@ pub struct Event {
 
 #[derive(Clone)]
 struct RollingFile {
-    path: PathBuf,
+    dir: PathBuf,
     file: Arc<Mutex<(File, u64)>>,
 }
 
 impl RollingFile {
-    fn open(path: PathBuf) -> std::io::Result<Self> {
-        let file = OpenOptions::new().create(true).append(true).open(&path)?;
+    fn open(dir: &Path) -> std::io::Result<Self> {
+        let file = OpenOptions::new().create(true).append(true).open(dir.join(LOG_FILES[0]))?;
         let len = file.metadata().map(|m| m.len()).unwrap_or(0);
-        Ok(Self { path, file: Arc::new(Mutex::new((file, len))) })
+        Ok(Self { dir: dir.to_path_buf(), file: Arc::new(Mutex::new((file, len))) })
+    }
+}
+
+struct Wall(i64);
+
+impl tracing_subscriber::fmt::time::FormatTime for Wall {
+    fn format_time(&self, w: &mut tracing_subscriber::fmt::format::Writer<'_>) -> std::fmt::Result {
+        write!(w, "{}", room::wall_clock(now_us(), self.0))
     }
 }
 
@@ -97,8 +107,10 @@ impl Write for RollingFile {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let mut file = self.file.lock().unwrap();
         if file.1 > MAX_LOG {
-            let _ = fs::rename(&self.path, self.path.with_extension("old.txt"));
-            *file = (OpenOptions::new().create(true).append(true).open(&self.path)?, 0);
+            for i in (1..LOG_FILES.len()).rev() {
+                let _ = fs::rename(self.dir.join(LOG_FILES[i - 1]), self.dir.join(LOG_FILES[i]));
+            }
+            *file = (OpenOptions::new().create(true).append(true).open(self.dir.join(LOG_FILES[0]))?, 0);
         }
         let n = file.0.write(buf)?;
         file.1 += n as u64;
@@ -118,17 +130,21 @@ impl<'a> MakeWriter<'a> for RollingFile {
 }
 
 pub fn init(dir: &Path) {
-    let Ok(writer) = RollingFile::open(dir.join("log.txt")) else { return };
+    let tz = data::tz_offset_seconds();
+    let Ok(writer) = RollingFile::open(dir) else { return };
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn,ez_hanseikai=debug,iroh=info"));
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(writer)
         .with_ansi(false)
-        .with_timer(tracing_subscriber::fmt::time::uptime())
+        .with_timer(Wall(tz))
         .init();
+    let crash = dir.join(CRASH);
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        tracing::error!("panic: {info}\n{}", std::backtrace::Backtrace::force_capture());
+        let text = format!("{} version {} panic: {info}\n{}\n", room::wall_clock(now_us(), tz), crate::VERSION, std::backtrace::Backtrace::force_capture());
+        let _ = OpenOptions::new().create(true).append(true).open(&crash).and_then(|mut f| f.write_all(text.as_bytes()).and_then(|_| f.sync_all()));
+        tracing::error!("{text}");
         previous(info);
     }));
 }
@@ -784,6 +800,8 @@ pub fn report_text(core: &Core, include_addresses: bool, peer_addresses: bool, c
     out.push_str(&text(core, peer_addresses));
     out.push_str("\nrecent errors\n");
     out.push_str(&errors(&log).join("\n"));
+    out.push_str("\n\nrecent crashes\n");
+    out.push_str(&tail(&core.dir.join(CRASH), 0, LOG_TAIL).0);
     out.push_str("\n\nrecent log\n");
     out.push_str(&recent.join("\n"));
     if include_addresses { out } else { redact(&out, &known_names(core)) }
