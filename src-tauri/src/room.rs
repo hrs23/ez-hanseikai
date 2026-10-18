@@ -830,7 +830,7 @@ pub fn gone_json(room: &str, logs: &[Log], deleted: &HashSet<String>, events: &[
         .map(|set| {
             let players: Vec<Value> = set.files.iter().map(|f| json!({"owner": f.owner, "total": f.total(), "voice": f.series(SERIES[0]).is_empty()})).collect();
             let covered: Vec<&Value> = events.iter().filter(|e| covers(&set, e)).map(|e| &e["key"]).collect();
-            json!({"id": set.id, "room": room, "start_us": set.start(), "end_us": set.end(), "players": players, "events": covered, "party": !party::records(logs, &set.id).is_empty()})
+            json!({"id": set.id, "room": room, "start_us": set.start(), "end_us": set.end(), "players": players, "events": covered})
         })
         .collect()
 }
@@ -958,6 +958,7 @@ pub fn sets_json(core: &Core, room: &str, logs: &[Log], events: &[Value]) -> Vec
     let online: Vec<&HashMap<String, u64>> = peers.iter().filter(|p| p.3).map(|p| &p.1).collect();
     let all = sets(core, room, logs);
     let mine = data::have_counts(core, room, &all);
+    let mut flows = party::records(logs);
     let mut out = Vec::new();
     for set in all {
         let mut holders = vec![Holder { id: &me, name: "You".into(), have: &mine, gone: false }];
@@ -982,7 +983,7 @@ pub fn sets_json(core: &Core, room: &str, logs: &[Log], events: &[Value]) -> Vec
         out.push(json!({
             "id": set.id, "room": room, "start_us": set.start(), "end_us": set.end(), "live": live,
             "players": players, "events": covered, "progress": {"have": have, "total": total, "stuck": stuck_all}, "missing": missing.len(), "lacking": lacking_by, "all_verified": all_verified,
-            "status": set_status(live, all_verified, &missing), "layout": set_layout(logs, &set.id), "party": party::records(logs, &set.id),
+            "status": set_status(live, all_verified, &missing), "layout": set_layout(logs, &set.id), "party": flows.remove(&set.id).unwrap_or_default(),
         }));
     }
     out

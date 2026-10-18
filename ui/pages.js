@@ -239,7 +239,7 @@ function renderJobs() {
   const running = jobInfo && jobInfo.running;
   const shown = jobs.filter((j) => jobFilter === "all" || (jobFilter === "failed" ? j.state === "failed" : j.state === "claimed" || j.state === "waiting"));
   if (!changed("roomtab", ["jobs", shown, running && [running.job, Math.floor((running.progress || 0) * 100)], jobFilter, st.names, lang])) return;
-  const seg = el("div", { className: "seg" }, ...[["all", t("All")], ["active", t("Active")], ["failed", t("Failed")]].map(([k, label]) => el("button", { className: jobFilter === k ? "on" : "", textContent: label, onclick: () => { jobFilter = k; renderRoom(); } })));
+  const seg = el("div", { className: "seg" }, ...[["all", t("All jobs")], ["active", t("Active")], ["failed", t("Failed")]].map(([k, label]) => el("button", { className: jobFilter === k ? "on" : "", textContent: label, onclick: () => { jobFilter = k; renderRoom(); } })));
   const state = (j) => {
     if (running && running.job === j.job) { const n = Math.floor((running.progress || 0) * 100); return el("div", { className: "jobrun" }, el("span", { textContent: t("Running {n}%", { n }) }), el("div", { className: "bar" }, el("i", { style: `width:${n}%` }))); }
     if (j.state === "failed") return el("span", { className: "pill bad", title: j.error || "" }, icon("fail", "sm"), t("Failed"));

@@ -197,21 +197,23 @@ pub fn log(core: &Core) {
     core.append_log(&active.room, &record(&active.id, &shared, crate::now_us()));
 }
 
-pub fn records(logs: &[room::Log], set: &str) -> Vec<Value> {
-    let mut out: Vec<Value> = Vec::new();
+pub fn records(logs: &[room::Log]) -> HashMap<String, Vec<Value>> {
+    let mut out: HashMap<String, Vec<Value>> = HashMap::new();
     for log in logs {
-        for r in log.records.iter().filter(|r| r["k"] == "party" && r["set"] == set) {
-            let (Some(t), Some(shared)) = (r["t_us"].as_i64(), r["shared"].as_object()) else { continue };
+        for r in log.records.iter().filter(|r| r["k"] == "party") {
+            let (Some(set), Some(t), Some(shared)) = (r["set"].as_str(), r["t_us"].as_i64(), r["shared"].as_object()) else { continue };
             let mut shared = Value::Object(shared.clone());
             for k in ["wall_us", "at_us"] {
                 if let Some(v) = shared[k].as_i64() {
                     shared[k] = json!(v - log.offset_us);
                 }
             }
-            out.push(json!({"t_us": t - log.offset_us, "by": log.owner, "shared": shared}));
+            out.entry(set.to_string()).or_default().push(json!({"t_us": t - log.offset_us, "by": log.owner, "shared": shared}));
         }
     }
-    out.sort_by_key(|r| r["t_us"].as_i64());
+    for list in out.values_mut() {
+        list.sort_by_key(|r| r["t_us"].as_i64());
+    }
     out
 }
 
@@ -452,8 +454,10 @@ mod tests {
         let shared = |wall: i64| json!({"set": "s1", "playing": true, "wall_us": wall, "at_us": wall});
         let a = room::Log { owner: "a".into(), offset_us: 0, records: std::sync::Arc::new(vec![record("rv", &shared(500), 300), record("other", &shared(1), 1), json!({"k": "party", "set": "rv"})]) };
         let b = room::Log { owner: "b".into(), offset_us: 100, records: std::sync::Arc::new(vec![record("rv", &shared(900), 350)]) };
-        let list = records(&[a, b], "rv");
+        let all = records(&[a, b]);
+        let list = &all["rv"];
         assert_eq!(list.iter().map(|r| (r["t_us"].as_i64().unwrap(), r["by"].as_str().unwrap())).collect::<Vec<_>>(), [(250, "b"), (300, "a")]);
         assert_eq!(list[0]["shared"]["wall_us"], 800);
+        assert_eq!(all["other"].len(), 1);
     }
 }

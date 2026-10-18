@@ -230,14 +230,14 @@ function livePlayers() {
   const files = { [st.id]: st.capture.live };
   for (const p of st.peers) if (p.live) files[p.id] = p.live;
   const keys = [st.id, ...st.peers.filter((p) => p.connected || files[p.id]).map((p) => p.id)];
-  return keys.map((key) => ({ key, file: files[key] && files[key].size > 0 ? files[key] : null, recording: recOf(key) && (key !== st.id || st.capture.working), relay: (peerOf(key) || {}).path === "relay" }));
+  return keys.map((key) => ({ key, file: files[key] && files[key].size > 0 ? files[key] : null, recording: recOf(key) && (key !== st.id || st.capture.working), sharing: key !== st.id && !!(peerOf(key) || {}).sharing }));
 }
 function liveWhat(p) {
   if (p.key === st.id) {
     if (!st.capture.source) return [el("div", { className: "big" }, icon("monitor-off")), el("b", { textContent: t("{name} · Screen off", { name: nameOf(st.id) }) }), el("button", { className: "sm choose", textContent: t("Choose screen"), onclick: (e) => { e.stopPropagation(); openSource($("screenmore")); } })];
     return [el("span", { textContent: captureProblem(st.capture) || t("Starting…") })];
   }
-  return [el("span", { textContent: p.relay ? t("Via relay · voice only") : t("Screen off") })];
+  return [el("span", { textContent: p.sharing ? t("Starting…") : t("Screen off") })];
 }
 function renderLive() {
   const idle = page === "player" && showingNow() && !playSet();
@@ -252,7 +252,7 @@ function renderLive() {
   for (const p of list) {
     const tl = tile(rec, p.key);
     nameTile(tl, p.key, p.recording);
-    if (changed("livewhat/" + p.key, [!!p.file, p.relay, st.capture.source, captureProblem(st.capture), lang])) tl.what.replaceChildren(...liveWhat(p));
+    if (changed("livewhat/" + p.key, [!!p.file, p.sharing, st.capture.source, captureProblem(st.capture), lang])) tl.what.replaceChildren(...liveWhat(p));
     tl.box.classList.toggle("wait", !p.file);
     tl.box.classList.toggle("mine", p.key === st.id && !st.capture.source);
     if (p.file) feed(tl.media, p.file, true);
@@ -416,7 +416,7 @@ function renderPlayer() {
 function renderTransport(set, idle) {
   const liveSetShown = !!(set && set.live && !review);
   const tot = shownTotal();
-  const edge = liveEdge(received(), nowM());
+  const edge = liveEdge(total(), nowM());
   if (liveSetShown && live && received() - nowM() > 2 * LIVE_LAG) setClock(true, received() - LIVE_LAG);
   if (set && !set.live) live = false;
   for (const id of ["play", "back", "fwd", "addnote", "mixbtn", "cc", "speed", "seek", "lane", "chapters", "matchchip"]) $(id).classList.toggle("nodisp", idle);
@@ -424,7 +424,7 @@ function renderTransport(set, idle) {
   $("transport").classList.toggle("idle", idle);
   $("clocknow").parentElement.hidden = idle;
   $("live").hidden = !(idle || liveSetShown);
-  const atLive = idle || (live && edge.at);
+  const atLive = idle || live;
   $("live").className = "livebtn " + (atLive ? "at" : "behind");
   if (changed("livebtn", [atLive, idle ? 0 : Math.round(edge.behind), lang])) $("live").replaceChildren(el("i"), atLive ? t("Live") : t("Go live"), atLive ? "" : el("span", { className: "lagt", textContent: "−" + fmt(edge.behind) }));
   $("seek").classList.toggle("onlive", liveSetShown && atLive);
@@ -441,8 +441,8 @@ function headerChips(set) {
   if (review) { const r = reviewSet(); return [pill("accent", "mic", t("Debrief")), r && r.live ? pill("rec", "rec", t("Recording")) : null]; }
   if (!set) return [];
   if (set.live) {
-    const edge = liveEdge(received(), nowM());
-    return [pill("rec", "rec", t("Recording {time}", { time: fmt((nowUs() - a.start_us) / 1e6) })), live && edge.at ? null : pill("gray", null, t("Playing back · {time} behind live", { time: fmt(edge.behind) }))];
+    const edge = liveEdge(total(), nowM());
+    return [pill("rec", "rec", t("Recording {time}", { time: fmt((nowUs() - a.start_us) / 1e6) })), live ? null : pill("gray", null, t("Playing back · {time} behind live", { time: fmt(edge.behind) }))];
   }
   return [isReview(set) ? pill("accent", "mic", t("Debrief")) : pill("gray", "film", t("Recorded"))];
 }
