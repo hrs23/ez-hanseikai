@@ -42,8 +42,8 @@ function inline(text, onTag = filterTag, onLink = openLink) {
   for (const m of text.matchAll(pattern)) {
     if (m.index > last) out.push(text.slice(last, m.index));
     const s = m[0];
-    if (s.startsWith("**")) out.push(el("b", { textContent: s.slice(2, -2) }));
-    else if (s.startsWith("==")) out.push(el("mark", { textContent: s.slice(2, -2) }));
+    if (s.startsWith("**")) out.push(el("b", {}, ...inline(s.slice(2, -2), onTag, onLink)));
+    else if (s.startsWith("==")) out.push(el("mark", {}, ...inline(s.slice(2, -2), onTag, onLink)));
     else if (s.startsWith("[")) {
       const label = s.slice(1, s.indexOf("]("));
       const url = s.slice(s.indexOf("](") + 2, -1);
@@ -61,7 +61,7 @@ function inline(text, onTag = filterTag, onLink = openLink) {
 
 function linkButton(label, url, onLink) {
   const link = parseLink(url);
-  return el("button", { className: "link", textContent: link ? `${label} ${fmt(link.m)}` : label, onclick: (e) => { e.stopPropagation(); if (link) onLink(link); } });
+  return el("button", { className: "link", onclick: (e) => { e.stopPropagation(); if (link) onLink(link); } }, icon("play", "sm"), link ? `${label} ${fmt(link.m)}` : label);
 }
 
 function tagName(tag) {

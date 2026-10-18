@@ -331,13 +331,8 @@ async function runCheck() {
   $("checksummary").textContent = bad ? `Check: ${bad} problem(s)` : warn ? `Check: ${warn} warning(s)` : "Check: OK";
   $("checks").replaceChildren(table(["Level", "Result"], lines, (l) => el("tr", null, td(l.level, l.level), td(l.text, "wrap"))));
 }
-const level = () => document.querySelector("input[name=level]:checked").value;
 $("runcheck").onclick = runCheck;
 $("openfolder").onclick = () => invoke("open_data_folder");
-$("resetopen").onclick = () => { $("reset").hidden = false; };
-$("resetcancel").onclick = () => { $("reset").hidden = true; $("reseterr").textContent = ""; };
-document.querySelectorAll("input[name=level]").forEach((r) => { r.onchange = () => { $("confirm").hidden = level() !== "all"; }; });
-$("doreset").onclick = () => invoke("reset", { everything: level() === "all", confirm: $("confirm").value }).catch((e) => { $("reseterr").textContent = String(e); });
 
 invoke("set_report_sharing", { on: false });
 setInterval(() => { if (!document.hidden) refreshNames().catch(() => {}); }, SLOW_MS);

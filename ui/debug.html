@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>EZ Hanseikai Debug</title>
+<title>EZ Hanseikai Developer tools</title>
 <style>
 :root { --bg: #0c0e12; --surface: #13161c; --raised: #1b1f27; --line: #262b35; --text: #e7e9ee; --muted: #8a92a3; --accent: #3dd6c6; --ok: #4ade80; --warn: #fbbf24; --bad: #f87171; }
 * { box-sizing: border-box; }
@@ -45,7 +45,6 @@ pre { margin: 0; padding: 4px 8px; font: 11px/1.45 Consolas, "Cascadia Mono", mo
 .empty { padding: 8px; color: var(--muted); }
 svg.spark { display: block; }
 #loglines div { white-space: pre-wrap; word-break: break-all; padding: 0 8px; font: 11px/1.45 Consolas, "Cascadia Mono", monospace; }
-#reset { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--line); margin: 4px 8px; }
 </style>
 </head>
 <body>
@@ -125,14 +124,7 @@ svg.spark { display: block; }
   <div id="checks"></div>
   <h4>Files</h4>
   <div id="datainfo" class="kv"></div>
-  <div class="bar"><button id="openfolder">Open data folder</button><button id="resetopen">Reset...</button></div>
-  <div id="reset" hidden>
-    <label><input type="radio" name="level" value="settings" checked> Settings and cache</label>
-    <label><input type="radio" name="level" value="all"> Everything, including recordings and your ID</label>
-    <input id="confirm" placeholder="Type RESET" hidden>
-    <div><button id="doreset" class="danger">Reset</button> <button id="resetcancel">Cancel</button></div>
-    <div id="reseterr" class="bad"></div>
-  </div>
+  <div class="bar"><button id="openfolder">Open data folder</button></div>
 </section>
 </main>
 <script src="debug.js"></script>
