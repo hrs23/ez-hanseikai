@@ -4,19 +4,21 @@ use std::path::Path;
 
 use serde_json::Value;
 
+pub const HEADER: usize = 8;
+
 pub fn parse(bytes: &[u8]) -> (Vec<Value>, usize) {
     let mut records = Vec::new();
     let mut at = 0usize;
-    while at + 8 <= bytes.len() {
+    while at + HEADER <= bytes.len() {
         let len = u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
-        let crc = u32::from_le_bytes(bytes[at + 4..at + 8].try_into().unwrap());
-        let Some(body) = bytes.get(at + 8..at + 8 + len) else { break };
+        let crc = u32::from_le_bytes(bytes[at + 4..at + HEADER].try_into().unwrap());
+        let Some(body) = bytes.get(at + HEADER..at + HEADER + len) else { break };
         if crc32fast::hash(body) != crc {
             break;
         }
         let Ok(v) = serde_json::from_slice(body) else { break };
         records.push(v);
-        at += 8 + len;
+        at += HEADER + len;
     }
     (records, at)
 }
@@ -41,7 +43,7 @@ pub fn repair(path: &Path) {
 
 pub fn encode(record: &Value) -> Vec<u8> {
     let body = serde_json::to_vec(record).unwrap_or_default();
-    let mut out = Vec::with_capacity(body.len() + 8);
+    let mut out = Vec::with_capacity(body.len() + HEADER);
     out.extend_from_slice(&(body.len() as u32).to_le_bytes());
     out.extend_from_slice(&crc32fast::hash(&body).to_le_bytes());
     out.extend_from_slice(&body);
@@ -49,10 +51,18 @@ pub fn encode(record: &Value) -> Vec<u8> {
 }
 
 pub fn append(path: &Path, record: &Value) -> std::io::Result<()> {
+    append_bytes(path, &encode(record))
+}
+
+pub fn append_bytes(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    OpenOptions::new().create(true).append(true).open(path)?.write_all(&encode(record))
+    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    let len = file.metadata()?.len();
+    file.write_all(bytes).inspect_err(|_| {
+        let _ = OpenOptions::new().write(true).open(path).and_then(|f| f.set_len(len));
+    })
 }
 
 pub fn extend(path: &Path, from: u64, data: &[u8]) -> std::io::Result<()> {
@@ -63,11 +73,10 @@ pub fn extend(path: &Path, from: u64, data: &[u8]) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-    if file.metadata()?.len() != from {
+    if std::fs::metadata(path).map_or(0, |m| m.len()) != from {
         return Ok(());
     }
-    file.write_all(&data[..whole])
+    append_bytes(path, &data[..whole])
 }
 
 #[cfg(test)]

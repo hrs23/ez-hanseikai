@@ -5,7 +5,7 @@ use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -25,13 +25,13 @@ use crate::audio::{self, Audio, CHANNELS, SAMPLE_RATE};
 use crate::ffmpeg::{self, FRAGMENTED};
 use crate::room::{part_of, seg_name, INIT, SERIES};
 use crate::sources::{self, Found, Item};
-use crate::{data, hex, media, merge, now_us, read_json, Core, BELOW_NORMAL, NO_WINDOW};
+use crate::{data, debug, hex, media, merge, now_us, read_json, write_whole, Core, BELOW_NORMAL, NO_WINDOW};
 
 pub type Err = Box<dyn std::error::Error + Send + Sync>;
 
 pub const FPS: u32 = 30;
 pub const FRAGMENTS_PER_SEGMENT: u32 = 4;
-const BASE_BITRATE_KBPS: f64 = 6000.0;
+const H264_BITS_PER_PIXEL: f64 = 0.2;
 const AUDIO_BITRATE: &str = "128k";
 const QUEUE_SIZE: &str = "512";
 const VOICE_FRAGMENT_US: &str = "1000000";
@@ -40,7 +40,8 @@ const REPEAT_AFTER: Duration = Duration::from_millis(250);
 const REPEAT_POLL: Duration = Duration::from_millis(100);
 const PCM_FRAME_BYTES: u64 = 4;
 const PAD_AFTER_FRAMES: u64 = SAMPLE_RATE as u64 / 50;
-const SHARED_MAX_WIDTH: u32 = 1280;
+pub const QUALITIES: [(&str, u32); 3] = [("light", 960), ("standard", 1280), ("high", 1920)];
+const WIDE: (u32, u32) = (16, 9);
 const LEVELS_PER_SECOND: u64 = 30;
 const READ_CHUNK: usize = 64 << 10;
 const SUPERVISE_EVERY: Duration = Duration::from_millis(500);
@@ -48,12 +49,32 @@ pub const RESCAN_EVERY: Duration = Duration::from_secs(5);
 const RETRY_FIRST: Duration = Duration::from_secs(1);
 const RETRY_MAX: Duration = Duration::from_secs(30);
 const STABLE_AFTER: Duration = Duration::from_secs(60);
+const STALL_AFTER: Duration = Duration::from_secs(10);
+const FEED_GAP: Duration = Duration::from_secs(2);
+const DROP_AFTER: u32 = 3;
 const FINISH_WAIT: Duration = Duration::from_secs(10);
 const CUT_WAIT: Duration = Duration::from_secs(3);
 const PROBE_WAIT: Duration = Duration::from_secs(2);
 const POLL: Duration = Duration::from_millis(20);
-pub const GAME: usize = 0;
+pub const APP: usize = 0;
 pub const MIC: usize = 1;
+const TEST_SIZE: (u32, u32) = (1280, 720);
+const TEST_TONES_HZ: [u32; 2] = [440, 880];
+
+pub fn quality_width(id: &str) -> u32 {
+    QUALITIES.iter().find(|q| q.0 == id).unwrap_or(&QUALITIES[1]).1
+}
+
+pub fn scaled(size: (u32, u32), width: u32) -> (u32, u32) {
+    let w = width.min(size.0) & !1;
+    let h = ((size.1 as u64 * w as u64 + size.0 as u64 / 2) / size.0.max(1) as u64) as u32 & !1;
+    (w, h.max(2))
+}
+
+pub fn bitrate_kbps(width: u32, factor: f64) -> u32 {
+    let pixels = width as f64 * width as f64 * WIDE.1 as f64 / WIDE.0 as f64;
+    (pixels * FPS as f64 * H264_BITS_PER_PIXEL * factor / 1000.0).round() as u32
+}
 const OPEN: &str = "open.json";
 pub const CAP: &str = "cap.json";
 
@@ -73,6 +94,51 @@ struct Open {
     count: u32,
 }
 
+#[derive(Default, Clone, Copy)]
+struct Watch {
+    owed: Option<Instant>,
+    fed: Option<Instant>,
+    writing: bool,
+    answered: Option<Instant>,
+}
+
+impl Watch {
+    fn fed(&mut self, now: Instant) {
+        if self.fed.is_none_or(|t| now.saturating_duration_since(t) > FEED_GAP) {
+            self.owed = Some(now);
+        }
+        self.owed.get_or_insert(now);
+        self.fed = Some(now);
+        self.writing = true;
+    }
+
+    fn wrote(&mut self) {
+        self.writing = false;
+    }
+
+    fn answer(&mut self, now: Instant) {
+        self.owed = None;
+        self.answered.get_or_insert(now);
+    }
+
+    fn stalled(&self, now: Instant) -> bool {
+        let feeding = self.writing || self.fed.is_some_and(|t| now.saturating_duration_since(t) <= FEED_GAP);
+        feeding && self.owed.is_some_and(|t| now.saturating_duration_since(t) > STALL_AFTER)
+    }
+
+    fn working(&self, now: Instant) -> bool {
+        self.answered.is_some() && !self.stalled(now)
+    }
+
+    fn stable(&self, now: Instant) -> bool {
+        self.working(now) && self.answered.is_some_and(|t| now.saturating_duration_since(t) > STABLE_AFTER)
+    }
+}
+
+fn strike(last: (&'static str, u32), encoder: &'static str) -> (&'static str, u32) {
+    (encoder, if last.0 == encoder { last.1 + 1 } else { 1 })
+}
+
 #[derive(Default)]
 struct Series {
     scales: HashMap<u32, u32>,
@@ -87,10 +153,16 @@ pub struct Sink {
     pub capture: String,
     dir: PathBuf,
     size: (u32, u32),
+    out: (u32, u32),
+    quality: String,
+    kbps: u32,
+    encoder: &'static str,
     codec: &'static str,
     meta: Value,
     child: Mutex<Child>,
-    video: Mutex<Option<ChildStdin>>,
+    frame: Mutex<Option<Arc<Vec<u8>>>>,
+    ready: Condvar,
+    watch: Mutex<Watch>,
     tracks: [Mutex<Track>; 2],
     outputs: [Mutex<Series>; 2],
     inits: Mutex<[Value; 2]>,
@@ -121,6 +193,7 @@ pub struct Engine {
     pub source: Mutex<Value>,
     pub mic: Mutex<String>,
     pub mix: Mutex<Value>,
+    pub quality: Mutex<String>,
     pub source_lost: AtomicBool,
     pub status: Mutex<String>,
     pub names: Mutex<Names>,
@@ -129,8 +202,9 @@ pub struct Engine {
     pub peaks: [AtomicU32; 2],
     video: Mutex<Option<Video>>,
     canvas: Mutex<Option<(u32, u32)>>,
-    last: Mutex<(Vec<u8>, (u32, u32), Instant)>,
+    last: Mutex<(Arc<Vec<u8>>, (u32, u32), Instant)>,
     failures: AtomicU32,
+    strikes: Mutex<(&'static str, u32)>,
     retry_at: Mutex<Instant>,
     rec_lock: Mutex<()>,
 }
@@ -141,6 +215,7 @@ impl Engine {
             source: Mutex::new(settings["source"].clone()),
             mic: Mutex::new(settings["mic"].as_str().unwrap_or_default().to_string()),
             mix: Mutex::new(if settings["mix"].is_object() { settings["mix"].clone() } else { json!({}) }),
+            quality: Mutex::new(settings["quality"].as_str().unwrap_or(QUALITIES[1].0).to_string()),
             source_lost: AtomicBool::new(false),
             status: Mutex::new(String::new()),
             names: Mutex::new(Names::default()),
@@ -149,15 +224,16 @@ impl Engine {
             peaks: [AtomicU32::new(0), AtomicU32::new(0)],
             video: Mutex::new(None),
             canvas: Mutex::new(None),
-            last: Mutex::new((Vec::new(), (0, 0), Instant::now())),
+            last: Mutex::new((Arc::new(Vec::new()), (0, 0), Instant::now())),
             failures: AtomicU32::new(0),
+            strikes: Mutex::new(("", 0)),
             retry_at: Mutex::new(Instant::now()),
             rec_lock: Mutex::new(()),
         }
     }
 
     pub fn mix_key(&self, track: usize) -> String {
-        if track == GAME { "game".into() } else { format!("mic:{}", self.names.lock().unwrap().mic_id) }
+        if track == APP { "app".into() } else { format!("mic:{}", self.names.lock().unwrap().mic_id) }
     }
 
     pub fn gain(&self, track: usize) -> (f32, bool) {
@@ -172,8 +248,26 @@ impl Engine {
         Some((sink.room.clone(), sink.capture.clone(), n))
     }
 
-    fn failed(&self, born: Instant, why: &str) {
-        let count = if born.elapsed() > STABLE_AFTER { 1 } else { self.failures.load(Ordering::Relaxed) + 1 };
+    pub fn working(&self) -> bool {
+        self.sink.lock().unwrap().clone().is_some_and(|s| !s.dead.load(Ordering::Relaxed) && s.watch.lock().unwrap().working(Instant::now()))
+    }
+
+    fn encoder_died(&self, sink: &Sink) {
+        let stable = sink.watch.lock().unwrap().stable(Instant::now());
+        let (encoder, count) = {
+            let mut strikes = self.strikes.lock().unwrap();
+            *strikes = strike(if stable { ("", 0) } else { *strikes }, sink.encoder);
+            *strikes
+        };
+        if count >= DROP_AFTER && ffmpeg::drop_encoder(encoder) {
+            tracing::warn!("{encoder} failed {count} times, switching to the next encoder");
+            self.failures.store(0, Ordering::Relaxed);
+        }
+        self.failed(stable, "the video encoder stopped");
+    }
+
+    fn failed(&self, stable: bool, why: &str) {
+        let count = if stable { 1 } else { self.failures.load(Ordering::Relaxed) + 1 };
         self.failures.store(count, Ordering::Relaxed);
         let delay = RETRY_FIRST.saturating_mul(1 << (count - 1).min(5)).min(RETRY_MAX);
         *self.retry_at.lock().unwrap() = Instant::now() + delay;
@@ -194,16 +288,33 @@ pub fn capture_json(core: &Core, live: Option<Value>) -> Value {
         "source_kind": e.names.lock().unwrap().kind.clone(),
         "source_lost": e.source_lost.load(Ordering::Relaxed),
         "sharing": core.sharing_live(),
+        "working": e.working(),
         "status": e.status.lock().unwrap().clone(),
         "mic": e.mic.lock().unwrap().clone(),
-        "mix": {"game": mix(GAME), "mic": mix(MIC)},
+        "mix": {"app": mix(APP), "mic": mix(MIC)},
+        "quality": quality_json(core),
         "live": live,
     })
 }
 
+fn quality_json(core: &Core) -> Value {
+    let e = &core.engine;
+    let id = e.quality.lock().unwrap().clone();
+    let sink = e.sink.lock().unwrap().clone().filter(|s| s.quality == id);
+    let (size, kbps, codec) = match sink {
+        Some(s) => (Some(s.out), s.kbps, s.codec),
+        None => {
+            let chosen = ffmpeg::pick(&usable_codecs(core));
+            let canvas = *e.canvas.lock().unwrap();
+            (canvas.map(|c| scaled(c, quality_width(&id))), bitrate_kbps(quality_width(&id), chosen.2), chosen.1)
+        }
+    };
+    json!({"id": id, "width": size.map(|s| s.0), "height": size.map(|s| s.1), "fps": FPS, "kbps": kbps, "codec": codec})
+}
+
 fn want(core: &Core) -> Option<String> {
     let e = &core.engine;
-    if e.source.lock().unwrap().is_null() || core.disk_full() {
+    if (e.source.lock().unwrap().is_null() && !crate::test_mode()) || core.disk_full() {
         return None;
     }
     if let Some(s) = core.active_set.lock().unwrap().as_ref() {
@@ -213,7 +324,7 @@ fn want(core: &Core) -> Option<String> {
     (core.share.load(Ordering::Relaxed) && !e.source_lost.load(Ordering::Relaxed)).then_some(room)
 }
 
-fn usable_codecs(core: &Core) -> Vec<String> {
+pub fn usable_codecs(core: &Core) -> Vec<String> {
     let mut usable = core.codecs.lock().unwrap().clone();
     for p in core.peers.lock().unwrap().iter().filter(|p| p.conn.is_some()) {
         usable.retain(|c| p.codecs.contains(c));
@@ -221,20 +332,27 @@ fn usable_codecs(core: &Core) -> Vec<String> {
     usable
 }
 
-fn encode_command(size: (u32, u32), chosen: (&str, &str, f64), inputs: [u16; 2], outputs: [u16; 2]) -> Command {
+fn encode_command(size: (u32, u32), out: (u32, u32), kbps: u32, chosen: (&str, &str, f64), inputs: [u16; 2], outputs: [u16; 2]) -> Command {
     let (rate, channels, fps) = (SAMPLE_RATE.to_string(), CHANNELS.to_string(), FPS.to_string());
     let mut command = Command::new(ffmpeg::path());
-    command
-        .args(["-hide_banner", "-loglevel", "warning", "-y"])
-        .args(["-use_wallclock_as_timestamps", "1", "-thread_queue_size", QUEUE_SIZE])
-        .args(["-f", "rawvideo", "-pix_fmt", "bgra", "-video_size", &format!("{}x{}", size.0, size.1), "-i", "-"]);
-    for port in inputs {
-        command.args(["-thread_queue_size", QUEUE_SIZE, "-f", "s16le", "-ar", &rate, "-ac", &channels, "-i", &format!("tcp://127.0.0.1:{port}")]);
+    command.args(["-hide_banner", "-loglevel", "warning", "-y"]);
+    if crate::test_mode() {
+        command.args(["-re", "-f", "lavfi", "-i", &format!("testsrc2=size={}x{}:rate={fps}", size.0, size.1)]);
+        for hz in TEST_TONES_HZ {
+            command.args(["-re", "-f", "lavfi", "-i", &format!("sine=frequency={hz}:sample_rate={rate}")]);
+        }
+    } else {
+        command
+            .args(["-use_wallclock_as_timestamps", "1", "-thread_queue_size", QUEUE_SIZE])
+            .args(["-f", "rawvideo", "-pix_fmt", "bgra", "-video_size", &format!("{}x{}", size.0, size.1), "-i", "-"]);
+        for port in inputs {
+            command.args(["-thread_queue_size", QUEUE_SIZE, "-f", "s16le", "-ar", &rate, "-ac", &channels, "-i", &format!("tcp://127.0.0.1:{port}")]);
+        }
     }
     command
         .args(["-map", "0:v", "-map", "1:a"])
-        .args(["-vf", &format!("scale={}:-2:flags=fast_bilinear,format=yuv420p", SHARED_MAX_WIDTH.min(size.0) & !1), "-r", &fps])
-        .args(["-c:v", chosen.0, "-bf", "0", "-g", &fps, "-b:v", &format!("{}k", (BASE_BITRATE_KBPS * chosen.2) as u32)]);
+        .args(["-vf", &format!("scale={}:{}:flags=fast_bilinear,format=yuv420p", out.0, out.1), "-r", &fps])
+        .args(["-c:v", chosen.0, "-bf", "0", "-g", &fps, "-b:v", &format!("{kbps}k")]);
     if chosen.0 == ffmpeg::FALLBACK.0 {
         command.args(["-preset", "ultrafast"]);
     }
@@ -251,12 +369,6 @@ fn encode_command(size: (u32, u32), chosen: (&str, &str, f64), inputs: [u16; 2],
         .stderr(Stdio::piped())
         .creation_flags(NO_WINDOW | BELOW_NORMAL);
     command
-}
-
-fn write_whole(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let part = part_of(path);
-    std::fs::write(&part, bytes)?;
-    std::fs::rename(part, path)
 }
 
 fn accept(listener: &TcpListener, closed: &AtomicBool) -> Option<TcpStream> {
@@ -276,7 +388,7 @@ fn accept(listener: &TcpListener, closed: &AtomicBool) -> Option<TcpStream> {
 
 fn ensure_rec(core: &Core, room: &str, set: &str, start_us: i64, meta: &Value) {
     let _guard = core.engine.rec_lock.lock().unwrap();
-    if core.own_log(room).iter().any(|r| r["k"] == "rec" && r["set"] == set) {
+    if crate::room::joined(&core.own_log(room), set) {
         return;
     }
     let by = core.active_set.lock().unwrap().as_ref().map(|s| s.by.clone()).unwrap_or_default();
@@ -309,31 +421,42 @@ impl Sink {
             std::fs::create_dir_all(dir.join(series))?;
         }
         let chosen = ffmpeg::pick(&usable_codecs(core));
+        let quality = core.engine.quality.lock().unwrap().clone();
+        let width = quality_width(&quality);
+        let (out, kbps) = (scaled(size, width), bitrate_kbps(width, chosen.2));
         let listeners = [TcpListener::bind("127.0.0.1:0")?, TcpListener::bind("127.0.0.1:0")?];
         let outputs = [TcpListener::bind("127.0.0.1:0")?, TcpListener::bind("127.0.0.1:0")?];
         let port = |l: &TcpListener| l.local_addr().map(|a| a.port());
-        let mut child = encode_command(size, chosen, [port(&listeners[0])?, port(&listeners[1])?], [port(&outputs[0])?, port(&outputs[1])?]).spawn()?;
+        let mut child = encode_command(size, out, kbps, chosen, [port(&listeners[0])?, port(&listeners[1])?], [port(&outputs[0])?, port(&outputs[1])?]).spawn()?;
         if let Some(stderr) = child.stderr.take() {
             thread::spawn(move || {
                 use std::io::BufRead;
                 for line in std::io::BufReader::new(stderr).lines().map_while(Result::ok) {
                     tracing::warn!("ffmpeg: {line}");
+                    debug::ffmpeg_line(&line);
                 }
             });
         }
         let names = core.engine.names.lock().unwrap().clone();
         let meta = json!({
-            "source_kind": names.kind, "source": names.source, "width": size.0, "height": size.1, "fps": FPS,
+            "source_kind": names.kind, "source": names.source, "width": out.0, "height": out.1, "fps": FPS, "kbps": kbps,
             "encoder": chosen.0, "codec": chosen.1, "audio": names.game, "mic": names.mic, "version": crate::VERSION,
         });
+        let stdin = child.stdin.take();
         let sink = Arc::new(Self {
             room,
             capture,
             dir,
             size,
+            out,
+            quality,
+            kbps,
             codec: chosen.1,
+            encoder: chosen.0,
             meta,
-            video: Mutex::new(child.stdin.take()),
+            frame: Mutex::new(None),
+            ready: Condvar::new(),
+            watch: Mutex::new(Watch::default()),
             child: Mutex::new(child),
             tracks: [Mutex::new(Track::default()), Mutex::new(Track::default())],
             outputs: [Mutex::new(Series::default()), Mutex::new(Series::default())],
@@ -350,6 +473,7 @@ impl Sink {
             let sink = sink.clone();
             thread::spawn(move || {
                 if let Some(stream) = accept(&listener, &sink.closed) {
+                    let _ = stream.set_write_timeout(Some(STALL_AFTER * 2));
                     if let Ok(closer) = stream.try_clone() {
                         sink.closers.lock().unwrap().push(closer);
                     }
@@ -360,6 +484,13 @@ impl Sink {
         for (which, listener) in outputs.into_iter().enumerate() {
             let (sink2, core) = (sink.clone(), core.clone());
             sink.readers.lock().unwrap().push(thread::spawn(move || sink2.read_output(&core, which, listener)));
+        }
+        if let Some(pipe) = stdin {
+            let sink = sink.clone();
+            thread::spawn(move || sink.feed(pipe));
+        }
+        if crate::test_mode() {
+            let _ = sink.start.set((Instant::now(), now_us()));
         }
         Ok(sink)
     }
@@ -373,6 +504,9 @@ impl Sink {
                     Ok(0) | Err(_) => break,
                     Ok(n) => n,
                 };
+                if which == 0 {
+                    self.watch.lock().unwrap().answer(Instant::now());
+                }
                 let Some(outs) = splitter.push(&buf[..n]) else { break };
                 for out in outs {
                     match out {
@@ -397,14 +531,11 @@ impl Sink {
         }
         self.outputs[which].lock().unwrap().scales = media::timescales(bytes);
         data::mark(core, &self.dir, &format!("{}/{INIT}", SERIES[which]), bytes.len() as u64, true);
-        let cap = {
-            let mut inits = self.inits.lock().unwrap();
-            inits[which] = json!({"size": bytes.len(), "sha256": hex(&Sha256::digest(bytes))});
-            let mut cap = json!({"start_us": self.start.get().map(|s| s.1), "init": {SERIES[0]: inits[0], SERIES[1]: inits[1]}});
-            merge(&mut cap, &self.meta);
-            cap
-        };
-        let _ = std::fs::write(self.dir.join(CAP), cap.to_string());
+        let mut inits = self.inits.lock().unwrap();
+        inits[which] = json!({"size": bytes.len(), "sha256": hex(&Sha256::digest(bytes))});
+        let mut cap = json!({"start_us": self.start.get().map(|s| s.1), "init": {SERIES[0]: inits[0], SERIES[1]: inits[1]}});
+        merge(&mut cap, &self.meta);
+        let _ = write_whole(&self.dir.join(CAP), cap.to_string().as_bytes());
     }
 
     fn take_fragment(&self, core: &Core, which: usize, bytes: &[u8]) {
@@ -441,7 +572,7 @@ impl Sink {
             return;
         };
         series.n = n;
-        let _ = std::fs::write(dir.join(OPEN), json!({"n": n, "set": set}).to_string());
+        let _ = write_whole(&dir.join(OPEN), json!({"n": n, "set": set}).to_string().as_bytes());
         if let Some(set) = &set {
             ensure_rec(core, &self.room, set, t_us, &self.meta);
         }
@@ -453,8 +584,9 @@ impl Sink {
         drop(open.file);
         let dir = self.dir.join(SERIES[which]);
         let path = dir.join(seg_name(open.n));
+        let d_us = next_us.map_or(series.last_us - open.t_us + series.step_us.max(0), |next| next - open.t_us);
+        debug::cut(&self.capture, SERIES[which], open.n, open.set.as_deref(), open.size, open.count, d_us);
         if let Some(set) = &open.set {
-            let d_us = next_us.map_or(series.last_us - open.t_us + series.step_us.max(0), |next| next - open.t_us);
             let sha = hex(&open.hasher.finalize());
             if !self.cap_logged.swap(true, Ordering::Relaxed) {
                 log_cap(core, &self.room, &self.capture, &read_json(&self.dir.join(CAP)));
@@ -466,16 +598,37 @@ impl Sink {
         let _ = std::fs::remove_file(dir.join(OPEN));
     }
 
-    fn write_video(&self, data: &[u8]) {
+    fn write_video(&self, frame: Arc<Vec<u8>>) {
         if self.closed.load(Ordering::Relaxed) {
             return;
         }
-        let mut pipe = self.video.lock().unwrap();
-        let Some(out) = pipe.as_mut() else { return };
-        let _ = self.start.set((Instant::now(), now_us()));
-        if out.write_all(data).is_err() {
-            *pipe = None;
-            self.dead.store(true, Ordering::Relaxed);
+        *self.frame.lock().unwrap() = Some(frame);
+        self.ready.notify_one();
+    }
+
+    fn next_frame(&self) -> Option<Arc<Vec<u8>>> {
+        let mut next = self.frame.lock().unwrap();
+        loop {
+            if self.closed.load(Ordering::Relaxed) {
+                return None;
+            }
+            if let Some(frame) = next.take() {
+                return Some(frame);
+            }
+            next = self.ready.wait(next).unwrap();
+        }
+    }
+
+    fn feed(&self, mut pipe: ChildStdin) {
+        while let Some(frame) = self.next_frame() {
+            let _ = self.start.set((Instant::now(), now_us()));
+            self.watch.lock().unwrap().fed(Instant::now());
+            if pipe.write_all(&frame).is_err() {
+                self.dead.store(true, Ordering::Relaxed);
+                return;
+            }
+            self.watch.lock().unwrap().wrote();
+            debug::frame(debug::ENCODED);
         }
     }
 
@@ -518,14 +671,9 @@ impl Sink {
         for stream in self.closers.lock().unwrap().drain(..) {
             let _ = stream.shutdown(Shutdown::Both);
         }
+        drop(self.frame.lock().unwrap());
+        self.ready.notify_all();
         let deadline = Instant::now() + FINISH_WAIT;
-        while Instant::now() < deadline {
-            if let Ok(mut pipe) = self.video.try_lock() {
-                *pipe = None;
-                break;
-            }
-            thread::sleep(POLL);
-        }
         let mut exited = false;
         {
             let mut child = self.child.lock().unwrap();
@@ -545,6 +693,52 @@ impl Sink {
     }
 }
 
+impl Sink {
+    fn debug_json(&self) -> Value {
+        let series: Vec<Value> = (0..SERIES.len())
+            .map(|i| {
+                let s = self.outputs[i].lock().unwrap();
+                let open = s.open.as_ref().map(|o| json!({"n": o.n, "set": o.set, "size": o.size, "fragments": o.count, "t_us": o.t_us}));
+                json!({"series": SERIES[i], "n": s.n, "open": open, "last_us": s.last_us, "step_us": s.step_us, "pcm_frames": self.tracks[i].try_lock().ok().map(|t| t.written)})
+            })
+            .collect();
+        json!({
+            "room": self.room, "capture": self.capture, "size": self.size, "codec": self.codec, "meta": self.meta, "age_ms": self.born.elapsed().as_millis() as u64,
+            "encoder": self.encoder, "working": self.watch.lock().unwrap().working(Instant::now()),
+            "dead": self.dead.load(Ordering::Relaxed), "closed": self.closed.load(Ordering::Relaxed), "pid": self.child.lock().unwrap().id(), "series": series, "inits": *self.inits.lock().unwrap(),
+        })
+    }
+}
+
+pub fn debug_json(core: &Core) -> Value {
+    let e = &core.engine;
+    let names = e.names.lock().unwrap().clone();
+    let sink = e.sink.lock().unwrap().clone();
+    let (frame_size, frame_ms) = {
+        let last = e.last.lock().unwrap();
+        (last.1, (!last.0.is_empty()).then(|| last.2.elapsed().as_millis() as u64))
+    };
+    json!({
+        "source": e.source.lock().unwrap().clone(),
+        "names": {"kind": names.kind, "source": names.source, "game": names.game, "mic": names.mic},
+        "source_lost": e.source_lost.load(Ordering::Relaxed),
+        "status": e.status.lock().unwrap().clone(),
+        "failures": e.failures.load(Ordering::Relaxed),
+        "strikes": *e.strikes.lock().unwrap(),
+        "dropped": ffmpeg::dropped(),
+        "retry_in_ms": e.retry_at.lock().unwrap().saturating_duration_since(Instant::now()).as_millis() as u64,
+        "capturing": e.video.lock().unwrap().is_some(),
+        "canvas": *e.canvas.lock().unwrap(),
+        "frame_size": frame_size,
+        "frame_age_ms": frame_ms,
+        "audio": ([APP, MIC].map(|t| e.audio[t].lock().unwrap().is_some())),
+        "mix": e.mix.lock().unwrap().clone(),
+        "want": want(core),
+        "encoders_ready": ffmpeg::encoders_ready(),
+        "sink": sink.map(|s| s.debug_json()),
+    })
+}
+
 fn current_sink(core: &Arc<Core>, canvas: Option<(u32, u32)>) -> Option<Arc<Sink>> {
     let e = &core.engine;
     let want = want(core);
@@ -553,13 +747,14 @@ fn current_sink(core: &Arc<Core>, canvas: Option<(u32, u32)>) -> Option<Arc<Sink
     let mut slot = e.sink.lock().unwrap();
     let stale = slot.as_ref().map(|sink| {
         let resized = !recording && canvas.is_some_and(|c| c != sink.size);
-        let codec = ffmpeg::pick(&usable).1 != sink.codec && (!recording || !usable.iter().any(|c| c == sink.codec));
-        (sink.dead.load(Ordering::Relaxed), resized || codec || want.as_deref() != Some(sink.room.as_str()))
+        let codec = ffmpeg::pick(&usable).0 != sink.encoder && (!recording || !usable.iter().any(|c| c == sink.codec));
+        let requality = !recording && *e.quality.lock().unwrap() != sink.quality;
+        (sink.dead.load(Ordering::Relaxed), resized || codec || requality || want.as_deref() != Some(sink.room.as_str()))
     });
     if let Some((dead, changed)) = stale.filter(|(dead, changed)| *dead || *changed) {
         let old = slot.take().unwrap();
         if dead && !changed {
-            e.failed(old.born, "the video encoder stopped");
+            e.encoder_died(&old);
         }
         thread::spawn(move || old.finish());
     }
@@ -570,14 +765,20 @@ fn current_sink(core: &Arc<Core>, canvas: Option<(u32, u32)>) -> Option<Arc<Sink
         }
         match Sink::start(core, room, size) {
             Ok(sink) => *slot = Some(sink),
-            Err(err) => e.failed(Instant::now(), &err.to_string()),
+            Err(err) => e.failed(false, &err.to_string()),
         }
     }
     slot.clone()
 }
 
-pub fn end_set(core: &Core) -> Option<crate::room::ActiveSet> {
-    let active = core.active_set.lock().unwrap().take()?;
+pub fn end_set(core: &Core, only: Option<&str>) -> Option<crate::room::ActiveSet> {
+    let active = {
+        let mut slot = core.active_set.lock().unwrap();
+        if only.is_some_and(|id| slot.as_ref().is_none_or(|a| a.id != id)) {
+            return None;
+        }
+        slot.take()?
+    };
     let sink = core.engine.sink.lock().unwrap().clone().filter(|s| s.room == active.room);
     if let Some(sink) = sink {
         sink.wait_cut(&active.id);
@@ -591,20 +792,30 @@ fn recover_series(core: &Core, room: &str, capture: &str, dir: &Path, which: usi
     let Some(n) = open["n"].as_u64().map(|n| n as u32) else { return };
     let path = series_dir.join(seg_name(n));
     let part = part_of(&path);
-    let (times, whole) = media::scan(&part);
-    let trimmed = whole > 0 && std::fs::OpenOptions::new().write(true).open(&part).and_then(|f| f.set_len(whole)).is_ok() && std::fs::rename(&part, &path).is_ok();
-    if !trimmed {
-        let _ = std::fs::remove_file(&part);
+    if part.exists() {
+        let whole = media::scan(&part).1;
+        let kept = whole > 0 && std::fs::OpenOptions::new().write(true).open(&part).and_then(|f| f.set_len(whole)).is_ok() && std::fs::rename(&part, &path).is_ok();
+        if !kept {
+            let _ = std::fs::remove_file(&part);
+        }
+    }
+    if let Some(set) = open["set"].as_str().filter(|_| path.exists()) {
+        log_recovered(core, room, capture, dir, which, n, set);
     }
     let _ = std::fs::remove_file(series_dir.join(OPEN));
-    let Some(set) = open["set"].as_str().filter(|_| trimmed) else { return };
+}
+
+fn log_recovered(core: &Core, room: &str, capture: &str, dir: &Path, which: usize, n: u32, set: &str) {
     let logged = core.own_log(room).iter().any(|r| r["k"] == "seg" && r["capture"] == capture && r["series"] == SERIES[which] && r["n"] == n);
     if logged {
         return;
     }
+    let series_dir = dir.join(SERIES[which]);
+    let path = series_dir.join(seg_name(n));
     let cap: Value = read_json(&dir.join(CAP));
     let (Some(start_us), Some((size, sha))) = (cap["start_us"].as_i64(), data::sha256(&path)) else { return };
     let scales = media::timescales(&std::fs::read(series_dir.join(INIT)).unwrap_or_default());
+    let times = media::scan(&path).0;
     let track = times.first().map(|t| t.track);
     let us: Vec<i64> = times.iter().filter(|t| Some(t.track) == track).map(|t| media::micros(t, &scales)).collect();
     let (Some(first), Some(last)) = (us.first(), us.last()) else { return };
@@ -625,9 +836,13 @@ pub fn recover(core: &Core) {
             }
         }
         let own = core.own_log(&room);
-        let ended: Vec<&str> = own.iter().filter(|r| r["k"] == "rec_end").filter_map(|r| r["set"].as_str()).collect();
-        for rec in own.iter().filter(|r| r["k"] == "rec" && r["set"].as_str().is_some_and(|s| !ended.contains(&s))) {
-            let set = rec["set"].as_str().unwrap_or_default();
+        let mut last: HashMap<&str, &Value> = HashMap::new();
+        for r in own.iter().filter(|r| r["k"] == "rec" || r["k"] == "rec_end") {
+            if let Some(set) = r["set"].as_str() {
+                last.insert(set, r);
+            }
+        }
+        for (set, rec) in last.into_iter().filter(|(_, r)| r["k"] == "rec") {
             let end = own.iter().filter(|r| r["k"] == "seg" && r["set"] == set).filter_map(|r| Some(r["t_us"].as_i64()? + r["d_us"].as_i64()?)).max();
             core.append_log(&room, &json!({"k": "rec_end", "set": set, "room": room, "t_us": end.or(rec["start_us"].as_i64()).unwrap_or_else(now_us)}));
         }
@@ -684,9 +899,11 @@ impl GraphicsCaptureApiHandler for Capture {
 
     fn on_frame_arrived(&mut self, frame: &mut Frame, _control: InternalCaptureControl) -> Result<(), Self::Error> {
         let (w, h) = (frame.width(), frame.height());
+        debug::frame(debug::ARRIVED);
         if self.last.elapsed() < FRAME_GAP || w < 2 || h < 2 {
             return Ok(());
         }
+        debug::frame(debug::TAKEN);
         self.last = Instant::now();
         let buffer = frame.buffer()?;
         let data = buffer.as_nopadding_buffer(&mut self.raw);
@@ -698,18 +915,11 @@ impl GraphicsCaptureApiHandler for Capture {
         if !same {
             fit(data, (w, h), size, &mut self.fitted);
         }
+        let frame = Arc::new(if same { data.to_vec() } else { std::mem::take(&mut self.fitted) });
         if let Some(sink) = &sink {
-            sink.write_video(if same { data } else { self.fitted.as_slice() });
+            sink.write_video(frame.clone());
         }
-        let mut last = e.last.lock().unwrap();
-        if same {
-            last.0.clear();
-            last.0.extend_from_slice(data);
-        } else {
-            std::mem::swap(&mut last.0, &mut self.fitted);
-        }
-        last.1 = size;
-        last.2 = Instant::now();
+        *e.last.lock().unwrap() = (frame, size, Instant::now());
         Ok(())
     }
 }
@@ -779,7 +989,8 @@ fn repeat(core: Arc<Core>) {
             continue;
         }
         if let Some(sink) = sink.filter(|s| s.size == last.1) {
-            sink.write_video(&last.0);
+            debug::frame(debug::REPEATED);
+            sink.write_video(last.0.clone());
         }
         last.2 = Instant::now() - (REPEAT_AFTER - REPEAT_POLL);
     }
@@ -789,10 +1000,10 @@ fn meters(core: Arc<Core>) {
     let mut quiet = false;
     loop {
         thread::sleep(Duration::from_millis(1000 / LEVELS_PER_SECOND));
-        let [game, mic] = [GAME, MIC].map(|t| f32::from_bits(core.engine.peaks[t].swap(0, Ordering::Relaxed)));
-        let silent = game == 0.0 && mic == 0.0;
+        let [app, mic] = [APP, MIC].map(|t| f32::from_bits(core.engine.peaks[t].swap(0, Ordering::Relaxed)));
+        let silent = app == 0.0 && mic == 0.0;
         if !(silent && quiet) {
-            let _ = core.app.emit("levels", json!({"game": game, "mic": mic}));
+            let _ = core.app.emit("levels", json!({"app": app, "mic": mic}));
         }
         quiet = silent;
     }
@@ -817,7 +1028,7 @@ fn ensure_video(core: &Arc<Core>, wanted: Option<&Found>) {
         let closed = v.control.is_finished();
         let _ = v.control.stop();
         if !closed {
-            e.last.lock().unwrap().0.clear();
+            e.last.lock().unwrap().0 = Arc::new(Vec::new());
             *e.canvas.lock().unwrap() = None;
         }
     }
@@ -837,20 +1048,42 @@ fn ensure_video(core: &Arc<Core>, wanted: Option<&Found>) {
             *e.canvas.lock().unwrap() = None;
             *video = Some(Video { control, key: f.key });
         }
-        Err(err) => e.failed(Instant::now(), &format!("screen capture could not start: {err}")),
+        Err(err) => e.failed(false, &format!("screen capture could not start: {err}")),
     }
 }
 
 fn check_sink(core: &Core) {
     let e = &core.engine;
     let Some(sink) = e.sink.lock().unwrap().clone() else { return };
-    if matches!(sink.child.lock().unwrap().try_wait(), Ok(Some(_))) {
+    let (watch, now) = (*sink.watch.lock().unwrap(), Instant::now());
+    let mut child = sink.child.lock().unwrap();
+    if matches!(child.try_wait(), Ok(Some(_))) {
         sink.dead.store(true, Ordering::Relaxed);
+    } else if watch.stalled(now) {
+        tracing::warn!("{} produced nothing for {} s, stopping it", sink.encoder, STALL_AFTER.as_secs());
+        sink.dead.store(true, Ordering::Relaxed);
+        let _ = child.kill();
     }
-    if sink.born.elapsed() > STABLE_AFTER {
-        e.failures.store(0, Ordering::Relaxed);
+    drop(child);
+    if watch.working(now) {
         e.status.lock().unwrap().clear();
     }
+    if watch.stable(now) {
+        e.failures.store(0, Ordering::Relaxed);
+        *e.strikes.lock().unwrap() = ("", 0);
+    }
+}
+
+fn test_source(core: &Core) {
+    let e = &core.engine;
+    if ffmpeg::encoders_ready() {
+        *e.canvas.lock().unwrap() = Some(TEST_SIZE);
+    }
+    let mut names = e.names.lock().unwrap();
+    names.kind = "test".into();
+    names.source = "Test picture".into();
+    names.game = "Test tone".into();
+    names.mic = "Test tone".into();
 }
 
 pub fn supervise(core: Arc<Core>) {
@@ -862,17 +1095,108 @@ pub fn supervise(core: Arc<Core>) {
     let mut scanned: Option<(Value, Instant)> = None;
     let mut found: Option<Found> = None;
     loop {
-        let source = e.source.lock().unwrap().clone();
-        let ended = e.video.lock().unwrap().as_ref().is_some_and(|v| v.control.is_finished());
-        if ended || scanned.as_ref().is_none_or(|(s, at)| *s != source || at.elapsed() > RESCAN_EVERY) {
-            found = rescan(&core, &source);
-            scanned = Some((source, Instant::now()));
+        if crate::test_mode() {
+            test_source(&core);
+        } else {
+            let source = e.source.lock().unwrap().clone();
+            let ended = e.video.lock().unwrap().as_ref().is_some_and(|v| v.control.is_finished());
+            if ended || scanned.as_ref().is_none_or(|(s, at)| *s != source || at.elapsed() > RESCAN_EVERY) {
+                found = rescan(&core, &source);
+                scanned = Some((source, Instant::now()));
+            }
+            audio::ensure(&core, APP, found.as_ref().map_or(0, |f| f.game.1).to_string());
+            let mic = e.mic.lock().unwrap().clone();
+            audio::ensure(&core, MIC, mic);
+            ensure_video(&core, found.as_ref().filter(|_| want(&core).is_some() && ffmpeg::encoders_ready()));
         }
-        audio::ensure(&core, GAME, found.as_ref().map_or(0, |f| f.game.1).to_string());
-        let mic = e.mic.lock().unwrap().clone();
-        audio::ensure(&core, MIC, mic);
-        ensure_video(&core, found.as_ref().filter(|_| want(&core).is_some() && ffmpeg::encoders_ready()));
         check_sink(&core);
         thread::sleep(SUPERVISE_EVERY);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn presets_scale_down_only_and_keep_even_sizes() {
+        assert_eq!(scaled((2560, 1440), quality_width("standard")), (1280, 720));
+        assert_eq!(scaled((1280, 720), quality_width("high")), (1280, 720));
+        assert_eq!(scaled((1921, 1081), 1920), (1920, 1080));
+        assert_eq!(scaled((3440, 1440), quality_width("light")), (960, 402));
+        assert_eq!(quality_width("nonsense"), quality_width("standard"));
+    }
+
+    #[test]
+    fn bitrate_follows_pixels_and_codec() {
+        assert_eq!(bitrate_kbps(1280, 1.0), 5530);
+        assert!(bitrate_kbps(1920, 1.0) > 2 * bitrate_kbps(1280, 1.0));
+        assert_eq!(bitrate_kbps(1280, 0.5), 2765);
+    }
+
+    fn fed_every(w: &mut Watch, from: Instant, to: Instant) {
+        let mut t = from;
+        while t <= to {
+            w.fed(t);
+            w.wrote();
+            t += FRAME_GAP;
+        }
+    }
+
+    #[test]
+    fn an_encoder_that_takes_frames_but_gives_nothing_is_stalled() {
+        let t = Instant::now();
+        let mut w = Watch::default();
+        assert!(!w.stalled(t + STALL_AFTER * 9));
+        fed_every(&mut w, t, t + STALL_AFTER);
+        assert!(!w.working(t + STALL_AFTER));
+        assert!(!w.stalled(t + STALL_AFTER));
+        fed_every(&mut w, t + STALL_AFTER, t + STALL_AFTER + POLL * 2);
+        assert!(w.stalled(t + STALL_AFTER + POLL * 2));
+        w.answer(t + STALL_AFTER * 2);
+        fed_every(&mut w, t + STALL_AFTER * 2, t + STALL_AFTER * 3);
+        assert!(w.working(t + STALL_AFTER * 3));
+    }
+
+    #[test]
+    fn a_write_that_never_returns_is_a_stall() {
+        let t = Instant::now();
+        let mut w = Watch::default();
+        w.fed(t);
+        assert!(!w.stalled(t + STALL_AFTER));
+        assert!(w.stalled(t + STALL_AFTER + POLL));
+    }
+
+    #[test]
+    fn no_frames_to_encode_is_not_a_stall() {
+        let t = Instant::now();
+        let mut w = Watch::default();
+        w.fed(t);
+        w.wrote();
+        assert!(!w.stalled(t + STALL_AFTER * 3));
+        w.fed(t + STALL_AFTER * 3);
+        w.wrote();
+        assert!(!w.stalled(t + STALL_AFTER * 3 + FEED_GAP));
+    }
+
+    #[test]
+    fn output_is_stable_only_after_a_long_working_run() {
+        let t = Instant::now();
+        let mut w = Watch::default();
+        w.fed(t);
+        w.wrote();
+        w.answer(t);
+        assert!(!w.stable(t + STABLE_AFTER));
+        assert!(w.stable(t + STABLE_AFTER + POLL));
+        w.fed(t + STABLE_AFTER);
+        assert!(!w.stable(t + STABLE_AFTER + STALL_AFTER + POLL));
+    }
+
+    #[test]
+    fn strikes_count_one_encoder_in_a_row() {
+        let a = strike(("", 0), "av1_nvenc");
+        let b = strike(a, "av1_nvenc");
+        assert_eq!(strike(b, "av1_nvenc"), ("av1_nvenc", DROP_AFTER));
+        assert_eq!(strike(b, "hevc_nvenc"), ("hevc_nvenc", 1));
     }
 }

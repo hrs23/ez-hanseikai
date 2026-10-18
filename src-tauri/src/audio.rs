@@ -7,7 +7,7 @@ use std::time::Instant;
 use serde_json::{json, Value};
 use wasapi::{initialize_mta, AudioCaptureClient, AudioClient, DeviceEnumerator, Direction, Handle, SampleType, StreamMode, WaveFormat};
 
-use crate::record::{Err, GAME, MIC, RESCAN_EVERY};
+use crate::record::{Err, APP, MIC, RESCAN_EVERY};
 use crate::Core;
 
 pub const SAMPLE_RATE: usize = 48000;
@@ -34,7 +34,7 @@ pub fn capture_format() -> (WaveFormat, StreamMode) {
 fn open(core: &Core, track: usize, key: &str) -> Result<Option<Opened>, Err> {
     let (format, mode) = capture_format();
     let mut found = None;
-    let mut client = if track == GAME {
+    let mut client = if track == APP {
         let pid: u32 = key.parse().unwrap_or(0);
         if pid == 0 {
             return Ok(None);

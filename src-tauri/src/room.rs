@@ -13,9 +13,9 @@ use tauri::Emitter;
 use crate::{clean_text, data, ffmpeg, hex, net, now_us, party, record, short, stream, Core, Peer, PROTOCOL, ROOM_NAME_MAX, VERSION};
 
 pub const SOLO: &str = "solo";
-pub const LEGACY: &str = "legacy";
 pub const SERIES: [&str; 2] = ["v", "m"];
 pub const INIT: &str = "init.mp4";
+pub const TOKEN_BYTES: usize = 8;
 
 pub fn seg_name(n: u32) -> String {
     format!("{n:06}.m4s")
@@ -78,6 +78,14 @@ pub fn random_hex(bytes: usize) -> String {
     hex(&iroh::SecretKey::generate().to_bytes()[..bytes])
 }
 
+pub fn capture_id(text: &str) -> bool {
+    !text.is_empty() && text.len() <= 20 && text.chars().all(|c| c.is_ascii_digit())
+}
+
+pub fn valid_token(text: &str) -> bool {
+    text.len() == 2 * TOKEN_BYTES && text.chars().all(|c| c.is_ascii_hexdigit())
+}
+
 pub fn valid_id(text: &str) -> bool {
     !text.is_empty() && text.len() <= 40 && text.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == ' ')
 }
@@ -117,29 +125,17 @@ impl Core {
         self.room_id().unwrap_or_else(|| SOLO.to_string())
     }
 
-    pub fn set_dir(&self, room: &str, set: &str) -> PathBuf {
-        self.dir.join("rooms").join(room).join("sets").join(set)
-    }
-
-    pub fn set_file(&self, room: &str, set: &str, owner: &str) -> PathBuf {
-        self.set_dir(room, set).join(format!("{owner}.mp4"))
-    }
-
     pub fn capture_dir(&self, room: &str, owner: &str, capture: &str) -> PathBuf {
         self.dir.join("rooms").join(room).join(owner).join(capture)
     }
 
-    pub fn seg_path(&self, room: &str, set: &str, owner: &str, seg: &Seg) -> PathBuf {
-        if seg.capture == LEGACY {
-            self.set_file(room, set, owner)
-        } else {
-            self.capture_dir(room, owner, &seg.capture).join(&seg.series).join(seg_name(seg.n))
-        }
+    pub fn seg_path(&self, room: &str, owner: &str, seg: &Seg) -> PathBuf {
+        self.capture_dir(room, owner, &seg.capture).join(&seg.series).join(seg_name(seg.n))
     }
 
     pub fn save_rooms(&self) {
         let text = serde_json::to_string(&*self.rooms.lock().unwrap()).unwrap_or_default();
-        let _ = std::fs::write(self.dir.join("rooms.json"), text);
+        let _ = crate::write_whole(&self.dir.join("rooms.json"), text.as_bytes());
     }
 
     pub fn active_set_json(&self) -> Value {
@@ -151,6 +147,10 @@ impl Core {
 
     pub fn is_recording(&self, room: &str, set: &str) -> bool {
         self.active_set.lock().unwrap().as_ref().is_some_and(|a| a.id == set && a.room == room)
+    }
+
+    pub fn in_use(&self, room: &str, set: &str) -> bool {
+        self.is_recording(room, set) || self.export.lock().unwrap().as_ref().is_some_and(|e| e.set.0 == room && e.set.1 == set)
     }
 }
 
@@ -241,7 +241,7 @@ pub fn create_room(core: &Arc<Core>, name: &str) -> Result<String, String> {
 pub fn join_room(core: &Arc<Core>, code: &str) -> Result<(), String> {
     let bad = || "That invite code is not valid. Ask for a new one.".to_string();
     let text: String = code.split_whitespace().collect();
-    let (id, token) = text.strip_prefix("ezh-").and_then(|t| t.split_once('-')).ok_or_else(bad)?;
+    let (id, token) = text.strip_prefix("ezh-").and_then(|t| t.split_once('-')).filter(|(_, token)| valid_token(token)).ok_or_else(bad)?;
     id.parse::<EndpointId>().map_err(|_| bad())?;
     idle(core)?;
     let members = vec![core.ep.id().to_string(), id.to_string()];
@@ -274,6 +274,59 @@ pub fn leave_room(core: &Arc<Core>, id: &str) {
     }
     core.save_rooms();
     apply_active(core);
+}
+
+pub fn rename_room(core: &Arc<Core>, name: &str) -> Result<(), String> {
+    let name = clean_text(name, ROOM_NAME_MAX);
+    let room = core.room_id().ok_or("Join a room first.")?;
+    if name.is_empty() {
+        return Err("Enter a room name.".into());
+    }
+    core.append_log(&room, &json!({"k": "room_name", "name": name, "t_us": now_us()}));
+    keep_name(core, &room, &name);
+    Ok(())
+}
+
+pub fn latest_name(logs: &[Log]) -> Option<String> {
+    logs.iter()
+        .flat_map(|log| log.records.iter().filter(|r| r["k"] == "room_name").filter_map(|r| Some((r["t_us"].as_i64()? - log.offset_us, &log.owner, r["name"].as_str()?))))
+        .max()
+        .map(|(_, _, name)| clean_text(name, ROOM_NAME_MAX))
+        .filter(|name| !name.is_empty())
+}
+
+fn keep_name(core: &Core, room: &str, name: &str) {
+    let changed = match core.rooms.lock().unwrap().list.iter_mut().find(|r| r.id == room) {
+        Some(r) if r.name != name => {
+            r.name = name.to_string();
+            true
+        }
+        _ => false,
+    };
+    if changed {
+        core.save_rooms();
+    }
+}
+
+pub const PALETTE: [&str; 8] = ["#ff8a00", "#00d5ff", "#7cff4f", "#ff5ad6", "#ffe83d", "#b48cff", "#ff6b6b", "#5affc8"];
+
+fn preferred_color(id: &str) -> usize {
+    let hash = id.bytes().fold(0u64, |h, b| h.wrapping_mul(31).wrapping_add(b as u64));
+    (hash % PALETTE.len() as u64) as usize
+}
+
+pub fn colors(people: &[String]) -> HashMap<String, usize> {
+    let mut sorted: Vec<(usize, &String)> = people.iter().map(|id| (preferred_color(id), id)).collect();
+    sorted.sort();
+    sorted.dedup();
+    let mut taken = [false; PALETTE.len()];
+    let mut out = HashMap::new();
+    for (preferred, id) in sorted {
+        let color = (0..PALETTE.len()).map(|step| (preferred + step) % PALETTE.len()).find(|c| !taken[*c]).unwrap_or(preferred);
+        taken[color] = true;
+        out.insert(id.clone(), color);
+    }
+    out
 }
 
 pub fn add_member(core: &Arc<Core>, room: &str, id: &str) {
@@ -423,6 +476,9 @@ pub fn apply_removals(core: &Arc<Core>) {
 }
 
 pub fn adopt_room(core: &Arc<Core>, pending: &str, id: &str, name: &str, members: &[String]) {
+    if !valid_id(id) || id.starts_with("pending-") {
+        return;
+    }
     {
         let mut rooms = core.rooms.lock().unwrap();
         rooms.list.retain(|r| r.id != id);
@@ -459,9 +515,30 @@ pub fn begin_set(core: &Arc<Core>, set: &str, by: &str, start_us: i64) -> Result
     Ok(())
 }
 
-pub fn end_set(core: &Arc<Core>) {
-    let Some(active) = record::end_set(core) else { return };
-    core.append_log(&active.room, &json!({"k": "rec_end", "set": active.id, "room": active.room, "t_us": now_us()}));
+pub fn end_set(core: &Arc<Core>, stop: bool, only: Option<&str>) {
+    let Some(active) = record::end_set(core, only) else { return };
+    core.append_log(&active.room, &json!({"k": "rec_end", "set": active.id, "room": active.room, "t_us": now_us(), "stop": stop}));
+}
+
+pub fn joined(records: &[Value], set: &str) -> bool {
+    records.iter().rev().find(|r| (r["k"] == "rec" || r["k"] == "rec_end") && r["set"] == set).is_some_and(|r| r["k"] == "rec")
+}
+
+pub fn may_join(records: &[Value], set: &str) -> bool {
+    let last = records.iter().rev().find(|r| r["k"] == "rec");
+    !joined(records, set) && last.is_none_or(|r| r["set"] == set || !records.iter().any(|r| r["k"] == "rec" && r["set"] == set))
+}
+
+pub fn stopped(logs: &[Log], set: &str) -> bool {
+    logs.iter().any(|log| log.records.iter().any(|r| r["k"] == "rec_end" && r["set"] == set && r["stop"] == true))
+}
+
+pub fn apply_stops(core: &Arc<Core>) {
+    let Some(active) = core.active_set.lock().unwrap().clone() else { return };
+    if stopped(&logs(core, &active.room), &active.id) {
+        let core = core.clone();
+        std::thread::spawn(move || end_set(&core, true, Some(&active.id)));
+    }
 }
 
 pub fn log_set_layout(core: &Core) {
@@ -483,7 +560,7 @@ pub fn start_set(core: &Arc<Core>) -> Result<(), String> {
 
 pub fn stop_set(core: &Arc<Core>) {
     let set = core.active_set.lock().unwrap().as_ref().map(|s| s.id.clone());
-    end_set(core);
+    end_set(core, true, None);
     if let Some(set) = set {
         net::broadcast(core, json!({"t": "rec", "action": "stop", "set": set, "room": core.active_room_id()}));
     }
@@ -495,7 +572,6 @@ pub struct Log {
     pub records: Arc<Vec<Value>>,
 }
 
-#[derive(Debug, PartialEq)]
 pub struct Seg {
     pub capture: String,
     pub series: String,
@@ -572,9 +648,7 @@ pub fn have_key(set: &str, owner: &str, series: &str) -> String {
 
 pub fn logs(core: &Core, room: &str) -> Vec<Log> {
     let own = core.own_log(room);
-    let legacy = core.log(&core.dir.join("legacy").join("log.bin"));
-    let mut offsets: HashMap<String, i64> =
-        legacy.iter().chain(own.iter()).filter(|r| r["k"] == "offset").filter_map(|r| Some((r["peer"].as_str()?.to_string(), r["offset_us"].as_i64()?))).collect();
+    let mut offsets: HashMap<String, i64> = own.iter().filter(|r| r["k"] == "offset").filter_map(|r| Some((r["peer"].as_str()?.to_string(), r["offset_us"].as_i64()?))).collect();
     for p in core.peers.lock().unwrap().iter() {
         if let Some(offset) = p.offset_us {
             offsets.insert(short(p.id), offset);
@@ -594,7 +668,7 @@ pub fn sets(core: &Core, room: &str, logs: &[Log]) -> Vec<Set> {
 }
 
 fn seg_from(r: &Value) -> Option<Seg> {
-    let capture = r["capture"].as_str().filter(|c| !c.is_empty() && c.len() <= 20 && c.chars().all(|c| c.is_ascii_digit()))?;
+    let capture = r["capture"].as_str().filter(|c| capture_id(c))?;
     let series = r["series"].as_str().filter(|s| SERIES.contains(s))?;
     let n = r["n"].as_u64().filter(|n| *n > 0 && *n <= u32::MAX as u64)? as u32;
     Some(Seg { capture: capture.into(), series: series.into(), n, t_us: r["t_us"].as_i64()?, d_us: r["d_us"].as_i64().unwrap_or(0), size: r["size"].as_u64()?, sha256: r["sha256"].as_str()?.into() })
@@ -603,8 +677,9 @@ fn seg_from(r: &Value) -> Option<Seg> {
 pub fn derive_sets(room: &str, logs: &[Log], deleted: &HashSet<String>) -> Vec<Set> {
     let mut sets: BTreeMap<String, Set> = BTreeMap::new();
     for log in logs {
-        let mut open: HashMap<&str, (usize, bool, bool)> = HashMap::new();
+        let mut open: HashMap<&str, (usize, bool)> = HashMap::new();
         let mut caps: HashMap<&str, Value> = HashMap::new();
+        let mut seen: HashSet<(&str, String, String, u32)> = HashSet::new();
         for r in log.records.iter() {
             if r["k"] == "cap" {
                 if let Some(capture) = r["capture"].as_str() {
@@ -615,31 +690,28 @@ pub fn derive_sets(room: &str, logs: &[Log], deleted: &HashSet<String>) -> Vec<S
             let Some(id) = r["set"].as_str() else { continue };
             match r["k"].as_str() {
                 Some("rec") if valid_id(id) => {
+                    if let Some((i, ended)) = open.get_mut(id) {
+                        if *ended {
+                            *ended = false;
+                            sets.get_mut(id).unwrap().files[*i].end_us = None;
+                        }
+                        continue;
+                    }
                     if deleted.contains(&format!("{room}/{id}")) || sets.get(id).is_some_and(|s| s.files.iter().any(|f| f.owner == log.owner)) {
                         continue;
                     }
                     let set = sets.entry(id.to_string()).or_insert_with(|| Set { id: id.to_string(), room: room.to_string(), files: Vec::new() });
-                    open.insert(id, (set.files.len(), false, false));
+                    open.insert(id, (set.files.len(), false));
                     set.files.push(File { owner: log.owner.clone(), start_us: r["start_us"].as_i64().unwrap_or(0), end_us: None, offset_us: log.offset_us, segs: Vec::new(), caps: HashMap::new() });
                 }
                 Some("rec_end") => {
-                    if let Some((i, ended, _)) = open.get_mut(id).filter(|(_, ended, _)| !ended) {
+                    if let Some((i, ended)) = open.get_mut(id).filter(|(_, ended)| !ended) {
                         *ended = true;
                         sets.get_mut(id).unwrap().files[*i].end_us = r["t_us"].as_i64();
                     }
                 }
-                Some("file") => {
-                    if let Some((i, _, hashed)) = open.get_mut(id).filter(|(_, _, hashed)| !hashed) {
-                        *hashed = true;
-                        let f = &mut sets.get_mut(id).unwrap().files[*i];
-                        if let (Some(size), Some(sha256)) = (r["size"].as_u64(), r["sha256"].as_str()) {
-                            let d_us = f.end_us.map_or(0, |e| e - f.start_us);
-                            f.segs.push(Seg { capture: LEGACY.into(), series: SERIES[0].into(), n: 1, t_us: f.start_us, d_us, size, sha256: sha256.into() });
-                        }
-                    }
-                }
                 Some("seg") => {
-                    if let (Some((i, _, _)), Some(seg)) = (open.get(id), seg_from(r)) {
+                    if let (Some((i, _)), Some(seg)) = (open.get(id), seg_from(r).filter(|s| seen.insert((id, s.capture.clone(), s.series.clone(), s.n)))) {
                         let f = &mut sets.get_mut(id).unwrap().files[*i];
                         if let Some(cap) = caps.get(seg.capture.as_str()) {
                             f.caps.entry(seg.capture.clone()).or_insert_with(|| cap.clone());
@@ -665,19 +737,27 @@ pub fn tags(text: &str) -> Vec<String> {
     out
 }
 
+fn event_tags(r: &Value, text: &str) -> Value {
+    match r["tags"].as_array() {
+        Some(list) => json!(list.iter().filter_map(|t| t.as_str()).collect::<Vec<_>>()),
+        None => json!(tags(text)),
+    }
+}
+
 fn event_from(r: &Value, owner: &str, id: i64, offset_us: i64) -> Value {
-    let note = r["k"] == "note";
-    let target = if note { json!({"t_us": r["at_us"].as_i64().unwrap_or(id)}) } else { r["target"].clone() };
+    let target = &r["target"];
     let local = |key: &str| target[key].as_i64().map(|t| t - offset_us);
-    let text = r["text"].as_str().unwrap_or_default();
+    let text: String = r["text"].as_str().unwrap_or_default().chars().take(crate::BOARD_MAX).collect();
     let plugin = if r["plugin"].is_object() { r["plugin"].clone() } else { Value::Null };
-    let tags = if r["tags"].is_array() { r["tags"].clone() } else { json!(tags(text)) };
+    let tags = event_tags(r, &text);
+    let file = target["file"].as_str().map_or(Value::Null, |f| json!(f));
+    let set = target["set"].as_str().map_or(Value::Null, |s| json!(s));
     json!({
         "key": format!("{owner}/{id}"), "id": id, "author": owner, "plugin": plugin,
-        "kind": if note { "note" } else { r["kind"].as_str().unwrap_or("event") },
+        "kind": r["kind"].as_str().unwrap_or("event"),
         "local_us": local("t_us").or_else(|| local("from_us")), "end_us": local("to_us"),
-        "set": target["set"], "file": target["file"],
-        "text": text, "values": r["values"], "tags": tags, "deleted": false,
+        "set": set, "file": file,
+        "text": text, "values": r["values"], "tags": tags, "deleted": false, "run": r["run"],
     })
 }
 
@@ -688,25 +768,26 @@ pub fn events(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> Vec<Value> {
         let mut list: Vec<Value> = Vec::new();
         let mut index: HashMap<i64, usize> = HashMap::new();
         for r in log.records.iter().take(cap) {
-            let id = r["id"].as_i64().or_else(|| r["t_us"].as_i64()).unwrap_or(0);
+            let Some(id) = r["id"].as_i64() else { continue };
             let found = index.get(&id).copied().filter(|i| list[*i]["plugin"].is_null());
             match (r["k"].as_str(), found) {
-                (Some("note" | "event"), None) if !index.contains_key(&id) => {
+                (Some("event"), None) if !index.contains_key(&id) => {
                     index.insert(id, list.len());
                     list.push(event_from(r, &log.owner, id, log.offset_us));
                 }
-                (Some("note_edit" | "event_edit"), Some(i)) => {
-                    let text = r["text"].as_str().unwrap_or_default();
-                    list[i]["tags"] = if r["tags"].is_array() { r["tags"].clone() } else { json!(tags(text)) };
+                (Some("event_edit"), Some(i)) => {
+                    let text: String = r["text"].as_str().unwrap_or_default().chars().take(crate::BOARD_MAX).collect();
+                    list[i]["tags"] = event_tags(r, &text);
                     list[i]["text"] = json!(text);
                 }
-                (Some("note_del" | "event_del"), Some(i)) => list[i]["deleted"] = json!(true),
-                (Some("note_restore" | "event_restore"), Some(i)) => list[i]["deleted"] = json!(false),
+                (Some("event_del"), Some(i)) => list[i]["deleted"] = json!(true),
+                (Some("event_restore"), Some(i)) => list[i]["deleted"] = json!(false),
                 _ => {}
             }
         }
         out.extend(list.into_iter().filter(|n| n["deleted"] == false));
     }
+    crate::jobs::keep_shown(&mut out, logs, caps);
     out.sort_by_key(|n| n["local_us"].as_i64());
     out
 }
@@ -726,13 +807,15 @@ pub fn delete_set(core: &Core, room: &str, set: &str) -> Result<(), String> {
     if core.is_recording(room, set) {
         return Err("This set is being recorded. Stop it first.".into());
     }
+    if core.in_use(room, set) {
+        return Err("This set is being exported. Cancel the export first.".into());
+    }
     let found = sets(core, room, &logs(core, room)).into_iter().find(|s| s.id == set);
     core.deleted.lock().unwrap().insert(format!("{room}/{set}"));
     core.save_settings();
     if let Some(found) = found {
         data::remove_media(core, &found);
     }
-    let _ = std::fs::remove_dir_all(core.set_dir(room, set));
     Ok(())
 }
 
@@ -792,7 +875,7 @@ fn parts_json(core: &Core, room: &str, set: &Set, f: &File) -> Vec<Value> {
         let mut part = json!({"capture": capture});
         for series in SERIES {
             let Some(first) = f.segs.iter().find(|s| s.capture == capture && s.series == series) else { continue };
-            let size = stream::size(&stream::set_pieces(core, room, set, f, capture, series));
+            let size = stream::size(&stream::set_pieces(core, room, f, capture, series));
             part[series] = json!({"path": format!("set/{room}/{}/{}/{series}/{capture}", set.id, f.owner), "start_us": first.t_us, "size": size});
         }
         out.push(part);
@@ -807,7 +890,7 @@ pub fn others_have(core: &Core) -> Vec<(String, HashMap<String, u64>, HashSet<St
 pub fn progress(core: &Core, set: &Set, mine: &HashMap<String, u64>, others: &[&HashMap<String, u64>]) -> (u64, u64, bool) {
     let (mut have, mut total, mut stuck_all, mut lacking) = (0u64, 0u64, true, false);
     for f in &set.files {
-        let (h, t) = data::held(core, &set.room, set, f);
+        let (h, t) = data::held(core, &set.room, f);
         have += h;
         total += t;
         if !full(mine, set, f) {
@@ -831,7 +914,7 @@ pub fn sets_json(core: &Core, room: &str, logs: &[Log], events: &[Value]) -> Vec
         holders.extend(peers.iter().zip(&names).map(|((id, have, gone, _), name)| Holder { id, name: name.clone(), have, gone: gone.contains(&set.id) }));
         let mut players = Vec::new();
         for f in &set.files {
-            let (have, total) = data::held(core, room, &set, f);
+            let (have, total) = data::held(core, room, f);
             let by: Vec<&str> = holders.iter().filter(|h| full(h.have, &set, f)).map(|h| h.id).collect();
             players.push(json!({
                 "owner": f.owner, "start_us": f.start_us, "end_us": f.end_us, "offset_us": f.offset_us, "have": have, "total": total,
@@ -842,12 +925,13 @@ pub fn sets_json(core: &Core, room: &str, logs: &[Log], events: &[Value]) -> Vec
         let finished: Vec<&File> = set.files.iter().filter(|f| f.end_us.is_some()).collect();
         let lacking = |h: &Holder| finished.iter().filter(|f| !full(h.have, &set, f)).count();
         let missing: Vec<(&str, usize)> = holders.iter().filter(|h| !h.gone).map(|h| (h.name.as_str(), lacking(h))).filter(|(_, n)| *n > 0).collect();
+        let lacking_by: Vec<Value> = holders.iter().filter(|h| !h.gone).map(|h| json!({"id": h.id, "n": lacking(h)})).filter(|v| v["n"] != 0).collect();
         let live = set.end().is_none();
         let all_verified = missing.is_empty() && finished.len() == set.files.len();
         let covered: Vec<&Value> = events.iter().filter(|e| covers(&set, e)).map(|e| &e["key"]).collect();
         out.push(json!({
             "id": set.id, "room": room, "start_us": set.start(), "end_us": set.end(), "live": live,
-            "players": players, "events": covered, "progress": {"have": have, "total": total, "stuck": stuck_all}, "missing": missing.len(), "all_verified": all_verified,
+            "players": players, "events": covered, "progress": {"have": have, "total": total, "stuck": stuck_all}, "missing": missing.len(), "lacking": lacking_by, "all_verified": all_verified,
             "status": set_status(live, all_verified, &missing), "layout": set_layout(logs, &set.id),
         }));
     }
@@ -902,6 +986,10 @@ pub fn state_json(core: &Core) -> Value {
         .collect();
     names.insert(my_id.clone(), "You".to_string());
     let logs = logs(core, &room_id);
+    if let Some(name) = latest_name(&logs) {
+        keep_name(core, &room_id, &name);
+    }
+    let active = core.active_room();
     let caps = core.party.lock().unwrap().caps();
     let mut events = events(&logs, caps.as_ref());
     let sets = sets_json(core, &room_id, &logs, &events);
@@ -919,6 +1007,7 @@ pub fn state_json(core: &Core) -> Value {
             }
         }
     }
+    let people = active.as_ref().map(Room::people).unwrap_or_default();
     let rooms = core.rooms.lock().unwrap();
     let room_list: Vec<Value> = rooms.list.iter().map(|r| json!({"id": r.id, "name": r.name, "active": rooms.active.as_deref() == Some(&r.id), "members": r.members.len()})).collect();
     drop(rooms);
@@ -927,6 +1016,10 @@ pub fn state_json(core: &Core) -> Value {
         "ffmpeg": core.ffmpeg_status.lock().unwrap().clone(),
         "id": my_id,
         "name": core.name.lock().unwrap().clone(),
+        "lang": crate::language(core),
+        "language": *core.language.lock().unwrap(),
+        "colors": colors(&people),
+        "palette": PALETTE,
         "share": core.share.load(Ordering::Relaxed),
         "audio_process": core.audio_process.lock().unwrap().clone(),
         "keep_days": *core.keep_days.lock().unwrap(),
@@ -961,11 +1054,11 @@ mod tests {
     }
 
     #[test]
-    fn sets_come_from_rec_rec_end_and_file_records() {
+    fn sets_come_from_rec_and_rec_end_records() {
         let a = log("a", 0, vec![
             json!({"k": "rec", "set": "s1", "start_us": 100}),
             json!({"k": "rec_end", "set": "s1", "t_us": 900}),
-            json!({"k": "file", "set": "s1", "size": 10, "sha256": "ab"}),
+            json!({"k": "rec_end", "set": "s1", "t_us": 950}),
             json!({"k": "rec", "set": "s2", "start_us": 1000}),
             json!({"k": "rec", "set": "../bad", "start_us": 1}),
         ]);
@@ -974,11 +1067,16 @@ mod tests {
         assert_eq!(sets.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["s2", "s1"]);
         let s1 = &sets[1];
         assert_eq!(s1.files.len(), 2);
-        assert_eq!(s1.files[0].segs, vec![Seg { capture: LEGACY.into(), series: "v".into(), n: 1, t_us: 100, d_us: 800, size: 10, sha256: "ab".into() }]);
-        assert_eq!(s1.files[0].total(), 10);
+        assert_eq!(s1.files[0].end_us, Some(900));
         assert_eq!(s1.start(), 100);
         assert_eq!(s1.end(), None);
         assert!(sets[0].files[0].end_us.is_none());
+        let rejoined = derive_sets("r", &[log("a", 0, vec![
+            json!({"k": "rec", "set": "s1", "start_us": 100}),
+            json!({"k": "rec_end", "set": "s1", "t_us": 400}),
+            json!({"k": "rec", "set": "s1", "start_us": 600}),
+        ])], &HashSet::new());
+        assert_eq!((rejoined[0].files.len(), rejoined[0].files[0].start_us, rejoined[0].files[0].end_us), (1, 100, None));
         let deleted: HashSet<String> = ["r/s2".to_string()].into();
         assert_eq!(derive_sets("r", &[log("a", 0, vec![json!({"k": "rec", "set": "s2"})])], &deleted).len(), 0);
     }
@@ -1000,6 +1098,7 @@ mod tests {
             seg("111", "q", 4, "s1"),
             json!({"k": "cap", "capture": "222", "start_us": 9}),
             seg("222", "v", 1, "s1"),
+            seg("111", "v", 2, "s1"),
             json!({"k": "rec_end", "set": "s1", "t_us": 20_000_000}),
         ]);
         let sets = derive_sets("r", &[a], &HashSet::new());
@@ -1027,16 +1126,18 @@ mod tests {
     }
 
     #[test]
-    fn events_merge_old_notes_new_events_and_edits() {
+    fn events_merge_with_their_edits() {
         let a = log("a", 10, vec![
-            json!({"k": "note", "id": 1, "t_us": 1, "at_us": 500, "text": "old #one"}),
-            json!({"k": "note_edit", "id": 1, "text": "edited #two"}),
+            json!({"k": "event", "id": 1, "t_us": 1, "kind": "note", "target": {"t_us": 500}, "text": "first #one"}),
+            json!({"k": "event_edit", "id": 1, "text": "edited #two"}),
             json!({"k": "event", "id": 2, "kind": "note", "target": {"t_us": 700}, "text": "new", "tags": ["x"]}),
             json!({"k": "event_del", "id": 2}),
             json!({"k": "event", "id": 3, "kind": "marker", "target": {"from_us": 100, "to_us": 200}, "text": ""}),
-            json!({"k": "event", "id": 4, "kind": "round", "plugin": {"name": "apex", "version": "1"}, "target": {"set": "s1"}, "values": {"n": 2}, "tags": ["p"]}),
+            json!({"k": "plugin", "plugin": "apex", "on": true, "version": "1", "settings": {}, "t_us": 1}),
+            json!({"k": "event", "id": 4, "kind": "round", "plugin": {"name": "apex", "version": "1"}, "target": {"set": "s1"}, "values": {"n": 2}, "tags": ["p"], "run": 5}),
+            json!({"k": "job", "state": "done", "job": "apex@1/44136fa355b3/s1/a", "run": 5}),
             json!({"k": "event_edit", "id": 4, "text": "hijack"}),
-            json!({"k": "note_del", "id": 9}),
+            json!({"k": "event_del", "id": 9}),
         ]);
         let all = events(&[a], None);
         assert_eq!(all.len(), 3);
@@ -1050,6 +1151,14 @@ mod tests {
         assert_eq!(plugin["text"], "");
         assert_eq!(plugin["set"], "s1");
         assert_eq!(plugin["plugin"]["name"], "apex");
+    }
+
+    #[test]
+    fn peer_events_are_cleaned() {
+        let a = log("a", 0, vec![json!({"k": "event", "id": 1, "kind": "note", "target": {"t_us": 5, "file": 7, "set": [1]}, "text": "x".repeat(crate::BOARD_MAX + 9), "tags": ["ok", 5, null]})]);
+        let e = &events(&[a], None)[0];
+        assert_eq!((e["tags"].clone(), e["file"].clone(), e["set"].clone()), (json!(["ok"]), Value::Null, Value::Null));
+        assert_eq!(e["text"].as_str().unwrap().len(), crate::BOARD_MAX);
     }
 
     #[test]
@@ -1110,6 +1219,70 @@ mod tests {
         assert_eq!(latest["d"], (200, true, "c".to_string()));
         let later = removals(&[log("a", 0, vec![json!({"k": "remove", "member": "b", "t_us": 100}), json!({"k": "admit", "member": "b", "t_us": 300})])]);
         assert!(!later["b"].1);
+    }
+
+    #[test]
+    fn the_latest_room_name_wins_on_every_clock() {
+        assert_eq!(latest_name(&[log("a", 0, vec![json!({"k": "rec"})])]), None);
+        let a = log("a", 0, vec![json!({"k": "room_name", "name": "Old", "t_us": 100}), json!({"k": "room_name", "name": "Newer", "t_us": 300})]);
+        let b = log("b", 1000, vec![json!({"k": "room_name", "name": "  Late  ", "t_us": 1200})]);
+        assert_eq!(latest_name(&[a, b]), Some("Newer".to_string()));
+        let c = log("c", -500, vec![json!({"k": "room_name", "name": "Last", "t_us": -150})]);
+        assert_eq!(latest_name(&[c, log("a", 0, vec![json!({"k": "room_name", "name": "First", "t_us": 340})])]), Some("Last".to_string()));
+    }
+
+    #[test]
+    fn invite_tokens_and_room_ids_cannot_leave_the_rooms_folder() {
+        assert!(valid_token(&random_hex(TOKEN_BYTES)));
+        assert!(!valid_token("0123456789abcdef/../x"));
+        assert!(!valid_token("../../../../evil00"));
+        assert!(!valid_id("../outside"));
+        assert!(!valid_id("a\\b"));
+        assert!(valid_id("1a2b3c4d"));
+    }
+
+    #[test]
+    fn a_stop_in_any_log_ends_the_set_and_a_crash_lets_its_member_rejoin() {
+        let a = log("a", 0, vec![json!({"k": "rec", "set": "s1"}), json!({"k": "rec_end", "set": "s1", "stop": false})]);
+        let b = log("b", 0, vec![json!({"k": "rec_end", "set": "s2", "stop": true})]);
+        assert!(!joined(&a.records, "s1"));
+        assert!(joined(&[json!({"k": "rec_end", "set": "s1"}), json!({"k": "rec", "set": "s1"})], "s1"));
+        assert!(!joined(&[json!({"k": "rec", "set": "s2"})], "s1"));
+        let crashed = [json!({"k": "rec", "set": "s1"}), json!({"k": "rec_end", "set": "s1"})];
+        assert!(may_join(&crashed, "s1"));
+        assert!(may_join(&crashed, "s2"));
+        let moved = [crashed[0].clone(), crashed[1].clone(), json!({"k": "rec", "set": "s2"}), json!({"k": "rec_end", "set": "s2"})];
+        assert!(!may_join(&moved, "s1"));
+        assert!(may_join(&moved, "s2"));
+        assert!(!may_join(&moved[..3], "s2"));
+        let logs = [a, b];
+        assert!(!stopped(&logs, "s1"));
+        assert!(stopped(&logs, "s2"));
+    }
+
+    #[test]
+    fn colors_are_the_same_everywhere() {
+        let ids: Vec<String> = (0..5).map(|i| format!("{i:064x}")).collect();
+        let a = colors(&ids);
+        let mut reversed = ids.clone();
+        reversed.reverse();
+        assert_eq!(a, colors(&reversed));
+        let mut seen: Vec<usize> = a.values().copied().collect();
+        seen.sort();
+        seen.dedup();
+        assert_eq!(seen.len(), ids.len());
+    }
+
+    #[test]
+    fn colors_stay_when_someone_joins_without_a_clash() {
+        let first = "a".repeat(64);
+        let alone = colors(std::slice::from_ref(&first))[&first];
+        assert_eq!(alone, preferred_color(&first));
+        let newcomer = (0..).map(|i| format!("{i:064x}")).find(|id| preferred_color(id) != alone).unwrap();
+        assert_eq!(colors(&[first.clone(), newcomer])[&first], alone);
+        let clash = (0..).map(|i| format!("{i:064x}")).find(|id| preferred_color(id) == alone && *id != first).unwrap();
+        let both = colors(&[first.clone(), clash.clone()]);
+        assert_ne!(both[&first], both[&clash]);
     }
 
     #[test]

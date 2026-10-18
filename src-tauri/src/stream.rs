@@ -7,7 +7,7 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 use tauri::http::{header, Request, Response, StatusCode};
 
-use crate::room::{self, part_of, seg_name, valid_id, File, Set, INIT, LEGACY, SERIES};
+use crate::room::{self, capture_id, part_of, seg_name, valid_id, File, INIT, SERIES};
 use crate::{data, file_len, media, Core};
 
 pub const LIVE_WINDOW: u32 = 3;
@@ -17,7 +17,6 @@ const INDEX_MAX: usize = 4096;
 pub struct Piece {
     pub path: PathBuf,
     pub len: u64,
-    pub raw: bool,
 }
 
 pub fn size(pieces: &[Piece]) -> u64 {
@@ -25,7 +24,7 @@ pub fn size(pieces: &[Piece]) -> u64 {
 }
 
 fn piece(path: PathBuf) -> Piece {
-    Piece { len: file_len(&path), path, raw: false }
+    Piece { len: file_len(&path), path }
 }
 
 fn growing(dir: &Path, mut n: u32, out: &mut Vec<Piece>) {
@@ -43,12 +42,7 @@ fn growing(dir: &Path, mut n: u32, out: &mut Vec<Piece>) {
     }
 }
 
-pub fn set_pieces(core: &Core, room: &str, set: &Set, f: &File, capture: &str, series: &str) -> Vec<Piece> {
-    if capture == LEGACY {
-        let path = core.set_file(room, &set.id, &f.owner);
-        let len = file_len(&path);
-        return if len > 0 { vec![Piece { path, len, raw: true }] } else { Vec::new() };
-    }
+pub fn set_pieces(core: &Core, room: &str, f: &File, capture: &str, series: &str) -> Vec<Piece> {
     let dir = core.capture_dir(room, &f.owner, capture).join(series);
     let init = dir.join(INIT);
     if !init.exists() {
@@ -60,11 +54,11 @@ pub fn set_pieces(core: &Core, room: &str, set: &Set, f: &File, capture: &str, s
     let mut next = None;
     for seg in f.segs.iter().filter(|s| s.capture == capture && s.series == series) {
         let path = dir.join(seg_name(seg.n));
-        let check = data::seg_check(core, room, &set.id, &f.owner, seg);
-        if !path.exists() || !(own || check == Some(true) || (recording && check.is_none())) {
+        let check = data::seg_check(core, room, &f.owner, seg);
+        if !(check == Some(true) || (own || (recording && check.is_none())) && path.exists()) {
             return out;
         }
-        out.push(Piece { len: if check == Some(true) { seg.size } else { file_len(&path) }, path, raw: false });
+        out.push(Piece { len: if check == Some(true) { seg.size } else { file_len(&path) }, path });
         next = Some(seg.n + 1);
     }
     if let Some(n) = next.filter(|_| recording) {
@@ -126,23 +120,19 @@ fn decode(path: &str) -> String {
     String::from_utf8_lossy(&out).to_string()
 }
 
-fn member(core: &Core, id: &str) -> bool {
-    id == core.me() || id.parse::<iroh::EndpointId>().is_ok()
-}
-
-fn capture_id(text: &str) -> bool {
-    text == LEGACY || (!text.is_empty() && text.len() <= 20 && text.chars().all(|c| c.is_ascii_digit()))
+fn member(id: &str) -> bool {
+    id.parse::<iroh::EndpointId>().is_ok()
 }
 
 pub fn pieces_for(core: &Core, path: &str) -> Option<(Vec<Piece>, &'static str)> {
     let path = decode(path.trim_start_matches('/'));
     let parts: Vec<&str> = path.split('/').collect();
     match parts.as_slice() {
-        ["live", room, owner, capture, from] if valid_id(room) && member(core, owner) && capture_id(capture) => Some((live_pieces(core, room, owner, capture, from.parse().ok()?), "video/mp4")),
-        ["set", room, set, owner, series, capture] if valid_id(room) && valid_id(set) && member(core, owner) && SERIES.contains(series) && capture_id(capture) => {
+        ["live", room, owner, capture, from] if valid_id(room) && member(owner) && capture_id(capture) => Some((live_pieces(core, room, owner, capture, from.parse().ok()?), "video/mp4")),
+        ["set", room, set, owner, series, capture] if valid_id(room) && valid_id(set) && member(owner) && SERIES.contains(series) && capture_id(capture) => {
             let found = room::sets(core, room, &room::logs(core, room)).into_iter().find(|s| s.id == *set)?;
             let f = found.files.iter().find(|f| f.owner == *owner)?;
-            Some((set_pieces(core, room, &found, f, capture, series), if *series == SERIES[1] { "audio/mp4" } else { "video/mp4" }))
+            Some((set_pieces(core, room, f, capture, series), if *series == SERIES[1] { "audio/mp4" } else { "video/mp4" }))
         }
         _ => None,
     }
@@ -164,7 +154,7 @@ fn index(core: &Core, piece: &Piece) -> Arc<Vec<media::Time>> {
 }
 
 pub fn read(core: &Core, pieces: &[Piece], start: u64, len: u64) -> std::io::Result<Vec<u8>> {
-    let bases: HashMap<u32, u64> = pieces.get(1).filter(|p| !p.raw).map(|p| media::bases(&index(core, p))).unwrap_or_default();
+    let bases: HashMap<u32, u64> = pieces.get(1).map(|p| media::bases(&index(core, p))).unwrap_or_default();
     let mut out = Vec::with_capacity(len as usize);
     let (end, mut at) = (start + len, 0u64);
     for (i, p) in pieces.iter().enumerate() {
@@ -174,7 +164,7 @@ pub fn read(core: &Core, pieces: &[Piece], start: u64, len: u64) -> std::io::Res
             file.seek(SeekFrom::Start(from - at))?;
             let mut buf = vec![0u8; (to - from) as usize];
             file.read_exact(&mut buf)?;
-            if i > 0 && !p.raw {
+            if i > 0 {
                 media::patch(&mut buf, from - at, &index(core, p), &bases);
             }
             out.extend_from_slice(&buf);

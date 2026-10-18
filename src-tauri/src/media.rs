@@ -40,10 +40,10 @@ pub fn children(data: &[u8]) -> Vec<([u8; 4], usize, &[u8])> {
     let mut out = Vec::new();
     let mut at = 0;
     while let Some((kind, head, size)) = header(&data[at..]) {
-        let size = size as usize;
-        if size < head || at + size > data.len() {
+        if size < head as u64 || size > (data.len() - at) as u64 {
             break;
         }
+        let size = size as usize;
         out.push((kind, at + head, &data[at + head..at + size]));
         at += size;
     }
@@ -68,13 +68,13 @@ impl Splitter {
         let mut out = Vec::new();
         let mut at = 0;
         while let Some((kind, head, size)) = header(&self.buf[at..]) {
-            let size = size as usize;
-            if size < head {
+            if size < head as u64 {
                 return None;
             }
-            if at + size > self.buf.len() {
+            if size > (self.buf.len() - at) as u64 {
                 break;
             }
+            let size = size as usize;
             let whole = &self.buf[at..at + size];
             match &kind {
                 b"moof" => {
@@ -154,7 +154,7 @@ pub fn scan(path: &Path) -> (Vec<Time>, u64) {
             break;
         }
         let Some((kind, size_of_head, size)) = header(&head[..read]) else { break };
-        if size < size_of_head as u64 || at + size > len {
+        if size < size_of_head as u64 || size > len - at {
             break;
         }
         if &kind == b"moof" {
@@ -261,6 +261,19 @@ pub mod tests {
         assert_eq!(times.iter().map(|t| (t.track, t.value)).collect::<Vec<_>>(), [(1, 10), (2, 20), (1, 30), (2, 40), (1, 30), (2, 40)]);
         assert_eq!(times[2].at, a.len() as u64 + times[0].at);
         assert_eq!(micros(&times[0], &HashMap::from([(1, 1000)])), 10_000);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn huge_box_sizes_in_damaged_files_stop_the_scan() {
+        let dir = crate::log::tests::temp("huge");
+        let path = dir.join("1.m4s");
+        let a = fragment(&[(1, 10)], b"aaaa");
+        let huge = [&1u32.to_be_bytes()[..], b"moof", &u64::MAX.to_be_bytes()].concat();
+        std::fs::write(&path, [a.clone(), huge.clone()].concat()).unwrap();
+        assert_eq!(scan(&path).1, a.len() as u64);
+        assert!(children(&huge).is_empty());
+        assert_eq!(Splitter::default().push(&huge).map(|o| o.len()), Some(0));
         let _ = std::fs::remove_dir_all(dir);
     }
 

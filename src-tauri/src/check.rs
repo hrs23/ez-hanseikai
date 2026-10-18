@@ -24,7 +24,7 @@ fn audio_lines(pid: Option<u32>) -> Vec<Value> {
         Ok(devices) => {
             let count = devices.get_nbr_devices().unwrap_or(0);
             if count == 0 {
-                lines.push(line("warn", "no playback device: there is no game sound to capture on this PC"));
+                lines.push(line("warn", "no playback device: there is no app sound to capture on this PC"));
             } else {
                 let names: Vec<String> = (0..count).filter_map(|i| devices.get_device_at_index(i).ok()?.get_friendlyname().ok()).collect();
                 lines.push(line("ok", format!("{count} playback device(s): {}", names.join(", "))));
@@ -32,7 +32,7 @@ fn audio_lines(pid: Option<u32>) -> Vec<Value> {
         }
     }
     match pid {
-        None => lines.push(line("info", "no game process selected, so game sound is not checked")),
+        None => lines.push(line("info", "no app selected for app sound, so it is not checked")),
         Some(pid) => {
             let (format, mode) = audio::capture_format();
             let result = AudioClient::new_application_loopback_client(pid, true)
@@ -53,7 +53,7 @@ pub fn run(core: &Arc<Core>, audio_pid: Option<u32>) -> Vec<Value> {
         Some(build) => {
             lines.push(line("info", format!("Windows build {build}")));
             if build < 19041 {
-                lines.push(line("fail", "per-process game sound capture needs Windows build 19041 or newer; recording will have no game sound"));
+                lines.push(line("fail", "per-process app sound capture needs Windows build 19041 or newer; recording will have no app sound"));
             } else {
                 lines.push(line("ok", "per-process sound capture is supported"));
             }

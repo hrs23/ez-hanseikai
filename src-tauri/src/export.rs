@@ -11,7 +11,7 @@ use tauri::Emitter;
 
 use crate::ffmpeg::{self, FRAGMENTED};
 use crate::record::FPS;
-use crate::room::{LEGACY, SERIES};
+use crate::room::SERIES;
 use crate::stream::{self, Piece};
 use crate::{room, strings, Core, BELOW_NORMAL, NO_WINDOW};
 
@@ -28,6 +28,7 @@ const CONNECT_WAIT: Duration = Duration::from_secs(120);
 const POLL: Duration = Duration::from_millis(50);
 
 pub struct Running {
+    pub set: (String, String),
     child: Child,
     cancelled: bool,
 }
@@ -111,8 +112,8 @@ pub fn start(core: &Arc<Core>, room_id: &str, set_id: &str, mut path: PathBuf) -
         for capture in f.captures() {
             for series in SERIES {
                 let Some(first) = f.segs.iter().find(|s| s.capture == capture && s.series == series) else { continue };
-                let pieces = stream::set_pieces(core, room_id, &set, f, capture, series);
-                if pieces.len() > usize::from(capture != LEGACY) {
+                let pieces = stream::set_pieces(core, room_id, f, capture, series);
+                if pieces.len() > 1 {
                     let delay = ((first.t_us - f.offset_us) - set.start()).max(0) as f64 / 1e6;
                     inputs.push((pieces, delay, series == SERIES[0]));
                 }
@@ -130,7 +131,6 @@ pub fn start(core: &Arc<Core>, room_id: &str, set_id: &str, mut path: PathBuf) -
         let name = room::display_name(core, &f.owner);
         let mut sounds = Vec::new();
         for (pieces, delay, video) in inputs {
-            let legacy = pieces.first().is_some_and(|p| p.raw);
             let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
             let port = listener.local_addr().map_err(|e| e.to_string())?.port();
             command.arg("-i").arg(format!("tcp://127.0.0.1:{port}"));
@@ -145,10 +145,8 @@ pub fn start(core: &Arc<Core>, room_id: &str, set_id: &str, mut path: PathBuf) -
                 );
                 layer += 1;
             }
-            for k in 0..if legacy { 2 } else { 1 } {
-                graph += &format!("[{j}:a:{k}]asetpts=PTS-STARTPTS,adelay=delays={}:all=1[s{j}_{k}];", (delay * 1000.0).round() as u64);
-                sounds.push(format!("[s{j}_{k}]"));
-            }
+            graph += &format!("[{j}:a:0]asetpts=PTS-STARTPTS,adelay=delays={}:all=1[s{j}];", (delay * 1000.0).round() as u64);
+            sounds.push(format!("[s{j}]"));
         }
         graph += &format!("{}amix=inputs={}:normalize=0:duration=longest,asplit=2[p{i}][m{i}];", sounds.concat(), sounds.len());
         let label = work.join(format!("label-{i}.txt"));
@@ -189,7 +187,7 @@ pub fn start(core: &Arc<Core>, room_id: &str, set_id: &str, mut path: PathBuf) -
         .creation_flags(NO_WINDOW | BELOW_NORMAL);
     let mut child = command.spawn().map_err(|e| e.to_string())?;
     let (stdout, stderr) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
-    *core.export.lock().unwrap() = Some(Running { child, cancelled: false });
+    *core.export.lock().unwrap() = Some(Running { set: (room_id.to_string(), set_id.to_string()), child, cancelled: false });
     for (listener, pieces) in feeds {
         let core = core.clone();
         std::thread::spawn(move || feed(core, listener, pieces));

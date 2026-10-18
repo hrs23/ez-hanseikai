@@ -25,25 +25,25 @@ Work in progress. See [the design](docs/design.md).
 
 1. Download `EZ.Hanseikai_<version>_x64-setup.exe` from [Releases](https://github.com/hrs23/ez-hanseikai/releases) and run it. It is unsigned, so SmartScreen warns: More info, then Run anyway. It installs for your Windows user only and needs no admin rights.
 2. Start the app. Allow it through the firewall when Windows asks. On first run it downloads ffmpeg.
-3. Enter your name. One player presses Create a room and sends the invite code; the others paste it and press Join (any member can create more invites). Then press Record.
+3. Enter your name. One player presses Create room, which copies an invite code to send; the others paste it and press Join, and a member approves them (Room > Copy invite code makes more). Then press Record.
 
 Requires Windows 10 version 2004 or later, or Windows 11.
 
 ## Update
 
-The app checks for a new version at start and installs it when you agree. Updates are signed and checked before they install. To go back to an older version, uninstall (keeping your data) and install that version from Releases.
+The app checks for a new version at start (or Help > Check for updates) and installs it when you agree. Updates are signed and checked before they install. An older version may not read data from a newer one, so going back means starting with an empty data folder.
 
 ## Uninstall
 
 Settings > Apps > Installed apps > EZ Hanseikai > Uninstall. Your data stays unless you tick the option to delete it, so a reinstall keeps your ID and recordings.
 
-Data lives in `%LOCALAPPDATA%\dev.ez-hanseikai.app`; the app's Files section opens it and can reset it. `key.bin` is your identity: keep it private, and deleting it changes your ID.
+Data lives in `%LOCALAPPDATA%\dev.ez-hanseikai.app`; File > Open data folder opens it, and Help > Debug > App can reset it. `key.bin` is your identity: keep it private, and deleting it changes your ID.
 
 ## Security
 
 - Only the teammates you connect to receive your recording, game sound, notes and name. Anything visible on your main screen, such as chats or notifications, is recorded too.
 - Your ID is the public half of a key made on first start. Connections are encrypted and accepted only from room members. An invite code works once; anyone who joins can invite others, so share it only with your team.
-- The Share switch in the settings stops others from receiving your recordings; the speed limit caps your upload.
+- The Share switch in File > Settings stops others from receiving your recordings; the speed limit caps your upload.
 
 ## Contributing
 

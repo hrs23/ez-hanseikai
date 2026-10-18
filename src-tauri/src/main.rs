@@ -6,10 +6,12 @@ mod data;
 mod debug;
 mod export;
 mod ffmpeg;
+mod jobs;
 mod log;
 mod media;
 mod net;
 mod party;
+mod plugins;
 mod record;
 mod room;
 mod shell;
@@ -19,7 +21,7 @@ mod stream;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use iroh::endpoint::{presets, Connection};
@@ -29,14 +31,32 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, State};
 
 pub const ALPN: &[u8] = b"ez-hanseikai/0";
-pub const PROTOCOL: u32 = 3;
+pub const PROTOCOL: u32 = 4;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const NO_WINDOW: u32 = 0x08000000;
 pub const BELOW_NORMAL: u32 = 0x00004000;
 const NOTE_MAX: usize = 500;
+const BOARD_MAX: usize = 4000;
+const VALUES_MAX: usize = 32 << 10;
+const EVENT_KINDS: [&str; 3] = ["note", "drawing", "board"];
 const NAME_MAX: usize = 24;
 pub const ROOM_NAME_MAX: usize = 40;
 const DISK_EVERY: Duration = Duration::from_secs(20);
+const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection";
+static TEST_PORT: LazyLock<Option<String>> = LazyLock::new(|| std::env::var("EZH_TEST").ok());
+
+pub fn test_mode() -> bool {
+    TEST_PORT.is_some()
+}
+
+fn open_main(app: &tauri::App) -> tauri::Result<()> {
+    let config = app.config().app.windows.first().cloned().unwrap_or_default();
+    let mut builder = tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?;
+    if let Some(port) = TEST_PORT.as_ref().and_then(|p| p.parse::<u16>().ok()) {
+        builder = builder.additional_browser_args(&format!("{BROWSER_ARGS} --remote-debugging-port={port}"));
+    }
+    builder.build().map(|window| shell::plain_keys(&window))
+}
 
 pub fn now_us() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros() as i64
@@ -54,8 +74,8 @@ pub fn clean_name(raw: &str) -> String {
     clean_text(raw, NAME_MAX)
 }
 
-fn clean_note(raw: &str) -> String {
-    raw.chars().filter(|c| !c.is_control()).take(NOTE_MAX).collect()
+fn clean_note(raw: &str, max: usize) -> String {
+    raw.chars().filter(|c| !c.is_control() || *c == '\n').take(max).collect()
 }
 
 pub fn hex(bytes: &[u8]) -> String {
@@ -66,8 +86,16 @@ pub fn file_len(path: &Path) -> u64 {
     std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
 }
 
+pub fn write_whole(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    static WRITING: Mutex<()> = Mutex::new(());
+    let _guard = WRITING.lock().unwrap();
+    let part = room::part_of(path);
+    std::fs::write(&part, bytes)?;
+    std::fs::rename(part, path)
+}
+
 pub fn read_json<T: DeserializeOwned + Default>(path: &Path) -> T {
-    std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+    std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str(t.trim_start_matches('\u{feff}')).ok()).unwrap_or_default()
 }
 
 pub fn strings<C: FromIterator<String>>(value: &Value) -> C {
@@ -77,6 +105,19 @@ pub fn strings<C: FromIterator<String>>(value: &Value) -> C {
 pub fn merge(into: &mut Value, from: &Value) {
     if let (Some(into), Some(from)) = (into.as_object_mut(), from.as_object()) {
         into.extend(from.clone());
+    }
+}
+
+pub fn os_language() -> &'static str {
+    const JAPANESE: u16 = 0x11;
+    const PRIMARY: u16 = 0x3ff;
+    if unsafe { windows::Win32::Globalization::GetUserDefaultUILanguage() } & PRIMARY == JAPANESE { "ja" } else { "en" }
+}
+
+pub fn language(core: &Core) -> String {
+    match core.language.lock().unwrap().as_str() {
+        "" => os_language().to_string(),
+        chosen => chosen.to_string(),
     }
 }
 
@@ -96,13 +137,14 @@ pub struct Peer {
     pub info: Option<(String, u32)>,
     pub sharing: bool,
     pub have: HashMap<String, u64>,
+    pub logs: HashMap<String, u64>,
     pub gone: HashSet<String>,
     pub asks: Vec<Value>,
 }
 
 impl Peer {
     pub fn new(id: EndpointId, name: String) -> Self {
-        Self { id, name, conn: None, incoming: None, offset_us: None, failures: 0, announce: true, codecs: default_codecs(), info: None, sharing: false, have: HashMap::new(), gone: HashSet::new(), asks: Vec::new() }
+        Self { id, name, conn: None, incoming: None, offset_us: None, failures: 0, announce: true, codecs: default_codecs(), info: None, sharing: false, have: HashMap::new(), logs: HashMap::new(), gone: HashSet::new(), asks: Vec::new() }
     }
 }
 
@@ -130,17 +172,17 @@ pub struct Core {
     pub pacer: Mutex<net::Pacer>,
     pub previous_version: String,
     pub ffmpeg_status: Mutex<String>,
-    pub events: Mutex<VecDeque<String>>,
+    pub events: Mutex<VecDeque<debug::Event>>,
     pub started: Instant,
     pub engine: record::Engine,
     pub layout: Mutex<Value>,
     pub export: Mutex<Option<export::Running>>,
     pub log_lock: Mutex<()>,
-    pub recovered: Mutex<HashSet<String>>,
     pub wake: tokio::sync::Notify,
     pub focus: Mutex<Option<String>>,
     pub asks: Mutex<Vec<room::Ask>>,
     pub party: Mutex<party::Party>,
+    pub language: Mutex<String>,
     logs: Mutex<HashMap<PathBuf, (Arc<Vec<Value>>, u64)>>,
     pub jsons: Mutex<HashMap<PathBuf, Value>>,
     pub writing: Mutex<HashSet<PathBuf>>,
@@ -161,52 +203,46 @@ impl Core {
     }
 
     fn log_ready(&self, room: &str) -> bool {
-        file_len(&self.log_path(room, &self.me())) > 0
-            || self.recovered.lock().unwrap().contains(room)
-            || !self.rooms.lock().unwrap().list.iter().any(|r| r.id == room && r.members.len() > 1)
+        !self.rooms.lock().unwrap().list.iter().any(|r| r.id == room && r.members.len() > 1)
+            || (file_len(&self.log_path(room, &self.me())) > 0 && !self.pending_path(room).exists())
     }
 
     pub fn append_log(&self, room: &str, record: &Value) {
         let _guard = self.log_lock.lock().unwrap();
         let path = if self.log_ready(room) { self.log_path(room, &self.me()) } else { self.pending_path(room) };
-        if log::append(&path, record).is_ok() && path == self.log_path(room, &self.me()) {
-            self.recovered.lock().unwrap().remove(room);
-        }
+        let _ = log::append(&path, record);
     }
 
-    pub fn settle(&self, room: &str) {
+    pub fn hold_own_log(&self, room: &str) -> std::io::Result<()> {
+        log::append_bytes(&self.pending_path(room), &[])
+    }
+
+    pub fn settle(&self, room: &str) -> std::io::Result<()> {
         let pending = self.pending_path(room);
-        let _guard = self.log_lock.lock().unwrap();
-        if !pending.exists() || !self.log_ready(room) {
-            return;
+        let Ok(bytes) = std::fs::read(&pending) else { return Ok(()) };
+        let whole = log::parse(&bytes).1;
+        if whole > 0 {
+            log::append_bytes(&self.log_path(room, &self.me()), &bytes[..whole])?;
         }
-        let own = self.log_path(room, &self.me());
-        for record in log::scan(&pending, 0).0 {
-            let _ = log::append(&own, &record);
-        }
-        let _ = std::fs::remove_file(pending);
-        self.recovered.lock().unwrap().remove(room);
+        std::fs::remove_file(pending)
     }
 
-    pub fn log(&self, path: &Path) -> Arc<Vec<Value>> {
+    pub fn room_log(&self, room: &str, id: &str) -> Arc<Vec<Value>> {
+        let path = self.log_path(room, id);
         let mut cache = self.logs.lock().unwrap();
-        let entry = cache.entry(path.to_path_buf()).or_default();
-        let len = file_len(path);
+        let entry = cache.entry(path.clone()).or_default();
+        let len = file_len(&path);
         if len < entry.1 {
             *entry = Default::default();
         }
         if len > entry.1 {
-            let (more, used) = log::scan(path, entry.1);
+            let (more, used) = log::scan(&path, entry.1);
             if !more.is_empty() {
                 Arc::make_mut(&mut entry.0).extend(more);
             }
             entry.1 += used;
         }
         entry.0.clone()
-    }
-
-    pub fn room_log(&self, room: &str, id: &str) -> Arc<Vec<Value>> {
-        self.log(&self.log_path(room, id))
     }
 
     pub fn own_log(&self, room: &str) -> Arc<Vec<Value>> {
@@ -224,9 +260,11 @@ impl Core {
             "source": self.engine.source.lock().unwrap().clone(),
             "mic": self.engine.mic.lock().unwrap().clone(),
             "mix": self.engine.mix.lock().unwrap().clone(),
+            "quality": self.engine.quality.lock().unwrap().clone(),
+            "language": *self.language.lock().unwrap(),
             "layout": *self.layout.lock().unwrap(),
         });
-        let _ = std::fs::write(self.dir.join("settings.json"), value.to_string());
+        let _ = write_whole(&self.dir.join("settings.json"), value.to_string().as_bytes());
     }
 
     pub fn has_peer(&self, id: &EndpointId) -> bool {
@@ -311,7 +349,7 @@ fn set_mic(core: State<Arc<Core>>, id: String) {
 #[tauri::command]
 fn set_mix(core: State<Arc<Core>>, kind: String, volume: f64, muted: bool) -> Result<(), String> {
     let track = match kind.as_str() {
-        "game" => record::GAME,
+        "app" => record::APP,
         "mic" => record::MIC,
         _ => return Err("unknown kind".into()),
     };
@@ -321,7 +359,66 @@ fn set_mix(core: State<Arc<Core>>, kind: String, volume: f64, muted: bool) -> Re
     Ok(())
 }
 
-async fn warm(core: &Core) {
+#[tauri::command]
+fn set_quality(core: State<Arc<Core>>, id: String) -> Result<(), String> {
+    if !record::QUALITIES.iter().any(|q| q.0 == id) {
+        return Err("unknown quality".into());
+    }
+    *core.engine.quality.lock().unwrap() = id;
+    core.save_settings();
+    Ok(())
+}
+
+#[tauri::command]
+fn set_language(core: State<Arc<Core>>, language: String) -> Result<(), String> {
+    if !["", "en", "ja"].contains(&language.as_str()) {
+        return Err("unknown language".into());
+    }
+    *core.language.lock().unwrap() = language;
+    core.save_settings();
+    shell::rebuild_menus(&core.app, &core);
+    Ok(())
+}
+
+#[tauri::command]
+fn rename_room(core: State<Arc<Core>>, name: String) -> Result<(), String> {
+    room::rename_room(&core, &name)
+}
+
+#[tauri::command]
+async fn check_room(core: State<'_, Arc<Core>>) -> Result<Vec<Value>, String> {
+    let core = core.inner().clone();
+    warm(&core).await;
+    let mine = {
+        let core = core.clone();
+        let pid = sources::pid_of(&core.audio_process.lock().unwrap().clone());
+        tauri::async_runtime::spawn_blocking(move || check::run(&core, pid))
+    };
+    let others = net::check_peers(&core).await;
+    let mut out = vec![json!({"id": core.me(), "lines": mine.await.map_err(|e| e.to_string())?})];
+    out.extend(others);
+    Ok(out)
+}
+
+#[tauri::command]
+fn draw(core: State<Arc<Core>>, stroke: Value) {
+    if core.party.lock().unwrap().on {
+        net::broadcast(&core, json!({"t": "draw", "room": core.active_room_id(), "stroke": stroke}));
+    }
+}
+
+#[tauri::command]
+async fn open_debug(app: AppHandle) {
+    shell::open_debug(&app);
+}
+
+#[tauri::command]
+fn party_typing(core: State<Arc<Core>>, on: bool) {
+    core.party.lock().unwrap().typing = on;
+    party::send(&core);
+}
+
+pub async fn warm(core: &Core) {
     let wait = Duration::from_secs(6);
     let _ = tokio::time::timeout(wait, core.ep.online()).await;
     let _ = tokio::time::timeout(wait, core.ep.net_report().initialized()).await;
@@ -334,11 +431,6 @@ async fn check(core: State<'_, Arc<Core>>, audio_process: String) -> Result<Vec<
     tauri::async_runtime::spawn_blocking(move || check::run(&core, sources::pid_of(&audio_process)))
         .await
         .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn debug_text(core: State<'_, Arc<Core>>) -> Result<String, String> {
-    Ok(debug::text(&core))
 }
 
 #[tauri::command]
@@ -372,8 +464,7 @@ fn delete_set(core: State<Arc<Core>>, room: String, set: String) -> Result<(), S
 #[tauri::command]
 fn open_set_folder(core: State<Arc<Core>>, room: String, set: String) {
     if room::valid_id(&room) && room::valid_id(&set) {
-        let legacy = core.set_dir(&room, &set);
-        data::open_folder(&if legacy.exists() { legacy } else { core.dir.join("rooms").join(&room).join(core.me()) });
+        data::open_folder(&core.dir.join("rooms").join(&room).join(core.me()));
     }
 }
 
@@ -385,7 +476,8 @@ async fn export_set(core: State<'_, Arc<Core>>, room: String, set: String) -> Re
     let core = core.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         export::check(&core)?;
-        let Some(path) = shell::pick_file(true, &format!("{set}.mp4")) else { return Ok(Value::Null) };
+        let name = format!("{set}.mp4");
+        let Some(path) = (if test_mode() { Some(core.dir.join(name)) } else { shell::pick_file(true, &name) }) else { return Ok(Value::Null) };
         export::start(&core, &room, &set, path).map(|skipped| json!({"skipped": skipped}))
     })
     .await
@@ -416,7 +508,7 @@ fn create_invite(core: State<Arc<Core>>, reuse: bool) -> String {
     let token = match invites.iter().rev().find(|(_, r)| *r == room).filter(|_| reuse) {
         Some((token, _)) => token.clone(),
         None => {
-            let token = room::random_hex(8);
+            let token = room::random_hex(room::TOKEN_BYTES);
             invites.push((token.clone(), room));
             token
         }
@@ -464,8 +556,17 @@ fn switch_room(core: State<Arc<Core>>, id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn leave_room(core: State<Arc<Core>>, id: String) {
+async fn leave_room(core: State<'_, Arc<Core>>, id: String) -> Result<(), String> {
+    let core = core.inner().clone();
+    if core.active_set.lock().unwrap().as_ref().is_some_and(|s| s.room == id) {
+        let c = core.clone();
+        tauri::async_runtime::spawn_blocking(move || room::end_set(&c, false, None)).await.map_err(|e| e.to_string())?;
+    }
+    if core.room_id().as_deref() == Some(id.as_str()) {
+        net::farewell(&core).await;
+    }
     room::leave_room(&core, &id);
+    Ok(())
 }
 
 #[tauri::command]
@@ -488,7 +589,7 @@ fn event_action(core: State<Arc<Core>>, kind: String, id: i64, text: String) {
         "restore" => "event_restore",
         _ => return,
     };
-    let text = clean_note(&text);
+    let text = clean_note(&text, BOARD_MAX);
     core.append_log(&core.active_room_id(), &json!({"k": kind, "id": id, "t_us": now_us(), "text": text, "tags": room::tags(&text)}));
     party::send(&core);
 }
@@ -542,14 +643,18 @@ fn dismiss_recovery(core: State<Arc<Core>>) {
 }
 
 #[tauri::command]
-fn add_note(core: State<Arc<Core>>, text: String, at_us: i64) {
-    let text = clean_note(&text);
-    if text.trim().is_empty() {
-        return;
+fn add_event(core: State<Arc<Core>>, kind: String, text: String, target: Value, values: Value) -> Result<i64, String> {
+    if !EVENT_KINDS.contains(&kind.as_str()) || !target.is_object() || values.to_string().len() > VALUES_MAX {
+        return Err("not a valid event".into());
+    }
+    let text = clean_note(&text, if kind == "board" { BOARD_MAX } else { NOTE_MAX });
+    if kind == "note" && text.trim().is_empty() {
+        return Err("empty note".into());
     }
     let id = now_us();
-    core.append_log(&core.active_room_id(), &json!({"k": "event", "id": id, "t_us": id, "kind": "note", "target": {"t_us": at_us}, "text": text, "tags": room::tags(&text)}));
+    core.append_log(&core.active_room_id(), &json!({"k": "event", "id": id, "t_us": id, "kind": kind, "target": target, "text": text, "values": values, "tags": room::tags(&text)}));
     party::send(&core);
+    Ok(id)
 }
 
 #[tauri::command]
@@ -579,11 +684,7 @@ fn party_act(core: State<Arc<Core>>, view: Value) {
 async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
     let dir = match std::env::var_os("EZH_DIR") {
         Some(dir) => PathBuf::from(dir),
-        None => {
-            let dir = app.path().app_local_data_dir()?;
-            data::migrate(&app.path().app_data_dir()?, &dir);
-            dir
-        }
+        None => app.path().app_local_data_dir()?,
     };
     std::fs::create_dir_all(&dir)?;
     debug::init(&dir);
@@ -607,7 +708,7 @@ async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
             recovery = Some("key.bin was missing, so this PC now has a new identity. Import your identity (File menu) to keep your old one.".into());
         }
         let key = SecretKey::generate();
-        std::fs::write(&key_path, key.to_bytes())?;
+        write_whole(&key_path, &key.to_bytes())?;
         key
     };
     let mut builder = Endpoint::builder(presets::N0).secret_key(key).alpns(vec![ALPN.to_vec()]);
@@ -617,7 +718,6 @@ async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
     let ep = builder.bind().await?;
     std::fs::write(dir.join("id.txt"), ep.id().to_string())?;
     let rooms: room::Rooms = read_json(&dir.join("rooms.json"));
-    data::split_old_logs(&dir, &ep.id().to_string(), &rooms.list);
     data::repair_logs(&dir);
     let settings: Value = read_json(&dir.join("settings.json"));
     Ok(Arc::new(Core {
@@ -625,7 +725,7 @@ async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
         ep,
         app,
         peers: Mutex::new(Vec::new()),
-        name: Mutex::new(settings["name"].as_str().map(clean_name).unwrap_or_else(|| "player".into())),
+        name: Mutex::new(settings["name"].as_str().map(clean_name).unwrap_or_default()),
         share: AtomicBool::new(settings["share"].as_bool().unwrap_or(true)),
         limit_mbps: Mutex::new(settings["limit_mbps"].as_f64()),
         invites: Mutex::new(Vec::new()),
@@ -650,11 +750,11 @@ async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
         layout: Mutex::new(settings["layout"].clone()),
         export: Mutex::new(None),
         log_lock: Mutex::new(()),
-        recovered: Mutex::new(HashSet::new()),
         wake: tokio::sync::Notify::new(),
         focus: Mutex::new(None),
         asks: Mutex::new(Vec::new()),
         party: Mutex::new(party::Party::default()),
+        language: Mutex::new(settings["language"].as_str().unwrap_or_default().to_string()),
         logs: Mutex::new(HashMap::new()),
         jsons: Mutex::new(HashMap::new()),
         writing: Mutex::new(HashSet::new()),
@@ -679,9 +779,12 @@ fn prepare_ffmpeg(core: &Core) {
 }
 
 fn main() {
+    if let Some(code) = plugins::child() {
+        std::process::exit(code);
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(tauri_plugin_window_state::Builder::default().with_denylist(&["debug"]).build())
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
@@ -696,6 +799,7 @@ fn main() {
             });
         })
         .setup(|app| {
+            open_main(app)?;
             let core = tauri::async_runtime::block_on(init(app.handle().clone()))?;
             app.manage(core.clone());
             shell::setup(app, core.clone())?;
@@ -714,9 +818,36 @@ fn main() {
             });
             let c = core.clone();
             std::thread::spawn(move || prepare_ffmpeg(&c));
+            let c = core.clone();
+            std::thread::spawn(move || jobs::worker(c));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug_text, save_report, start_recording, stop_recording, delete_set, open_set_folder, export_set, cancel_export, set_layout, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, set_share, set_limit, set_codecs, cancel_invites, list_sources, set_source, use_display, list_mics, set_mic, set_mix, set_audio_process, set_keep_days, event_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_note, answer_ask, focus_set, party_on, party_act])
+        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug::debug_view, debug::debug_report, debug::set_report_sharing, save_report, start_recording, stop_recording, delete_set, open_set_folder, export_set, cancel_export, set_layout, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, set_share, set_limit, set_codecs, cancel_invites, list_sources, set_source, use_display, list_mics, set_mic, set_mix, set_audio_process, set_keep_days, event_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_event, answer_ask, focus_set, party_on, party_act, jobs::room_plugins, jobs::set_room_plugin, jobs::prepare_plugin, jobs::jobs, jobs::retry_job, jobs::cancel_job, set_quality, set_language, rename_room, check_room, draw, party_typing, open_debug])
         .run(tauri::generate_context!())
         .expect("failed to run");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_files_may_start_with_a_byte_order_mark() {
+        let path = std::env::temp_dir().join(format!("ezh-bom-{}.json", std::process::id()));
+        std::fs::write(&path, "\u{feff}{\"name\": \"Ren\"}").unwrap();
+        let value: Value = read_json(&path);
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(value["name"], "Ren");
+    }
+
+    #[test]
+    fn whole_writes_replace_the_file_and_leave_no_part() {
+        let dir = log::tests::temp("whole");
+        let path = dir.join("rooms.json");
+        write_whole(&path, b"old").unwrap();
+        write_whole(&path, b"new").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+        assert!(!room::part_of(&path).exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

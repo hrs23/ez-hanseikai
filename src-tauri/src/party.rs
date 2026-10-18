@@ -9,7 +9,7 @@ use crate::{net, room, Core};
 pub const REPEAT: Duration = Duration::from_secs(4);
 const SEEN: Duration = Duration::from_secs(10);
 const CHECK: Duration = Duration::from_secs(1);
-const SHARED: [&str; 8] = ["set", "playing", "wall_us", "at_us", "rate", "focus", "mode", "order"];
+const SHARED: [&str; 9] = ["set", "playing", "wall_us", "at_us", "rate", "focus", "mode", "slots", "order"];
 
 pub type Heads = HashMap<String, u64>;
 
@@ -18,6 +18,7 @@ pub struct Viewer {
     pub heads: Heads,
     pub progress: Option<f64>,
     pub stuck: bool,
+    pub typing: bool,
     pub seen: Instant,
 }
 
@@ -29,6 +30,7 @@ pub struct Party {
     pub shared: Value,
     pub heads: Heads,
     pub viewers: HashMap<String, Viewer>,
+    pub typing: bool,
     grown: HashMap<String, Instant>,
     sent: Option<(Instant, Heads)>,
 }
@@ -104,7 +106,7 @@ impl Party {
         self.lamport = self.lamport.max(key(&shared).0);
         let heads = heads_of(&msg["heads"]);
         self.absorb(&heads, now);
-        self.viewers.insert(from.to_string(), Viewer { set: shared["set"].clone(), heads, progress: msg["progress"].as_f64(), stuck: msg["stuck"] == true, seen: now });
+        self.viewers.insert(from.to_string(), Viewer { set: shared["set"].clone(), heads, progress: msg["progress"].as_f64(), stuck: msg["stuck"] == true, typing: msg["typing"] == true, seen: now });
         if !newer(&shared, &self.shared) {
             return false;
         }
@@ -133,10 +135,10 @@ impl Party {
         self.enter(room);
         self.absorb(own, now);
         self.sent = Some((now, own.clone()));
-        json!({"t": "party", "room": self.room, "shared": self.shared, "heads": own, "progress": progress.0, "stuck": progress.1})
+        json!({"t": "party", "room": self.room, "shared": self.shared, "heads": own, "progress": progress.0, "stuck": progress.1, "typing": self.typing})
     }
 
-    pub fn status(&self, me: &str, own: &Heads, progress: Progress, now: Instant, name: impl Fn(&str) -> String) -> Vec<String> {
+    pub fn status(&self, me: &str, own: &Heads, progress: Progress, now: Instant) -> Vec<Value> {
         let set = &self.shared["set"];
         let mut viewers: Vec<(&str, &Heads, Progress, &Value)> = vec![(me, own, progress, set)];
         let mut others: Vec<(&String, &Viewer)> = self.viewers.iter().filter(|(_, v)| now.duration_since(v.seen) < SEEN).collect();
@@ -148,15 +150,20 @@ impl Party {
         for owner in owners {
             let settled = self.grown.get(owner).is_none_or(|at| now.duration_since(*at) >= REPEAT);
             if settled && viewers.iter().any(|(_, heads, _, _)| heads.get(owner).copied().unwrap_or(0) < self.heads[owner]) {
-                out.push(format!("Catching up with {}", if owner == me { "you".to_string() } else { name(owner) }));
+                out.push(json!({"kind": "catching", "who": owner}));
             }
         }
         for (id, _, (progress, stuck), at) in viewers {
             if let Some(p) = progress.filter(|p| *p < 1.0 && *at == *set) {
-                let verb = if stuck { "incomplete at" } else { "receiving" };
-                out.push(format!("{} {verb} {}%", name(id), (p * 100.0).floor()));
+                out.push(json!({"kind": if stuck { "incomplete" } else { "receiving" }, "who": id, "percent": (p * 100.0).floor()}));
             }
         }
+        out
+    }
+
+    pub fn typists(&self, now: Instant) -> Vec<String> {
+        let mut out: Vec<String> = self.viewers.iter().filter(|(_, v)| v.typing && now.duration_since(v.seen) < SEEN).map(|(id, _)| id.clone()).collect();
+        out.sort();
         out
     }
 
@@ -219,8 +226,8 @@ pub fn state_json(core: &Core, own: &Heads) -> Value {
     let party = core.party.lock().unwrap();
     let now = Instant::now();
     let me = core.me();
-    let status = party.status(&me, own, progress, now, |id| if id == me { "You".to_string() } else { room::display_name(core, id) });
-    json!({"on": true, "shared": party.shared, "status": status, "viewers": party.viewers(now)})
+    let status = party.status(&me, own, progress, now);
+    json!({"on": true, "shared": party.shared, "status": status, "viewers": party.viewers(now), "typing": party.typists(now)})
 }
 
 pub async fn repeat(core: Arc<Core>) {
@@ -306,9 +313,9 @@ mod tests {
         let own = heads(&[("x", 5), ("y", 2)]);
         assert!(!a.lacks(&own));
         assert!(a.lacks(&heads(&[("x", 4), ("y", 2)])));
-        assert!(a.status("a", &own, (None, false), Instant::now(), |id| id.to_uppercase()).is_empty());
-        let status = a.status("a", &own, (None, false), Instant::now() + REPEAT, |id| id.to_uppercase());
-        assert_eq!(status, vec!["Catching up with X".to_string()]);
+        assert!(a.status("a", &own, (None, false), Instant::now()).is_empty());
+        let status = a.status("a", &own, (None, false), Instant::now() + REPEAT);
+        assert_eq!(status, vec![json!({"kind": "catching", "who": "x"})]);
         a.message("r", &heads(&[("x", 1), ("y", 9)]), (None, false), Instant::now());
         assert_eq!(a.heads, heads(&[("x", 5), ("y", 9)]));
     }
@@ -318,9 +325,23 @@ mod tests {
         let mut a = party("a");
         a.receive("b", &json!({"room": "r", "shared": {"seq": 0, "set": "s1"}, "progress": 0.725}), 0, "r", Instant::now());
         a.receive("c", &json!({"room": "r", "shared": {"seq": 0, "set": "s9"}, "progress": 0.1}), 0, "r", Instant::now());
-        assert_eq!(a.status("a", &Heads::new(), (Some(1.0), false), Instant::now(), |id| id.to_string()), vec!["b receiving 72%".to_string()]);
+        assert_eq!(a.status("a", &Heads::new(), (Some(1.0), false), Instant::now()), vec![json!({"kind": "receiving", "who": "b", "percent": 72.0})]);
         a.receive("b", &json!({"room": "r", "shared": {"seq": 0, "set": "s1"}, "progress": 0.5, "stuck": true}), 0, "r", Instant::now());
-        assert_eq!(a.status("a", &Heads::new(), (Some(0.25), true), Instant::now(), |id| id.to_string()), vec!["a incomplete at 25%".to_string(), "b incomplete at 50%".to_string()]);
+        assert_eq!(
+            a.status("a", &Heads::new(), (Some(0.25), true), Instant::now()),
+            vec![json!({"kind": "incomplete", "who": "a", "percent": 25.0}), json!({"kind": "incomplete", "who": "b", "percent": 50.0})]
+        );
+    }
+
+    #[test]
+    fn typing_shows_while_the_viewer_is_seen() {
+        let mut a = party("a");
+        a.receive("b", &json!({"room": "r", "shared": {"seq": 0}, "typing": true}), 0, "r", Instant::now());
+        a.receive("c", &json!({"room": "r", "shared": {"seq": 0}, "typing": false}), 0, "r", Instant::now());
+        assert_eq!(a.typists(Instant::now()), vec!["b".to_string()]);
+        assert!(a.typists(Instant::now() + SEEN).is_empty());
+        a.typing = true;
+        assert_eq!(a.message("r", &Heads::new(), (None, false), Instant::now())["typing"], true);
     }
 
     #[test]

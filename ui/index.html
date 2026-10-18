@@ -8,140 +8,216 @@
 </head>
 <body>
 <header id="top">
-  <nav class="tabs" role="tablist"><button id="tabrecord" role="tab" class="on">Record</button><button id="tabplayer" role="tab">Player</button></nav>
-  <span id="roomlabel" class="roomlabel"></span>
+  <nav class="tabs" role="tablist"><button id="tabroom" role="tab" class="on" data-t="Room">Room</button><button id="tabrecord" role="tab" data-t="Record">Record</button><button id="tabplayer" role="tab" data-t="Player">Player</button></nav>
+  <button id="roombtn" class="roombtn" aria-haspopup="true" hidden><b id="roomname"></b><span id="avatars" class="avatars"></span><svg class="caret" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></button>
   <span class="spacer"></span>
-  <span id="sharing" class="sharing" hidden><i class="dot rec"></i>Sharing your screen</span>
-  <button id="rec" class="recbtn" disabled><i></i><span>Record</span></button>
+  <span id="sync" class="sync" hidden><i class="dot"></i><span id="synctext"></span></span>
+  <span id="sharing" class="sharing" hidden><i class="dot rec"></i><span data-t="Sharing your screen">Sharing your screen</span></span>
+  <button id="rec" class="recbtn" hidden><i></i><span>Record</span></button>
   <span id="timer" class="timer"></span>
   <span id="starter" class="muted"></span>
 </header>
 <div id="asks" class="asks" hidden></div>
-<div id="notice" class="notice" hidden><span id="noticetext"></span><button id="updatebtn" class="primary" hidden>Update</button><button id="exportcancel" hidden>Cancel</button></div>
+<div id="notice" class="notice" hidden><span id="noticetext"></span><button id="updatebtn" class="primary" hidden data-t="Update">Update</button><button id="exportcancel" hidden data-t="Cancel">Cancel</button></div>
 
-<main id="recordtab" class="tab">
+<main id="start" class="start" hidden>
+  <div class="card">
+    <label id="namefield" class="field"><span data-t="Your name">Your name</span><input id="startname" maxlength="24" autocomplete="off"></label>
+    <div id="startpending" class="pending" hidden><span class="dot rec"></span><span id="pendingtext"></span><button id="pendingcancel" data-t="Cancel">Cancel</button></div>
+    <div id="startform" class="startform">
+      <button id="newroom" class="primary big" data-t="Create room">Create room</button>
+      <div class="row"><input id="joincode" class="code" autocomplete="off" data-t-placeholder="Invite code" data-t-label="Invite code"><button id="join" data-t="Join">Join</button></div>
+      <h3 id="recenthead" data-t="Recent rooms">Recent rooms</h3>
+      <div id="roomlist" class="roomlist"></div>
+    </div>
+  </div>
+</main>
+
+<main id="roomtab" class="tab home" hidden>
+  <div class="homewrap">
+    <header class="homehead">
+      <div class="homeid"><h1 id="homename"></h1><div id="homesub" class="muted"></div></div>
+      <span class="spacer"></span>
+      <button id="homeinvite" class="primary" data-t="Copy invite code">Copy invite code</button>
+      <button id="homemore" class="icon" data-t-label="More" aria-haspopup="true"><svg viewBox="0 0 16 16" class="solid"><path d="M3 7h2v2H3zM7 7h2v2H7zM11 7h2v2h-2z"/></svg></button>
+    </header>
+    <div id="people" class="people"></div>
+    <div class="homegrid">
+      <section class="homemain">
+        <h3 data-t="Board">Board</h3>
+        <div id="boardcards" class="cards"></div>
+      </section>
+      <aside class="homeside">
+        <h3 data-t="Sets">Sets</h3>
+        <div id="homesets" class="homelist"></div>
+        <h3 data-t="Recent notes">Recent notes</h3>
+        <div id="homenotes" class="homelist"></div>
+      </aside>
+    </div>
+  </div>
+</main>
+
+<main id="recordtab" class="tab" hidden>
   <aside class="col left">
-    <h3>Source</h3>
-    <select id="source" aria-label="Source"></select>
-    <div id="lost" class="lost" hidden><span>Source lost</span><button id="usedisplay">Use display instead</button></div>
+    <h3 data-t="Capture">Capture</h3>
+    <select id="source" data-t-label="Capture"></select>
+    <div id="lost" class="lost" hidden><span data-t="Source lost">Source lost</span><button id="usedisplay" data-t="Use display instead">Use display instead</button></div>
     <div id="preview" class="preview"></div>
-    <h3>Audio</h3>
+    <div class="row quality"><select id="quality" data-t-label="Quality"><option value="light" data-t="Light">Light</option><option value="standard" data-t="Standard">Standard</option><option value="high" data-t="High">High</option></select><span id="qinfo" class="muted small"></span></div>
+    <h3 data-t="Audio">Audio</h3>
     <div class="mixrow">
-      <div class="mixhead"><span>Game sound</span></div>
-      <div id="gamemeter" class="meter"><i class="fill"></i><i class="peak"></i></div>
-      <div class="row"><input id="gamevol" type="range" min="0" max="1" step="0.05" aria-label="Game sound volume"><button id="gamemute" class="icon" aria-label="Mute game sound"><svg viewBox="0 0 16 16"><path d="M2 6h3l4-3v10l-4-3H2z"/><path class="on" d="M11 5.5a3.5 3.5 0 0 1 0 5"/><path class="off" d="M11 6l4 4M15 6l-4 4"/></svg></button></div>
+      <div class="mixhead"><span data-t="App sound">App sound</span><span class="spacer"></span><span id="appdb" class="db"></span></div>
+      <div id="appmeter" class="meter"><i class="fill"></i><i class="peak"></i><i class="clip"></i></div>
+      <div id="appscale" class="scale"></div>
+      <div class="row"><input id="appvol" type="range" min="0" max="1" step="0.05" data-t-label="App sound"><button id="appmute" class="icon" data-t-label="Mute"><svg viewBox="0 0 16 16"><path d="M2 6h3l4-3v10l-4-3H2z"/><path class="on" d="M11 5.5a3.5 3.5 0 0 1 0 5"/><path class="off" d="M11 6l4 4M15 6l-4 4"/></svg></button></div>
     </div>
     <div class="mixrow">
-      <div class="mixhead"><span>Microphone</span><select id="mic" aria-label="Microphone"></select></div>
-      <div id="micmeter" class="meter"><i class="fill"></i><i class="peak"></i></div>
-      <div class="row"><input id="micvol" type="range" min="0" max="1" step="0.05" aria-label="Microphone volume"><button id="micmute" class="icon" aria-label="Mute microphone"><svg viewBox="0 0 16 16"><path d="M8 2a2 2 0 0 1 2 2v4a2 2 0 0 1-4 0V4a2 2 0 0 1 2-2zM4 8a4 4 0 0 0 8 0M8 12v2"/><path class="off" d="M3 3l10 10"/></svg></button></div>
+      <div class="mixhead"><span data-t="Microphone">Microphone</span><select id="mic" data-t-label="Microphone"></select><span id="micdb" class="db"></span></div>
+      <div id="micmeter" class="meter"><i class="fill"></i><i class="peak"></i><i class="clip"></i></div>
+      <div id="micscale" class="scale"></div>
+      <div class="row"><input id="micvol" type="range" min="0" max="1" step="0.05" data-t-label="Microphone"><button id="micmute" class="icon" data-t-label="Mute"><svg viewBox="0 0 16 16"><path d="M8 2a2 2 0 0 1 2 2v4a2 2 0 0 1-4 0V4a2 2 0 0 1 2-2zM4 8a4 4 0 0 0 8 0M8 12v2"/><path class="off" d="M3 3l10 10"/></svg></button></div>
     </div>
   </aside>
-  <section id="room" class="roomcol">
-    <div class="head"><h3>Room</h3><button id="layoutrec" class="icon layoutbtn" aria-label="Change layout" aria-haspopup="true"></button></div>
+  <section class="roomcol">
+    <div class="head"><span class="spacer"></span><button id="layoutrec" class="icon layoutbtn" data-t-label="Layout" aria-haspopup="true"></button></div>
     <div id="rectiles" class="tiles"></div>
-    <h3>Members</h3>
-    <div id="members" class="members"></div>
-    <div class="row">
-      <button id="invite">Invite</button>
-      <span id="invitebox" class="row" hidden><input id="code" class="code" readonly aria-label="Invite code"><button id="copycode">Copy</button><button id="cancelinvite">Cancel invite</button></span>
-    </div>
   </section>
-  <section id="norooms" class="norooms" hidden></section>
 </main>
 
 <main id="playertab" class="tab" hidden>
   <aside id="sets" class="col sets">
-    <button id="setsrail" class="icon rail" aria-label="Sets" aria-expanded="false"><svg viewBox="0 0 16 16"><path d="M3 4h10M3 8h10M3 12h10"/></svg></button>
+    <button id="setsrail" class="icon rail" data-t-label="Sets" aria-expanded="false"><svg viewBox="0 0 16 16"><path d="M3 4h10M3 8h10M3 12h10"/></svg></button>
     <div class="setspanel">
-      <h3>Sets</h3>
-      <div id="setlist" class="setlist" role="listbox" aria-label="Sets"></div>
+      <h3 data-t="Sets">Sets</h3>
+      <div id="setlist" class="setlist" role="listbox" data-t-label="Sets"></div>
     </div>
   </aside>
   <section id="stage" class="stage">
-    <div class="toolbar">
-      <div id="views" class="seg" role="group" aria-label="View"></div>
-      <button id="layoutplay" class="icon layoutbtn" aria-label="Change layout" aria-haspopup="true"></button>
+    <div id="toolbar" class="toolbar">
+      <div id="views" class="seg" role="group" data-t-label="View"></div>
+      <button id="layoutplay" class="icon layoutbtn" data-t-label="Layout" aria-haspopup="true"></button>
+      <div id="tools" class="seg tools" role="group" data-t-label="Drawing">
+        <button data-tool="pen" data-t-title="Pen" data-t-label="Pen"><svg viewBox="0 0 16 16"><path d="M3 13l1-3 7-7 2 2-7 7z"/></svg></button>
+        <button data-tool="arrow" data-t-title="Arrow" data-t-label="Arrow"><svg viewBox="0 0 16 16"><path d="M3 13L13 3M7 3h6v6"/></svg></button>
+        <button data-tool="laser" data-t-title="Laser" data-t-label="Laser"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.5"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2"/></svg></button>
+        <button id="clearink" data-t-title="Clear drawing (X)" data-t-label="Clear drawing"><svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
+      </div>
       <span class="spacer"></span>
-      <span id="partystatus" class="muted partystatus"></span>
-      <button id="wp" class="pill" aria-pressed="true">Watch Party</button>
-      <button id="notestoggle" class="notestoggle" aria-expanded="false">Notes</button>
+      <button id="wp" class="pill" aria-pressed="true" data-t="Watch Party">Watch Party</button>
+      <button id="notestoggle" class="notestoggle" aria-expanded="false">Events</button>
     </div>
-    <div id="playtiles" class="tiles"><div id="bezel" class="bezel" hidden></div><div id="osd" class="osd" hidden><span id="osdtext"></span><button id="osdundo">Undo</button></div></div>
-    <div id="empty" class="empty" hidden>No sets yet</div>
+    <div id="playtiles" class="tiles">
+      <div id="bezel" class="bezel" hidden></div>
+      <div id="overlay" class="overlay"></div>
+      <form id="quick" class="quick" hidden onsubmit="return false"><button type="button" id="quicktime" class="when" data-t-title="Tab"></button><input id="quicktext" autocomplete="off" data-t-placeholder="Note" data-t-label="Note"><div id="taghints" class="taghints" hidden></div></form>
+      <div id="osd" class="osd" hidden><span id="osdtext"></span><button id="osdundo" data-t="Undo">Undo</button></div>
+    </div>
+    <div id="empty" class="empty" hidden data-t="No sets yet">No sets yet</div>
     <div id="transport" class="transport">
+      <div id="chapters" class="chapters" hidden></div>
       <div id="lane" class="lane"></div>
-      <div id="seek" class="seek" role="slider" tabindex="0" aria-label="Seek" aria-valuemin="0"><i class="fill"></i><i class="thumb"></i></div>
+      <div id="seek" class="seek" role="slider" tabindex="0" data-t-label="Seek" aria-valuemin="0"><i class="fill"></i><i class="thumb"></i><div id="peek" class="peek" hidden><canvas width="192" height="108"></canvas><span id="peekchapter"></span><span id="peektime"></span></div></div>
       <div class="controls">
-        <button id="play" class="icon" aria-label="Play"><svg viewBox="0 0 16 16" class="solid"><path class="on" d="M4 3l9 5-9 5z"/><path class="off" d="M4 3h3v10H4zM9 3h3v10H9z"/></svg></button>
-        <button id="back" class="icon text" aria-label="Back 5 seconds">-5</button>
-        <button id="fwd" class="icon text" aria-label="Forward 5 seconds">+5</button>
+        <button id="play" class="icon" data-t-label="Play"><svg viewBox="0 0 16 16" class="solid"><path class="on" d="M4 3l9 5-9 5z"/><path class="off" d="M4 3h3v10H4zM9 3h3v10H9z"/></svg></button>
+        <button id="back" class="icon text" data-t-label="Back 5 seconds">-5</button>
+        <button id="fwd" class="icon text" data-t-label="Forward 5 seconds">+5</button>
         <span class="clock"><span id="clocknow"></span><span id="clocktotal" class="muted"></span></span>
+        <span id="chapter" class="chaptername"></span>
         <span class="spacer"></span>
+        <button id="addnote" class="icon" data-t-title="Add note (C)" data-t-label="Add note"><svg viewBox="0 0 16 16"><path d="M3 3h10v7H8l-3 3v-3H3z"/></svg></button>
         <span id="extra" class="extra">
-          <select id="speed" aria-label="Speed"><option value="0.5">0.5x</option><option value="0.75">0.75x</option><option value="1" selected>1x</option><option value="1.25">1.25x</option><option value="1.5">1.5x</option><option value="2">2x</option></select>
-          <button id="mute" class="icon" aria-label="Mute"><svg viewBox="0 0 16 16"><path d="M2 6h3l4-3v10l-4-3H2z"/><path class="on" d="M11 5.5a3.5 3.5 0 0 1 0 5"/><path class="off" d="M11 6l4 4M15 6l-4 4"/></svg></button>
-          <input id="volume" type="range" min="0" max="1" step="0.05" value="1" aria-label="Volume">
+          <select id="speed" data-t-label="Speed"><option value="0.5">0.5x</option><option value="0.75">0.75x</option><option value="1" selected>1x</option><option value="1.25">1.25x</option><option value="1.5">1.5x</option><option value="2">2x</option><option value="3">3x</option></select>
+          <button id="cc" class="icon text" data-t-title="Subtitles" data-t-label="Subtitles">CC</button>
+          <button id="mute" class="icon" data-t-label="Mute"><svg viewBox="0 0 16 16"><path d="M2 6h3l4-3v10l-4-3H2z"/><path class="on" d="M11 5.5a3.5 3.5 0 0 1 0 5"/><path class="off" d="M11 6l4 4M15 6l-4 4"/></svg></button>
+          <input id="volume" type="range" min="0" max="1" step="0.05" value="1" data-t-label="Volume">
         </span>
-        <button id="more" class="icon" aria-label="More" aria-haspopup="true"><svg viewBox="0 0 16 16" class="solid"><path d="M3 7h2v2H3zM7 7h2v2H7zM11 7h2v2h-2z"/></svg></button>
-        <button id="live" class="livebtn" aria-pressed="false">Live</button>
-        <button id="full" class="icon" aria-label="Full screen"><svg viewBox="0 0 16 16"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"/></svg></button>
+        <button id="more" class="icon" data-t-label="More" aria-haspopup="true"><svg viewBox="0 0 16 16" class="solid"><path d="M3 7h2v2H3zM7 7h2v2H7zM11 7h2v2h-2z"/></svg></button>
+        <button id="live" class="livebtn" aria-pressed="false" data-t="Live">Live</button>
+        <button id="fill" class="icon" data-t-title="Fill window (T)" data-t-label="Fill window"><svg viewBox="0 0 16 16"><path d="M2 3h12v10H2zM5 6v4M11 6v4"/></svg></button>
+        <button id="full" class="icon" data-t-title="Full screen (F)" data-t-label="Full screen"><svg viewBox="0 0 16 16"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"/></svg></button>
       </div>
     </div>
   </section>
   <aside id="notes" class="col notes">
-    <h3 id="noteshead">Notes</h3>
-    <input id="filter" type="search" placeholder="Filter" autocomplete="off" aria-label="Filter notes">
+    <div class="seg sidetabs"><button id="sideevents" class="on" data-t="Events">Events</button><button id="sideconvo" data-t="Conversation" hidden>Conversation</button></div>
+    <input id="filter" type="search" autocomplete="off" data-t-placeholder="Filter" data-t-label="Filter">
     <div id="notelist" class="notelist"></div>
-    <form id="noteform"><input id="note" placeholder="Note at this time" autocomplete="off" aria-label="Note at this time"></form>
+    <div id="convolist" class="notelist convo" hidden></div>
   </aside>
 </main>
 
-<dialog id="roomsdlg">
-  <div class="dlghead"><h2>Rooms</h2><button class="icon close" aria-label="Close">&times;</button></div>
-  <div id="rooms" class="rooms">
-    <div id="roomlist" class="roomlist"></div>
-    <button id="newroom" class="primary">Create room</button>
-    <div class="row"><input id="joincode" class="code" placeholder="Paste an invite" aria-label="Invite code"><button id="join">Join</button></div>
-  </div>
-</dialog>
 <dialog id="settings">
-  <div class="dlghead"><h2>Settings</h2><button class="icon close" aria-label="Close">&times;</button></div>
-  <label class="field">Name<input id="name" maxlength="24" autofocus></label>
-  <label class="field">Game sound<select id="proc"></select></label>
-  <label class="check"><input type="checkbox" id="share"> Share with the room</label>
-  <label class="field">Speed limit (Mbit/s)<input id="limit" type="number" min="0" step="1" placeholder="No limit"></label>
-  <label class="field">Delete recordings after (days)<input id="keepdays" type="number" min="0" step="1" placeholder="Never"></label>
+  <div class="dlghead"><h2 data-t="Settings">Settings</h2><button class="icon close" data-t-label="Close">&times;</button></div>
+  <label class="field"><span data-t="Name">Name</span><input id="name" maxlength="24"></label>
+  <label class="field"><span data-t="Language">Language</span><select id="language"><option value="" data-t="Automatic">Automatic</option><option value="en">English</option><option value="ja">日本語</option></select></label>
+  <label class="field"><span data-t="App sound">App sound</span><select id="proc"></select></label>
+  <label class="check"><input type="checkbox" id="share"> <span data-t="Share with the room">Share with the room</span></label>
+  <label class="field"><span data-t="Speed limit (Mbit/s)">Speed limit (Mbit/s)</span><input id="limit" type="number" min="0" step="1" data-t-placeholder="No limit"></label>
+  <label class="field"><span data-t="Delete recordings after (days)">Delete recordings after (days)</span><input id="keepdays" type="number" min="0" step="1" data-t-placeholder="Never"></label>
+</dialog>
+<dialog id="joindlg">
+  <div class="dlghead"><h2 data-t="Join room">Join room</h2><button class="icon close" data-t-label="Close">&times;</button></div>
+  <div class="row"><input id="joincode2" class="code" autocomplete="off" data-t-placeholder="Invite code" data-t-label="Invite code"><button id="join2" class="primary" data-t="Join">Join</button></div>
+</dialog>
+<dialog id="renamedlg">
+  <div class="dlghead"><h2 data-t="Rename room">Rename room</h2><button class="icon close" data-t-label="Close">&times;</button></div>
+  <div class="row"><input id="renameinput" maxlength="40" autocomplete="off" data-t-label="Name"><button id="renamesave" class="primary" data-t="Save">Save</button></div>
+</dialog>
+<dialog id="checkdlg" class="wide">
+  <div class="dlghead"><h2 data-t="Connections">Connections</h2><span class="spacer"></span><button id="recheck" data-t="Check again">Check again</button><button class="icon close" data-t-label="Close">&times;</button></div>
+  <div id="checkbody" class="checkbody"></div>
+</dialog>
+<dialog id="pluginsdlg" class="wide">
+  <div class="dlghead"><h2 data-t="Plugins">Plugins</h2><button class="icon close" data-t-label="Close">&times;</button></div>
+  <div id="pluginlist" class="pluginlist"></div>
+  <h3 data-t="Jobs">Jobs</h3>
+  <div id="joblist" class="joblist"></div>
+</dialog>
+<dialog id="storagedlg" class="wide">
+  <div class="dlghead"><h2 data-t="Storage">Storage</h2><button class="icon close" data-t-label="Close">&times;</button></div>
+  <div id="storagehead" class="muted"></div>
+  <div id="storagelist" class="storagelist"></div>
 </dialog>
 <dialog id="shortcuts">
-  <div class="dlghead"><h2>Keyboard shortcuts</h2><button class="icon close" aria-label="Close">&times;</button></div>
+  <div class="dlghead"><h2 data-t="Keyboard shortcuts">Keyboard shortcuts</h2><button class="icon close" data-t-label="Close">&times;</button></div>
   <dl class="keys">
-    <dt>Play / pause</dt><dd><kbd>Space</kbd><kbd>K</kbd></dd>
-    <dt>Back / forward 5 s (Shift 1 s)</dt><dd><kbd>&larr;</kbd><kbd>&rarr;</kbd></dd>
-    <dt>Back / forward 10 s (Shift 1 min)</dt><dd><kbd>J</kbd><kbd>L</kbd></dd>
-    <dt>Slower / faster</dt><dd><kbd>&lt;</kbd><kbd>&gt;</kbd></dd>
-    <dt>Mute / volume</dt><dd><kbd>M</kbd><kbd>&uarr;</kbd><kbd>&darr;</kbd></dd>
-    <dt>Full screen / leave</dt><dd><kbd>F</kbd><kbd>Esc</kbd></dd>
-    <dt>All players / one player</dt><dd><kbd>0</kbd><kbd>1-6</kbd><kbd>Tab</kbd></dd>
-    <dt>Add note / previous / next</dt><dd><kbd>C</kbd><kbd>Q</kbd><kbd>E</kbd></dd>
-    <dt>Undo</dt><dd><kbd>U</kbd></dd>
-    <dt>Shortcuts</dt><dd><kbd>?</kbd></dd>
+    <dt data-t="Room / Record / Player">Room / Record / Player</dt><dd><kbd>Ctrl+1</kbd><kbd>Ctrl+2</kbd><kbd>Ctrl+3</kbd><kbd>Ctrl+Tab</kbd></dd>
+    <dt data-t="Play / pause">Play / pause</dt><dd><kbd>Space</kbd><kbd>K</kbd></dd>
+    <dt data-t="Back / forward 5 s (Shift 1 s)">Back / forward 5 s (Shift 1 s)</dt><dd><kbd>&larr;</kbd><kbd>&rarr;</kbd></dd>
+    <dt data-t="Back / forward 10 s (Shift 1 min)">Back / forward 10 s (Shift 1 min)</dt><dd><kbd>J</kbd><kbd>L</kbd></dd>
+    <dt data-t="Back / forward 1 min">Back / forward 1 min</dt><dd><kbd>Ctrl+&larr;</kbd><kbd>Ctrl+&rarr;</kbd></dd>
+    <dt data-t="Slower / faster">Slower / faster</dt><dd><kbd>&lt;</kbd><kbd>&gt;</kbd></dd>
+    <dt data-t="Mute / volume">Mute / volume</dt><dd><kbd>M</kbd><kbd>&uarr;</kbd><kbd>&darr;</kbd></dd>
+    <dt data-t="Full screen / fill window / leave">Full screen / fill window / leave</dt><dd><kbd>F</kbd><kbd>T</kbd><kbd>Esc</kbd></dd>
+    <dt data-t="All players / one player">All players / one player</dt><dd><kbd>0</kbd><kbd>1-6</kbd><kbd>Tab</kbd></dd>
+    <dt data-t="Previous / next set">Previous / next set</dt><dd><kbd>Shift+P</kbd><kbd>Shift+N</kbd></dd>
+    <dt data-t="Add note / previous / next">Add note / previous / next</dt><dd><kbd>C</kbd><kbd>Q</kbd><kbd>E</kbd></dd>
+    <dt data-t="Previous / next event">Previous / next event</dt><dd><kbd>A</kbd><kbd>D</kbd></dd>
+    <dt data-t="Clear drawing">Clear drawing</dt><dd><kbd>X</kbd></dd>
+    <dt data-t="Undo">Undo</dt><dd><kbd>U</kbd></dd>
+    <dt data-t="Shortcuts">Shortcuts</dt><dd><kbd>?</kbd></dd>
   </dl>
 </dialog>
 <div id="menu" class="menu" role="menu" hidden></div>
+<div id="pop" class="pop" hidden></div>
 <div id="recovery" class="recovery" hidden>
   <div class="box">
     <p id="recoverymsg"></p>
     <div class="row">
-      <button id="rfolder">Open data folder</button>
-      <button id="rreport">Save report</button>
-      <button id="rreset" class="danger">Reset settings and cache</button>
-      <button id="rcontinue" class="primary">Continue</button>
+      <button id="rfolder" data-t="Open data folder">Open data folder</button>
+      <button id="rreport" data-t="Save report">Save report</button>
+      <button id="rreset" class="danger" data-t="Reset settings and cache">Reset settings and cache</button>
+      <button id="rcontinue" class="primary" data-t="Continue">Continue</button>
     </div>
     <div id="rinfo" class="muted small"></div>
   </div>
 </div>
+<script src="util.js"></script>
+<script src="i18n.js"></script>
 <script src="layout.js"></script>
+<script src="events.js"></script>
+<script src="draw.js"></script>
+<script src="media.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
