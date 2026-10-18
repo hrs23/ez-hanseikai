@@ -8,19 +8,19 @@ const COORD_STEP = 10000;
 
 const ink = { tool: "pen", live: new Map(), cleared: null, press: null, sentAt: 0, sendTimer: null, frame: 0 };
 
-function contentRect(t) {
-  const box = t.box.getBoundingClientRect();
-  const v = t.media.video;
+function contentRect(tl) {
+  const box = tl.box.getBoundingClientRect();
+  const v = tl.media.video;
   const ratio = v.videoWidth && v.videoHeight ? v.videoWidth / v.videoHeight : 1 / ASPECT;
   const w = Math.min(box.width, box.height * ratio);
   const h = w / ratio;
   return { x: (box.width - w) / 2, y: (box.height - h) / 2, w, h, left: box.left, top: box.top };
 }
 
-function inkLayer(t) {
-  if (!t.ink) t.ink = t.box.appendChild(svg("svg", { class: "ink", viewBox: "0 0 1 1", preserveAspectRatio: "none" }));
-  const r = contentRect(t);
-  Object.assign(t.ink.style, { left: r.x + "px", top: r.y + "px", width: r.w + "px", height: r.h + "px" });
+function inkLayer(tl) {
+  if (!tl.ink) tl.ink = tl.box.appendChild(svg("svg", { class: "ink", viewBox: "0 0 1 1", preserveAspectRatio: "none" }));
+  const r = contentRect(tl);
+  Object.assign(tl.ink.style, { left: r.x + "px", top: r.y + "px", width: r.w + "px", height: r.h + "px" });
   return r;
 }
 
@@ -62,7 +62,7 @@ function colorIndex(id) {
 }
 
 function renderInk() {
-  if (!st || tab !== "player") return;
+  if (!st || page !== "player") return;
   const set = playSet();
   const now = performance.now();
   const shown = [...storedStrokes(set, nowM())];
@@ -75,11 +75,11 @@ function renderInk() {
     shown.push(s);
   }
   for (const key of play.keys) {
-    const t = play.tiles[key];
-    if (!t) continue;
-    const r = inkLayer(t);
+    const tl = play.tiles[key];
+    if (!tl) continue;
+    const r = inkLayer(tl);
     const mine = shown.filter((s) => s.member === key);
-    t.ink.replaceChildren(...mine.flatMap((s) => {
+    tl.ink.replaceChildren(...mine.flatMap((s) => {
       const shapes = strokeShapes(s, r.w / Math.max(1, r.h));
       if (s.tool === "laser" && s !== drawing) for (const shape of shapes) shape.style.opacity = Math.max(0, 1 - (now - s.at) / LASER_MS);
       return shapes;
@@ -93,7 +93,7 @@ function sendStroke(s) {
   const out = { id: s.id, set: selected, member: s.member, tool: s.tool, color: s.color, points: s.points, done: !!s.done };
   clearTimeout(ink.sendTimer);
   const wait = DRAW_SEND_MS - (performance.now() - ink.sentAt);
-  const go = () => { ink.sentAt = performance.now(); invoke("draw", { stroke: out }).catch(() => {}); };
+  const go = () => { ink.sentAt = performance.now(); invoke("draw", { stroke: out }).catch(warn); };
   if (s.done || wait <= 0) go();
   else ink.sendTimer = setTimeout(go, wait);
 }
@@ -102,13 +102,13 @@ function clearInk(remote) {
   const set = playSet();
   ink.cleared = set ? { set: set.id, m: nowM() } : null;
   ink.live.clear();
-  if (!remote) invoke("draw", { stroke: { clear: true, set: selected } }).catch(() => {});
+  if (!remote) invoke("draw", { stroke: { clear: true, set: selected } }).catch(warn);
   renderInk();
 }
 
-function inkDown(t, e) {
-  if (e.button !== 0 || e.target.closest(".lab")) return;
-  ink.press = { t, x: e.clientX, y: e.clientY, id: e.pointerId, stroke: null, last: null };
+function inkDown(tl, e) {
+  if (e.button !== 0 || e.target.closest(".nl")) return;
+  ink.press = { tl, x: e.clientX, y: e.clientY, id: e.pointerId, stroke: null, last: null };
 }
 
 function inkMove(e) {
@@ -118,8 +118,8 @@ function inkMove(e) {
   if (!p.stroke) {
     if (Math.hypot(e.clientX - p.x, e.clientY - p.y) < DRAW_START_PX) return;
     if (ink.tool !== "laser" && clock.playing) { ink.press = null; return; }
-    p.t.box.setPointerCapture(e.pointerId);
-    p.stroke = { id: Math.random().toString(36).slice(2), member: p.t.key, tool: ink.tool, color: colorIndex(st.id), points: [], at: performance.now() };
+    p.tl.box.setPointerCapture(e.pointerId);
+    p.stroke = { id: Math.random().toString(36).slice(2), member: p.tl.key, tool: ink.tool, color: colorIndex(st.id), points: [], at: performance.now() };
     ink.live.set("me/" + p.stroke.id, p.stroke);
     addPoint(p, p.x, p.y);
   }
@@ -129,7 +129,7 @@ function inkMove(e) {
 function addPoint(p, x, y) {
   if (p.last && Math.hypot(x - p.last[0], y - p.last[1]) < DRAW_STEP_PX) return;
   p.last = [x, y];
-  const r = contentRect(p.t);
+  const r = contentRect(p.tl);
   const n = (v) => Math.round(Math.min(1, Math.max(0, v)) * COORD_STEP) / COORD_STEP;
   const point = [n((x - r.left - r.x) / r.w), n((y - r.top - r.y) / r.h)];
   if (p.stroke.tool === "arrow") p.stroke.points = [...p.stroke.points.slice(0, 2), ...point];

@@ -50,5 +50,28 @@ function stored(key, fallback) {
   try { const v = JSON.parse(localStorage.getItem(key)); return v === null ? fallback : v; } catch { return fallback; }
 }
 function store(key, value) {
-  try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { console.warn(e); }
+}
+const warn = (e) => console.warn(e);
+const playFailed = (e) => { if (e.name !== "AbortError" && e.name !== "NotAllowedError") warn(e); };
+const sessionDay = (id) => id.slice(0, 10);
+const sessionClock = (id) => (id.split(" ")[1] || "").replaceAll("-", ":").slice(0, 5);
+function dayOf(date) {
+  const p = (n) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())}`;
+}
+function dayLabel(day, now, lang) {
+  if (day === dayOf(now)) return t("Today");
+  if (day === dayOf(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1))) return t("Yesterday");
+  const [y, m, d] = day.split("-").map(Number);
+  const options = y === now.getFullYear() ? { month: "short", day: "numeric" } : { year: "numeric", month: "short", day: "numeric" };
+  return new Intl.DateTimeFormat(lang === "ja" ? "ja-JP" : "en-US", options).format(new Date(y, m - 1, d));
+}
+const sessionName = (id, now = new Date()) => `${dayLabel(sessionDay(id), now, language)} ${sessionClock(id)}`;
+function keysOf(e) {
+  const named = { " ": "Space", ArrowLeft: "Left", ArrowRight: "Right", ArrowUp: "Up", ArrowDown: "Down" };
+  const code = e.code || "";
+  const key = /^Key[A-Z]$/.test(code) ? code.slice(3) : /^Digit[0-9]$/.test(code) ? code.slice(5) : /^F([1-9]|1[0-9]|2[0-4])$/.test(code) ? code : named[e.key] || null;
+  if (!key || (!e.ctrlKey && !e.altKey)) return null;
+  return [e.ctrlKey && "Ctrl", e.altKey && "Alt", e.shiftKey && "Shift", key].filter(Boolean).join("+");
 }

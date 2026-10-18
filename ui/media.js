@@ -39,7 +39,7 @@ function load(s, src, size, part, at) {
   v.onseeked = () => {
     if (s.pending !== next) return;
     v.onseeked = null;
-    if (!old.paused) v.play().catch(() => {});
+    if (!old.paused) v.play().catch(playFailed);
     const done = () => {
       if (s.pending !== next) return;
       s.pending = null;
@@ -95,7 +95,7 @@ function follow(s) {
   if (!v || v.readyState < 1 || !isFinite(v.duration)) return;
   const lag = LIVE_LAG + 2 * s.loadSec;
   if (v.duration - v.currentTime > lag + LIVE_SLACK) v.currentTime = Math.max(0, v.duration - lag);
-  if (v.paused && v.currentTime < v.duration - SEEK_TOLERANCE) v.play().catch(() => {});
+  if (v.paused && v.currentTime < v.duration - SEEK_TOLERANCE) v.play().catch(playFailed);
 }
 
 function sync(v, target, playing) {
@@ -108,7 +108,7 @@ function sync(v, target, playing) {
     return;
   } else if (v.paused) {
     if (Math.abs(v.currentTime - target) > SEEK_TOLERANCE) v.currentTime = target;
-    v.play().catch(() => {});
+    v.play().catch(playFailed);
   } else if (Math.abs(v.currentTime - target) > DRIFT_MAX) {
     v.currentTime = target;
   }

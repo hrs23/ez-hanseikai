@@ -94,3 +94,36 @@ function chaptersOf(list) {
 function activeAt(list, m) {
   return list.filter((e) => e.m !== null && m >= e.m && m <= (e.end !== null ? e.end : e.m + NOTE_SHOW_S));
 }
+
+const MATCH_TAG = "match";
+const MATCH_LEAD_S = 60;
+const DRAWING_GROUP_S = 1;
+
+function matchEnds(list) {
+  return list.filter((n) => n.role === "moment" && n.plugin && n.m !== null && (n.tags || []).includes(MATCH_TAG)).map((n) => n.m).sort((a, b) => a - b);
+}
+
+function matchChapters(ends, total, live) {
+  const out = [];
+  let from = 0;
+  ends.forEach((end, i) => { out.push({ m: from, end, n: i + 1 }); from = end; });
+  if (live && ends.length && total > from) out.push({ m: from, end: total, n: ends.length + 1 });
+  return out;
+}
+
+function stepTarget(times, m, dir, gap) {
+  const sorted = [...times].sort((a, b) => a - b);
+  return dir > 0 ? sorted.find((x) => x > m + gap) : sorted.reverse().find((x) => x < m - gap);
+}
+
+const matchTargets = (ends) => ends.map((e) => Math.max(0, e - MATCH_LEAD_S));
+
+function groupDrawings(list) {
+  const out = [];
+  for (const n of list) {
+    const last = out[out.length - 1];
+    if (n.role === "drawing" && last && last.role === "drawing" && last.author === n.author && last.setId === n.setId && Math.abs((n.m ?? 0) - (last.m ?? 0)) <= DRAWING_GROUP_S) last.count += 1;
+    else out.push(n.role === "drawing" ? { ...n, count: 1 } : n);
+  }
+  return out;
+}

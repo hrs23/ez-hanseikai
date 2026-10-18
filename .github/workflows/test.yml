@@ -13,6 +13,7 @@ jobs:
           workspaces: src-tauri
       - run: cargo test
         working-directory: src-tauri
+      - run: node --test scripts/ui-test.mjs
 
   e2e:
     runs-on: windows-latest

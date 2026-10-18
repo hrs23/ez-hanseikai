@@ -7,212 +7,211 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header id="top">
-  <nav class="tabs" role="tablist"><button id="tabroom" role="tab" class="on" data-t="Room">Room</button><button id="tabrecord" role="tab" data-t="Record">Record</button><button id="tabplayer" role="tab" data-t="Player">Player</button></nav>
-  <button id="roombtn" class="roombtn" aria-haspopup="true" hidden><b id="roomname"></b><span id="avatars" class="avatars"></span><svg class="caret" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></button>
-  <span class="spacer"></span>
-  <span id="sync" class="sync" hidden><i class="dot"></i><span id="synctext"></span></span>
-  <span id="sharing" class="sharing" hidden><i class="dot rec"></i><span data-t="Sharing your screen">Sharing your screen</span></span>
-  <button id="rec" class="recbtn" hidden><i></i><span>Record</span></button>
-  <span id="timer" class="timer"></span>
-  <span id="starter" class="muted"></span>
-</header>
-<div id="asks" class="asks" hidden></div>
-<div id="notice" class="notice" hidden><span id="noticetext"></span><button id="updatebtn" class="primary" hidden data-t="Update">Update</button><button id="exportcancel" hidden data-t="Cancel">Cancel</button></div>
-
 <main id="start" class="start" hidden>
-  <div class="card">
-    <label id="namefield" class="field"><span data-t="Your name">Your name</span><input id="startname" maxlength="24" autocomplete="off"></label>
-    <div id="startpending" class="pending" hidden><span class="dot rec"></span><span id="pendingtext"></span><button id="pendingcancel" data-t="Cancel">Cancel</button></div>
-    <div id="startform" class="startform">
-      <button id="newroom" class="primary big" data-t="Create room">Create room</button>
-      <div class="row"><input id="joincode" class="code" autocomplete="off" data-t-placeholder="Invite code" data-t-label="Invite code"><button id="join" data-t="Join">Join</button></div>
-      <h3 id="recenthead" data-t="Recent rooms">Recent rooms</h3>
-      <div id="roomlist" class="roomlist"></div>
+  <div class="scard">
+    <div class="brand"><svg class="logo" viewBox="0 0 256 256" aria-hidden="true"><rect x="8" y="8" width="240" height="240" rx="60" fill="#111827"/><rect x="40" y="62" width="120" height="92" rx="16" fill="none" stroke="#38bdf8" stroke-width="14"/><rect x="96" y="102" width="120" height="92" rx="16" fill="#111827" stroke="#34d399" stroke-width="14"/><path d="M138 128v40l34-20z" fill="#34d399"/></svg><b>EZ Hanseikai</b></div>
+    <label id="namefield" class="field"><span data-t="Your name">Your name</span><input id="startname" class="lg" maxlength="24" autocomplete="off"></label>
+    <div id="startpending" class="pending" hidden><i class="dot wait"></i><span id="pendingtext"></span><button id="pendingcancel" data-t="Cancel">Cancel</button></div>
+    <div id="startform">
+      <button id="newroom" class="primary lg wide" data-t="Create room">Create room</button>
+      <div class="or" data-t="or">or</div>
+      <div class="row"><input id="joincode" class="lg grow" autocomplete="off" data-t-placeholder="Invite code" data-t-label="Invite code"><button id="join" class="lg" data-t="Join">Join</button></div>
+      <div id="roomsbox" class="rooms"><div class="lab" data-t="Your rooms">Your rooms</div><div id="roomlist"></div></div>
     </div>
   </div>
 </main>
 
-<main id="roomtab" class="tab home" hidden>
-  <div class="homewrap">
-    <header class="homehead">
-      <div class="homeid"><h1 id="homename"></h1><div id="homesub" class="muted"></div></div>
-      <span class="spacer"></span>
-      <button id="homeinvite" class="primary" data-t="Copy invite code">Copy invite code</button>
-      <button id="homemore" class="icon" data-t-label="More" aria-haspopup="true"><svg viewBox="0 0 16 16" class="solid"><path d="M3 7h2v2H3zM7 7h2v2H7zM11 7h2v2h-2z"/></svg></button>
-    </header>
-    <div id="people" class="people"></div>
-    <div class="homegrid">
-      <section class="homemain">
-        <h3 data-t="Board">Board</h3>
-        <div id="boardcards" class="cards"></div>
-      </section>
-      <aside class="homeside">
-        <h3 data-t="Sets">Sets</h3>
-        <div id="homesets" class="homelist"></div>
-        <h3 data-t="Recent notes">Recent notes</h3>
-        <div id="homenotes" class="homelist"></div>
+<div id="app" class="app" hidden>
+  <aside id="side" class="side">
+    <button id="roomsw" class="roomsw" aria-haspopup="menu"><span id="roomname" class="nm"></span><span class="muted" data-icon="chevrons"></span></button>
+    <nav class="nav"><button id="navroom" class="item"><span data-icon="users"></span><span data-t="Room">Room</span></button></nav>
+    <div class="sechead" data-t="Now">Now</div>
+    <div id="now" class="now" role="button" tabindex="0">
+      <span id="nowicon" class="nowicon"></span>
+      <span class="lbl"><b id="nowtitle"></b><small id="nowsub"></small></span>
+      <button id="rec" class="sm rbtn"></button>
+    </div>
+    <div class="sechead" data-t="Sessions">Sessions</div>
+    <div id="sessions" class="sessions" role="listbox" data-t-label="Sessions"></div>
+    <div class="sechead"><span data-t="Members">Members</span><span class="end"><button id="checkbtn" class="icon sm" data-icon="activity" data-t-title="Check connections" data-t-label="Check connections"></button><button id="invitebtn" class="icon sm" data-icon="user-plus" data-t-title="Copy invite code" data-t-label="Copy invite code"></button></span></div>
+    <div id="members" class="members"></div>
+    <div class="me"><div id="you" class="mrow you" role="button" tabindex="0"><span id="youav"></span><span class="two"><b id="youname"></b><small id="yousrc"></small></span><span class="end"><button id="youmic" class="icon sm" data-t-label="Mute microphone"></button></span></div></div>
+  </aside>
+
+  <section class="main">
+    <div id="notices" class="notices"></div>
+
+    <div id="roompage" class="page scroll" hidden>
+      <div class="phead"><h1 id="homename"></h1><span id="homesub" class="sub"></span><span class="sp"></span><button id="homemore" class="icon" data-icon="more" data-t-label="More" aria-haspopup="menu"></button></div>
+      <h2 class="sec" data-t="Board">Board</h2>
+      <div id="boardcards" class="cards"></div>
+      <h2 class="sec gap" data-t="Plugins">Plugins</h2>
+      <div id="pluginlist" class="plugins"></div>
+    </div>
+
+    <div id="capturepage" class="page scroll cap" hidden>
+      <div class="left">
+        <div class="phead"><h1 data-t="Capture">Capture</h1></div>
+        <div class="selbox lg"><span id="sourceicon" class="lead"></span><select id="source" data-t-label="Capture"></select></div>
+        <div class="prev">
+          <div id="preview" class="pvid"></div>
+          <div class="badges"><span id="badgerec" class="rc" hidden><span data-icon="rec" data-icon-class="sm"></span>REC</span><span id="badgelive" class="lv"><span data-icon="radio" data-icon-class="sm"></span><span data-t="Live">Live</span></span></div>
+          <div id="prevstate" class="pstate" hidden><span id="prevtext"></span><button id="usedisplay" class="sm" data-t="Use display instead">Use display instead</button></div>
+        </div>
+        <div class="stats"><span id="qinfo"></span></div>
+        <div id="chips" class="checks"></div>
+      </div>
+      <div class="right">
+        <div class="box"><h2 class="sec" data-t="Sound">Sound</h2>
+          <div class="fld"><div class="selbox"><span class="lead" data-icon="window" data-icon-class="sm"></span><select id="proc" data-t-label="Record sound from"></select></div><span id="appdb" class="db"></span>
+            <div class="meter"><div id="appmeter" class="mbar"><i class="fill"></i><i class="peak"></i></div><div id="appscale" class="mscale"></div></div>
+            <div class="mvol"><input id="appvol" type="range" min="0" max="1" step="0.05" data-t-label="App sound"><button id="appmute" class="icon sm" data-t-label="Mute"></button></div>
+          </div>
+          <div class="fld"><div class="selbox"><span class="lead" data-icon="mic" data-icon-class="sm"></span><select id="mic" data-t-label="Microphone"></select></div><span id="micdb" class="db"></span>
+            <div class="meter"><div id="micmeter" class="mbar"><i class="fill"></i><i class="peak"></i></div><div id="micscale" class="mscale"></div></div>
+            <div class="mvol"><input id="micvol" type="range" min="0" max="1" step="0.05" data-t-label="Microphone"><button id="micmute" class="icon sm" data-t-label="Mute"></button></div>
+          </div>
+        </div>
+        <div class="box"><h2 class="sec" data-t="Quality">Quality</h2>
+          <div id="quality" class="seg full" role="radiogroup" data-t-label="Quality"><button data-q="light" data-t="Light">Light</button><button data-q="standard" data-t="Standard">Standard</button><button data-q="high" data-t="High">High</button></div>
+        </div>
+        <div class="box"><h2 class="sec" data-t="Sending">Sending</h2>
+          <label class="fld line"><span class="lab" data-t="Send to room">Send to room</span><input id="share" type="checkbox" class="switch" role="switch"></label>
+          <label class="fld line"><span class="lab" data-t="Upload limit">Upload limit</span><span class="unit"><input id="limit" type="number" min="0" step="1" data-t-placeholder="No limit"><span>Mbit/s</span></span></label>
+        </div>
+      </div>
+    </div>
+
+    <div id="playerpage" class="player" hidden>
+      <div class="pcol">
+        <div class="phbar">
+          <span class="title"><span id="ptitle"></span><small id="psub"></small></span>
+          <span class="sp"></span>
+          <button id="wp" class="wpbtn" role="switch"><span data-icon="users" data-icon-class="sm"></span><span>Watch Party</span><i class="switch"></i></button>
+          <span class="vsep"></span>
+          <button id="cc" class="icon" data-icon="captions" data-t-title="Subtitles" data-t-label="Subtitles"></button>
+          <span class="vol"><button id="mute" class="icon" data-t-label="Mute"></button><input id="volume" type="range" min="0" max="1" step="0.05" value="1" data-t-label="Volume"></span>
+          <button id="panelbtn" class="icon" data-icon="panel" data-t-title="Events panel" data-t-label="Events panel"></button>
+          <button id="full" class="icon" data-t-title="Full screen (F)" data-t-label="Full screen"></button>
+        </div>
+        <div id="shared" class="shared">
+          <div id="wplabel" class="wplabel" hidden></div>
+          <div id="toolbar" class="tool">
+            <div id="views" class="seg" role="group" data-t-label="View"></div>
+            <button id="layoutplay" class="icon layoutbtn" data-t-label="Layout" aria-haspopup="menu"></button>
+            <span id="toolsep" class="vsep"></span>
+            <div id="tools" class="seg" role="group" data-t-label="Drawing">
+              <button data-tool="pen" class="ic" data-icon="pen" data-icon-class="sm" data-t-title="Pen" data-t-label="Pen"></button>
+              <button data-tool="arrow" class="ic" data-icon="arrow" data-icon-class="sm" data-t-title="Arrow" data-t-label="Arrow"></button>
+              <button data-tool="laser" class="ic" data-icon="laser" data-icon-class="sm" data-t-title="Laser" data-t-label="Laser"></button>
+              <button id="clearink" class="ic" data-icon="eraser" data-icon-class="sm" data-t-title="Clear drawing (X)" data-t-label="Clear drawing"></button>
+            </div>
+          </div>
+          <div id="stage" class="stage">
+            <div id="livetiles" class="tiles"></div>
+            <div id="playtiles" class="tiles">
+              <div id="bezel" class="bezel" hidden></div>
+              <div id="overlay" class="overlay"></div>
+              <form id="quick" class="quick" hidden onsubmit="return false"><div class="q"><button type="button" id="quicktime" class="when" data-t-title="Tab"></button><input id="quicktext" autocomplete="off" data-t-placeholder="Note" data-t-label="Note"></div><div id="taghints" class="hints" hidden></div></form>
+            </div>
+            <div id="osd" class="osd" hidden><span id="osdtext"></span><button id="osdundo" class="ghost sm"><span data-icon="undo" data-icon-class="sm"></span><span data-t="Undo">Undo</span></button></div>
+          </div>
+          <div id="transport" class="transport">
+            <div class="tl">
+              <div id="chapters" class="chaps" hidden></div>
+              <div id="lane" class="lane"></div>
+              <div id="seek" class="seek" role="slider" tabindex="0" data-t-label="Position" aria-valuemin="0"><i class="got"></i><i class="missing"></i><i class="fill"></i><i class="thumb"></i><div id="peek" class="peek" hidden><canvas width="192" height="108"></canvas><span id="peekchapter"></span><span id="peektime"></span></div></div>
+            </div>
+            <div class="ctl">
+              <button id="play" class="icon" data-t-label="Play"></button>
+              <button id="back" class="icon" data-icon="rotate-ccw" data-t-title="Back 5 s" data-t-label="Back 5 s"></button>
+              <button id="fwd" class="icon" data-icon="rotate-cw" data-t-title="Forward 5 s" data-t-label="Forward 5 s"></button>
+              <span class="clock"><span id="clocknow"></span><span id="clocktotal"></span></span>
+              <span id="matchchip" class="chip" hidden></span>
+              <span class="sp"></span>
+              <button id="addnote" class="ghost sm" data-t-title="Add note (C)"><span data-icon="note" data-icon-class="sm"></span><span data-t="Note">Note</span><kbd>C</kbd></button>
+              <span class="selbox ghost sm"><select id="speed" data-t-label="Speed"></select></span>
+              <button id="live" class="livebtn" aria-pressed="false"><i class="dot"></i><span data-t="Live">Live</span></button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <aside id="panel" class="panel">
+        <div class="ph"><div class="seg"><button id="sideevents" class="on"></button><button id="sideconvo" data-t="Conversation" hidden>Conversation</button></div></div>
+        <div id="filterrow" class="search"><div class="selbox"><span class="lead" data-icon="search" data-icon-class="sm"></span><input id="filter" type="search" autocomplete="off" data-t-placeholder="Filter" data-t-label="Filter"><span class="selbox chipsel"><select id="scope" data-t-label="Scope"><option value="session" data-t="This session">This session</option><option value="all" data-t="All sessions">All sessions</option></select></span></div></div>
+        <div id="notelist" class="list"></div>
+        <div id="convolist" class="list convo" hidden></div>
       </aside>
     </div>
-  </div>
-</main>
 
-<main id="recordtab" class="tab" hidden>
-  <aside class="col left">
-    <h3 data-t="Capture">Capture</h3>
-    <select id="source" data-t-label="Capture"></select>
-    <div id="lost" class="lost" hidden><span data-t="Source lost">Source lost</span><button id="usedisplay" data-t="Use display instead">Use display instead</button></div>
-    <div id="preview" class="preview"></div>
-    <div class="row quality"><select id="quality" data-t-label="Quality"><option value="light" data-t="Light">Light</option><option value="standard" data-t="Standard">Standard</option><option value="high" data-t="High">High</option></select><span id="qinfo" class="muted small"></span></div>
-    <h3 data-t="Audio">Audio</h3>
-    <div class="mixrow">
-      <div class="mixhead"><span data-t="App sound">App sound</span><span class="spacer"></span><span id="appdb" class="db"></span></div>
-      <div id="appmeter" class="meter"><i class="fill"></i><i class="peak"></i><i class="clip"></i></div>
-      <div id="appscale" class="scale"></div>
-      <div class="row"><input id="appvol" type="range" min="0" max="1" step="0.05" data-t-label="App sound"><button id="appmute" class="icon" data-t-label="Mute"><svg viewBox="0 0 16 16"><path d="M2 6h3l4-3v10l-4-3H2z"/><path class="on" d="M11 5.5a3.5 3.5 0 0 1 0 5"/><path class="off" d="M11 6l4 4M15 6l-4 4"/></svg></button></div>
-    </div>
-    <div class="mixrow">
-      <div class="mixhead"><span data-t="Microphone">Microphone</span><select id="mic" data-t-label="Microphone"></select><span id="micdb" class="db"></span></div>
-      <div id="micmeter" class="meter"><i class="fill"></i><i class="peak"></i><i class="clip"></i></div>
-      <div id="micscale" class="scale"></div>
-      <div class="row"><input id="micvol" type="range" min="0" max="1" step="0.05" data-t-label="Microphone"><button id="micmute" class="icon" data-t-label="Mute"><svg viewBox="0 0 16 16"><path d="M8 2a2 2 0 0 1 2 2v4a2 2 0 0 1-4 0V4a2 2 0 0 1 2-2zM4 8a4 4 0 0 0 8 0M8 12v2"/><path class="off" d="M3 3l10 10"/></svg></button></div>
-    </div>
-  </aside>
-  <section class="roomcol">
-    <div class="head"><span class="spacer"></span><button id="layoutrec" class="icon layoutbtn" data-t-label="Layout" aria-haspopup="true"></button></div>
-    <div id="rectiles" class="tiles"></div>
   </section>
-</main>
-
-<main id="playertab" class="tab" hidden>
-  <aside id="sets" class="col sets">
-    <button id="setsrail" class="icon rail" data-t-label="Sets" aria-expanded="false"><svg viewBox="0 0 16 16"><path d="M3 4h10M3 8h10M3 12h10"/></svg></button>
-    <div class="setspanel">
-      <h3 data-t="Sets">Sets</h3>
-      <div id="setlist" class="setlist" role="listbox" data-t-label="Sets"></div>
-    </div>
-  </aside>
-  <section id="stage" class="stage">
-    <div id="toolbar" class="toolbar">
-      <div id="views" class="seg" role="group" data-t-label="View"></div>
-      <button id="layoutplay" class="icon layoutbtn" data-t-label="Layout" aria-haspopup="true"></button>
-      <div id="tools" class="seg tools" role="group" data-t-label="Drawing">
-        <button data-tool="pen" data-t-title="Pen" data-t-label="Pen"><svg viewBox="0 0 16 16"><path d="M3 13l1-3 7-7 2 2-7 7z"/></svg></button>
-        <button data-tool="arrow" data-t-title="Arrow" data-t-label="Arrow"><svg viewBox="0 0 16 16"><path d="M3 13L13 3M7 3h6v6"/></svg></button>
-        <button data-tool="laser" data-t-title="Laser" data-t-label="Laser"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.5"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2"/></svg></button>
-        <button id="clearink" data-t-title="Clear drawing (X)" data-t-label="Clear drawing"><svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
-      </div>
-      <span class="spacer"></span>
-      <button id="wp" class="pill" aria-pressed="true" data-t="Watch Party">Watch Party</button>
-      <button id="notestoggle" class="notestoggle" aria-expanded="false">Events</button>
-    </div>
-    <div id="playtiles" class="tiles">
-      <div id="bezel" class="bezel" hidden></div>
-      <div id="overlay" class="overlay"></div>
-      <form id="quick" class="quick" hidden onsubmit="return false"><button type="button" id="quicktime" class="when" data-t-title="Tab"></button><input id="quicktext" autocomplete="off" data-t-placeholder="Note" data-t-label="Note"><div id="taghints" class="taghints" hidden></div></form>
-      <div id="osd" class="osd" hidden><span id="osdtext"></span><button id="osdundo" data-t="Undo">Undo</button></div>
-    </div>
-    <div id="empty" class="empty" hidden data-t="No sets yet">No sets yet</div>
-    <div id="transport" class="transport">
-      <div id="chapters" class="chapters" hidden></div>
-      <div id="lane" class="lane"></div>
-      <div id="seek" class="seek" role="slider" tabindex="0" data-t-label="Seek" aria-valuemin="0"><i class="fill"></i><i class="thumb"></i><div id="peek" class="peek" hidden><canvas width="192" height="108"></canvas><span id="peekchapter"></span><span id="peektime"></span></div></div>
-      <div class="controls">
-        <button id="play" class="icon" data-t-label="Play"><svg viewBox="0 0 16 16" class="solid"><path class="on" d="M4 3l9 5-9 5z"/><path class="off" d="M4 3h3v10H4zM9 3h3v10H9z"/></svg></button>
-        <button id="back" class="icon text" data-t-label="Back 5 seconds">-5</button>
-        <button id="fwd" class="icon text" data-t-label="Forward 5 seconds">+5</button>
-        <span class="clock"><span id="clocknow"></span><span id="clocktotal" class="muted"></span></span>
-        <span id="chapter" class="chaptername"></span>
-        <span class="spacer"></span>
-        <button id="addnote" class="icon" data-t-title="Add note (C)" data-t-label="Add note"><svg viewBox="0 0 16 16"><path d="M3 3h10v7H8l-3 3v-3H3z"/></svg></button>
-        <span id="extra" class="extra">
-          <select id="speed" data-t-label="Speed"><option value="0.5">0.5x</option><option value="0.75">0.75x</option><option value="1" selected>1x</option><option value="1.25">1.25x</option><option value="1.5">1.5x</option><option value="2">2x</option><option value="3">3x</option></select>
-          <button id="cc" class="icon text" data-t-title="Subtitles" data-t-label="Subtitles">CC</button>
-          <button id="mute" class="icon" data-t-label="Mute"><svg viewBox="0 0 16 16"><path d="M2 6h3l4-3v10l-4-3H2z"/><path class="on" d="M11 5.5a3.5 3.5 0 0 1 0 5"/><path class="off" d="M11 6l4 4M15 6l-4 4"/></svg></button>
-          <input id="volume" type="range" min="0" max="1" step="0.05" value="1" data-t-label="Volume">
-        </span>
-        <button id="more" class="icon" data-t-label="More" aria-haspopup="true"><svg viewBox="0 0 16 16" class="solid"><path d="M3 7h2v2H3zM7 7h2v2H7zM11 7h2v2h-2z"/></svg></button>
-        <button id="live" class="livebtn" aria-pressed="false" data-t="Live">Live</button>
-        <button id="fill" class="icon" data-t-title="Fill window (T)" data-t-label="Fill window"><svg viewBox="0 0 16 16"><path d="M2 3h12v10H2zM5 6v4M11 6v4"/></svg></button>
-        <button id="full" class="icon" data-t-title="Full screen (F)" data-t-label="Full screen"><svg viewBox="0 0 16 16"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"/></svg></button>
-      </div>
-    </div>
-  </section>
-  <aside id="notes" class="col notes">
-    <div class="seg sidetabs"><button id="sideevents" class="on" data-t="Events">Events</button><button id="sideconvo" data-t="Conversation" hidden>Conversation</button></div>
-    <input id="filter" type="search" autocomplete="off" data-t-placeholder="Filter" data-t-label="Filter">
-    <div id="notelist" class="notelist"></div>
-    <div id="convolist" class="notelist convo" hidden></div>
-  </aside>
-</main>
+</div>
 
 <dialog id="settings">
-  <div class="dlghead"><h2 data-t="Settings">Settings</h2><button class="icon close" data-t-label="Close">&times;</button></div>
+  <div class="dlghead"><h2 data-t="Settings">Settings</h2><button class="icon close" data-icon="x" data-t-label="Close"></button></div>
   <label class="field"><span data-t="Name">Name</span><input id="name" maxlength="24"></label>
   <label class="field"><span data-t="Language">Language</span><select id="language"><option value="" data-t="Automatic">Automatic</option><option value="en">English</option><option value="ja">日本語</option></select></label>
-  <label class="field"><span data-t="App sound">App sound</span><select id="proc"></select></label>
-  <label class="check"><input type="checkbox" id="share"> <span data-t="Share with the room">Share with the room</span></label>
-  <label class="field"><span data-t="Speed limit (Mbit/s)">Speed limit (Mbit/s)</span><input id="limit" type="number" min="0" step="1" data-t-placeholder="No limit"></label>
-  <label class="field"><span data-t="Delete recordings after (days)">Delete recordings after (days)</span><input id="keepdays" type="number" min="0" step="1" data-t-placeholder="Never"></label>
+  <div class="field"><span data-t="Mark this moment">Mark this moment</span><div class="row"><button id="hotkey" class="keys grow"></button></div><span id="hotkeyerr" class="err" hidden></span></div>
 </dialog>
 <dialog id="joindlg">
-  <div class="dlghead"><h2 data-t="Join room">Join room</h2><button class="icon close" data-t-label="Close">&times;</button></div>
-  <div class="row"><input id="joincode2" class="code" autocomplete="off" data-t-placeholder="Invite code" data-t-label="Invite code"><button id="join2" class="primary" data-t="Join">Join</button></div>
+  <div class="dlghead"><h2 data-t="Join room">Join room</h2><button class="icon close" data-icon="x" data-t-label="Close"></button></div>
+  <div class="row"><input id="joincode2" class="grow" autocomplete="off" data-t-placeholder="Invite code" data-t-label="Invite code"><button id="join2" class="primary" data-t="Join">Join</button></div>
 </dialog>
 <dialog id="renamedlg">
-  <div class="dlghead"><h2 data-t="Rename room">Rename room</h2><button class="icon close" data-t-label="Close">&times;</button></div>
-  <div class="row"><input id="renameinput" maxlength="40" autocomplete="off" data-t-label="Name"><button id="renamesave" class="primary" data-t="Save">Save</button></div>
-</dialog>
-<dialog id="checkdlg" class="wide">
-  <div class="dlghead"><h2 data-t="Connections">Connections</h2><span class="spacer"></span><button id="recheck" data-t="Check again">Check again</button><button class="icon close" data-t-label="Close">&times;</button></div>
-  <div id="checkbody" class="checkbody"></div>
-</dialog>
-<dialog id="pluginsdlg" class="wide">
-  <div class="dlghead"><h2 data-t="Plugins">Plugins</h2><button class="icon close" data-t-label="Close">&times;</button></div>
-  <div id="pluginlist" class="pluginlist"></div>
-  <h3 data-t="Jobs">Jobs</h3>
-  <div id="joblist" class="joblist"></div>
+  <div class="dlghead"><h2 data-t="Rename room">Rename room</h2><button class="icon close" data-icon="x" data-t-label="Close"></button></div>
+  <div class="row"><input id="renameinput" class="grow" maxlength="40" autocomplete="off" data-t-label="Name"><button id="renamesave" class="primary" data-t="Save">Save</button></div>
 </dialog>
 <dialog id="storagedlg" class="wide">
-  <div class="dlghead"><h2 data-t="Storage">Storage</h2><button class="icon close" data-t-label="Close">&times;</button></div>
-  <div id="storagehead" class="muted"></div>
+  <div class="dlghead"><h2 data-t="Storage">Storage</h2><button class="icon close" data-icon="x" data-t-label="Close"></button></div>
+  <div class="row"><span id="storagehead" class="muted grow"></span><label class="inline"><span data-t="Keep sessions for">Keep sessions for</span><span class="unit"><input id="keepdays" type="number" min="0" step="1" data-t-placeholder="Forever"><span data-t="days">days</span></span></label></div>
   <div id="storagelist" class="storagelist"></div>
 </dialog>
-<dialog id="shortcuts">
-  <div class="dlghead"><h2 data-t="Keyboard shortcuts">Keyboard shortcuts</h2><button class="icon close" data-t-label="Close">&times;</button></div>
+<dialog id="confirm">
+  <h2 id="confirmtitle"></h2>
+  <div class="row end"><button id="confirmno" data-t="Cancel">Cancel</button><button id="confirmyes"></button></div>
+</dialog>
+<dialog id="shortcuts" class="wide">
+  <div class="dlghead"><h2 data-t="Keyboard shortcuts">Keyboard shortcuts</h2><button class="icon close" data-icon="x" data-t-label="Close"></button></div>
   <dl class="keys">
-    <dt data-t="Room / Record / Player">Room / Record / Player</dt><dd><kbd>Ctrl+1</kbd><kbd>Ctrl+2</kbd><kbd>Ctrl+3</kbd><kbd>Ctrl+Tab</kbd></dd>
+    <dt data-t="Room / Now / Capture">Room / Now / Capture</dt><dd><kbd>Ctrl+1</kbd><kbd>Ctrl+2</kbd><kbd>Ctrl+3</kbd></dd>
+    <dt data-t="Sidebar">Sidebar</dt><dd><kbd>Ctrl+B</kbd></dd>
+    <dt data-t="Start or end session">Start or end session</dt><dd><kbd>Ctrl+R</kbd></dd>
+    <dt data-t="Mark this moment">Mark this moment</dt><dd><kbd id="hotkeyshown"></kbd></dd>
     <dt data-t="Play / pause">Play / pause</dt><dd><kbd>Space</kbd><kbd>K</kbd></dd>
-    <dt data-t="Back / forward 5 s (Shift 1 s)">Back / forward 5 s (Shift 1 s)</dt><dd><kbd>&larr;</kbd><kbd>&rarr;</kbd></dd>
+    <dt data-t="Back / forward 5 s (Shift 1 s)">Back / forward 5 s (Shift 1 s)</dt><dd><kbd>←</kbd><kbd>→</kbd></dd>
     <dt data-t="Back / forward 10 s (Shift 1 min)">Back / forward 10 s (Shift 1 min)</dt><dd><kbd>J</kbd><kbd>L</kbd></dd>
-    <dt data-t="Back / forward 1 min">Back / forward 1 min</dt><dd><kbd>Ctrl+&larr;</kbd><kbd>Ctrl+&rarr;</kbd></dd>
+    <dt data-t="Back / forward 1 min">Back / forward 1 min</dt><dd><kbd>Ctrl+←</kbd><kbd>Ctrl+→</kbd></dd>
     <dt data-t="Slower / faster">Slower / faster</dt><dd><kbd>&lt;</kbd><kbd>&gt;</kbd></dd>
-    <dt data-t="Mute / volume">Mute / volume</dt><dd><kbd>M</kbd><kbd>&uarr;</kbd><kbd>&darr;</kbd></dd>
-    <dt data-t="Full screen / fill window / leave">Full screen / fill window / leave</dt><dd><kbd>F</kbd><kbd>T</kbd><kbd>Esc</kbd></dd>
-    <dt data-t="All players / one player">All players / one player</dt><dd><kbd>0</kbd><kbd>1-6</kbd><kbd>Tab</kbd></dd>
-    <dt data-t="Previous / next set">Previous / next set</dt><dd><kbd>Shift+P</kbd><kbd>Shift+N</kbd></dd>
-    <dt data-t="Add note / previous / next">Add note / previous / next</dt><dd><kbd>C</kbd><kbd>Q</kbd><kbd>E</kbd></dd>
-    <dt data-t="Previous / next event">Previous / next event</dt><dd><kbd>A</kbd><kbd>D</kbd></dd>
+    <dt data-t="Mute / volume">Mute / volume</dt><dd><kbd>M</kbd><kbd>↑</kbd><kbd>↓</kbd></dd>
+    <dt data-t="Full screen / leave">Full screen / leave</dt><dd><kbd>F</kbd><kbd>Esc</kbd></dd>
+    <dt data-t="All players / one player">All players / one player</dt><dd><kbd>0</kbd><kbd>1–6</kbd><kbd>Tab</kbd></dd>
+    <dt data-t="Previous / next session">Previous / next session</dt><dd><kbd>Shift+P</kbd><kbd>Shift+N</kbd></dd>
+    <dt data-t="Add note">Add note</dt><dd><kbd>C</kbd></dd>
+    <dt data-t="Previous / next note">Previous / next note</dt><dd><kbd>Q</kbd><kbd>E</kbd></dd>
+    <dt data-t="Previous / next match (or event)">Previous / next match (or event)</dt><dd><kbd>A</kbd><kbd>D</kbd></dd>
     <dt data-t="Clear drawing">Clear drawing</dt><dd><kbd>X</kbd></dd>
-    <dt data-t="Undo">Undo</dt><dd><kbd>U</kbd></dd>
+    <dt data-t="Undo">Undo</dt><dd><kbd>Ctrl+Z</kbd></dd>
     <dt data-t="Shortcuts">Shortcuts</dt><dd><kbd>?</kbd></dd>
   </dl>
 </dialog>
+<div id="toast" class="toast" hidden><span id="toasttext"></span><button id="toastaction" class="ghost sm" hidden></button></div>
 <div id="menu" class="menu" role="menu" hidden></div>
 <div id="pop" class="pop" hidden></div>
 <div id="recovery" class="recovery" hidden>
-  <div class="box">
+  <div class="rbox">
     <p id="recoverymsg"></p>
-    <div class="row">
+    <div class="row wrap">
       <button id="rfolder" data-t="Open data folder">Open data folder</button>
       <button id="rreport" data-t="Save report">Save report</button>
-      <button id="rreset" class="danger" data-t="Reset settings and cache">Reset settings and cache</button>
+      <button id="rreset" class="danger" data-t="Reset settings and cache…">Reset settings and cache…</button>
+      <span class="sp"></span>
       <button id="rcontinue" class="primary" data-t="Continue">Continue</button>
     </div>
     <div id="rinfo" class="muted small"></div>
   </div>
 </div>
 <script src="util.js"></script>
+<script src="icons.js"></script>
 <script src="i18n.js"></script>
 <script src="layout.js"></script>
 <script src="events.js"></script>
