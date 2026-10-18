@@ -682,7 +682,9 @@ async function scenario(ctx) {
     check(logOf(a, ctx.room, a.id).some((r) => r.k === "party" && r.set === ctx.review), "A did not log what was watched when the review started");
     await allSee(all, "two party records in the review", within(SYNC_ROUND_S * 2), (st) => (setOf(st, ctx.review)?.party || []).length >= 2);
     await waitFor("A sees a review session", within(UI_REFRESH_S * 3), () => evaluate(a, `isReview(setById(${JSON.stringify(ctx.review)}))`));
-    await evaluate(a, `openSession(${JSON.stringify(ctx.review)}); setReview(false, reviewTotal()); true`);
+    await evaluate(a, `openSession(${JSON.stringify(ctx.review)}); true`);
+    await waitFor("A opens the review", within(UI_REFRESH_S * 3), () => evaluate(a, `review?.id === ${JSON.stringify(ctx.review)} && reviewTotal() > 0`));
+    await evaluate(a, `act("seek", reviewTotal()); true`);
     await waitFor("A replays the watched session at the seek", within(UI_REFRESH_S * 3), () => evaluate(a, `review?.id === ${JSON.stringify(ctx.review)} && selected === ${JSON.stringify(ctx.set)} && Math.abs(nowM() - ${SEEK_TO_S * 2}) < ${JUMP_MIN_S}`));
     await evaluate(a, `endReview(); openSession(${JSON.stringify(ctx.set)}); true`);
     ctx.notes.push(`review session with ${(await state(a)).sets.find((s) => s.id === ctx.review).party.length} party records replayed`);
