@@ -6,7 +6,7 @@ use std::process::{ChildStderr, ChildStdout, Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use serde_json::json;
+use serde_json::{json, Value};
 use tauri::Emitter;
 
 use crate::ffmpeg::{self, FRAGMENTED};
@@ -43,6 +43,32 @@ pub struct Input {
 pub struct Player {
     pub name: String,
     pub inputs: Vec<Input>,
+    pub width: u32,
+    pub kbps: f64,
+}
+
+pub fn codec_factor(codec: &str) -> f64 {
+    ffmpeg::CANDIDATES.iter().find(|c| c.1 == codec).map_or(1.0, |c| c.2)
+}
+
+pub fn source_kbps(cap: &Value) -> f64 {
+    let width = cap["width"].as_u64().map_or(record::quality_width(""), |w| w as u32);
+    let kbps = cap["kbps"].as_f64().unwrap_or_else(|| record::bitrate_kbps(width, 1.0) as f64);
+    kbps / codec_factor(cap["codec"].as_str().unwrap_or_default())
+}
+
+pub fn canvas(n: usize, widest: u32) -> (u32, u32) {
+    let cols = (n.max(1) as f64).sqrt().ceil() as u32;
+    let rows = (n.max(1) as u32).div_ceil(cols);
+    let (w, h) = (cols * widest.max(2), rows * (widest.max(2) * 9 / 16));
+    let scale = (CANVAS.0 as f64 / w as f64).min(CANVAS.1 as f64 / h as f64).min(1.0);
+    ((w as f64 * scale) as u32 & !1, (h as f64 * scale) as u32 & !1)
+}
+
+pub fn export_kbps(players: &[(u32, f64)], size: (u32, u32), factor: f64) -> u32 {
+    let sources: f64 = players.iter().map(|(_, kbps)| kbps).sum();
+    let ceiling = record::bitrate_kbps(size.0.max(size.1 * 16 / 9), 1.0) as f64;
+    (sources.min(ceiling) * factor).round() as u32
 }
 
 pub fn grid(n: usize, (width, height): (u32, u32)) -> Vec<(u32, u32, u32, u32)> {
@@ -58,8 +84,8 @@ pub fn label_file(i: usize) -> String {
     format!("label-{i}.txt")
 }
 
-pub fn graph(players: &[Vec<(f64, bool)>], rects: &[(u32, u32, u32, u32)], total: f64) -> String {
-    let mut graph = format!("color=c=black:s={}x{}:r={FPS}:d={total:.3}[bg0];", CANVAS.0, CANVAS.1);
+pub fn graph(players: &[Vec<(f64, bool)>], rects: &[(u32, u32, u32, u32)], size: (u32, u32), total: f64) -> String {
+    let mut graph = format!("color=c=black:s={}x{}:r={FPS}:d={total:.3}[bg0];", size.0, size.1);
     let (mut labels, mut mixes) = (Vec::new(), Vec::new());
     let (mut input, mut layer) = (0usize, 0usize);
     for (i, (inputs, (x, y, w, h))) in players.iter().zip(rects).enumerate() {
@@ -137,7 +163,12 @@ fn players(core: &Core, room_id: &str, set: &room::Set) -> (Vec<Player>, Vec<Str
     let (mut players, mut skipped) = (Vec::new(), Vec::new());
     for f in files {
         let mut inputs = Vec::new();
+        let (mut width, mut kbps) = (0u32, 0f64);
         for capture in f.captures() {
+            if let Some(cap) = f.caps.get(capture) {
+                width = width.max(cap["width"].as_u64().unwrap_or(0) as u32);
+                kbps = kbps.max(source_kbps(cap));
+            }
             for series in SERIES {
                 let Some(first) = f.segs.iter().find(|s| s.capture == capture && s.series == series) else { continue };
                 let pieces = stream::set_pieces(core, room_id, f, capture, series);
@@ -151,13 +182,13 @@ fn players(core: &Core, room_id: &str, set: &room::Set) -> (Vec<Player>, Vec<Str
         if inputs.is_empty() {
             skipped.push(name);
         } else {
-            players.push(Player { name, inputs });
+            players.push(Player { name, inputs, width: if width > 0 { width } else { record::quality_width("") }, kbps });
         }
     }
     (players, skipped)
 }
 
-fn command(work: &Path, ports: &[u16], graph: &str, names: &[String], total: f64) -> Command {
+fn command(work: &Path, ports: &[u16], graph: &str, names: &[String], total: f64, kbps: u32) -> Command {
     let chosen = ffmpeg::pick(&crate::default_codecs());
     let mut command = Command::new(ffmpeg::path());
     command.current_dir(work).args(["-hide_banner", "-loglevel", "error", "-nostats", "-progress", "pipe:1", "-y"]);
@@ -167,7 +198,7 @@ fn command(work: &Path, ports: &[u16], graph: &str, names: &[String], total: f64
     command
         .args(["-filter_complex", graph, "-map", "[vout]", "-map", "[mix]"])
         .args((0..names.len()).flat_map(|i| ["-map".to_string(), format!("[p{i}]")]))
-        .args(["-c:v", chosen.0, "-b:v", &format!("{}k", record::bitrate_kbps(CANVAS.0, chosen.2)), "-g", &KEYFRAME_EVERY.to_string(), "-r", &FPS.to_string()]);
+        .args(["-c:v", chosen.0, "-b:v", &format!("{kbps}k"), "-g", &KEYFRAME_EVERY.to_string(), "-r", &FPS.to_string()]);
     if chosen.0 == ffmpeg::FALLBACK.0 {
         command.args(["-preset", "veryfast"]);
     }
@@ -207,7 +238,11 @@ pub fn start(core: &Arc<Core>, room_id: &str, set_id: &str, mut path: PathBuf) -
         std::fs::write(work.join(label_file(i)), &player.name).map_err(|e| e.to_string())?;
     }
     let shape: Vec<Vec<(f64, bool)>> = players.iter().map(|p| p.inputs.iter().map(|i| (i.delay, i.video)).collect()).collect();
-    let graph = graph(&shape, &grid(players.len(), CANVAS), total);
+    let size = canvas(players.len(), players.iter().map(|p| p.width).max().unwrap_or(0));
+    let graph = graph(&shape, &grid(players.len(), size), size, total);
+    let rates: Vec<(u32, f64)> = players.iter().map(|p| (p.width, p.kbps)).collect();
+    let kbps = export_kbps(&rates, size, ffmpeg::pick(&crate::default_codecs()).2);
+    tracing::info!("export of {set_id} started: {} players, {}x{}, {kbps} kbit/s, {total:.0} s", players.len(), size.0, size.1);
     let names: Vec<String> = players.iter().map(|p| p.name.clone()).collect();
     let mut ports = Vec::new();
     for input in players.into_iter().flat_map(|p| p.inputs) {
@@ -215,7 +250,7 @@ pub fn start(core: &Arc<Core>, room_id: &str, set_id: &str, mut path: PathBuf) -
         ports.push(listener.local_addr().map_err(|e| e.to_string())?.port());
         feeds.push((listener, input.pieces));
     }
-    let mut child = proc::spawn(&mut command(&work, &ports, &graph, &names, total), BELOW_NORMAL).map_err(|e| e.to_string())?;
+    let mut child = proc::spawn(&mut command(&work, &ports, &graph, &names, total, kbps), BELOW_NORMAL).map_err(|e| e.to_string())?;
     let (stdout, stderr) = (child.child.stdout.take().unwrap(), child.child.stderr.take().unwrap());
     {
         let mut slot = core.export.lock().unwrap();
@@ -291,8 +326,14 @@ fn watch(core: &Core, stdout: ChildStdout, stderr: ChildStderr, partial: &Path, 
     let _ = std::fs::remove_file(partial);
     *core.export.lock().unwrap() = None;
     match result {
-        Ok(()) => emit(core, 100.0, true, None),
-        Err(e) => emit(core, 0.0, true, Some(e)),
+        Ok(()) => {
+            tracing::info!("export finished: {} ({} B)", path.display(), crate::file_len(path));
+            emit(core, 100.0, true, None)
+        }
+        Err(e) => {
+            tracing::warn!("export ended: {e}");
+            emit(core, 0.0, true, Some(e))
+        }
     }
 }
 
@@ -310,7 +351,7 @@ mod tests {
     #[test]
     fn the_graph_places_each_player_and_mixes_every_sound() {
         let players = vec![vec![(0.0, true), (0.0, false)], vec![(1.5, true), (2.0, true), (1.5, false)]];
-        let g = graph(&players, &grid(2, CANVAS), 60.0);
+        let g = graph(&players, &grid(2, CANVAS), CANVAS, 60.0);
         assert!(g.starts_with("color=c=black:s=2560x1440:r=30:d=60.000[bg0];"));
         assert!(g.contains("[0:v]setpts=PTS-STARTPTS+0.000/TB"));
         assert!(g.contains("[2:v]setpts=PTS-STARTPTS+1.500/TB"));
@@ -322,6 +363,20 @@ mod tests {
         assert!(g.contains("drawtext=fontfile=font.ttc:textfile=label-1.txt"));
         assert!(g.ends_with("[bg3]drawtext=fontfile=font.ttc:textfile=label-0.txt:expansion=none:fontsize=28:fontcolor=white:box=1:boxcolor=black@0.6:boxborderw=8:x=16:y=1064-th,drawtext=fontfile=font.ttc:textfile=label-1.txt:expansion=none:fontsize=28:fontcolor=white:box=1:boxcolor=black@0.6:boxborderw=8:x=1296:y=1064-th,format=yuv420p[vout];[m0][m1]amix=inputs=2:normalize=0:duration=longest[mix]"));
         assert!(!g.contains('\''));
+    }
+
+    #[test]
+    fn the_export_is_sized_and_paced_by_its_sources() {
+        assert_eq!(canvas(1, 1280), (1280, 720));
+        assert_eq!(canvas(2, 1280), (2560, 720));
+        assert_eq!(canvas(3, 1280), (2560, 1440));
+        assert_eq!(canvas(4, 1920), CANVAS);
+        assert_eq!(source_kbps(&json!({"width": 1280, "kbps": 3000, "codec": "av1"})).round(), (3000.0 / 0.55_f64).round());
+        assert_eq!(source_kbps(&json!({"width": 1280})), record::bitrate_kbps(1280, 1.0) as f64);
+        let three = [(1280, 5000.0), (1280, 5000.0), (1280, 5000.0)];
+        assert_eq!(export_kbps(&three, canvas(3, 1280), 1.0), 15000);
+        assert_eq!(export_kbps(&three, canvas(3, 1280), 0.55), 8250);
+        assert_eq!(export_kbps(&[(1280, 90000.0)], canvas(1, 1280), 1.0), record::bitrate_kbps(1280, 1.0));
     }
 
     #[test]
