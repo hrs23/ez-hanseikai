@@ -17,6 +17,7 @@ const AUDIO_KBPS: u32 = 160;
 const KEYFRAME_EVERY: u32 = 2 * FPS;
 const LABEL_PX: u32 = 28;
 const LABEL_MARGIN: u32 = 16;
+const PARTIAL: &str = "export.mp4";
 const FONTS: [&str; 3] = ["YuGothM.ttc", "meiryo.ttc", "msgothic.ttc"];
 
 pub struct Running {
@@ -120,7 +121,7 @@ pub fn start(core: &Arc<Core>, room_id: &str, set_id: &str, mut path: PathBuf) -
             [format!("-metadata:s:a:{i}"), format!("title={n}"), format!("-metadata:s:a:{i}"), format!("handler_name={n}")]
         }))
         .args(["-t", &format!("{total:.3}"), "-movflags", FRAGMENTED, "-f", "mp4"])
-        .arg(&path)
+        .arg(work.join(PARTIAL))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -129,11 +130,19 @@ pub fn start(core: &Arc<Core>, room_id: &str, set_id: &str, mut path: PathBuf) -
     let (stdout, stderr) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
     *core.export.lock().unwrap() = Some(Running { child, cancelled: false });
     let core = core.clone();
-    std::thread::spawn(move || watch(&core, stdout, stderr, &path, total));
+    std::thread::spawn(move || watch(&core, stdout, stderr, &work.join(PARTIAL), &path, total));
     Ok(skipped)
 }
 
-fn watch(core: &Core, stdout: ChildStdout, mut stderr: ChildStderr, path: &Path, total: f64) {
+fn finish(partial: &Path, path: &Path) -> std::io::Result<()> {
+    if std::fs::rename(partial, path).is_err() {
+        std::fs::copy(partial, path)?;
+        std::fs::remove_file(partial)?;
+    }
+    Ok(())
+}
+
+fn watch(core: &Core, stdout: ChildStdout, mut stderr: ChildStderr, partial: &Path, path: &Path, total: f64) {
     let errors = std::thread::spawn(move || {
         let mut text = String::new();
         let _ = stderr.read_to_string(&mut text);
@@ -149,10 +158,13 @@ fn watch(core: &Core, stdout: ChildStdout, mut stderr: ChildStderr, path: &Path,
     let ok = running.child.wait().is_ok_and(|s| s.success());
     let text = errors.join().unwrap_or_default();
     if running.cancelled {
-        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(partial);
         emit(core, 0.0, true, Some("Export cancelled".into()));
     } else if ok {
-        emit(core, 100.0, true, None);
+        match finish(partial, path) {
+            Ok(()) => emit(core, 100.0, true, None),
+            Err(e) => emit(core, 0.0, true, Some(format!("Export failed: {e}"))),
+        }
     } else {
         tracing::warn!("export failed: {text}");
         emit(core, 0.0, true, Some(format!("Export failed: {}", text.lines().last().unwrap_or("ffmpeg stopped"))));
