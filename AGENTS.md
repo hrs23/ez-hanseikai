@@ -6,3 +6,8 @@
 - Plugins are self-contained: each one runs as its own program, reads only recordings and set information, writes only events, depends on no other plugin and can be turned on or off on its own. The app knows nothing about any plugin's internals and shows every plugin's events the same way.
 - One mechanism per job: notes, markers and plugin results are all events; the UI shows each action and piece of information in one place, with no explanatory text.
 - Avoid hard-coded numbers; keep the ones you need in one place, with the reason.
+- Make the UI intuitive and standard, like common native apps: standard menus, shortcuts and dialogs; everything works with the mouse alone; modern but simple; a dark, calm look with one accent colour.
+- Keep the code simple: plain functions and modules, no clever abstractions; share code only where it is truly the same; delete what is no longer used; no code comments.
+- Make it robust: nothing is lost by a crash, a dropped connection or someone's delete; everything resumes on its own.
+- Prefer efficiency and simplicity over the lowest delay; a few seconds of lag is fine.
+- Test changes on two PCs, including a fresh install and an update, before releasing.
