@@ -25,7 +25,7 @@ Work in progress. See [the design](docs/design.md).
 
 1. Download `EZ.Hanseikai_<version>_x64-setup.exe` from [Releases](https://github.com/hrs23/ez-hanseikai/releases) and run it. It is unsigned, so SmartScreen warns: More info, then Run anyway. It installs for your Windows user only and needs no admin rights.
 2. Start the app. Allow it through the firewall when Windows asks. On first run it downloads ffmpeg, and keeps retrying until that works.
-3. Enter your name. One player presses Create room, which copies an invite code to send; the others paste it and press Join, and a member approves them (the invite icon beside Members makes more). Then press Start session.
+3. Enter your name. One player presses Create room, which copies an invite code to send; the others paste it and press Join, and a member approves them (Copy invite code on the room's page makes more). Choose your screen with the Screen button at the bottom left, then press Start session.
 
 Requires Windows 10 version 2004 or later, or Windows 11.
 
@@ -33,17 +33,19 @@ Requires Windows 10 version 2004 or later, or Windows 11.
 
 The app checks for a new version at start, every four hours while it runs (or Help > Check for updates), and shows it above the page with Install. During a session it offers to install after the session instead: then it asks once nothing records, plays, exports or analyses, and it never installs without asking. Updates are signed and checked before they install. An older version may not read data from a newer one, so going back means starting with an empty data folder.
 
+Settings > Updates chooses the channel: Stable (the default) gets releases marked stable, Beta gets every release first.
+
 ## Uninstall
 
 Settings > Apps > Installed apps > EZ Hanseikai > Uninstall. Your data stays unless you tick the option to delete it, so a reinstall keeps your ID and recordings.
 
-Data lives in `%LOCALAPPDATA%\dev.ez-hanseikai.app`; File > Open data folder opens it, and Help > Diagnostics > App can reset it. `key.bin` is your identity: keep it private, and deleting it changes your ID.
+Data lives in `%LOCALAPPDATA%\dev.ez-hanseikai.app`; File > Open data folder opens it, and Help > Reset app resets it, keeping your ID, rooms and recordings unless you choose otherwise. `key.bin` is your identity: keep it private, and deleting it changes your ID.
 
 ## Security
 
 - Only the teammates you connect to receive your recording, game sound, notes and name. Anything visible on your main screen, such as chats or notifications, is recorded too.
 - Your ID is the public half of a key made on first start. Connections are encrypted and accepted only from room members. An invite code works once; anyone who joins can invite others, so share it only with your team.
-- Send to room on the Capture page stops others from receiving your recordings; the upload limit caps your upload.
+- With the Screen button off, nothing of your screen is sent; what was already recorded in a session still reaches the room. The upload limit (Settings > Capture) caps your upload. Help > Diagnostics > Where data goes shows each connection and what goes over it.
 
 ## Contributing
 
