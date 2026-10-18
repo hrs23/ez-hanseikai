@@ -77,6 +77,7 @@ pub struct ActiveSet {
     pub room: String,
     pub by: String,
     pub start_us: i64,
+    pub voice: bool,
 }
 
 pub fn random_hex(bytes: usize) -> String {
@@ -153,7 +154,7 @@ impl Core {
 
     pub fn active_set_json(&self) -> Value {
         match self.active_set.lock().unwrap().as_ref() {
-            Some(s) => json!({"id": s.id, "room": s.room, "by": s.by, "start_us": s.start_us}),
+            Some(s) => json!({"id": s.id, "room": s.room, "by": s.by, "start_us": s.start_us, "voice": s.voice}),
             None => Value::Null,
         }
     }
@@ -275,6 +276,17 @@ pub fn switch_room(core: &Arc<Core>, id: &str) -> Result<(), String> {
     core.save_rooms();
     apply_active(core);
     Ok(())
+}
+
+pub fn close_room(core: &Arc<Core>, id: &str) {
+    {
+        let mut rooms = core.rooms.lock().unwrap();
+        if rooms.active.as_deref() == Some(id) {
+            rooms.active = None;
+        }
+    }
+    core.save_rooms();
+    apply_active(core);
 }
 
 pub fn leave_room(core: &Arc<Core>, id: &str) {
@@ -511,13 +523,13 @@ pub fn adopt_room(core: &Arc<Core>, pending: &str, id: &str, name: &str, members
     }
 }
 
-pub fn begin_set(core: &Arc<Core>, set: &str, by: &str, start_us: i64) -> Result<(), String> {
+pub fn begin_set(core: &Arc<Core>, set: &str, by: &str, start_us: i64, voice: bool) -> Result<(), String> {
     ffmpeg::ready()?;
     let room = core.active_room_id();
     if core.is_deleted(&room, set) {
         return Err("That session was deleted on this PC.".into());
     }
-    let active = ActiveSet { id: set.to_string(), room, by: by.to_string(), start_us };
+    let active = ActiveSet { id: set.to_string(), room, by: by.to_string(), start_us, voice };
     {
         let mut slot = core.active_set.lock().unwrap();
         if slot.is_some() {
@@ -525,7 +537,7 @@ pub fn begin_set(core: &Arc<Core>, set: &str, by: &str, start_us: i64) -> Result
         }
         *slot = Some(active);
     }
-    tracing::info!("session {set} started by {by}");
+    tracing::info!("{} {set} started by {by}", if voice { "review session" } else { "session" });
     Ok(())
 }
 
@@ -569,9 +581,11 @@ pub fn start_set(core: &Arc<Core>) -> Result<(), String> {
     let start_us = now_us();
     let set = set_id_for(start_us, core.tz_offset_s);
     let by = core.name.lock().unwrap().clone();
-    begin_set(core, &set, &by, start_us)?;
+    let voice = core.party.lock().unwrap().reviewing();
+    begin_set(core, &set, &by, start_us, voice)?;
     log_set_layout(core);
-    net::broadcast(core, json!({"t": "rec", "action": "start", "set": set, "room": core.active_room_id(), "by": by, "start_us": start_us}));
+    party::log(core);
+    net::broadcast(core, json!({"t": "rec", "action": "start", "set": set, "room": core.active_room_id(), "by": by, "start_us": start_us, "voice": voice}));
     Ok(())
 }
 
@@ -809,6 +823,25 @@ pub fn events(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> Vec<Value> {
     out
 }
 
+pub fn gone_json(room: &str, logs: &[Log], deleted: &HashSet<String>, events: &[Value]) -> Vec<Value> {
+    derive_sets(room, logs, &HashSet::new())
+        .into_iter()
+        .filter(|s| deleted.contains(&format!("{room}/{}", s.id)))
+        .map(|set| {
+            let players: Vec<Value> = set.files.iter().map(|f| json!({"owner": f.owner, "total": f.total(), "voice": f.series(SERIES[0]).is_empty()})).collect();
+            let covered: Vec<&Value> = events.iter().filter(|e| covers(&set, e)).map(|e| &e["key"]).collect();
+            json!({"id": set.id, "room": room, "start_us": set.start(), "end_us": set.end(), "players": players, "events": covered, "party": !party::records(logs, &set.id).is_empty()})
+        })
+        .collect()
+}
+
+pub fn restore_set(core: &Core, room: &str, set: &str) {
+    if core.deleted.lock().unwrap().remove(&format!("{room}/{set}")) {
+        core.save_settings();
+        tracing::info!("session {set} brought back to this PC");
+    }
+}
+
 pub fn gone_list(core: &Core, room: &str) -> Vec<String> {
     core.deleted.lock().unwrap().iter().filter_map(|k| k.strip_prefix(&format!("{room}/")).map(String::from)).collect()
 }
@@ -949,24 +982,33 @@ pub fn sets_json(core: &Core, room: &str, logs: &[Log], events: &[Value]) -> Vec
         out.push(json!({
             "id": set.id, "room": room, "start_us": set.start(), "end_us": set.end(), "live": live,
             "players": players, "events": covered, "progress": {"have": have, "total": total, "stuck": stuck_all}, "missing": missing.len(), "lacking": lacking_by, "all_verified": all_verified,
-            "status": set_status(live, all_verified, &missing), "layout": set_layout(logs, &set.id),
+            "status": set_status(live, all_verified, &missing), "layout": set_layout(logs, &set.id), "party": party::records(logs, &set.id),
         }));
     }
     out
 }
 
-fn path_kind(conn: &Connection) -> (&'static str, u64) {
+fn path_kind(conn: &Connection) -> (&'static str, u64, Option<String>) {
     for path in conn.paths().iter() {
         if path.is_selected() {
-            return (if path.is_ip() { "direct" } else { "relay" }, path.rtt().as_millis() as u64);
+            let relay = (!path.is_ip()).then(|| relay_host(&format!("{:?}", path.remote_addr()))).flatten();
+            return (if path.is_ip() { "direct" } else { "relay" }, path.rtt().as_millis() as u64, relay);
         }
     }
-    ("none", 0)
+    ("none", 0, None)
+}
+
+pub fn relay_host(text: &str) -> Option<String> {
+    let rest = &text[text.find("://")? + 3..];
+    let host: String = rest.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '-').collect();
+    (!host.is_empty()).then_some(host)
 }
 
 fn peer_json(core: &Core, room: &str, p: &Peer) -> Value {
     let alive = p.alive();
-    let (path, rtt) = alive.map(path_kind).unzip();
+    let kind = alive.map(path_kind);
+    let (path, rtt, relay) = (kind.as_ref().map(|k| k.0), kind.as_ref().map(|k| k.1), kind.and_then(|k| k.2));
+    let stats = alive.map(|c| c.stats());
     let other_version = p.info.as_ref().is_some_and(|(_, proto)| *proto != PROTOCOL);
     let sharing = p.sharing && alive.is_some();
     json!({
@@ -975,6 +1017,9 @@ fn peer_json(core: &Core, room: &str, p: &Peer) -> Value {
         "connected": alive.is_some(),
         "path": path,
         "rtt_ms": rtt,
+        "relay": relay,
+        "sent": stats.as_ref().map(|s| s.udp_tx.bytes),
+        "received": stats.as_ref().map(|s| s.udp_rx.bytes),
         "failures": p.failures,
         "offset_us": p.offset_us,
         "version": p.info.as_ref().map(|(version, _)| version),
@@ -982,6 +1027,10 @@ fn peer_json(core: &Core, room: &str, p: &Peer) -> Value {
         "sharing": sharing,
         "live": if sharing { stream::live_json(core, room, &p.id.to_string()) } else { None },
     })
+}
+
+fn last_used(core: &Core, room: &str) -> Option<i64> {
+    std::fs::metadata(core.log_path(room, &core.me())).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_micros() as i64)
 }
 
 pub fn state_json(core: &Core) -> Value {
@@ -1010,6 +1059,8 @@ pub fn state_json(core: &Core) -> Value {
     let caps = core.party.lock().unwrap().caps();
     let mut events = events(&logs, caps.as_ref());
     let sets = sets_json(core, &room_id, &logs, &events);
+    let recorded: Vec<(u64, i64)> = sets.iter().filter_map(|s| Some((s["progress"]["total"].as_u64()?, s["end_us"].as_i64()? - s["start_us"].as_i64()?))).collect();
+    let disk = data::disk_json(core.free_bytes.load(Ordering::Relaxed), core.total_bytes.load(Ordering::Relaxed), data::bytes_per_hour(&recorded), *core.warn_hours.lock().unwrap(), core.disk_full());
     let seekable: HashSet<&str> = sets.iter().filter(|s| s["progress"]["have"].as_u64() > Some(0)).flat_map(|s| s["events"].as_array().into_iter().flatten().filter_map(|k| k.as_str())).collect();
     for e in events.iter_mut() {
         let (can_seek, mine) = (seekable.contains(e["key"].as_str().unwrap_or_default()) && e["local_us"].is_i64(), e["author"] == my_id.as_str() && e["plugin"].is_null());
@@ -1026,7 +1077,7 @@ pub fn state_json(core: &Core) -> Value {
     }
     let people = active.as_ref().map(Room::people).unwrap_or_default();
     let rooms = core.rooms.lock().unwrap();
-    let room_list: Vec<Value> = rooms.list.iter().map(|r| json!({"id": r.id, "name": r.name, "active": rooms.active.as_deref() == Some(&r.id), "members": r.members, "names": r.names, "colors": colors(&r.people())})).collect();
+    let room_list: Vec<Value> = rooms.list.iter().map(|r| json!({"id": r.id, "name": r.name, "active": rooms.active.as_deref() == Some(&r.id), "members": r.members, "names": r.names, "colors": colors(&r.people()), "used_us": last_used(core, &r.id)})).collect();
     drop(rooms);
     json!({
         "version": VERSION,
@@ -1037,15 +1088,15 @@ pub fn state_json(core: &Core) -> Value {
         "language": *core.language.lock().unwrap(),
         "colors": colors(&people),
         "palette": PALETTE,
-        "share": core.share.load(Ordering::Relaxed),
         "audio_process": core.audio_process.lock().unwrap().clone(),
-        "keep_days": *core.keep_days.lock().unwrap(),
         "invites": core.invites.lock().unwrap().len(),
         "limit_mbps": *core.limit_mbps.lock().unwrap(),
         "process_jobs": core.process_jobs.load(Ordering::Relaxed),
         "recovery": core.recovery.lock().unwrap().clone(),
         "notice": core.notice.lock().unwrap().clone(),
-        "disk": {"free": core.free_bytes.load(Ordering::Relaxed), "low": core.disk_low()},
+        "disk": disk,
+        "warn_hours": *core.warn_hours.lock().unwrap(),
+        "channel": *core.channel.lock().unwrap(),
         "previous_version": core.previous_version,
         "codec": ffmpeg::pick(&core.codecs.lock().unwrap()).1,
         "recording": core.active_set.lock().unwrap().is_some(),
@@ -1056,6 +1107,7 @@ pub fn state_json(core: &Core) -> Value {
         "layout": core.layout.lock().unwrap().clone(),
         "hotkey": core.hotkey.lock().unwrap().clone(),
         "sets": sets,
+        "gone": gone_json(&room_id, &logs, &core.deleted.lock().unwrap(), &events),
         "peers": peers,
         "events": events,
         "names": names,
@@ -1136,6 +1188,27 @@ mod tests {
         assert!(!stuck(&some, &[&all], &sets[0], f));
         assert!(stuck(&some, &[&some], &sets[0], f));
         assert!(!stuck(&all, &[], &sets[0], f));
+    }
+
+    #[test]
+    fn deleted_sessions_are_listed_apart_with_what_they_held() {
+        let a = log("a", 0, vec![
+            json!({"k": "rec", "set": "s1", "start_us": 100}),
+            seg("111", "m", 1, "s1"),
+            json!({"k": "rec_end", "set": "s1", "t_us": 900}),
+            json!({"k": "rec", "set": "s2", "start_us": 1000}),
+        ]);
+        let deleted: HashSet<String> = ["r/s1".to_string()].into();
+        let gone = gone_json("r", &[a], &deleted, &[json!({"key": "a/1", "local_us": 500, "set": null})]);
+        assert_eq!(gone.len(), 1);
+        assert_eq!((gone[0]["id"].as_str(), gone[0]["end_us"].as_i64(), gone[0]["players"][0]["total"].as_u64(), gone[0]["players"][0]["voice"].as_bool()), (Some("s1"), Some(900), Some(100), Some(true)));
+        assert_eq!(gone[0]["events"], json!(["a/1"]));
+    }
+
+    #[test]
+    fn the_relay_shows_by_its_host_name() {
+        assert_eq!(relay_host("Relay(RelayUrl(\"https://use1-1.relay.n0.example/\"))").as_deref(), Some("use1-1.relay.n0.example"));
+        assert_eq!(relay_host("Ip(192.0.2.1:5000)"), None);
     }
 
     #[test]

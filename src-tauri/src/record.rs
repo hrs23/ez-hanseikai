@@ -149,6 +149,7 @@ struct Series {
 pub struct Sink {
     pub room: String,
     pub capture: String,
+    pub voice: bool,
     dir: PathBuf,
     size: (u32, u32),
     out: (u32, u32),
@@ -302,7 +303,7 @@ pub fn capture_json(core: &Core, live: Option<Value>) -> Value {
 fn quality_json(core: &Core) -> Value {
     let e = &core.engine;
     let id = e.quality.lock().unwrap().clone();
-    let sink = e.sink.lock().unwrap().clone().filter(|s| s.quality == id);
+    let sink = e.sink.lock().unwrap().clone().filter(|s| s.quality == id && !s.voice);
     let (size, kbps, codec) = match sink {
         Some(s) => (Some(s.out), s.kbps, s.codec),
         None => {
@@ -314,16 +315,20 @@ fn quality_json(core: &Core) -> Value {
     json!({"id": id, "width": size.map(|s| s.0), "height": size.map(|s| s.1), "fps": FPS, "kbps": kbps, "codec": codec})
 }
 
-fn want(core: &Core) -> Option<String> {
-    let e = &core.engine;
-    if e.source.lock().unwrap().is_null() || core.disk_full() {
+pub fn wanted(source: bool, lost: bool, recording: Option<&str>, room: Option<String>, full: bool) -> Option<(String, bool)> {
+    if full {
         return None;
     }
-    if let Some(s) = core.active_set.lock().unwrap().as_ref() {
-        return Some(s.room.clone());
+    match recording {
+        Some(room) => Some((room.to_string(), !source)),
+        None => room.filter(|_| source && !lost).map(|room| (room, false)),
     }
-    let room = core.room_id()?;
-    (core.share.load(Ordering::Relaxed) && !e.source_lost.load(Ordering::Relaxed)).then_some(room)
+}
+
+fn want(core: &Core) -> Option<(String, bool)> {
+    let e = &core.engine;
+    let recording = core.active_set.lock().unwrap().as_ref().map(|s| s.room.clone());
+    wanted(!e.source.lock().unwrap().is_null(), e.source_lost.load(Ordering::Relaxed), recording.as_deref(), core.room_id(), core.disk_full())
 }
 
 pub fn usable_codecs(core: &Core) -> Vec<String> {
@@ -375,6 +380,22 @@ fn encode_command(size: (u32, u32), out: (u32, u32), kbps: u32, chosen: (&str, &
     command
 }
 
+fn voice_command(input: u16, output: u16) -> Command {
+    let mut command = Command::new(ffmpeg::path());
+    command.args(["-hide_banner", "-loglevel", "warning", "-y"]);
+    if crate::test_mode() {
+        command.args(["-re", "-f", "lavfi", "-i", &format!("sine=frequency={}:sample_rate={SAMPLE_RATE}", TEST_TONES_HZ[1])]);
+    } else {
+        command.args(["-thread_queue_size", QUEUE_SIZE, "-f", "s16le", "-ar", &SAMPLE_RATE.to_string(), "-ac", &CHANNELS.to_string(), "-i", &format!("tcp://127.0.0.1:{input}")]);
+    }
+    command
+        .args(["-map", "0:a", "-c:a", "aac", "-b:a", &format!("{AUDIO_KBPS}k"), "-metadata:s:a:0", "title=Microphone"])
+        .args(["-movflags", "empty_moov+default_base_moof+skip_trailer", "-frag_duration", VOICE_FRAGMENT_US, "-f", "mp4", &format!("tcp://127.0.0.1:{output}")])
+        .stdin(Stdio::null())
+        .stderr(Stdio::piped());
+    command
+}
+
 fn accept(listener: &TcpListener, closed: &AtomicBool) -> Option<TcpStream> {
     listener.set_nonblocking(true).ok()?;
     while !closed.load(Ordering::Relaxed) {
@@ -395,8 +416,8 @@ fn ensure_rec(core: &Core, room: &str, set: &str, start_us: i64, meta: &Value) {
     if crate::room::joined(&core.own_log(room), set) {
         return;
     }
-    let by = core.active_set.lock().unwrap().as_ref().map(|s| s.by.clone()).unwrap_or_default();
-    let mut record = json!({"k": "rec", "room": room, "set": set, "start_us": start_us, "by": by});
+    let (by, voice) = core.active_set.lock().unwrap().as_ref().map(|s| (s.by.clone(), s.voice)).unwrap_or_default();
+    let mut record = json!({"k": "rec", "room": room, "set": set, "start_us": start_us, "by": by, "voice": voice});
     merge(&mut record, meta);
     core.append_log(room, &record);
 }
@@ -425,7 +446,7 @@ fn seg_record(capture: &str, series: &str, n: u32, set: &str, t_us: i64, d_us: i
 }
 
 impl Sink {
-    fn start(core: &Arc<Core>, room: String, size: (u32, u32)) -> Result<Arc<Self>, Err> {
+    fn start(core: &Arc<Core>, room: String, size: (u32, u32), voice: bool) -> Result<Arc<Self>, Err> {
         if !ffmpeg::present() {
             return Err("ffmpeg is not installed yet".into());
         }
@@ -441,7 +462,11 @@ impl Sink {
         let listeners = [TcpListener::bind("127.0.0.1:0")?, TcpListener::bind("127.0.0.1:0")?];
         let outputs = [TcpListener::bind("127.0.0.1:0")?, TcpListener::bind("127.0.0.1:0")?];
         let port = |l: &TcpListener| l.local_addr().map(|a| a.port());
-        let mut command = encode_command(size, out, kbps, chosen, [port(&listeners[0])?, port(&listeners[1])?], [port(&outputs[0])?, port(&outputs[1])?]);
+        let mut command = if voice {
+            voice_command(port(&listeners[1])?, port(&outputs[1])?)
+        } else {
+            encode_command(size, out, kbps, chosen, [port(&listeners[0])?, port(&listeners[1])?], [port(&outputs[0])?, port(&outputs[1])?])
+        };
         let mut child = proc::spawn(&mut command, BELOW_NORMAL)?;
         if let Some(stderr) = child.child.stderr.take() {
             thread::spawn(move || {
@@ -453,15 +478,24 @@ impl Sink {
             });
         }
         let names = core.engine.names.lock().unwrap().clone();
-        let meta = json!({
-            "source_kind": names.kind, "source": names.source, "width": out.0, "height": out.1, "fps": FPS, "kbps": kbps,
-            "encoder": chosen.0, "codec": chosen.1, "audio": names.game, "mic": names.mic, "version": crate::VERSION,
-        });
-        tracing::info!("capture {capture} started: {} {}x{} at {kbps} kbit/s from a {}", chosen.0, out.0, out.1, names.kind);
+        let meta = if voice {
+            json!({"voice": true, "mic": names.mic, "version": crate::VERSION})
+        } else {
+            json!({
+                "source_kind": names.kind, "source": names.source, "width": out.0, "height": out.1, "fps": FPS, "kbps": kbps,
+                "encoder": chosen.0, "codec": chosen.1, "audio": names.game, "mic": names.mic, "version": crate::VERSION,
+            })
+        };
+        if voice {
+            tracing::info!("capture {capture} started: voice only");
+        } else {
+            tracing::info!("capture {capture} started: {} {}x{} at {kbps} kbit/s from a {}", chosen.0, out.0, out.1, names.kind);
+        }
         let stdin = child.child.stdin.take();
         let sink = Arc::new(Self {
             room,
             capture,
+            voice,
             dir,
             size,
             out,
@@ -505,7 +539,7 @@ impl Sink {
             let sink = sink.clone();
             thread::spawn(move || sink.feed(pipe));
         }
-        if crate::test_mode() {
+        if crate::test_mode() || voice {
             let _ = sink.start.set((Instant::now(), now_us()));
         }
         Ok(sink)
@@ -520,7 +554,7 @@ impl Sink {
                     Ok(0) | Err(_) => break,
                     Ok(n) => n,
                 };
-                if which == 0 {
+                if which == 0 || self.voice {
                     self.watch.lock().unwrap().answer(Instant::now());
                 }
                 let Some(outs) = splitter.push(&buf[..n]) else { break };
@@ -560,7 +594,7 @@ impl Sink {
         let mut series = self.outputs[which].lock().unwrap();
         let Some(first) = times.first() else { return };
         let t_us = start_us + media::micros(first, &series.scales);
-        let wanted = core.active_set.lock().unwrap().as_ref().filter(|a| a.room == self.room).map(|a| a.id.clone());
+        let wanted = core.active_set.lock().unwrap().as_ref().filter(|a| a.room == self.room && !(a.voice && which == 0)).map(|a| a.id.clone());
         let open = series.open.as_ref();
         if media::cut(open.is_some(), open.map_or(0, |o| o.count), FRAGMENTS_PER_SEGMENT, open.and_then(|o| o.set.as_deref()), wanted.as_deref()) {
             self.close(core, which, &mut series, Some(t_us));
@@ -783,7 +817,8 @@ pub(crate) fn current_sink(core: &Arc<Core>, canvas: Option<(u32, u32)>) -> Opti
         let resized = !recording && canvas.is_some_and(|c| scaled(c, quality_width(&sink.quality)) != sink.out);
         let codec = ffmpeg::pick(&usable).0 != sink.encoder && (!recording || !usable.iter().any(|c| c == sink.codec));
         let requality = !recording && *e.quality.lock().unwrap() != sink.quality;
-        (sink.dead.load(Ordering::Relaxed), resized || codec || requality || want.as_deref() != Some(sink.room.as_str()))
+        let kind = want.as_ref().map(|(room, voice)| (room.as_str(), *voice)) != Some((sink.room.as_str(), sink.voice));
+        (sink.dead.load(Ordering::Relaxed), !sink.voice && (resized || codec || requality) || kind)
     });
     if let Some((dead, changed)) = stale.filter(|(dead, changed)| *dead || *changed) {
         let old = slot.take().unwrap();
@@ -796,14 +831,15 @@ pub(crate) fn current_sink(core: &Arc<Core>, canvas: Option<(u32, u32)>) -> Opti
         e.finishing.lock().unwrap().push(thread::spawn(move || old.finish()));
     }
     if slot.is_none() {
-        let (room, size) = (want?, canvas?);
+        let (room, voice) = want?;
+        let size = if voice { (0, 0) } else { canvas? };
         let mut finishing = e.finishing.lock().unwrap();
         finishing.retain(|h| !h.is_finished());
         if !finishing.is_empty() || Instant::now() < *e.retry_at.lock().unwrap() {
             return None;
         }
         drop(finishing);
-        match Sink::start(core, room, size) {
+        match Sink::start(core, room, size, voice) {
             Ok(sink) => *slot = Some(sink),
             Err(err) => e.failed(false, &err.to_string()),
         }
@@ -898,7 +934,7 @@ fn repeat(core: Arc<Core>) {
         if last.0.is_empty() || last.2.elapsed() < REPEAT_AFTER {
             continue;
         }
-        if let Some(sink) = sink.filter(|s| s.out == last.1) {
+        if let Some(sink) = sink.filter(|s| !s.voice && s.out == last.1) {
             debug::frame(debug::REPEATED);
             sink.write_video(last.0.clone());
         }
@@ -1017,7 +1053,7 @@ pub fn supervise(core: Arc<Core>) {
             audio::ensure(&core, APP, found.as_ref().map_or(0, |f| f.game.1).to_string());
             let mic = e.mic.lock().unwrap().clone();
             audio::ensure(&core, MIC, mic);
-            ensure_video(&core, found.as_ref().filter(|_| want(&core).is_some() && ffmpeg::encoders_ready()));
+            ensure_video(&core, found.as_ref().filter(|_| want(&core).is_some_and(|(_, voice)| !voice) && ffmpeg::encoders_ready()));
         }
         check_sink(&core);
         thread::sleep(SUPERVISE_EVERY);
@@ -1033,6 +1069,18 @@ mod tests {
         let mix = starting_mix(&json!({"app": {"volume": 0.4, "muted": true}, "mic": {"volume": 0.7, "muted": false}, "game": {"volume": 0.45}, "mic:{6844}": {"volume": 0.55}}));
         assert_eq!(mix, json!({"app": {"volume": 0.4, "muted": true}, "mic": {"volume": 0.7, "muted": true}}));
         assert_eq!(starting_mix(&Value::Null), json!({"app": {"volume": 1.0, "muted": false}, "mic": {"volume": 1.0, "muted": true}}));
+    }
+
+    #[test]
+    fn recording_without_a_screen_records_the_voice_only() {
+        let room = || Some("r".to_string());
+        assert_eq!(wanted(false, false, None, room(), false), None);
+        assert_eq!(wanted(true, false, None, room(), false), Some(("r".into(), false)));
+        assert_eq!(wanted(true, true, None, room(), false), None);
+        assert_eq!(wanted(true, false, None, None, false), None);
+        assert_eq!(wanted(false, false, Some("s"), room(), false), Some(("s".into(), true)));
+        assert_eq!(wanted(true, true, Some("s"), room(), false), Some(("s".into(), false)));
+        assert_eq!(wanted(true, false, Some("s"), room(), true), None);
     }
 
     #[test]

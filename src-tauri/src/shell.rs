@@ -18,7 +18,7 @@ pub const DEFAULT_HOTKEY: &str = "Ctrl+Alt+M";
 const REPO: &str = "https://github.com/hrs23/ez-hanseikai";
 const STATUS_POLL: Duration = Duration::from_secs(1);
 const DEBUG_SIZE: (f64, f64) = (1100.0, 720.0);
-const JA: [(&str, &str); 52] = [
+const JA: [(&str, &str); 51] = [
     ("EZ Hanseikai is already running with this data folder.", "EZ Hanseikai はこのデータフォルダですでに動いています。"),
     ("File", "ファイル"),
     ("Room", "ルーム"),
@@ -26,51 +26,50 @@ const JA: [(&str, &str); 52] = [
     ("View", "表示"),
     ("Help", "ヘルプ"),
     ("Open data folder", "データフォルダを開く"),
-    ("Storage…", "ストレージ…"),
-    ("Export identity…", "IDを書き出す…"),
-    ("Import identity…", "IDを読み込む…"),
+    ("Export identity…", "IDをエクスポート…"),
+    ("Import identity…", "IDをインポート…"),
     ("Settings…", "設定…"),
     ("Exit", "終了"),
-    ("Create room", "ルームを作成"),
-    ("Join room…", "ルームに参加…"),
     ("Copy invite code", "招待コードをコピー"),
     ("Cancel invite", "招待を取り消す"),
     ("Rename room…", "ルーム名を変更…"),
-    ("Check connections", "接続を確認"),
-    ("Leave room…", "ルームから退出…"),
+    ("Leave room", "ルームを離れる"),
     ("Start session", "セッション開始"),
     ("End session", "セッション終了"),
-    ("Mark this moment", "この瞬間をマーク"),
+    ("Record review", "反省を録音"),
+    ("Mark this moment", "この場面に印をつける"),
     ("Add note", "メモを追加"),
     ("Previous session", "前のセッション"),
     ("Next session", "次のセッション"),
-    ("Export video…", "動画を書き出す…"),
+    ("Export video…", "動画をエクスポート…"),
     ("Delete from this PC…", "このPCから削除…"),
-    ("Now", "いま"),
-    ("Capture", "キャプチャ"),
+    ("Live", "ライブ"),
+    ("Game plan", "作戦ボード"),
     ("Sidebar", "サイドバー"),
-    ("Events panel", "イベント欄"),
+    ("Side panel", "サイドパネル"),
     ("Full screen", "全画面"),
     ("All players", "全員"),
     ("Next player", "次のプレイヤー"),
     ("Previous player", "前のプレイヤー"),
     ("Keyboard shortcuts", "キーボードショートカット"),
     ("Diagnostics", "診断"),
-    ("Check for updates", "更新を確認"),
+    ("Developer tools", "開発者ツール"),
+    ("Check for updates", "アップデートを確認"),
+    ("Reset app…", "アプリをリセット…"),
     ("Report a problem", "問題を報告"),
     ("Release notes", "リリースノート"),
     ("About", "バージョン情報"),
     ("End the session for everyone and exit?", "全員のセッションを終了してアプリを終了しますか?"),
     ("End session and exit", "セッションを終了して終了"),
-    ("Cancel the export and exit?", "書き出しを中止してアプリを終了しますか?"),
+    ("Cancel the export and exit?", "エクスポートを中止してアプリを終了しますか?"),
     ("Files are still arriving. Exit anyway?", "まだファイルを受け取っています。それでも終了しますか?"),
     ("Cancel", "キャンセル"),
     ("Identity saved. Keep this file private: anyone with it can act as you.", "IDを保存しました。このファイルは誰にも渡さないでください。持っている人はあなたとして振る舞えます。"),
     ("That file is not an identity key.", "このファイルはIDの鍵ではありません。"),
-    ("Importing replaces your identity, so your ID changes. Your current key is kept as key.bin.old.", "読み込むとIDが置き換わり、IDが変わります。今の鍵は key.bin.old として残ります。"),
-    ("Import", "読み込む"),
+    ("Importing replaces your identity, so your ID changes. Your current key is kept as key.bin.old.", "インポートするとIDが置き換わり、IDが変わります。今の鍵は key.bin.old として残ります。"),
+    ("Import", "インポート"),
     ("Version", "バージョン"),
-    ("Moment marked", "マークしました"),
+    ("Moment marked", "印をつけました"),
 ];
 const JA_WANTS: (&str, &str) = ("{name} wants to join", "{name} が参加を希望しています");
 
@@ -167,7 +166,7 @@ pub fn open_debug(app: &AppHandle) {
         return;
     }
     let built = WebviewWindowBuilder::new(app, "debug", WebviewUrl::App("debug.html".into()))
-        .title("EZ Hanseikai Diagnostics")
+        .title("EZ Hanseikai Developer tools")
         .inner_size(DEBUG_SIZE.0, DEBUG_SIZE.1)
         .center()
         .theme(Some(Theme::Dark))
@@ -207,14 +206,14 @@ pub fn exit_app(app: &AppHandle, core: &Arc<Core>) {
     app.exit(0);
 }
 
-fn export_identity(app: &AppHandle, core: &Arc<Core>) {
+pub fn export_identity(app: &AppHandle, core: &Arc<Core>) {
     let Some(path) = save_file(app, "ez-hanseikai-identity.key", "Key", "key") else { return };
     if std::fs::copy(core.dir.join("key.bin"), &path).is_ok() {
         tell(app, tr(&lang(core), "Identity saved. Keep this file private: anyone with it can act as you."));
     }
 }
 
-fn import_identity(app: &AppHandle, core: &Arc<Core>) {
+pub fn import_identity(app: &AppHandle, core: &Arc<Core>) {
     let Some(path) = open_file(app, "Key", "key") else { return };
     let lang = lang(core);
     if !std::fs::read(&path).is_ok_and(|b| b.len() == 32) {
@@ -278,15 +277,18 @@ fn item(app: &AppHandle, lang: &str, id: &str, text: &'static str, accel: Option
     }
 }
 
-fn toggle_text(recording: bool) -> &'static str {
-    if recording { "End session" } else { "Start session" }
+fn toggle_text(recording: bool, reviewing: bool) -> &'static str {
+    match (recording, reviewing) {
+        (true, _) => "End session",
+        (false, true) => "Record review",
+        (false, false) => "Start session",
+    }
 }
 
 fn build_menu(app: &AppHandle, lang: &str, toggle: &MenuItem<Wry>, mark: &MenuItem<Wry>) -> tauri::Result<Menu<Wry>> {
     let it = |id: &str, text: &'static str, accel: Option<&str>| item(app, lang, id, text, accel);
     let file = SubmenuBuilder::new(app, tr(lang, "File"))
         .item(&it("open-folder", "Open data folder", None)?)
-        .item(&it("storage", "Storage…", None)?)
         .separator()
         .item(&it("export-identity", "Export identity…", None)?)
         .item(&it("import-identity", "Import identity…", None)?)
@@ -296,15 +298,11 @@ fn build_menu(app: &AppHandle, lang: &str, toggle: &MenuItem<Wry>, mark: &MenuIt
         .item(&it("exit", "Exit", None)?)
         .build()?;
     let room = SubmenuBuilder::new(app, tr(lang, "Room"))
-        .item(&it("create-room", "Create room", None)?)
-        .item(&it("join-room", "Join room…", None)?)
-        .separator()
         .item(&it("copy-invite", "Copy invite code", None)?)
         .item(&it("cancel-invite", "Cancel invite", None)?)
         .item(&it("rename-room", "Rename room…", None)?)
-        .item(&it("check-room", "Check connections", None)?)
         .separator()
-        .item(&it("leave-room", "Leave room…", None)?)
+        .item(&it("leave-room", "Leave room", None)?)
         .build()?;
     let session = SubmenuBuilder::new(app, tr(lang, "Session"))
         .item(toggle)
@@ -319,11 +317,11 @@ fn build_menu(app: &AppHandle, lang: &str, toggle: &MenuItem<Wry>, mark: &MenuIt
         .build()?;
     let view = SubmenuBuilder::new(app, tr(lang, "View"))
         .item(&it("page-room", "Room", Some("CmdOrCtrl+1"))?)
-        .item(&it("page-now", "Now", Some("CmdOrCtrl+2"))?)
-        .item(&it("page-capture", "Capture", Some("CmdOrCtrl+3"))?)
+        .item(&it("page-now", "Live", Some("CmdOrCtrl+2"))?)
+        .item(&it("page-board", "Game plan", Some("CmdOrCtrl+3"))?)
         .separator()
         .item(&it("sidebar", "Sidebar", Some("CmdOrCtrl+B"))?)
-        .item(&it("events-panel", "Events panel", None)?)
+        .item(&it("events-panel", "Side panel", None)?)
         .item(&it("fullscreen", "Full screen", Some("F11"))?)
         .separator()
         .item(&it("all-players", "All players", None)?)
@@ -333,8 +331,11 @@ fn build_menu(app: &AppHandle, lang: &str, toggle: &MenuItem<Wry>, mark: &MenuIt
         .item(&it("shortcuts", "Keyboard shortcuts", None)?)
         .build()?;
     let help = SubmenuBuilder::new(app, tr(lang, "Help"))
-        .item(&it("debug", "Diagnostics", Some("CmdOrCtrl+Shift+I"))?)
+        .item(&it("diagnostics", "Diagnostics", None)?)
+        .item(&it("debug", "Developer tools", Some("CmdOrCtrl+Shift+I"))?)
         .item(&it("update", "Check for updates", None)?)
+        .separator()
+        .item(&it("reset", "Reset app…", None)?)
         .separator()
         .item(&it("github", "GitHub", None)?)
         .item(&it("issues", "Report a problem", None)?)
@@ -348,7 +349,7 @@ fn build_menu(app: &AppHandle, lang: &str, toggle: &MenuItem<Wry>, mark: &MenuIt
 fn install_menus(app: &AppHandle, core: &Core) -> tauri::Result<()> {
     let lang = lang(core);
     let recording = core.active_set.lock().unwrap().is_some();
-    let text = toggle_text(recording);
+    let text = toggle_text(recording, core.party.lock().unwrap().reviewing());
     let keys = core.hotkey.lock().unwrap().clone();
     let toggle = item(app, &lang, "toggle-recording", text, Some("CmdOrCtrl+R"))?;
     let mark = item(app, &lang, "mark", "Mark this moment", hotkey(&keys).map(|_| keys.as_str()))?;
@@ -427,14 +428,15 @@ pub fn setup(app: &tauri::App, core: Arc<Core>) -> tauri::Result<()> {
         let mut asked: HashSet<String> = HashSet::new();
         loop {
             let recording = core.active_set.lock().unwrap().is_some();
+            let reviewing = core.party.lock().unwrap().reviewing();
             let lang = lang(&core);
             let hotkey = core.hotkey.lock().unwrap().clone();
-            if last.as_ref() != Some(&(recording, lang.clone(), hotkey.clone())) {
-                last = Some((recording, lang.clone(), hotkey.clone()));
+            if last.as_ref() != Some(&(recording, reviewing, lang.clone(), hotkey.clone())) {
+                last = Some((recording, reviewing, lang.clone(), hotkey.clone()));
                 arm_hotkey(&app, &hotkey, recording);
                 let items = ITEMS.lock().unwrap();
                 if let Some(toggle) = &items.toggle {
-                    let _ = toggle.set_text(tr(&lang, toggle_text(recording)));
+                    let _ = toggle.set_text(tr(&lang, toggle_text(recording, reviewing)));
                 }
                 if let Some(mark) = &items.mark {
                     let _ = mark.set_enabled(recording);
@@ -468,6 +470,13 @@ mod tests {
         assert_eq!(tr("en", "Room"), "Room");
         assert_eq!(tr("ja", "Not translated"), "Not translated");
         assert_eq!(wants_text("ja", "Sora"), "Sora が参加を希望しています");
+    }
+
+    #[test]
+    fn the_start_command_says_what_it_records() {
+        assert_eq!(toggle_text(false, false), "Start session");
+        assert_eq!(toggle_text(false, true), "Record review");
+        assert_eq!(toggle_text(true, true), "End session");
     }
 
     #[test]

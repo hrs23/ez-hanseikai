@@ -43,6 +43,7 @@ const VALUES_MAX: usize = 32 << 10;
 const EVENT_KINDS: [&str; 3] = ["note", "drawing", "board"];
 const NAME_MAX: usize = 24;
 pub const ROOM_NAME_MAX: usize = 40;
+pub const CHANNELS: [&str; 2] = ["stable", "beta"];
 const DISK_EVERY: Duration = Duration::from_secs(20);
 const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection";
 static TEST_PORT: LazyLock<Option<String>> = LazyLock::new(|| std::env::var("EZH_TEST").ok());
@@ -159,14 +160,14 @@ pub struct Core {
     pub app: AppHandle,
     pub peers: Mutex<Vec<Peer>>,
     pub name: Mutex<String>,
-    pub share: AtomicBool,
     pub limit_mbps: Mutex<Option<f64>>,
     pub invites: Mutex<Vec<(String, String)>>,
     pub rooms: Mutex<room::Rooms>,
     pub active_set: Mutex<Option<room::ActiveSet>>,
     pub tz_offset_s: i64,
     pub audio_process: Mutex<String>,
-    pub keep_days: Mutex<Option<u32>>,
+    pub warn_hours: Mutex<u32>,
+    pub channel: Mutex<String>,
     pub codecs: Mutex<Vec<String>>,
     pub following: Mutex<HashSet<String>>,
     pub recovery: Mutex<Option<String>>,
@@ -264,10 +265,10 @@ impl Core {
     pub fn save_settings(&self) {
         let value = json!({
             "name": *self.name.lock().unwrap(),
-            "share": self.share.load(Ordering::Relaxed),
             "limit_mbps": *self.limit_mbps.lock().unwrap(),
             "audio_process": *self.audio_process.lock().unwrap(),
-            "keep_days": *self.keep_days.lock().unwrap(),
+            "warn_hours": *self.warn_hours.lock().unwrap(),
+            "channel": *self.channel.lock().unwrap(),
             "deleted_sets": *self.deleted.lock().unwrap(),
             "mic": self.engine.mic.lock().unwrap().clone(),
             "mix": self.engine.mix.lock().unwrap().clone(),
@@ -297,16 +298,12 @@ impl Core {
     }
 
     pub fn sharing_live(&self) -> bool {
-        self.engine.sink.lock().unwrap().is_some() && self.share.load(Ordering::Relaxed)
+        self.engine.sink.lock().unwrap().as_ref().is_some_and(|s| !s.voice)
     }
 
     fn disk_below(&self, share: f64) -> bool {
         let total = self.total_bytes.load(Ordering::Relaxed);
         total > 0 && (self.free_bytes.load(Ordering::Relaxed) as f64) < total as f64 * share
-    }
-
-    pub fn disk_low(&self) -> bool {
-        self.disk_below(data::LOW_SHARE)
     }
 
     pub fn disk_full(&self) -> bool {
@@ -349,10 +346,10 @@ async fn list_sources() -> Vec<Value> {
 
 #[tauri::command]
 fn set_source(core: State<Arc<Core>>, source: Value) -> Result<(), String> {
-    if !sources::valid(&source) || source.is_null() {
+    if !sources::valid(&source) {
         return Err("That capture source is not available.".into());
     }
-    tracing::info!("capture source chosen: {}", source["kind"]);
+    tracing::info!("capture source chosen: {}", if source.is_null() { "none" } else { source["kind"].as_str().unwrap_or_default() });
     *core.engine.source.lock().unwrap() = source;
     Ok(())
 }
@@ -409,21 +406,6 @@ fn set_language(core: State<Arc<Core>>, language: String) -> Result<(), String> 
 #[tauri::command]
 fn rename_room(core: State<Arc<Core>>, name: String) -> Result<(), String> {
     room::rename_room(&core, &name)
-}
-
-#[tauri::command]
-async fn check_room(core: State<'_, Arc<Core>>) -> Result<Vec<Value>, String> {
-    let core = core.inner().clone();
-    warm(&core).await;
-    let mine = {
-        let core = core.clone();
-        let pid = sources::pid_of(&core.audio_process.lock().unwrap().clone());
-        tauri::async_runtime::spawn_blocking(move || check::run(&core, pid))
-    };
-    let others = net::check_peers(&core).await;
-    let mut out = vec![json!({"id": core.me(), "lines": mine.await.map_err(|e| e.to_string())?})];
-    out.extend(others);
-    Ok(out)
 }
 
 #[tauri::command]
@@ -498,11 +480,42 @@ fn update_allowed(core: &Core) -> Result<(), String> {
     Ok(())
 }
 
+pub fn update_url(channel: &str) -> String {
+    let file = if channel == CHANNELS[1] { "latest-beta.json" } else { "latest.json" };
+    format!("https://github.com/hrs23/ez-hanseikai/releases/download/updater/{file}")
+}
+
+async fn find_update(core: &Core) -> Result<Option<tauri_plugin_updater::Update>, String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let channel = core.channel.lock().unwrap().clone();
+    let url = tauri::Url::parse(&update_url(&channel)).map_err(|e| e.to_string())?;
+    let updater = core.app.updater_builder().endpoints(vec![url]).and_then(|b| b.build()).map_err(|e| e.to_string())?;
+    updater.check().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn check_update(core: State<'_, Arc<Core>>) -> Result<Option<String>, String> {
+    Ok(find_update(&core).await?.map(|u| u.version))
+}
+
+#[tauri::command]
+async fn save_text(core: State<'_, Arc<Core>>, name: String, text: String) -> Result<bool, String> {
+    let core = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = if test_mode() { Some(core.dir.join(&name)) } else { shell::save_file(&core.app, &name, "Text", "txt") };
+        match path {
+            Some(path) => std::fs::write(path, text).map(|_| true).map_err(|e| e.to_string()),
+            None => Ok(false),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 async fn install_update(core: State<'_, Arc<Core>>) -> Result<(), String> {
-    use tauri_plugin_updater::UpdaterExt;
     update_allowed(&core)?;
-    let update = core.app.updater().map_err(|e| e.to_string())?.check().await.map_err(|e| e.to_string())?.ok_or("No update is available.")?;
+    let update = find_update(&core).await?.ok_or("No update is available.")?;
     let bytes = update.download(|_, _| {}, || {}).await.map_err(|e| e.to_string())?;
     update_allowed(&core)?;
     tracing::info!("installing version {}", update.version);
@@ -514,6 +527,17 @@ async fn install_update(core: State<'_, Arc<Core>>) -> Result<(), String> {
         let _ = data::lock(&core.dir);
     }
     installed
+}
+
+#[tauri::command]
+fn identity(core: State<Arc<Core>>, export: bool) {
+    let core = core.inner().clone();
+    std::thread::spawn(move || if export { shell::export_identity(&core.app, &core) } else { shell::import_identity(&core.app, &core) });
+}
+
+#[tauri::command]
+fn restore_set(core: State<Arc<Core>>, room: String, set: String) {
+    room::restore_set(&core, &room, &set);
 }
 
 #[tauri::command]
@@ -590,9 +614,19 @@ fn set_audio_process(core: State<Arc<Core>>, name: String) {
 }
 
 #[tauri::command]
-fn set_keep_days(core: State<Arc<Core>>, days: Option<u32>) {
-    *core.keep_days.lock().unwrap() = days.filter(|d| *d > 0);
+fn set_warn_hours(core: State<Arc<Core>>, hours: u32) {
+    *core.warn_hours.lock().unwrap() = hours;
     core.save_settings();
+}
+
+#[tauri::command]
+fn set_channel(core: State<Arc<Core>>, channel: String) -> Result<(), String> {
+    if !CHANNELS.contains(&channel.as_str()) {
+        return Err(format!("unknown channel {channel}"));
+    }
+    *core.channel.lock().unwrap() = channel;
+    core.save_settings();
+    Ok(())
 }
 
 #[tauri::command]
@@ -610,24 +644,43 @@ fn switch_room(core: State<Arc<Core>>, id: String) -> Result<(), String> {
     room::switch_room(&core, &id)
 }
 
-#[tauri::command]
-async fn leave_room(core: State<'_, Arc<Core>>, id: String) -> Result<(), String> {
-    let core = core.inner().clone();
+async fn quit_room(core: &Arc<Core>, id: &str) -> Result<(), String> {
     if core.active_set.lock().unwrap().as_ref().is_some_and(|s| s.room == id) {
         let c = core.clone();
         tauri::async_runtime::spawn_blocking(move || room::end_set(&c, false, None)).await.map_err(|e| e.to_string())?;
     }
-    if core.room_id().as_deref() == Some(id.as_str()) {
-        net::farewell(&core).await;
+    if core.room_id().as_deref() == Some(id) {
+        net::farewell(core).await;
     }
+    Ok(())
+}
+
+#[tauri::command]
+async fn leave_room(core: State<'_, Arc<Core>>, id: String) -> Result<(), String> {
+    let core = core.inner().clone();
+    quit_room(&core, &id).await?;
+    room::close_room(&core, &id);
+    Ok(())
+}
+
+#[tauri::command]
+async fn remove_room(core: State<'_, Arc<Core>>, id: String) -> Result<(), String> {
+    let core = core.inner().clone();
+    quit_room(&core, &id).await?;
     room::leave_room(&core, &id);
     Ok(())
 }
 
 #[tauri::command]
-fn set_share(core: State<Arc<Core>>, on: bool) {
-    core.share.store(on, Ordering::Relaxed);
-    core.save_settings();
+async fn check_peer(core: State<'_, Arc<Core>>, id: String) -> Result<Value, String> {
+    let core = core.inner().clone();
+    if id == core.me() {
+        warm(&core).await;
+        let pid = sources::pid_of(&core.audio_process.lock().unwrap().clone());
+        let c = core.clone();
+        return tauri::async_runtime::spawn_blocking(move || json!(check::run(&c, pid))).await.map_err(|e| e.to_string());
+    }
+    Ok(net::check_peer(&core, &id).await)
 }
 
 #[tauri::command]
@@ -684,15 +737,15 @@ async fn data_info(core: State<'_, Arc<Core>>) -> Result<Value, String> {
 }
 
 #[tauri::command]
-async fn reset(core: State<'_, Arc<Core>>, everything: bool, confirm: String) -> Result<(), String> {
-    if everything && confirm != "RESET" {
-        return Err("Type RESET to confirm.".into());
-    }
+async fn reset(core: State<'_, Arc<Core>>, keep_rooms: bool) -> Result<(), String> {
     let core = core.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        tracing::info!("resetting the app{}", if keep_rooms { ", keeping the rooms" } else { "" });
         room::stop_set(&core);
         export::cancel(&core);
-        data::reset(&core.dir, everything);
+        jobs::stop_and_wait(&core);
+        data::unlock(&core.dir);
+        data::reset(&core.dir, keep_rooms);
         core.app.restart()
     })
     .await
@@ -770,6 +823,7 @@ fn party_act(core: State<Arc<Core>>, view: Value) {
     let me = core.me();
     core.party.lock().unwrap().act(&me, &view, now_us());
     party::send(&core);
+    party::log(&core);
 }
 
 fn data_dir(app: &AppHandle) -> tauri::Result<PathBuf> {
@@ -827,14 +881,14 @@ async fn init(app: AppHandle, dir: PathBuf, left_lock: bool) -> Result<Arc<Core>
         app,
         peers: Mutex::new(Vec::new()),
         name: Mutex::new(settings["name"].as_str().map(clean_name).unwrap_or_default()),
-        share: AtomicBool::new(settings["share"].as_bool().unwrap_or(true)),
         limit_mbps: Mutex::new(settings["limit_mbps"].as_f64()),
         invites: Mutex::new(Vec::new()),
         rooms: Mutex::new(rooms),
         active_set: Mutex::new(None),
         tz_offset_s: data::tz_offset_seconds(),
         audio_process: Mutex::new(settings["audio_process"].as_str().unwrap_or_default().to_string()),
-        keep_days: Mutex::new(settings["keep_days"].as_u64().map(|d| d as u32)),
+        warn_hours: Mutex::new(settings["warn_hours"].as_u64().map_or(data::WARN_HOURS, |h| h as u32)),
+        channel: Mutex::new(settings["channel"].as_str().unwrap_or(CHANNELS[0]).to_string()),
         codecs: Mutex::new(default_codecs()),
         following: Mutex::new(HashSet::new()),
         recovery: Mutex::new(recovery),
@@ -872,8 +926,11 @@ pub fn clean_settings(mut settings: Value) -> Value {
     if !settings["limit_mbps"].as_f64().is_some_and(|v| v.is_finite() && v > 0.0) {
         settings["limit_mbps"] = Value::Null;
     }
-    if !settings["keep_days"].as_u64().is_some_and(|d| d > 0 && d <= u32::MAX as u64) {
-        settings["keep_days"] = Value::Null;
+    if !settings["warn_hours"].as_u64().is_some_and(|h| data::WARN_CHOICES.contains(&h)) {
+        settings["warn_hours"] = Value::Null;
+    }
+    if !settings["channel"].as_str().is_some_and(|c| CHANNELS.contains(&c)) {
+        settings["channel"] = Value::Null;
     }
     if !sources::valid(&settings["source"]) {
         settings["source"] = Value::Null;
@@ -967,7 +1024,7 @@ fn main() {
             std::thread::spawn(move || jobs::worker(c));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug::debug_view, debug::debug_report, debug::set_report_sharing, save_report, start_recording, stop_recording, delete_set, open_set_folder, export_set, cancel_export, set_layout, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, set_share, set_limit, set_process_jobs, set_codecs, cancel_invites, list_sources, set_source, use_display, list_mics, set_mic, set_mix, set_audio_process, set_keep_days, event_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_event, answer_ask, focus_set, party_on, party_act, jobs::room_plugins, jobs::set_room_plugin, jobs::prepare_plugin, jobs::jobs, jobs::retry_job, jobs::cancel_job, install_update, set_quality, set_language, rename_room, check_room, draw, party_typing, open_debug, mark, set_hotkey, retry_ffmpeg])
+        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug::debug_view, debug::debug_report, debug::set_report_sharing, save_report, start_recording, stop_recording, delete_set, restore_set, identity, open_set_folder, export_set, cancel_export, set_layout, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, remove_room, check_peer, set_limit, set_process_jobs, set_codecs, cancel_invites, list_sources, set_source, use_display, list_mics, set_mic, set_mix, set_audio_process, set_warn_hours, set_channel, event_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_event, answer_ask, focus_set, party_on, party_act, jobs::room_plugins, jobs::set_room_plugin, jobs::prepare_plugin, jobs::jobs, jobs::retry_job, jobs::cancel_job, install_update, check_update, save_text, jobs::run_job_next, set_quality, set_language, rename_room, draw, party_typing, open_debug, mark, set_hotkey, retry_ffmpeg])
         .build(tauri::generate_context!())
         .expect("failed to start");
     app.run(|app, event| {
@@ -984,6 +1041,13 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_update_channel_reads_its_own_manifest() {
+        assert!(update_url("stable").ends_with("/updater/latest.json"));
+        assert!(update_url("beta").ends_with("/updater/latest-beta.json"));
+        assert_eq!(update_url("nonsense"), update_url("stable"));
+    }
 
     #[test]
     fn json_files_may_start_with_a_byte_order_mark() {
@@ -1005,12 +1069,12 @@ mod tests {
 
     #[test]
     fn settings_from_older_versions_fall_back_to_defaults() {
-        let old = clean_settings(json!({"name": "Ren", "limit_mbps": 0, "keep_days": 0, "source": "display:1", "language": "fr", "quality": "ultra", "obs_port": 4455}));
+        let old = clean_settings(json!({"name": "Ren", "limit_mbps": 0, "keep_days": 30, "warn_hours": 7, "channel": "nightly", "source": "display:1", "language": "fr", "quality": "ultra", "obs_port": 4455}));
         assert_eq!(old["name"], "Ren");
-        assert!(old["limit_mbps"].is_null() && old["keep_days"].is_null() && old["source"].is_null() && old["quality"].is_null());
+        assert!(old["limit_mbps"].is_null() && old["warn_hours"].is_null() && old["channel"].is_null() && old["source"].is_null() && old["quality"].is_null());
         assert_eq!(old["language"], "");
-        let kept = clean_settings(json!({"limit_mbps": 8.5, "keep_days": 30, "source": {"kind": "display", "index": 1}, "language": "ja", "quality": "high"}));
-        assert_eq!((kept["limit_mbps"].as_f64(), kept["keep_days"].as_u64(), kept["language"].as_str(), kept["quality"].as_str()), (Some(8.5), Some(30), Some("ja"), Some("high")));
+        let kept = clean_settings(json!({"limit_mbps": 8.5, "warn_hours": 20, "channel": "beta", "source": {"kind": "display", "index": 1}, "language": "ja", "quality": "high"}));
+        assert_eq!((kept["limit_mbps"].as_f64(), kept["warn_hours"].as_u64(), kept["channel"].as_str(), kept["language"].as_str(), kept["quality"].as_str()), (Some(8.5), Some(20), Some("beta"), Some("ja"), Some("high")));
         assert_eq!(kept["source"]["index"], 1);
         assert_eq!(clean_settings(json!([1, 2])), clean_settings(json!({})));
     }

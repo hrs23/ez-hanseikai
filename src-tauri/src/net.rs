@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -283,7 +282,7 @@ async fn follow(core: &Core, from: EndpointId, send: &mut SendStream, req: &Valu
     let own = owner == core.me();
     let live = req["live"] == true;
     let valid = in_active_room(core, &room) && owner.parse::<EndpointId>().is_ok() && SERIES.contains(&series.as_str()) && capture_id(&capture);
-    if !valid || (own && !core.share.load(Ordering::Relaxed)) || (live && !own) {
+    if !valid || (live && !own) {
         return Ok(());
     }
     let _ = send.set_priority(priority(live, &series));
@@ -292,7 +291,7 @@ async fn follow(core: &Core, from: EndpointId, send: &mut SendStream, req: &Valu
     let files: Vec<&room::File> = sets.iter().flat_map(|s| s.files.iter().filter(|f| f.owner == owner)).collect();
     let verified = |n: u32| files.iter().any(|f| f.segs.iter().any(|g| g.capture == capture && g.series == series && g.n == n && data::seg_check(core, &room, &f.owner, g) == Some(true)));
     let dir = core.capture_dir(&room, &owner, &capture).join(&series);
-    let tail = || own && core.share.load(Ordering::Relaxed) && core.engine.live().is_some_and(|(r, c, _)| r == room && c == capture);
+    let tail = || own && core.engine.live().is_some_and(|(r, c, _)| r == room && c == capture);
     let history = !live;
     if req["init"] == true {
         let ok = own || files.iter().any(|f| f.segs.iter().any(|g| g.capture == capture) && data::init_check(core, &room, f, &capture, &series) == Some(true));
@@ -320,20 +319,20 @@ fn react_to_set(core: &Arc<Core>, set: &Value) {
     if !room::may_join(&core.own_log(room), id) || room::stopped(&room::logs(core, room), id) {
         return;
     }
-    let (by, start_us) = (set["by"].as_str().unwrap_or_default().to_string(), set["start_us"].as_i64().unwrap_or(0));
+    let (by, start_us, voice) = (set["by"].as_str().unwrap_or_default().to_string(), set["start_us"].as_i64().unwrap_or(0), set["voice"] == true);
     let newer = match core.active_set.lock().unwrap().as_ref() {
         None => false,
         Some(a) if (a.start_us, a.id.as_str()) < (start_us, id) => true,
         Some(_) => return,
     };
     if !newer {
-        let _ = room::begin_set(core, id, &by, start_us);
+        let _ = room::begin_set(core, id, &by, start_us, voice);
         return;
     }
     let (core, id) = (core.clone(), id.to_string());
     std::thread::spawn(move || {
         room::end_set(&core, false, None);
-        let _ = room::begin_set(&core, &id, &by, start_us);
+        let _ = room::begin_set(&core, &id, &by, start_us, voice);
     });
 }
 
@@ -381,7 +380,7 @@ async fn handle(core: Arc<Core>, from: EndpointId, mut send: SendStream, mut rec
         }
         Some("rec") => {
             if req["action"] == "start" {
-                react_to_set(&core, &json!({"id": req["set"], "room": req["room"], "by": req["by"], "start_us": req["start_us"]}));
+                react_to_set(&core, &json!({"id": req["set"], "room": req["room"], "by": req["by"], "start_us": req["start_us"], "voice": req["voice"]}));
             } else if req["action"] == "stop" && core.is_recording(req["room"].as_str().unwrap_or_default(), req["set"].as_str().unwrap_or_default()) {
                 let (core, set) = (core.clone(), req["set"].as_str().unwrap_or_default().to_string());
                 tokio::task::spawn_blocking(move || room::end_set(&core, true, Some(&set)));
@@ -437,27 +436,13 @@ async fn handle(core: Arc<Core>, from: EndpointId, mut send: SendStream, mut rec
     Ok(())
 }
 
-pub async fn check_peers(core: &Arc<Core>) -> Vec<Value> {
-    let peers: Vec<(EndpointId, Option<Connection>)> = core.peers.lock().unwrap().iter().map(|p| (p.id, p.conn.clone())).collect();
-    let tasks: Vec<_> = peers
-        .into_iter()
-        .map(|(id, conn)| {
-            tokio::spawn(async move {
-                let reply = match conn {
-                    Some(conn) => request_within(&conn, &json!({"t": "check"}), CHECK_TIMEOUT).await.ok(),
-                    None => None,
-                };
-                json!({"id": id.to_string(), "lines": reply.and_then(|b| serde_json::from_slice::<Value>(&b).ok())})
-            })
-        })
-        .collect();
-    let mut out = Vec::new();
-    for task in tasks {
-        if let Ok(v) = task.await {
-            out.push(v);
-        }
-    }
-    out
+pub async fn check_peer(core: &Arc<Core>, id: &str) -> Value {
+    let conn = core.peers.lock().unwrap().iter().find(|p| p.id.to_string() == id).and_then(|p| p.alive().cloned());
+    let reply = match conn {
+        Some(conn) => request_within(&conn, &json!({"t": "check"}), CHECK_TIMEOUT).await.ok(),
+        None => None,
+    };
+    reply.and_then(|b| serde_json::from_slice::<Value>(&b).ok()).unwrap_or(Value::Null)
 }
 
 pub async fn farewell(core: &Arc<Core>) {
@@ -740,7 +725,7 @@ fn history_fetches(core: &Core) -> usize {
 }
 
 fn fetch_history(core: &Arc<Core>, peer: &EndpointId, conn: &Connection, room: &str) {
-    if core.disk_low() {
+    if core.disk_full() {
         return;
     }
     let via = peer.to_string();

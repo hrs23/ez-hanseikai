@@ -11,11 +11,12 @@ use sha2::{Digest, Sha256};
 use crate::room::{self, part_of, seg_name, File, Seg, Set, INIT, SERIES};
 use crate::{debug, file_len, hex, log, now_us, read_json, record, short, Core};
 
-pub const LOW_SHARE: f64 = 0.10;
 pub const FULL_SHARE: f64 = 0.01;
+pub const WARN_HOURS: u32 = 10;
+pub const WARN_CHOICES: [u64; 5] = [2, 5, 10, 20, 50];
+const RATE_SETS: usize = 5;
 const KEEP_EVERY: Duration = Duration::from_secs(5);
 const AGE_EVERY: Duration = Duration::from_secs(3600);
-const DAY_US: i64 = 86_400_000_000;
 const CHECKS: &str = "verified.json";
 const OLD_AFTER: Duration = Duration::from_secs(7 * 86_400);
 pub const LIVE_KEEP: u32 = 2 * crate::stream::LIVE_WINDOW + 1;
@@ -108,6 +109,18 @@ fn recreate(core: &Core) {
     debug::event(core, core.started, "the data folder was missing files; recreated them".into());
 }
 
+pub fn bytes_per_hour(sets: &[(u64, i64)]) -> Option<f64> {
+    let recent: Vec<&(u64, i64)> = sets.iter().filter(|(bytes, us)| *bytes > 0 && *us > 0).take(RATE_SETS).collect();
+    let (bytes, us) = recent.iter().fold((0u64, 0i64), |(b, u), (bytes, us)| (b + bytes, u + us));
+    (us > 0).then(|| bytes as f64 * 3600e6 / us as f64)
+}
+
+pub fn disk_json(free: u64, total: u64, per_hour: Option<f64>, warn_hours: u32, full: bool) -> Value {
+    let hours_left = per_hour.map(|rate| free as f64 / rate);
+    let low = full || hours_left.is_some_and(|h| h < warn_hours as f64);
+    json!({"free": free, "total": total, "per_hour": per_hour, "hours_left": hours_left, "low": low, "full": full})
+}
+
 pub fn used_bytes(dir: &Path) -> u64 {
     let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
     entries
@@ -136,18 +149,16 @@ pub fn open_folder(dir: &Path) {
     let _ = Command::new("explorer").arg(dir).spawn();
 }
 
-pub fn reset(dir: &Path, everything: bool) {
+pub fn reset(dir: &Path, keep_rooms: bool) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
-    let settings = ["ffmpeg.exe", "ffmpeg.exe.part", "ffmpeg.zip", "log.txt", "log.old.txt", "log.older.txt", "crash.txt", "report.txt", "settings.json", "id.txt", "version.txt"];
+    let rooms = ["key.bin", "rooms.json", "rooms"];
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
-        if name == "EBWebView" || name == "webview" || name == "running.marker" || name == LOCK {
+        if name == "EBWebView" || name == "webview" || name == "running.marker" || name == LOCK || (keep_rooms && rooms.contains(&name.as_str())) {
             continue;
         }
-        if everything || settings.contains(&name.as_str()) {
-            let path: PathBuf = entry.path();
-            let _ = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
-        }
+        let path: PathBuf = entry.path();
+        let _ = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
     }
 }
 
@@ -443,56 +454,6 @@ fn clean_media(core: &Core) {
     }
 }
 
-fn all_sets(core: &Core) -> Vec<(Set, bool)> {
-    let rooms: Vec<String> = core.rooms.lock().unwrap().list.iter().map(|r| r.id.clone()).collect();
-    let mut out = Vec::new();
-    for room in rooms {
-        let logs = room::logs(core, &room);
-        let events = room::events(&logs, None);
-        for set in room::sets(core, &room, &logs) {
-            let noted = events.iter().any(|e| room::covers(&set, e));
-            out.push((set, noted));
-        }
-    }
-    out
-}
-
-fn delete_old(core: &Core) {
-    let Some(days) = *core.keep_days.lock().unwrap() else { return };
-    let limit = days as i64 * DAY_US;
-    for (set, _) in all_sets(core) {
-        if !core.in_use(&set.room, &set.id) && set.end().is_some_and(|end| now_us() - end > limit) {
-            let _ = room::delete_set(core, &set.room, &set.id);
-        }
-    }
-}
-
-fn free_space(core: &Core) {
-    if !core.disk_low() {
-        return;
-    }
-    let mut old: Vec<(bool, i64, Set)> = all_sets(core)
-        .into_iter()
-        .filter(|(s, _)| !core.in_use(&s.room, &s.id) && s.end().is_some() && s.files.iter().any(|f| held(core, &s.room, f).0 > 0))
-        .map(|(s, noted)| (noted, s.start(), s))
-        .collect();
-    old.sort_by_key(|(noted, start, _)| (*noted, *start));
-    let mut removed = Vec::new();
-    for (_, _, set) in old {
-        if !core.disk_low() {
-            break;
-        }
-        if room::delete_set(core, &set.room, &set.id).is_ok() {
-            removed.push(set.id.clone());
-            refresh_disk(core);
-        }
-    }
-    if !removed.is_empty() {
-        *core.notice.lock().unwrap() = format!("Low disk space: removed {} old set(s) from this PC: {}.", removed.len(), removed.join(", "));
-        debug::event(core, core.started, format!("low disk space, removed sets {}", removed.join(", ")));
-    }
-}
-
 fn room_ids(core: &Core) -> Vec<String> {
     let mut ids: Vec<String> = core.rooms.lock().unwrap().list.iter().map(|r| r.id.clone()).collect();
     ids.push(room::SOLO.to_string());
@@ -508,11 +469,9 @@ pub fn keeper(core: Arc<Core>) {
         }
         recreate(&core);
         if aged.is_none_or(|t| t.elapsed() > AGE_EVERY) {
-            delete_old(&core);
             cleanup(&core);
             aged = Some(Instant::now());
         }
-        free_space(&core);
         let room = core.active_room_id();
         for set in room::sets(&core, &room, &room::logs(&core, &room)) {
             verify(&core, &set);
@@ -565,6 +524,39 @@ mod tests {
         let now: Vec<PathBuf> = leftovers(&dir, &rooms, true, SystemTime::now());
         assert!(!now.iter().any(|p| p.ends_with("export") || p.ends_with("report.txt")));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_reset_keeps_only_the_rooms_when_asked() {
+        let files = ["key.bin", "rooms.json", "rooms/r/logs/a.bin", "settings.json", "ffmpeg.exe", "plugins/x/m.bin", "EBWebView/x", LOCK];
+        for keep in [true, false] {
+            let dir = temp(if keep { "resetkeep" } else { "resetall" });
+            for f in files {
+                let path = dir.join(f);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, b"x").unwrap();
+            }
+            reset(&dir, keep);
+            let left: Vec<&str> = files.iter().copied().filter(|f| dir.join(f).exists()).collect();
+            let kept: &[&str] = if keep { &["key.bin", "rooms.json", "rooms/r/logs/a.bin", "EBWebView/x", LOCK] } else { &["EBWebView/x", LOCK] };
+            assert_eq!(left, kept);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn hours_left_come_from_the_newest_sessions() {
+        let hour = 3600e6 as i64;
+        assert_eq!(bytes_per_hour(&[]), None);
+        assert_eq!(bytes_per_hour(&[(0, hour), (100, 0)]), None);
+        assert_eq!(bytes_per_hour(&[(3_000, hour), (1_000, hour)]), Some(2_000.0));
+        let many: Vec<(u64, i64)> = (0..RATE_SETS + 3).map(|i| (if i < RATE_SETS { 10 } else { 1_000 }, hour)).collect();
+        assert_eq!(bytes_per_hour(&many), Some(10.0));
+        let disk = disk_json(20_000, 100_000, Some(2_000.0), WARN_HOURS, false);
+        assert_eq!((disk["hours_left"].as_f64(), disk["low"].as_bool()), (Some(10.0), Some(false)));
+        assert_eq!(disk_json(19_999, 100_000, Some(2_000.0), WARN_HOURS, false)["low"], true);
+        assert_eq!(disk_json(1, 100_000, None, WARN_HOURS, false)["low"], false);
+        assert_eq!(disk_json(1, 100_000, None, WARN_HOURS, true)["low"], true);
     }
 
     #[test]

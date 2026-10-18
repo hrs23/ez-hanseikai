@@ -98,15 +98,18 @@ impl Party {
     }
 
     pub fn receive(&mut self, from: &str, msg: &Value, offset_us: i64, room: &str, now: Instant) -> bool {
-        if !self.on || msg["room"] != room {
+        if msg["room"] != room {
             return false;
         }
         self.enter(room);
         let mut shared = msg["shared"].clone();
-        self.lamport = self.lamport.max(key(&shared).0);
         let heads = heads_of(&msg["heads"]);
+        self.viewers.insert(from.to_string(), Viewer { set: shared["set"].clone(), heads: heads.clone(), progress: msg["progress"].as_f64(), stuck: msg["stuck"] == true, typing: msg["typing"] == true, seen: now });
+        if !self.on {
+            return false;
+        }
+        self.lamport = self.lamport.max(key(&shared).0);
         self.absorb(&heads, now);
-        self.viewers.insert(from.to_string(), Viewer { set: shared["set"].clone(), heads, progress: msg["progress"].as_f64(), stuck: msg["stuck"] == true, typing: msg["typing"] == true, seen: now });
         if !newer(&shared, &self.shared) {
             return false;
         }
@@ -168,10 +171,48 @@ impl Party {
     }
 
     pub fn watching(&self, now: Instant) -> Vec<String> {
-        let mut out: Vec<String> = self.viewers.iter().filter(|(_, v)| now.duration_since(v.seen) < SEEN && v.set == self.shared["set"]).map(|(id, _)| id.clone()).collect();
+        let mut out: Vec<String> = self.viewers.iter().filter(|(_, v)| now.duration_since(v.seen) < SEEN && (!self.on || v.set == self.shared["set"])).map(|(id, _)| id.clone()).collect();
         out.sort();
         out
     }
+
+    pub fn reviewing(&self) -> bool {
+        self.on && self.shared["set"].is_string()
+    }
+}
+
+pub fn record(set: &str, shared: &Value, t_us: i64) -> Value {
+    json!({"k": "party", "set": set, "t_us": t_us, "shared": shared})
+}
+
+pub fn log(core: &Core) {
+    let Some(active) = core.active_set.lock().unwrap().clone() else { return };
+    let shared = {
+        let party = core.party.lock().unwrap();
+        if !party.on {
+            return;
+        }
+        party.shared.clone()
+    };
+    core.append_log(&active.room, &record(&active.id, &shared, crate::now_us()));
+}
+
+pub fn records(logs: &[room::Log], set: &str) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::new();
+    for log in logs {
+        for r in log.records.iter().filter(|r| r["k"] == "party" && r["set"] == set) {
+            let (Some(t), Some(shared)) = (r["t_us"].as_i64(), r["shared"].as_object()) else { continue };
+            let mut shared = Value::Object(shared.clone());
+            for k in ["wall_us", "at_us"] {
+                if let Some(v) = shared[k].as_i64() {
+                    shared[k] = json!(v - log.offset_us);
+                }
+            }
+            out.push(json!({"t_us": t - log.offset_us, "by": log.owner, "shared": shared}));
+        }
+    }
+    out.sort_by_key(|r| r["t_us"].as_i64());
+    out
 }
 
 pub type Progress = (Option<f64>, bool);
@@ -220,7 +261,7 @@ pub fn state_json(core: &Core, own: &Heads) -> Value {
     let room = core.active_room_id();
     let party = core.party.lock().unwrap();
     if !party.on {
-        return json!({"on": false});
+        return json!({"on": false, "watching": party.watching(Instant::now())});
     }
     let set = party.shared["set"].clone();
     drop(party);
@@ -384,11 +425,35 @@ mod tests {
     }
 
     #[test]
-    fn other_rooms_and_off_are_ignored() {
+    fn other_rooms_and_off_are_ignored_but_viewers_are_counted() {
         let mut a = party("a");
         assert!(!a.receive("b", &json!({"room": "other", "shared": {"seq": 9}}), 0, "r", Instant::now()));
         a.turn(false, "a", &Value::Null, "r", 2_000);
-        assert!(!a.receive("b", &json!({"room": "r", "shared": {"seq": 9}}), 0, "r", Instant::now()));
+        assert!(!a.receive("b", &json!({"room": "r", "shared": {"seq": 9, "set": "s4"}}), 0, "r", Instant::now()));
         assert!(a.caps().is_none());
+        assert_eq!(a.watching(Instant::now()), vec!["b".to_string()]);
+        assert_ne!(a.shared["set"], "s4");
+    }
+
+    #[test]
+    fn a_review_starts_only_while_watching_a_session_together() {
+        let mut a = Party::default();
+        assert!(!a.reviewing());
+        a.turn(true, "a", &json!({"set": null}), "r", 1);
+        assert!(!a.reviewing());
+        a.act("a", &view("s1", 5), 2);
+        assert!(a.reviewing());
+        a.turn(false, "a", &Value::Null, "r", 3);
+        assert!(!a.reviewing());
+    }
+
+    #[test]
+    fn party_records_come_back_on_the_local_clock_in_order() {
+        let shared = |wall: i64| json!({"set": "s1", "playing": true, "wall_us": wall, "at_us": wall});
+        let a = room::Log { owner: "a".into(), offset_us: 0, records: std::sync::Arc::new(vec![record("rv", &shared(500), 300), record("other", &shared(1), 1), json!({"k": "party", "set": "rv"})]) };
+        let b = room::Log { owner: "b".into(), offset_us: 100, records: std::sync::Arc::new(vec![record("rv", &shared(900), 350)]) };
+        let list = records(&[a, b], "rv");
+        assert_eq!(list.iter().map(|r| (r["t_us"].as_i64().unwrap(), r["by"].as_str().unwrap())).collect::<Vec<_>>(), [(250, "b"), (300, "a")]);
+        assert_eq!(list[0]["shared"]["wall_us"], 800);
     }
 }

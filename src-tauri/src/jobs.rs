@@ -74,6 +74,7 @@ pub struct Running {
 }
 
 static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
+static FIRST: Mutex<String> = Mutex::new(String::new());
 static CANCEL: AtomicBool = AtomicBool::new(false);
 static STOP: AtomicBool = AtomicBool::new(false);
 static WORKING: AtomicBool = AtomicBool::new(false);
@@ -217,6 +218,7 @@ pub fn next(
     tracks: &HashMap<String, Track>,
     chosen: &HashMap<String, String>,
     inputs: &[Input],
+    first: &str,
 ) -> Option<Pick> {
     let mut picks = Vec::new();
     for (order, (id, config)) in configs.iter().enumerate() {
@@ -239,7 +241,7 @@ pub fn next(
             if !resumed && taken(track, me, online) {
                 continue;
             }
-            let rank = (!resumed, input.owner != me, Reverse(input.start_us), order);
+            let rank = (key != first, !resumed, input.owner != me, Reverse(input.start_us), order);
             picks.push((rank, Pick { plugin: id.clone(), key, input: i }));
         }
     }
@@ -403,7 +405,8 @@ fn tick(core: &Arc<Core>) {
         core.append_log(&room, &job_record("fail", &key, run, json!({"error": "Stopped twice without finishing."})));
     }
     let inputs = inputs(core, &room, &logs, |file| open(file, &me, &prefixes, &tracks));
-    let pick = next(&me, &online(core), recording(core), &bundled(), |id, s| ready(core, id, s), &configs, &tracks, &chosen(&logs, None), &inputs);
+    let first = FIRST.lock().unwrap().clone();
+    let pick = next(&me, &online(core), recording(core), &bundled(), |id, s| ready(core, id, s), &configs, &tracks, &chosen(&logs, None), &inputs, &first);
     let Some(pick) = pick else { return };
     let (Some(plugin), Some(config)) = (plugins::find(&pick.plugin), configs.get(&pick.plugin)) else { return };
     WORKING.store(true, Ordering::Relaxed);
@@ -582,7 +585,8 @@ fn jobs_json(core: &Core) -> Value {
         for input in inputs.iter().filter(|i| counts(id, &i.file, &chosen)) {
             let key = format!("{prefix}{}", input.file);
             let (state, by, error) = state(tracks.get(&key), &me, &online);
-            list.push(json!({"job": key, "plugin": id, "version": config.version, "set": input.set, "owner": input.owner, "here": input.here, "state": state, "by": by, "error": error}));
+            let next = *FIRST.lock().unwrap() == key;
+            list.push(json!({"job": key, "plugin": id, "version": config.version, "settings": config.settings, "set": input.set, "owner": input.owner, "whole": plugins::find(id).is_some_and(|p| p.per_set), "here": input.here, "state": state, "by": by, "error": error, "next": next}));
         }
     }
     json!({"jobs": list, "running": running_json(), "tags": tag_names(&logs, core.party.lock().unwrap().caps().as_ref())})
@@ -597,6 +601,11 @@ pub async fn jobs(core: State<'_, Arc<Core>>) -> Result<Value, String> {
 #[tauri::command]
 pub fn retry_job(core: State<Arc<Core>>, job: String) {
     core.append_log(&core.active_room_id(), &job_record("retry", &job, 0, Value::Null));
+}
+
+#[tauri::command]
+pub fn run_job_next(job: String) {
+    *FIRST.lock().unwrap() = job;
 }
 
 #[tauri::command]
@@ -649,7 +658,7 @@ mod tests {
 
     fn pick(me: &str, online: &[&str], recording: bool, logs: &[Log], inputs: &[Input]) -> Option<String> {
         let online: HashSet<String> = online.iter().map(|s| s.to_string()).collect();
-        next(me, &online, recording, &BUNDLED, |_, _| true, &configs(logs, None), &tracks(logs, None), &HashMap::new(), inputs).map(|p| inputs[p.input].file.clone())
+        next(me, &online, recording, &BUNDLED, |_, _| true, &configs(logs, None), &tracks(logs, None), &HashMap::new(), inputs, "").map(|p| inputs[p.input].file.clone())
     }
 
     fn base_logs(extra_a: Vec<Value>, extra_b: Vec<Value>) -> Vec<Log> {
@@ -695,6 +704,21 @@ mod tests {
     }
 
     #[test]
+    fn a_job_asked_for_runs_next() {
+        let logs = base_logs(vec![], vec![]);
+        let inputs = [input("s1", "b", 100, true), input("s2", "a", 200, true)];
+        let online: HashSet<String> = HashSet::new();
+        let first = key(&inputs[0].file);
+        let pick = next("a", &online, false, &BUNDLED, |_, _| true, &configs(&logs, None), &tracks(&logs, None), &HashMap::new(), &inputs, &first).unwrap();
+        assert_eq!(inputs[pick.input].file, inputs[0].file);
+        assert_eq!(pick_file("a", &logs, &inputs), inputs[1].file);
+    }
+
+    fn pick_file(me: &str, logs: &[Log], inputs: &[Input]) -> String {
+        pick(me, &[], false, logs, inputs).unwrap()
+    }
+
+    #[test]
     fn own_recordings_come_first_then_the_newest() {
         let logs = base_logs(vec![], vec![]);
         let inputs = [input("s1", "b", 10, true), input("s2", "b", 20, true), input("s1", "a", 10, true)];
@@ -715,8 +739,8 @@ mod tests {
         let online = HashSet::new();
         let live = [("transcribe", "1.0.0", true)];
         let logs = base_logs(vec![], vec![]);
-        assert!(next("a", &online, true, &live, |_, _| true, &configs(&logs, None), &tracks(&logs, None), &HashMap::new(), &inputs).is_some());
-        assert!(next("a", &online, false, &live, |_, _| false, &configs(&logs, None), &tracks(&logs, None), &HashMap::new(), &inputs).is_none());
+        assert!(next("a", &online, true, &live, |_, _| true, &configs(&logs, None), &tracks(&logs, None), &HashMap::new(), &inputs, "").is_some());
+        assert!(next("a", &online, false, &live, |_, _| false, &configs(&logs, None), &tracks(&logs, None), &HashMap::new(), &inputs, "").is_none());
     }
 
     #[test]
