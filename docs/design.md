@@ -53,6 +53,7 @@ Peers measure clock offsets continuously and log them. Playback lines up everyon
 - Each person plays their own copy. Views: all players, or one player's picture and sound (keys 0 and 1 to 6).
 - Layouts: auto grid, one large with the others beside or below, and a row; for 1 to 6 players. The recorder's layout is the set's default; each viewer can rearrange.
 - Watch Party: those who turn it on follow each other's play, pause, seek and view. The newest command wins and the current state is repeated, so anyone who joins catches up; no member leads. The screen says who did what, and the last seek can be undone.
+- Everyone in Watch Party sees the same thing (planned): one shared state holds playback, view, layout and tile order, how far each member's log has been read and how much of each file each member has. Everyone follows the newest change, shows only the data everyone has reached, fetches what it lacks at once, and shows "Catching up with Ren" or "Ren receiving 72%" to all until it has it. Volume stays personal.
 - Volume is personal. Each person can set app sound and voice volume and mute for each member for themselves (planned; one volume now).
 
 ## Events
