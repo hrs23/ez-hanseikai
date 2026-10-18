@@ -57,6 +57,7 @@ let idleTimer = null;
 let undo = null;
 let available = null;
 let installAfter = false;
+let askingUpdate = false;
 let checkedAt = 0;
 let updateText = "";
 let menuReturn = null;
@@ -451,7 +452,7 @@ function players() {
 function base(list = players()) {
   return list.length ? Math.min(...list.map((p) => p.start - p.off)) : nowUs();
 }
-function total(list = players()) {
+function received(list = players()) {
   const b = base(list);
   const ends = [];
   for (const p of list) {
@@ -460,6 +461,9 @@ function total(list = players()) {
     if (tl && tl.media.part && isFinite(tl.media.video.duration)) ends.push(tl.media.video.duration - shiftOf(p, tl.media.part, b));
   }
   return ends.length ? Math.max(...ends) : 0;
+}
+function total(list = players()) {
+  return Math.max(received(list), list.some((p) => p.recording) ? (nowUs() - base(list)) / 1e6 : 0);
 }
 const nowM = () => (clock.playing ? clock.m + ((performance.now() - clock.at) / 1000) * rate : clock.m);
 const wallOf = (m) => Math.round(base() + m * 1e6);
@@ -564,7 +568,7 @@ function renderPlayer() {
   press($("live"), live);
   press($("cc"), subtitles);
   $("cc").classList.toggle("on", subtitles);
-  if (live && total() - nowM() > 2 * LIVE_LAG) setClock(true, total() - LIVE_LAG);
+  if (live && received() - nowM() > 2 * LIVE_LAG) setClock(true, received() - LIVE_LAG);
   const frac = set && set.progress.total ? Math.min(1, set.progress.have / set.progress.total) : 1;
   $("seek").querySelector(".got").style.width = frac * 100 + "%";
   $("seek").querySelector(".missing").hidden = !(set && set.progress.stuck);
@@ -1219,6 +1223,18 @@ async function checkUpdate(manual) {
   dismissed.delete("update");
   renderNotices();
 }
+function busy() {
+  const party = watchParty && st.party.on && st.party.watching.some((id) => id !== st.id);
+  return st.recording || party || clock.playing || !!exporting || !!(jobInfo && jobInfo.running);
+}
+async function askUpdate() {
+  askingUpdate = true;
+  const yes = await ask(t("Install version {version} now? The app restarts.", { version: available.version }), t("Install"));
+  askingUpdate = false;
+  installAfter = false;
+  if (yes && available) installUpdate();
+  else renderNotices();
+}
 async function installUpdate() {
   const update = available;
   available = null;
@@ -1353,7 +1369,7 @@ async function update() {
   idx = indexOf(st);
   if (lang !== st.lang) { lang = st.lang; setLanguage(lang); for (const k of Object.keys(sigs)) delete sigs[k]; fillSources().catch(warn); fillMics().catch(warn); fillProcesses().catch(warn); }
   if (!ready) { ready = true; invoke("ui_ready"); pollPlugins(); }
-  if (installAfter && available && !st.recording) installUpdate();
+  if (installAfter && available && !busy() && !askingUpdate) askUpdate();
   if (selected && !st.sets.some((s) => s.id === selected)) selected = null;
   const l = liveSet();
   if (nowView && l && selected !== l.id) { selectSet(l.id); nowSet = l.id; live = true; share(); }
@@ -1616,7 +1632,7 @@ $("fwd").onclick = () => jump(STEP.normal);
 $("addnote").onclick = openQuick;
 $("wp").onclick = () => { watchParty = !watchParty; store("watchParty", watchParty); joinParty().then(refresh); renderHeader(playSet()); };
 $("osdundo").onclick = runUndo;
-$("live").onclick = () => { live = !live; if (live) setClock(true, Math.max(0, total() - LIVE_LAG)); renderPlayer(); };
+$("live").onclick = () => { live = !live; if (live) setClock(true, Math.max(0, received() - LIVE_LAG)); renderPlayer(); };
 $("speed").onchange = (e) => { setRate(Number(e.target.value)); share(); };
 $("volume").oninput = () => setVolume(Number($("volume").value));
 $("mute").onclick = toggleMute;

@@ -31,7 +31,7 @@ Requires Windows 10 version 2004 or later, or Windows 11.
 
 ## Update
 
-The app checks for a new version at start, every four hours while it runs and when its window comes back from the tray (or Help > Check for updates), and shows it above the page with Install. During a session it offers to install after the session instead, and it never installs while a session records or an export runs. Updates are signed and checked before they install. An older version may not read data from a newer one, so going back means starting with an empty data folder.
+The app checks for a new version at start, every four hours while it runs (or Help > Check for updates), and shows it above the page with Install. During a session it offers to install after the session instead: then it asks once nothing records, plays, exports or analyses, and it never installs without asking. Updates are signed and checked before they install. An older version may not read data from a newer one, so going back means starting with an empty data folder.
 
 ## Uninstall
 
