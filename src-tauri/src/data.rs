@@ -70,7 +70,7 @@ pub fn leftovers(dir: &Path, rooms: &HashSet<String>, exporting: bool, now: Syst
     if !exporting && dir.join("export").exists() {
         out.push(dir.join("export"));
     }
-    for name in ["report.txt", "log.old.txt"] {
+    for name in ["report.txt", "log.old.txt", "log.older.txt", "crash.txt"] {
         if older(&dir.join(name), now) {
             out.push(dir.join(name));
         }
@@ -138,16 +138,34 @@ pub fn open_folder(dir: &Path) {
 
 pub fn reset(dir: &Path, everything: bool) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
-    let settings = ["ffmpeg.exe", "ffmpeg.exe.part", "ffmpeg.zip", "log.txt", "log.old.txt", "report.txt", "settings.json", "id.txt", "version.txt"];
+    let settings = ["ffmpeg.exe", "ffmpeg.exe.part", "ffmpeg.zip", "log.txt", "log.old.txt", "log.older.txt", "crash.txt", "report.txt", "settings.json", "id.txt", "version.txt"];
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
-        if name == "EBWebView" || name == "webview" || name == "running.marker" {
+        if name == "EBWebView" || name == "webview" || name == "running.marker" || name == LOCK {
             continue;
         }
         if everything || settings.contains(&name.as_str()) {
             let path: PathBuf = entry.path();
             let _ = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
         }
+    }
+}
+
+pub const LOCK: &str = "app.lock";
+static HELD: Mutex<Option<std::fs::File>> = Mutex::new(None);
+
+pub fn lock(dir: &Path) -> std::io::Result<bool> {
+    use std::os::windows::fs::OpenOptionsExt;
+    let path = dir.join(LOCK);
+    let left = path.exists();
+    let file = std::fs::OpenOptions::new().write(true).create(true).truncate(false).share_mode(0).open(&path)?;
+    *HELD.lock().unwrap() = Some(file);
+    Ok(left)
+}
+
+pub fn unlock(dir: &Path) {
+    if HELD.lock().unwrap().take().is_some() {
+        let _ = std::fs::remove_file(dir.join(LOCK));
     }
 }
 
@@ -513,6 +531,19 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn one_app_holds_a_data_folder_and_a_leftover_lock_is_noticed() {
+        let dir = temp("lock");
+        assert!(!lock(&dir).unwrap());
+        assert!(std::fs::OpenOptions::new().write(true).open(dir.join(LOCK)).is_err());
+        unlock(&dir);
+        assert!(!dir.join(LOCK).exists());
+        std::fs::write(dir.join(LOCK), b"").unwrap();
+        assert!(lock(&dir).unwrap());
+        unlock(&dir);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

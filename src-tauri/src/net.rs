@@ -731,6 +731,10 @@ async fn fetch(core: Arc<Core>, conn: Connection, req: Value, key: String) {
     core.following.lock().unwrap().remove(&key);
 }
 
+pub fn receiving(core: &Core) -> bool {
+    history_fetches(core) > 0
+}
+
 fn history_fetches(core: &Core) -> usize {
     core.following.lock().unwrap().iter().filter(|k| k.starts_with(HISTORY_KEY)).count()
 }

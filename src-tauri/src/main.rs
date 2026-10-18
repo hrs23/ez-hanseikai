@@ -762,16 +762,26 @@ fn party_act(core: State<Arc<Core>>, view: Value) {
     party::send(&core);
 }
 
-async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
-    let dir = match std::env::var_os("EZH_DIR") {
-        Some(dir) => PathBuf::from(dir),
-        None => app.path().app_local_data_dir()?,
-    };
-    std::fs::create_dir_all(&dir)?;
+fn data_dir(app: &AppHandle) -> tauri::Result<PathBuf> {
+    match std::env::var_os("EZH_DIR") {
+        Some(dir) => Ok(PathBuf::from(dir)),
+        None => app.path().app_local_data_dir(),
+    }
+}
+
+async fn init(app: AppHandle, dir: PathBuf, left_lock: bool) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
     debug::init(&dir);
+    tracing::info!("EZ Hanseikai {VERSION} started, process {}, data folder {}", std::process::id(), dir.display());
     ffmpeg::set_data_dir(dir.clone());
     let marker = dir.join("running.marker");
-    let mut recovery = marker.exists().then(|| "The app did not start properly last time.".to_string());
+    let mut recovery = if marker.exists() {
+        Some("The app did not start properly last time.".to_string())
+    } else {
+        left_lock.then(|| "The app restarted after a problem.".to_string())
+    };
+    if left_lock {
+        tracing::warn!("the app did not exit cleanly last time");
+    }
     let _ = std::fs::write(&marker, VERSION);
     let previous_version = std::fs::read_to_string(dir.join("version.txt")).unwrap_or_default().trim().to_string();
     let _ = std::fs::write(dir.join("version.txt"), VERSION);
@@ -871,7 +881,11 @@ fn main() {
     if let Some(code) = plugins::child() {
         std::process::exit(code);
     }
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+    if std::env::var_os("EZH_DIR").is_none() {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _, _| shell::show_window(app)));
+    }
+    let app = builder
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_window_state::Builder::default().with_denylist(&["debug"]).build())
         .plugin(tauri_plugin_dialog::init())
@@ -891,7 +905,10 @@ fn main() {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 match window.app_handle().try_state::<Arc<Core>>() {
-                    Some(core) if window.label() == "main" => shell::close_main(window.app_handle(), core.inner()),
+                    Some(core) if window.label() == "main" => {
+                        let (app, core) = (window.app_handle().clone(), core.inner().clone());
+                        std::thread::spawn(move || shell::exit_app(&app, &core));
+                    }
                     _ => {
                         let _ = window.hide();
                     }
@@ -906,8 +923,19 @@ fn main() {
             });
         })
         .setup(|app| {
+            let dir = data_dir(app.handle())?;
+            std::fs::create_dir_all(&dir)?;
+            let left_lock = match data::lock(&dir) {
+                Ok(left) => left,
+                Err(_) => {
+                    if !test_mode() {
+                        shell::already_running();
+                    }
+                    std::process::exit(0);
+                }
+            };
             open_main(app)?;
-            let core = tauri::async_runtime::block_on(init(app.handle().clone()))?;
+            let core = tauri::async_runtime::block_on(init(app.handle().clone(), dir, left_lock))?;
             app.manage(core.clone());
             shell::setup(app, core.clone())?;
             record::recover(&core);
@@ -929,9 +957,18 @@ fn main() {
             std::thread::spawn(move || jobs::worker(c));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug::debug_view, debug::debug_report, debug::set_report_sharing, save_report, start_recording, stop_recording, delete_set, open_set_folder, export_set, cancel_export, set_layout, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, set_share, set_limit, set_codecs, cancel_invites, list_sources, set_source, use_display, list_mics, set_mic, set_mix, set_audio_process, set_keep_days, event_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_event, answer_ask, focus_set, party_on, party_act, jobs::room_plugins, jobs::set_room_plugin, jobs::prepare_plugin, jobs::jobs, jobs::retry_job, jobs::cancel_job, install_update, set_quality, set_language, rename_room, check_room, draw, party_typing, open_debug, mark, set_hotkey, retry_ffmpeg])
-        .run(tauri::generate_context!())
-        .expect("failed to run");
+        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug::debug_view, debug::debug_report, debug::set_report_sharing, save_report, start_recording, stop_recording, delete_set, open_set_folder, export_set, cancel_export, set_layout, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, set_share, set_limit, set_process_jobs, set_codecs, cancel_invites, list_sources, set_source, use_display, list_mics, set_mic, set_mix, set_audio_process, set_keep_days, event_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_event, answer_ask, focus_set, party_on, party_act, jobs::room_plugins, jobs::set_room_plugin, jobs::prepare_plugin, jobs::jobs, jobs::retry_job, jobs::cancel_job, install_update, set_quality, set_language, rename_room, check_room, draw, party_typing, open_debug, mark, set_hotkey, retry_ffmpeg])
+        .build(tauri::generate_context!())
+        .expect("failed to start");
+    app.run(|app, event| {
+        if let tauri::RunEvent::Exit = event {
+            if let Some(core) = app.try_state::<Arc<Core>>() {
+                tracing::info!("exiting");
+                jobs::stop_now(&core);
+                data::unlock(&core.dir);
+            }
+        }
+    });
 }
 
 #[cfg(test)]

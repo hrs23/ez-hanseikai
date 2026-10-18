@@ -3,13 +3,10 @@ use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
 use std::str::FromStr;
-use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tauri::image::Image;
 use tauri::menu::{Menu, MenuBuilder, MenuItem, MenuItemBuilder, SubmenuBuilder};
-use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, Theme, WebviewUrl, WebviewWindowBuilder, Wry};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Modifiers, Shortcut};
@@ -19,9 +16,10 @@ use crate::{room, Core, NO_WINDOW, VERSION};
 
 pub const DEFAULT_HOTKEY: &str = "Ctrl+Alt+M";
 const REPO: &str = "https://github.com/hrs23/ez-hanseikai";
-const TRAY_POLL: Duration = Duration::from_secs(1);
+const STATUS_POLL: Duration = Duration::from_secs(1);
 const DEBUG_SIZE: (f64, f64) = (1100.0, 720.0);
 const JA: [(&str, &str); 52] = [
+    ("EZ Hanseikai is already running with this data folder.", "EZ Hanseikai はこのデータフォルダですでに動いています。"),
     ("File", "ファイル"),
     ("Room", "ルーム"),
     ("Session", "セッション"),
@@ -62,28 +60,26 @@ const JA: [(&str, &str); 52] = [
     ("Report a problem", "問題を報告"),
     ("Release notes", "リリースノート"),
     ("About", "バージョン情報"),
-    ("Show EZ Hanseikai", "EZ Hanseikai を表示"),
     ("End the session for everyone and exit?", "全員のセッションを終了してアプリを終了しますか?"),
     ("End session and exit", "セッションを終了して終了"),
+    ("Cancel the export and exit?", "書き出しを中止してアプリを終了しますか?"),
+    ("Files are still arriving. Exit anyway?", "まだファイルを受け取っています。それでも終了しますか?"),
     ("Cancel", "キャンセル"),
     ("Identity saved. Keep this file private: anyone with it can act as you.", "IDを保存しました。このファイルは誰にも渡さないでください。持っている人はあなたとして振る舞えます。"),
     ("That file is not an identity key.", "このファイルはIDの鍵ではありません。"),
     ("Importing replaces your identity, so your ID changes. Your current key is kept as key.bin.old.", "読み込むとIDが置き換わり、IDが変わります。今の鍵は key.bin.old として残ります。"),
     ("Import", "読み込む"),
     ("Version", "バージョン"),
-    ("EZ Hanseikai is still running", "EZ Hanseikai はバックグラウンドで動作中です"),
-    ("Exit from the tray icon.", "終了はトレイアイコンから。"),
     ("Moment marked", "マークしました"),
 ];
 const JA_WANTS: (&str, &str) = ("{name} wants to join", "{name} が参加を希望しています");
 
 struct Items {
-    toggles: Vec<MenuItem<Wry>>,
-    marks: Vec<MenuItem<Wry>>,
-    status: Option<MenuItem<Wry>>,
+    toggle: Option<MenuItem<Wry>>,
+    mark: Option<MenuItem<Wry>>,
 }
 
-static ITEMS: Mutex<Items> = Mutex::new(Items { toggles: Vec::new(), marks: Vec::new(), status: None });
+static ITEMS: Mutex<Items> = Mutex::new(Items { toggle: None, mark: None });
 
 pub fn tr(lang: &str, en: &'static str) -> &'static str {
     if lang != "ja" {
@@ -132,7 +128,14 @@ fn open_url(url: &str) {
     let _ = Command::new("cmd").args(["/c", "start", "", url]).creation_flags(NO_WINDOW).spawn();
 }
 
-fn show_window(app: &AppHandle) {
+pub fn already_running() {
+    use windows::core::HSTRING;
+    use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONINFORMATION, MB_OK};
+    let text = tr(crate::os_language(), "EZ Hanseikai is already running with this data folder.");
+    unsafe { MessageBoxW(None, &HSTRING::from(text), &HSTRING::from("EZ Hanseikai"), MB_OK | MB_ICONINFORMATION) };
+}
+
+pub fn show_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
@@ -175,35 +178,31 @@ pub fn open_debug(app: &AppHandle) {
     }
 }
 
-pub fn keep_running(recording: bool, online: bool) -> bool {
-    recording || online
+pub fn exit_question(recording: bool, exporting: bool, receiving: bool) -> Option<(&'static str, &'static str)> {
+    if recording {
+        Some(("End the session for everyone and exit?", "End session and exit"))
+    } else if exporting {
+        Some(("Cancel the export and exit?", "Exit"))
+    } else if receiving {
+        Some(("Files are still arriving. Exit anyway?", "Exit"))
+    } else {
+        None
+    }
 }
 
-pub fn close_main(app: &AppHandle, core: &Core) {
+pub fn exit_app(app: &AppHandle, core: &Arc<Core>) {
     let recording = core.active_set.lock().unwrap().is_some();
-    let online = core.peers.lock().unwrap().iter().any(|p| p.conn.is_some());
-    if !keep_running(recording, online) {
-        app.exit(0);
-        return;
-    }
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.hide();
-    }
-    if !core.hid_once.swap(true, Ordering::Relaxed) {
-        core.save_settings();
-        let lang = lang(core);
-        notify(app, tr(&lang, "EZ Hanseikai is still running"), tr(&lang, "Exit from the tray icon."));
-    }
-}
-
-fn exit_app(app: &AppHandle, core: &Arc<Core>) {
-    if core.active_set.lock().unwrap().is_some() {
+    let exporting = core.export.lock().unwrap().is_some();
+    if let Some((question, ok)) = exit_question(recording, exporting, crate::net::receiving(core)) {
         show_window(app);
         let lang = lang(core);
-        if !ask(app, tr(&lang, "End the session for everyone and exit?"), tr(&lang, "End session and exit"), tr(&lang, "Cancel")) {
+        if !ask(app, tr(&lang, question), tr(&lang, ok), tr(&lang, "Cancel")) {
             return;
         }
-        room::stop_set(core);
+        if recording {
+            room::stop_set(core);
+        }
+        crate::export::cancel(core);
     }
     app.exit(0);
 }
@@ -346,36 +345,16 @@ fn build_menu(app: &AppHandle, lang: &str, toggle: &MenuItem<Wry>, mark: &MenuIt
     MenuBuilder::new(app).items(&[&file, &room, &session, &view, &help]).build()
 }
 
-fn tray_menu(app: &AppHandle, lang: &str, status: &MenuItem<Wry>, toggle: &MenuItem<Wry>, mark: &MenuItem<Wry>) -> tauri::Result<Menu<Wry>> {
-    MenuBuilder::new(app)
-        .item(status)
-        .separator()
-        .item(&item(app, lang, "show", "Show EZ Hanseikai", None)?)
-        .item(mark)
-        .item(toggle)
-        .separator()
-        .item(&item(app, lang, "exit", "Exit", None)?)
-        .build()
-}
-
 fn install_menus(app: &AppHandle, core: &Core) -> tauri::Result<()> {
     let lang = lang(core);
     let recording = core.active_set.lock().unwrap().is_some();
     let text = toggle_text(recording);
     let keys = core.hotkey.lock().unwrap().clone();
-    let bar_toggle = item(app, &lang, "toggle-recording", text, Some("CmdOrCtrl+R"))?;
-    let tray_toggle = item(app, &lang, "toggle-recording", text, None)?;
-    let bar_mark = item(app, &lang, "mark", "Mark this moment", hotkey(&keys).map(|_| keys.as_str()))?;
-    let tray_mark = item(app, &lang, "mark", "Mark this moment", None)?;
-    let status = MenuItemBuilder::with_id("status", status_text(core)).enabled(false).build(app)?;
-    for m in [&bar_mark, &tray_mark] {
-        m.set_enabled(recording)?;
-    }
-    app.set_menu(build_menu(app, &lang, &bar_toggle, &bar_mark)?)?;
-    if let Some(tray) = app.tray_by_id("main") {
-        tray.set_menu(Some(tray_menu(app, &lang, &status, &tray_toggle, &tray_mark)?))?;
-    }
-    *ITEMS.lock().unwrap() = Items { toggles: vec![bar_toggle, tray_toggle], marks: vec![bar_mark, tray_mark], status: Some(status) };
+    let toggle = item(app, &lang, "toggle-recording", text, Some("CmdOrCtrl+R"))?;
+    let mark = item(app, &lang, "mark", "Mark this moment", hotkey(&keys).map(|_| keys.as_str()))?;
+    mark.set_enabled(recording)?;
+    app.set_menu(build_menu(app, &lang, &toggle, &mark)?)?;
+    *ITEMS.lock().unwrap() = Items { toggle: Some(toggle), mark: Some(mark) };
     Ok(())
 }
 
@@ -414,19 +393,6 @@ fn wants_text(lang: &str, name: &str) -> String {
 }
 
 pub fn setup(app: &tauri::App, core: Arc<Core>) -> tauri::Result<()> {
-    let source = app.default_window_icon().unwrap();
-    let idle_icon = Image::new_owned(source.rgba().to_vec(), source.width(), source.height());
-    let rec_icon = Image::from_bytes(include_bytes!("../icons/tray-rec.png"))?;
-    let tray = TrayIconBuilder::with_id("main")
-        .icon(idle_icon.clone())
-        .tooltip("EZ Hanseikai")
-        .show_menu_on_left_click(false)
-        .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
-                show_window(tray.app_handle());
-            }
-        })
-        .build(app)?;
     install_menus(app.handle(), &core)?;
 
     let menu_core = core.clone();
@@ -441,7 +407,6 @@ pub fn setup(app: &tauri::App, core: Arc<Core>) -> tauri::Result<()> {
             "export-identity" => dialog(export_identity),
             "import-identity" => dialog(import_identity),
             "exit" => dialog(exit_app),
-            "show" => show_window(app),
             "toggle-recording" => dialog(|_, core| toggle_recording(core)),
             "mark" => marked(core),
             "debug" => open_debug(app),
@@ -462,26 +427,20 @@ pub fn setup(app: &tauri::App, core: Arc<Core>) -> tauri::Result<()> {
         let mut asked: HashSet<String> = HashSet::new();
         loop {
             let recording = core.active_set.lock().unwrap().is_some();
-            let working = recording && core.engine.working();
             let lang = lang(&core);
             let hotkey = core.hotkey.lock().unwrap().clone();
-            if last.as_ref() != Some(&(recording, working, lang.clone(), hotkey.clone())) {
-                last = Some((recording, working, lang.clone(), hotkey.clone()));
+            if last.as_ref() != Some(&(recording, lang.clone(), hotkey.clone())) {
+                last = Some((recording, lang.clone(), hotkey.clone()));
                 arm_hotkey(&app, &hotkey, recording);
                 let items = ITEMS.lock().unwrap();
-                for toggle in &items.toggles {
+                if let Some(toggle) = &items.toggle {
                     let _ = toggle.set_text(tr(&lang, toggle_text(recording)));
                 }
-                for mark in &items.marks {
+                if let Some(mark) = &items.mark {
                     let _ = mark.set_enabled(recording);
                 }
-                let _ = tray.set_icon(Some(if working { rec_icon.clone() } else { idle_icon.clone() }));
             }
             let status = status_text(&core);
-            if let Some(item) = ITEMS.lock().unwrap().status.as_ref() {
-                let _ = item.set_text(&status);
-            }
-            let _ = tray.set_tooltip(Some(if recording { status.as_str() } else { "EZ Hanseikai" }));
             let asks = ask_names(&core);
             let hidden = !window_shown(&app);
             for (id, name) in &asks {
@@ -490,7 +449,7 @@ pub fn setup(app: &tauri::App, core: Arc<Core>) -> tauri::Result<()> {
                 }
             }
             asked.retain(|id| asks.iter().any(|(a, _)| a == id));
-            std::thread::sleep(TRAY_POLL);
+            std::thread::sleep(STATUS_POLL);
         }
     });
     Ok(())
@@ -522,10 +481,11 @@ mod tests {
     }
 
     #[test]
-    fn the_window_hides_only_while_needed() {
-        assert!(keep_running(true, false));
-        assert!(keep_running(false, true));
-        assert!(!keep_running(false, false));
+    fn closing_asks_only_while_work_would_be_lost() {
+        assert_eq!(exit_question(false, false, false), None);
+        assert_eq!(exit_question(true, true, true).unwrap().0, "End the session for everyone and exit?");
+        assert_eq!(exit_question(false, true, true).unwrap().0, "Cancel the export and exit?");
+        assert_eq!(exit_question(false, false, true).unwrap().0, "Files are still arriving. Exit anyway?");
     }
 
     #[test]
