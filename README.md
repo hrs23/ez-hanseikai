@@ -43,6 +43,19 @@ Data lives in `%LOCALAPPDATA%\dev.ez-hanseikai.app`; the app's Files section ope
 - Your ID is the public half of a key made on first start. Connections are encrypted and accepted only from room members. An invite code works once; anyone who joins can invite others, so share it only with your team.
 - The Share switch in the settings stops others from receiving your recordings; the speed limit caps how fast recordings move.
 
+## Contributing
+
+1. Never touch the game process: capture the screen with Windows Graphics Capture and game sound with per-process audio capture; never inject code, draw overlays or read game memory; detect game events only from the captured picture and sound.
+2. Everyday review features live in the app; game-specific analysis lives in plugins.
+3. Plugins are self-contained: each runs as its own program, reads only recordings and set information, writes only events, depends on no other plugin and can be turned on or off on its own. The app knows nothing about a plugin's internals and shows every plugin's events the same way.
+4. One mechanism per job: notes, markers and plugin results are all events. In the UI each action and piece of information has one place, with no explanatory text.
+5. The UI is intuitive and standard, like common native apps: standard menus, shortcuts and dialogs, and everything works with the mouse alone.
+6. The code stays plain: functions and modules, no clever abstractions, shared code only where it is truly the same, no comments.
+7. Nothing is lost by a crash, a dropped connection or someone's delete, and everything resumes on its own.
+8. Efficiency and simplicity come before the lowest delay; a few seconds of lag is fine.
+9. No hard-coded numbers without a reason; keep the needed ones in one place.
+10. The repository is public: English only, made-up examples, and no secrets, personal data, real recordings or private addresses.
+
 ## Development
 
 See [docs/development.md](docs/development.md).
