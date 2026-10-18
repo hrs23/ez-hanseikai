@@ -42,7 +42,8 @@ try {
       }
     } finally { $zip.Dispose() }
   }
-} finally { Remove-Item -LiteralPath $part -ErrorAction SilentlyContinue }
+} finally { if (Test-Path -LiteralPath $part) { Remove-Item -LiteralPath $part } }
+exit 0
 "#;
 
 pub struct Download {
