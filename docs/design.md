@@ -29,26 +29,33 @@ One key per person, made on first start; its public half is the person's ID ever
 - The microphone is on by default, as its own track, and can be muted. App sound comes from per-process capture. Each source has a dB meter with peak and clipping and a volume.
 - Inside a room everyone's picture and sound stream all the time and show live in the Record tab, a few seconds behind. Sharing off sends nothing; one speed limit caps the upload.
 - One recording per room: anyone's Record starts it for every member and anyone's Stop ends it. That span is a set holding everyone's file, and every member sees the same list. Nothing is kept while nobody records. A member who joins mid-set records from then on; an absent member is an empty tile.
-- One ffmpeg process per person encodes the capture once (scaled to the shared width) and writes, through the tee muxer, short live segments that stream to the room and, while the room records, the set file. Only the newest few live segments are kept.
-- Codec: AV1, then HEVC, then H.264, the best one that every member can play. Fragmented MP4, a keyframe every second, no B-frames; app sound and voice are separate tracks. There is no separate full-quality copy.
+- One ffmpeg process per person encodes the capture once (scaled to the shared width) into two fragmented MP4 series that it sends to the app over localhost: `v` (picture and app sound) and `m` (voice). Each fragment is one second. The app cuts them into segments of 4 fragments, and also at once on Record and Stop, so a set starts and ends on a fragment. Four seconds keeps a live joiner close to now and keeps the file count low (about 900 per hour per series). Live and recording are the same segments: a recording is the list of segments logged for the set.
+- A capture is one encoder run; a restart (new size, codec change or crash) starts a new capture, so a set can have several parts per member.
+- Codec: AV1, then HEVC, then H.264, the best one that every member can play. A keyframe every second, no B-frames. There is no separate full-quality copy.
 
 ## Data
 
 - Each person writes their own append-only files: their recordings and their log. The logs are the source of truth; a torn last record is dropped on start.
 - One log per person per room, `rooms/<room>/logs/<member-id>.bin`. Members receive only that room's logs, and everyone keeps every member's log of the room, so the room survives anyone leaving. A person whose own log of a room is empty (a new PC with an imported key, or a deleted data folder) first gets it back from a member, then writes; until then new records wait in `pending.bin`.
 - Logs in the old single-file format are split by room on first start, the same way on every PC; a record without a room goes with its set or note, and the old log is kept as `legacy/log.bin`, which is never sent.
-- A set is a folder, `rooms/<room>/sets/<local start time>/`, with `<member-id>.mp4` for every member and `set.json`, which keeps the recorder's tile order and layout as the set's default.
-- Log record kinds include `rec`, `rec_end`, `file`, `file_bad`, `event`, `event_edit`, `event_del`, `event_restore`, `remove`, `admit`, `offset` and `layout`; old `note` records are still read. Unknown kinds are kept and ignored. Edits and deletions are new records.
+- Media lives in `rooms/<room>/<member-id>/<capture start ms>/{v,m}/`: `init.mp4` and `000001.m4s`, `000002.m4s`, and so on, written as `.part` and renamed when complete. `cap.json` keeps the capture's start and settings, and `open.json` the segment being written, for crash recovery.
+- The owner logs `cap` (capture start, settings, size and SHA-256 of each init) and `seg` (capture, series, number, set, start, duration, size and SHA-256) for segments in a set only; live-only segments are never logged. A member's part of a set is its `seg` records for that set. The set's default layout is the last `layout` record for it.
+- After a crash, the open segment is cut back to its last whole fragment, finished and logged, and an open set gets its `rec_end`.
+- Sets from 0.6.0 stay as they are, `rooms/<room>/sets/<set>/<member-id>.mp4` with a `file` record, and are read as a capture with one segment.
+- Log record kinds include `rec`, `rec_end`, `cap`, `seg`, `file`, `file_bad`, `event`, `event_edit`, `event_del`, `event_restore`, `remove`, `admit`, `offset` and `layout`; old `note` records are still read. Unknown kinds are kept and ignored. Edits and deletions are new records.
 - The app works from an empty data folder, and recreates its files if the folder is deleted while it runs; without `key.bin` it makes a new identity at the next start and says so.
 
 ## Sharing
 
 - Peers connect directly with iroh, through a relay when they must. Connections are encrypted and accepted only from room members. Address lookup publishes only the relay URL.
-- On connecting, members pull every member's log from any peer that has it, so late or offline members learn every set. Missing files then come from any member with a verified copy, resuming where they stopped, behind live streams and within the speed limit.
+- On connecting, members pull every member's log from any peer that has it, so late or offline members learn every set.
+- Media moves with one request, follow: from a segment and byte, the sender streams segments in order, waits on the open one and goes on into new ones. Live follows each member's current segment; missing segments of sets come the same way from the owner or any member with verified copies, resuming where they stopped.
+- Order of importance: logs, voice, live picture, then history (voice before picture). The speed limit caps the upload; history always keeps a quarter of it, so live streams cannot stop it.
+- The Player and the Record tab read media through the app's `ezh://` scheme, which joins the init and segments into one growing file with byte ranges.
 
 ## Verification
 
-When a set ends, each recorder logs the size and SHA-256 of its file. Every member hashes its copies once complete; a copy that does not match is logged, deleted and fetched again from a good copy. Members tell each other which files they hold, so the set list shows whether everyone has everything or what is missing.
+Each recorder logs the size and SHA-256 of every init and set segment. Every member hashes each copy once complete; a copy that does not match is logged as `file_bad`, deleted and fetched again from a good copy. Members tell each other, per set, member and series, how many segments they hold verified in order, so the set list shows whether everyone has everything or what is missing.
 
 ## Time
 
@@ -58,7 +65,8 @@ Peers measure clock offsets continuously and log them. Playback lines up everyon
 
 - Each person plays their own copy. Views: all players, or one player's picture and sound (keys 0 and 1 to 6).
 - Layouts: auto grid, one large with the others beside or below, and a row; for 1 to 6 players. The recorder's layout is the set's default; each viewer can rearrange.
-- Watch Party: everyone who turns it on sees the same thing, with no leader. One shared state holds the set, playback (playing, position as wall time, speed), view, layout and tile order; it is ordered by a Lamport counter, then time, then sender, the newest wins, and it is repeated every few seconds, so anyone who joins catches up. Each message also carries how many records of each member's log the sender holds and how much of the set it has. Those counts only grow; everyone shows only events below them, fetches what it lacks at once, and shows "Catching up with Ren" or "Ren receiving 72%" to all until it has it. Choosing a set switches everyone; a member without the files fetches that set first and shows its tiles as receiving where it has no picture yet. The screen says who did what, and the last seek can be undone. Volume stays personal; outside Watch Party the layout is each viewer's own.
+- Watch Party: everyone who turns it on sees the same thing, with no leader. One shared state holds the set, playback (playing, position as wall time, speed), view, layout and tile order; it is ordered by a Lamport counter, then time, then sender, the newest wins, and it is repeated every few seconds, so anyone who joins catches up. Each message also carries how many records of each member's log the sender holds and how much of the set it has. Those counts only grow; everyone shows only events below them, fetches what it lacks at once, and shows "Catching up with Ren" or "Ren receiving 72%" to all until it has it, or "Ren incomplete at 72%" when no member online has more. Choosing a set switches everyone; a member without the files fetches that set first and shows its tiles as receiving where it has no picture yet. The screen says who did what, and the last seek can be undone. Volume stays personal; outside Watch Party the layout is each viewer's own.
+- Each tile plays its picture and app sound and, as a separate audio stream on the same clock, its voice. Everyone's voice is heard in every view; app sound comes from the chosen player.
 - Volume is personal. Each person can set app sound and voice volume and mute for each member for themselves (planned; one volume now).
 
 ## Events
@@ -84,14 +92,14 @@ A plugin that turns voice into range events with Whisper on whichever member run
 
 ## Export
 
-File > Export set writes one video on this PC, like a screen recording of the Player: the set's players on the auto grid with names, lined up as in playback; track 1 is the mix and one track per player follows. Players whose files are not here yet are left out.
+File > Export set writes one video on this PC, like a screen recording of the Player: the set's players on the auto grid with names, lined up as in playback; track 1 is the mix and one track per player (app sound and voice) follows. The app streams each part's segments to ffmpeg over localhost. Players with nothing here yet are left out.
 
 ## Deleting and cleanup
 
 - Deleting a set removes it from this PC only and is remembered, so it is not fetched again; others keep theirs.
 - Sets older than the kept days are deleted the same way (empty keeps them forever).
 - When free disk space runs low, the oldest sets without notes go first, then those with notes, never one being recorded; the app says which. When the disk is nearly full, recording stops.
-- The app removes by itself old live segments, live segments of rooms not open, partial exports, what is left of rooms left and sets deleted, and reports and old logs older than a week. It never touches recordings, events or the key without being asked.
+- Deleting a set removes its segments. A segment that is in no set goes once it is not among the newest few of a live capture; a capture folder goes when nothing in it is kept. The app also removes partial exports, what is left of rooms left and sets deleted, and reports and old logs older than a week. It never touches recordings, events or the key without being asked.
 
 ## Planned
 
@@ -116,7 +124,7 @@ File > Export set writes one video on this PC, like a screen recording of the Pl
 - Keeping only the parts of old sets around notes and events instead of deleting them whole.
 - A storage view: free space and the space each set uses.
 - A jobs view: plugin jobs with progress, retry and cancel.
-- Thin connections: send in order of importance (logs and notes, sound, live picture, then history); members who already have a file pass it on, so a slow uploader sends each piece once; history slows down by itself when round trips grow; the room menu shows each member's speed and time left. Optional later: receiving only the sets one opens.
+- Thin connections: members who already have a segment pass it on, so a slow uploader sends each piece once; history slows down by itself when round trips grow; the room menu shows each member's speed and time left. Optional later: receiving only the sets one opens.
 - Sending quality: Light / Standard / High presets, or choose the resolution (720p, 1080p, as captured) and frame rate (30, 60) yourself; the bit rate follows from them and the codec, and the room's total bandwidth is shown next to it.
 - Receiving quality: each member can ask for a light live picture from a member; that member then also encodes a smaller live copy while anyone asks for it. Saved sets keep the sender's quality.
 - Health check: Room > Check connections tests every pair of members (direct or relay, round trip, upload and download speed with a short transfer) and each member's capture, encoder, microphone and free space, and shows everyone the same table, with what to do for each problem.

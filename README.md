@@ -43,7 +43,7 @@ Data lives in `%LOCALAPPDATA%\dev.ez-hanseikai.app`; the app's Files section ope
 
 - Only the teammates you connect to receive your recording, game sound, notes and name. Anything visible on your main screen, such as chats or notifications, is recorded too.
 - Your ID is the public half of a key made on first start. Connections are encrypted and accepted only from room members. An invite code works once; anyone who joins can invite others, so share it only with your team.
-- The Share switch in the settings stops others from receiving your recordings; the speed limit caps how fast recordings move.
+- The Share switch in the settings stops others from receiving your recordings; the speed limit caps your upload.
 
 ## Contributing
 
