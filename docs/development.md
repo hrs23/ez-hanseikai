@@ -21,3 +21,5 @@ To run a second instance on one PC for testing, set `EZH_DIR` to a folder inside
 To try a change on another Windows PC over SSH without pushing: `scripts/deploy.sh <user@host>`. It sends the working tree, builds, and starts the app. `APP_ARGS="--peer <id> --record 20 --audio-pid <pid>"` connects to a peer and records for 20 seconds. Set `SCRIPT=capture.ps1`, `audio.ps1` or `record.ps1` to also run a screen capture, a per-process audio capture or a combined recording check. `record-run.ps1 -TargetPid <pid>` records a running app instead of the test tone.
 
 A deploy builds without an installer (`tauri build --no-bundle`); set `INSTALLER=1` to also build the installer.
+
+Set `EZH_RELAY_ONLY=1` to start an instance that uses only the relay, to test the slow path.

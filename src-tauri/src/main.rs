@@ -640,7 +640,11 @@ async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
         std::fs::write(&key_path, key.to_bytes())?;
         key
     };
-    let ep = Endpoint::builder(presets::N0).secret_key(key).alpns(vec![ALPN.to_vec()]).bind().await?;
+    let mut builder = Endpoint::builder(presets::N0).secret_key(key).alpns(vec![ALPN.to_vec()]);
+    if std::env::var_os("EZH_RELAY_ONLY").is_some() {
+        builder = builder.clear_ip_transports();
+    }
+    let ep = builder.bind().await?;
     std::fs::write(dir.join("id.txt"), ep.id().to_string())?;
     let rooms: room::Rooms = std::fs::read_to_string(dir.join("rooms.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
     let settings: Value = std::fs::read_to_string(dir.join("settings.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
