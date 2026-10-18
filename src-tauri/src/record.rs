@@ -972,8 +972,7 @@ fn check_sink(core: &Core) {
     }
     drop(child);
     if watch.working(now) {
-        let fallback = sink.encoder == ffmpeg::FALLBACK.0 && !ffmpeg::dropped().is_empty();
-        *e.status.lock().unwrap() = if fallback { "The hardware video encoders failed, so the CPU encodes (libx264) for now.".into() } else { String::new() };
+        e.status.lock().unwrap().clear();
     }
     if watch.stable(now) {
         e.failures.store(0, Ordering::Relaxed);
