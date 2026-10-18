@@ -116,11 +116,11 @@ pub fn text(core: &Core) -> String {
         out.push_str(&format!("set {} {}\n", set["id"].as_str().unwrap_or_default(), set["status"].as_str().unwrap_or_default()));
         for p in set["players"].as_array().into_iter().flatten() {
             out.push_str(&format!(
-                "  {} have {} of {:?} B sha256 {} verified by {}\n",
+                "  {} have {} of {} B in {} parts verified by {}\n",
                 short(p["owner"].as_str().unwrap_or_default()),
-                p["size"],
-                p["total"].as_u64(),
-                p["sha256"].as_str().unwrap_or("unknown"),
+                p["have"],
+                p["total"],
+                p["parts"].as_array().map_or(0, |a| a.len()),
                 p["verified_by"].as_array().into_iter().flatten().filter_map(|k| k.as_str()).map(short).collect::<Vec<_>>().join(", ")
             ));
         }

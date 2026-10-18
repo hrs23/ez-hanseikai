@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use crate::{file_len, net, room, Core};
+use crate::{net, room, Core};
 
 pub const REPEAT: Duration = Duration::from_secs(4);
 const SEEN: Duration = Duration::from_secs(10);
@@ -17,6 +17,7 @@ pub struct Viewer {
     pub set: Value,
     pub heads: Heads,
     pub progress: Option<f64>,
+    pub stuck: bool,
     pub seen: Instant,
 }
 
@@ -103,7 +104,7 @@ impl Party {
         self.lamport = self.lamport.max(key(&shared).0);
         let heads = heads_of(&msg["heads"]);
         self.absorb(&heads, now);
-        self.viewers.insert(from.to_string(), Viewer { set: shared["set"].clone(), heads, progress: msg["progress"].as_f64(), seen: now });
+        self.viewers.insert(from.to_string(), Viewer { set: shared["set"].clone(), heads, progress: msg["progress"].as_f64(), stuck: msg["stuck"] == true, seen: now });
         if !newer(&shared, &self.shared) {
             return false;
         }
@@ -128,19 +129,19 @@ impl Party {
         self.on && self.sent.as_ref().is_none_or(|(at, heads)| now.duration_since(*at) >= REPEAT || heads != own)
     }
 
-    pub fn message(&mut self, room: &str, own: &Heads, progress: Option<f64>, now: Instant) -> Value {
+    pub fn message(&mut self, room: &str, own: &Heads, progress: Progress, now: Instant) -> Value {
         self.enter(room);
         self.absorb(own, now);
         self.sent = Some((now, own.clone()));
-        json!({"t": "party", "room": self.room, "shared": self.shared, "heads": own, "progress": progress})
+        json!({"t": "party", "room": self.room, "shared": self.shared, "heads": own, "progress": progress.0, "stuck": progress.1})
     }
 
-    pub fn status(&self, me: &str, own: &Heads, progress: Option<f64>, now: Instant, name: impl Fn(&str) -> String) -> Vec<String> {
+    pub fn status(&self, me: &str, own: &Heads, progress: Progress, now: Instant, name: impl Fn(&str) -> String) -> Vec<String> {
         let set = &self.shared["set"];
-        let mut viewers: Vec<(&str, &Heads, Option<f64>, &Value)> = vec![(me, own, progress, set)];
+        let mut viewers: Vec<(&str, &Heads, Progress, &Value)> = vec![(me, own, progress, set)];
         let mut others: Vec<(&String, &Viewer)> = self.viewers.iter().filter(|(_, v)| now.duration_since(v.seen) < SEEN).collect();
         others.sort_by_key(|(id, _)| id.as_str());
-        viewers.extend(others.into_iter().map(|(id, v)| (id.as_str(), &v.heads, v.progress, &v.set)));
+        viewers.extend(others.into_iter().map(|(id, v)| (id.as_str(), &v.heads, (v.progress, v.stuck), &v.set)));
         let mut owners: Vec<&String> = self.heads.keys().collect();
         owners.sort();
         let mut out = Vec::new();
@@ -150,9 +151,10 @@ impl Party {
                 out.push(format!("Catching up with {}", if owner == me { "you".to_string() } else { name(owner) }));
             }
         }
-        for (id, _, progress, at) in viewers {
+        for (id, _, (progress, stuck), at) in viewers {
             if let Some(p) = progress.filter(|p| *p < 1.0 && *at == *set) {
-                out.push(format!("{} receiving {}%", name(id), (p * 100.0).floor()));
+                let verb = if stuck { "incomplete at" } else { "receiving" };
+                out.push(format!("{} {verb} {}%", name(id), (p * 100.0).floor()));
             }
         }
         out
@@ -163,16 +165,16 @@ impl Party {
     }
 }
 
-fn progress(core: &Core, room: &str, logs: &[room::Log], set: &Value) -> Option<f64> {
-    let set = room::sets(core, room, logs).into_iter().find(|s| set.as_str() == Some(s.id.as_str()))?;
-    let (mut have, mut total) = (0u64, 0u64);
-    for f in &set.files {
-        if let Some(t) = f.total {
-            have += file_len(&core.set_file(room, &set.id, &f.owner)).min(t);
-            total += t;
-        }
-    }
-    (total > 0).then(|| have as f64 / total as f64)
+pub type Progress = (Option<f64>, bool);
+
+fn progress(core: &Core, room: &str, logs: &[room::Log], set: &Value) -> Progress {
+    let all = room::sets(core, room, logs);
+    let Some(found) = all.iter().find(|s| set.as_str() == Some(s.id.as_str())) else { return (None, false) };
+    let mine = crate::data::have_counts(core, room, std::slice::from_ref(found));
+    let others = room::others_have(core);
+    let online: Vec<&Heads> = others.iter().filter(|o| o.3).map(|o| &o.1).collect();
+    let (have, total, stuck) = room::progress(core, found, &mine, &online);
+    ((total > 0).then(|| have as f64 / total as f64), stuck)
 }
 
 pub fn send(core: &Arc<Core>) {
@@ -265,7 +267,7 @@ mod tests {
         let (mut a, mut b) = (party("a"), party("b"));
         a.act("a", &view("s1", 100), 1_000);
         b.act("b", &view("s1", 200), 1_000);
-        let (ma, mb) = (a.message("r", &Heads::new(), None, Instant::now()), b.message("r", &Heads::new(), None, Instant::now()));
+        let (ma, mb) = (a.message("r", &Heads::new(), (None, false), Instant::now()), b.message("r", &Heads::new(), (None, false), Instant::now()));
         assert!(a.receive("b", &mb, 0, "r", Instant::now()));
         assert!(!b.receive("a", &ma, 0, "r", Instant::now()));
         assert_eq!(key(&a.shared), key(&b.shared));
@@ -279,9 +281,9 @@ mod tests {
         let mut old = party("a");
         old.act("a", &view("s2", 50), 10);
         let mut new = party("z");
-        assert!(new.receive("a", &old.message("r", &Heads::new(), None, Instant::now()), 0, "r", Instant::now()));
+        assert!(new.receive("a", &old.message("r", &Heads::new(), (None, false), Instant::now()), 0, "r", Instant::now()));
         assert_eq!(new.shared["set"], "s2");
-        assert!(!old.receive("z", &new.message("r", &Heads::new(), None, Instant::now()), 0, "r", Instant::now()));
+        assert!(!old.receive("z", &new.message("r", &Heads::new(), (None, false), Instant::now()), 0, "r", Instant::now()));
     }
 
     #[test]
@@ -289,7 +291,7 @@ mod tests {
         let mut a = party("a");
         let mut b = party("b");
         a.act("a", &view("s1", 1_000), 5);
-        b.receive("a", &a.message("r", &Heads::new(), None, Instant::now()), 300, "r", Instant::now());
+        b.receive("a", &a.message("r", &Heads::new(), (None, false), Instant::now()), 300, "r", Instant::now());
         assert_eq!(b.shared["wall_us"], 700);
         assert_eq!(b.shared["at_us"], 700);
     }
@@ -304,10 +306,10 @@ mod tests {
         let own = heads(&[("x", 5), ("y", 2)]);
         assert!(!a.lacks(&own));
         assert!(a.lacks(&heads(&[("x", 4), ("y", 2)])));
-        assert!(a.status("a", &own, None, Instant::now(), |id| id.to_uppercase()).is_empty());
-        let status = a.status("a", &own, None, Instant::now() + REPEAT, |id| id.to_uppercase());
+        assert!(a.status("a", &own, (None, false), Instant::now(), |id| id.to_uppercase()).is_empty());
+        let status = a.status("a", &own, (None, false), Instant::now() + REPEAT, |id| id.to_uppercase());
         assert_eq!(status, vec!["Catching up with X".to_string()]);
-        a.message("r", &heads(&[("x", 1), ("y", 9)]), None, Instant::now());
+        a.message("r", &heads(&[("x", 1), ("y", 9)]), (None, false), Instant::now());
         assert_eq!(a.heads, heads(&[("x", 5), ("y", 9)]));
     }
 
@@ -316,7 +318,9 @@ mod tests {
         let mut a = party("a");
         a.receive("b", &json!({"room": "r", "shared": {"seq": 0, "set": "s1"}, "progress": 0.725}), 0, "r", Instant::now());
         a.receive("c", &json!({"room": "r", "shared": {"seq": 0, "set": "s9"}, "progress": 0.1}), 0, "r", Instant::now());
-        assert_eq!(a.status("a", &Heads::new(), Some(1.0), Instant::now(), |id| id.to_string()), vec!["b receiving 72%".to_string()]);
+        assert_eq!(a.status("a", &Heads::new(), (Some(1.0), false), Instant::now(), |id| id.to_string()), vec!["b receiving 72%".to_string()]);
+        a.receive("b", &json!({"room": "r", "shared": {"seq": 0, "set": "s1"}, "progress": 0.5, "stuck": true}), 0, "r", Instant::now());
+        assert_eq!(a.status("a", &Heads::new(), (Some(0.25), true), Instant::now(), |id| id.to_string()), vec!["a incomplete at 25%".to_string(), "b incomplete at 50%".to_string()]);
     }
 
     #[test]

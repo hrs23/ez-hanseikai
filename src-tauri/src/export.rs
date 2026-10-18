@@ -1,15 +1,19 @@
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::TcpListener;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdout, Command, Stdio};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use serde_json::json;
 use tauri::Emitter;
 
 use crate::ffmpeg::{self, FRAGMENTED};
 use crate::record::FPS;
-use crate::{file_len, room, strings, Core, BELOW_NORMAL, NO_WINDOW};
+use crate::room::{LEGACY, SERIES};
+use crate::stream::{self, Piece};
+use crate::{room, strings, Core, BELOW_NORMAL, NO_WINDOW};
 
 const CANVAS: (u32, u32) = (2560, 1440);
 const VIDEO_KBPS: u32 = 12000;
@@ -19,6 +23,9 @@ const LABEL_PX: u32 = 28;
 const LABEL_MARGIN: u32 = 16;
 const PARTIAL: &str = "export.mp4";
 const FONTS: [&str; 3] = ["YuGothM.ttc", "meiryo.ttc", "msgothic.ttc"];
+const FEED_CHUNK: u64 = 1 << 20;
+const CONNECT_WAIT: Duration = Duration::from_secs(120);
+const POLL: Duration = Duration::from_millis(50);
 
 pub struct Running {
     child: Child,
@@ -32,6 +39,32 @@ pub fn grid(n: usize, (width, height): (u32, u32)) -> Vec<(u32, u32, u32, u32)> 
     let (w, h) = (unit as u32 & !1, (unit * 9.0 / 16.0) as u32 & !1);
     let (left, top) = ((width - w * cols as u32) / 2, (height - h * rows as u32) / 2);
     (0..n).map(|i| (left + (i % cols) as u32 * w, top + (i / cols) as u32 * h, w, h)).collect()
+}
+
+fn feed(core: Arc<Core>, listener: TcpListener, pieces: Vec<Piece>) {
+    let deadline = Instant::now() + CONNECT_WAIT;
+    if listener.set_nonblocking(true).is_err() {
+        return;
+    }
+    let mut stream = loop {
+        match listener.accept() {
+            Ok((stream, _)) => break stream,
+            Err(_) if Instant::now() < deadline && core.export.lock().unwrap().is_some() => std::thread::sleep(POLL),
+            Err(_) => return,
+        }
+    };
+    if stream.set_nonblocking(false).is_err() {
+        return;
+    }
+    let total = stream::size(&pieces);
+    let mut at = 0;
+    while at < total {
+        let Ok(bytes) = stream::read(&core, &pieces, at, FEED_CHUNK.min(total - at)) else { return };
+        if stream.write_all(&bytes).is_err() {
+            return;
+        }
+        at += bytes.len() as u64;
+    }
 }
 
 fn quoted(path: &Path) -> String {
@@ -60,36 +93,64 @@ pub fn start(core: &Arc<Core>, room_id: &str, set_id: &str, mut path: PathBuf) -
     if path.extension().is_none() {
         path.set_extension("mp4");
     }
-    let dir = core.set_dir(room_id, set_id);
-    let order: Vec<String> = strings(&core.json(&dir.join("set.json"))["layout"]["order"]);
+    let logs = room::logs(core, room_id);
+    let order: Vec<String> = strings(&room::set_layout(&logs, set_id)["order"]);
     let mut files: Vec<&room::File> = set.files.iter().collect();
     files.sort_by_key(|f| order.iter().position(|o| *o == f.owner).unwrap_or(usize::MAX));
     let work = core.dir.join("export");
     std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
     let fonts = PathBuf::from(std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".into())).join("Fonts");
     let font = FONTS.iter().map(|f| fonts.join(f)).find(|f| f.exists()).ok_or("No Japanese font found in Windows.")?;
-    let rects = grid(files.len(), CANVAS);
     let mut command = Command::new(ffmpeg::path());
     command.args(["-hide_banner", "-loglevel", "error", "-nostats", "-progress", "pipe:1", "-y"]);
     let mut graph = format!("color=c=black:s={}x{}:r={FPS}:d={total:.3}[bg0];", CANVAS.0, CANVAS.1);
-    let (mut labels, mut mixes, mut names, mut skipped) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
-    for (f, (x, y, w, h)) in files.iter().zip(rects) {
-        let name = room::display_name(core, &f.owner);
-        let file = core.set_file(room_id, set_id, &f.owner);
-        if file_len(&file) == 0 {
-            skipped.push(name);
-            continue;
+    let (mut labels, mut mixes, mut names, mut skipped, mut feeds) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let mut players: Vec<(&room::File, Vec<(Vec<Piece>, f64, bool)>)> = Vec::new();
+    for f in &files {
+        let mut inputs = Vec::new();
+        for capture in f.captures() {
+            for series in SERIES {
+                let Some(first) = f.segs.iter().find(|s| s.capture == capture && s.series == series) else { continue };
+                let pieces = stream::set_pieces(core, room_id, &set, f, capture, series);
+                if pieces.len() > usize::from(capture != LEGACY) {
+                    let delay = ((first.t_us - f.offset_us) - set.start()).max(0) as f64 / 1e6;
+                    inputs.push((pieces, delay, series == SERIES[0]));
+                }
+            }
         }
-        let i = names.len();
-        let delay = ((f.start_us - f.offset_us) - set.start()).max(0) as f64 / 1e6;
-        command.arg("-i").arg(&file);
-        graph += &format!(
-            "[{i}:v]setpts=PTS-STARTPTS+{delay:.3}/TB,scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1[v{i}];\
-             [bg{i}][v{i}]overlay=x={x}:y={y}:eof_action=pass[bg{}];\
-             [{i}:a:0][{i}:a:1]amix=inputs=2:normalize=0:duration=longest,asetpts=PTS-STARTPTS,adelay=delays={}:all=1,asplit=2[p{i}][m{i}];",
-            i + 1,
-            (delay * 1000.0).round() as u64
-        );
+        if inputs.is_empty() {
+            skipped.push(room::display_name(core, &f.owner));
+        } else {
+            players.push((f, inputs));
+        }
+    }
+    let rects = grid(players.len(), CANVAS);
+    let (mut input, mut layer) = (0usize, 0usize);
+    for (i, ((f, inputs), (x, y, w, h))) in players.into_iter().zip(rects).enumerate() {
+        let name = room::display_name(core, &f.owner);
+        let mut sounds = Vec::new();
+        for (pieces, delay, video) in inputs {
+            let legacy = pieces.first().is_some_and(|p| p.raw);
+            let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
+            let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+            command.arg("-i").arg(format!("tcp://127.0.0.1:{port}"));
+            feeds.push((listener, pieces));
+            let j = input;
+            input += 1;
+            if video {
+                graph += &format!(
+                    "[{j}:v]setpts=PTS-STARTPTS+{delay:.3}/TB,scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1[v{j}];\
+                     [bg{layer}][v{j}]overlay=x={x}:y={y}:eof_action=pass[bg{}];",
+                    layer + 1
+                );
+                layer += 1;
+            }
+            for k in 0..if legacy { 2 } else { 1 } {
+                graph += &format!("[{j}:a:{k}]asetpts=PTS-STARTPTS,adelay=delays={}:all=1[s{j}_{k}];", (delay * 1000.0).round() as u64);
+                sounds.push(format!("[s{j}_{k}]"));
+            }
+        }
+        graph += &format!("{}amix=inputs={}:normalize=0:duration=longest,asplit=2[p{i}][m{i}];", sounds.concat(), sounds.len());
         let label = work.join(format!("label-{i}.txt"));
         std::fs::write(&label, &name).map_err(|e| e.to_string())?;
         labels.push(format!(
@@ -106,7 +167,7 @@ pub fn start(core: &Arc<Core>, room_id: &str, set_id: &str, mut path: PathBuf) -
         return Err("None of this set's files are on this PC yet.".into());
     }
     labels.push("format=yuv420p".into());
-    graph += &format!("[bg{}]{}[vout];{}amix=inputs={}:normalize=0:duration=longest[mix]", names.len(), labels.join(","), mixes.concat(), names.len());
+    graph += &format!("[bg{layer}]{}[vout];{}amix=inputs={}:normalize=0:duration=longest[mix]", labels.join(","), mixes.concat(), names.len());
     let encoder = ffmpeg::encoder();
     command
         .args(["-filter_complex", &graph, "-map", "[vout]", "-map", "[mix]"])
@@ -129,6 +190,10 @@ pub fn start(core: &Arc<Core>, room_id: &str, set_id: &str, mut path: PathBuf) -
     let mut child = command.spawn().map_err(|e| e.to_string())?;
     let (stdout, stderr) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
     *core.export.lock().unwrap() = Some(Running { child, cancelled: false });
+    for (listener, pieces) in feeds {
+        let core = core.clone();
+        std::thread::spawn(move || feed(core, listener, pieces));
+    }
     let core = core.clone();
     std::thread::spawn(move || watch(&core, stdout, stderr, &work.join(PARTIAL), &path, total));
     Ok(skipped)

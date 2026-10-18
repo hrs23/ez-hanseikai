@@ -7,12 +7,14 @@ mod debug;
 mod export;
 mod ffmpeg;
 mod log;
+mod media;
 mod net;
 mod party;
 mod record;
 mod room;
 mod shell;
 mod sources;
+mod stream;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -27,7 +29,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, State};
 
 pub const ALPN: &[u8] = b"ez-hanseikai/0";
-pub const PROTOCOL: u32 = 2;
+pub const PROTOCOL: u32 = 3;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const NO_WINDOW: u32 = 0x08000000;
 pub const BELOW_NORMAL: u32 = 0x00004000;
@@ -93,15 +95,14 @@ pub struct Peer {
     pub codecs: Vec<String>,
     pub info: Option<(String, u32)>,
     pub sharing: bool,
-    pub live: Option<String>,
-    pub have: HashSet<String>,
+    pub have: HashMap<String, u64>,
     pub gone: HashSet<String>,
     pub asks: Vec<Value>,
 }
 
 impl Peer {
     pub fn new(id: EndpointId, name: String) -> Self {
-        Self { id, name, conn: None, incoming: None, offset_us: None, failures: 0, announce: true, codecs: default_codecs(), info: None, sharing: false, live: None, have: HashSet::new(), gone: HashSet::new(), asks: Vec::new() }
+        Self { id, name, conn: None, incoming: None, offset_us: None, failures: 0, announce: true, codecs: default_codecs(), info: None, sharing: false, have: HashMap::new(), gone: HashSet::new(), asks: Vec::new() }
     }
 }
 
@@ -126,7 +127,7 @@ pub struct Core {
     pub free_bytes: AtomicU64,
     pub total_bytes: AtomicU64,
     pub deleted: Mutex<HashSet<String>>,
-    pub pacers: [Mutex<Instant>; 2],
+    pub pacer: Mutex<net::Pacer>,
     pub previous_version: String,
     pub ffmpeg_status: Mutex<String>,
     pub events: Mutex<VecDeque<String>>,
@@ -142,6 +143,8 @@ pub struct Core {
     pub party: Mutex<party::Party>,
     logs: Mutex<HashMap<PathBuf, (Arc<Vec<Value>>, u64)>>,
     pub jsons: Mutex<HashMap<PathBuf, Value>>,
+    pub writing: Mutex<HashSet<PathBuf>>,
+    pub indexes: Mutex<HashMap<PathBuf, (u64, Arc<Vec<media::Time>>)>>,
 }
 
 impl Core {
@@ -369,7 +372,8 @@ fn delete_set(core: State<Arc<Core>>, room: String, set: String) -> Result<(), S
 #[tauri::command]
 fn open_set_folder(core: State<Arc<Core>>, room: String, set: String) {
     if room::valid_id(&room) && room::valid_id(&set) {
-        data::open_folder(&core.set_dir(&room, &set));
+        let legacy = core.set_dir(&room, &set);
+        data::open_folder(&if legacy.exists() { legacy } else { core.dir.join("rooms").join(&room).join(core.me()) });
     }
 }
 
@@ -397,10 +401,7 @@ fn cancel_export(core: State<Arc<Core>>) {
 fn set_layout(core: State<Arc<Core>>, layout: Value) {
     *core.layout.lock().unwrap() = layout;
     core.save_settings();
-    let active = core.active_set.lock().unwrap().clone();
-    if let Some(active) = active {
-        room::write_set_json(&core, &active, false);
-    }
+    room::log_set_layout(&core);
 }
 
 #[tauri::command]
@@ -640,7 +641,7 @@ async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
         free_bytes: AtomicU64::new(0),
         total_bytes: AtomicU64::new(0),
         deleted: Mutex::new(strings(&settings["deleted_sets"])),
-        pacers: [Mutex::new(Instant::now()), Mutex::new(Instant::now())],
+        pacer: Mutex::new(net::Pacer::new()),
         previous_version,
         ffmpeg_status: Mutex::new(String::new()),
         events: Mutex::new(VecDeque::new()),
@@ -656,6 +657,8 @@ async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
         party: Mutex::new(party::Party::default()),
         logs: Mutex::new(HashMap::new()),
         jsons: Mutex::new(HashMap::new()),
+        writing: Mutex::new(HashSet::new()),
+        indexes: Mutex::new(HashMap::new()),
     }))
 }
 
@@ -685,13 +688,20 @@ fn main() {
                 let _ = window.hide();
             }
         })
+        .register_asynchronous_uri_scheme_protocol("ezh", |ctx, request, responder| {
+            let core = ctx.app_handle().try_state::<Arc<Core>>().map(|c| c.inner().clone());
+            std::thread::spawn(move || match core {
+                Some(core) => responder.respond(stream::respond(&core, &request)),
+                None => responder.respond(tauri::http::Response::builder().status(503).body(Vec::new()).unwrap()),
+            });
+        })
         .setup(|app| {
             let core = tauri::async_runtime::block_on(init(app.handle().clone()))?;
             app.manage(core.clone());
             shell::setup(app, core.clone())?;
-            let unhashed = data::unhashed(&core);
+            record::recover(&core);
             let c = core.clone();
-            std::thread::spawn(move || data::keeper(c, unhashed));
+            std::thread::spawn(move || data::keeper(c));
             tauri::async_runtime::spawn(net::accept_loop(core.clone()));
             tauri::async_runtime::spawn(party::repeat(core.clone()));
             room::apply_active(&core);

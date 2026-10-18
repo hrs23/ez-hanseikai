@@ -1,15 +1,16 @@
 use std::collections::HashMap;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tauri::Emitter;
 use windows_capture::capture::{CaptureControl, Context, GraphicsCaptureApiHandler};
 use windows_capture::frame::Frame;
@@ -22,15 +23,18 @@ use windows_capture::settings::{
 
 use crate::audio::{self, Audio, CHANNELS, SAMPLE_RATE};
 use crate::ffmpeg::{self, FRAGMENTED};
+use crate::room::{part_of, seg_name, INIT, SERIES};
 use crate::sources::{self, Found, Item};
-use crate::{merge, now_us, Core, BELOW_NORMAL, NO_WINDOW};
+use crate::{data, hex, media, merge, now_us, read_json, Core, BELOW_NORMAL, NO_WINDOW};
 
 pub type Err = Box<dyn std::error::Error + Send + Sync>;
 
 pub const FPS: u32 = 30;
+pub const FRAGMENTS_PER_SEGMENT: u32 = 4;
 const BASE_BITRATE_KBPS: f64 = 6000.0;
 const AUDIO_BITRATE: &str = "128k";
 const QUEUE_SIZE: &str = "512";
+const VOICE_FRAGMENT_US: &str = "1000000";
 const FRAME_GAP: Duration = Duration::from_millis(30);
 const REPEAT_AFTER: Duration = Duration::from_millis(250);
 const REPEAT_POLL: Duration = Duration::from_millis(100);
@@ -38,25 +42,20 @@ const PCM_FRAME_BYTES: u64 = 4;
 const PAD_AFTER_FRAMES: u64 = SAMPLE_RATE as u64 / 50;
 const SHARED_MAX_WIDTH: u32 = 1280;
 const LEVELS_PER_SECOND: u64 = 30;
-const LIVE_SEGMENT_S: u32 = 10;
-const LIVE_KEEP: usize = 3;
+const READ_CHUNK: usize = 64 << 10;
 const SUPERVISE_EVERY: Duration = Duration::from_millis(500);
 pub const RESCAN_EVERY: Duration = Duration::from_secs(5);
-const CLEAN_EVERY: Duration = Duration::from_secs(LIVE_SEGMENT_S as u64);
 const RETRY_FIRST: Duration = Duration::from_secs(1);
 const RETRY_MAX: Duration = Duration::from_secs(30);
 const STABLE_AFTER: Duration = Duration::from_secs(60);
 const FINISH_WAIT: Duration = Duration::from_secs(10);
+const CUT_WAIT: Duration = Duration::from_secs(3);
 const PROBE_WAIT: Duration = Duration::from_secs(2);
 const POLL: Duration = Duration::from_millis(20);
 pub const GAME: usize = 0;
 pub const MIC: usize = 1;
-
-#[derive(Clone, PartialEq)]
-pub struct Target {
-    pub room: String,
-    pub set: Option<String>,
-}
+const OPEN: &str = "open.json";
+pub const CAP: &str = "cap.json";
 
 #[derive(Default)]
 struct Track {
@@ -64,18 +63,41 @@ struct Track {
     written: u64,
 }
 
+struct Open {
+    n: u32,
+    set: Option<String>,
+    file: std::fs::File,
+    hasher: Sha256,
+    size: u64,
+    t_us: i64,
+    count: u32,
+}
+
+#[derive(Default)]
+struct Series {
+    scales: HashMap<u32, u32>,
+    n: u32,
+    open: Option<Open>,
+    last_us: i64,
+    step_us: i64,
+}
+
 pub struct Sink {
-    pub target: Target,
-    live_dir: PathBuf,
-    live_prefix: String,
-    segment: AtomicU32,
+    pub room: String,
+    pub capture: String,
+    dir: PathBuf,
     size: (u32, u32),
+    codec: &'static str,
     meta: Value,
     child: Mutex<Child>,
     video: Mutex<Option<ChildStdin>>,
     tracks: [Mutex<Track>; 2],
+    outputs: [Mutex<Series>; 2],
+    inits: Mutex<[Value; 2]>,
+    readers: Mutex<Vec<JoinHandle<()>>>,
     closers: Mutex<Vec<TcpStream>>,
-    start: OnceLock<Instant>,
+    start: OnceLock<(Instant, i64)>,
+    cap_logged: AtomicBool,
     closed: AtomicBool,
     dead: AtomicBool,
     born: Instant,
@@ -110,6 +132,7 @@ pub struct Engine {
     last: Mutex<(Vec<u8>, (u32, u32), Instant)>,
     failures: AtomicU32,
     retry_at: Mutex<Instant>,
+    rec_lock: Mutex<()>,
 }
 
 impl Engine {
@@ -129,6 +152,7 @@ impl Engine {
             last: Mutex::new((Vec::new(), (0, 0), Instant::now())),
             failures: AtomicU32::new(0),
             retry_at: Mutex::new(Instant::now()),
+            rec_lock: Mutex::new(()),
         }
     }
 
@@ -142,9 +166,10 @@ impl Engine {
         (mix[&key]["volume"].as_f64().unwrap_or(1.0) as f32, mix[&key]["muted"].as_bool().unwrap_or(false))
     }
 
-    pub fn live_file(&self) -> Option<String> {
+    pub fn live(&self) -> Option<(String, String, [u32; 2])> {
         let sink = self.sink.lock().unwrap().clone()?;
-        sink.live_file()
+        let n = [0, 1].map(|i| sink.outputs[i].lock().unwrap().n);
+        Some((sink.room.clone(), sink.capture.clone(), n))
     }
 
     fn failed(&self, born: Instant, why: &str) {
@@ -176,26 +201,16 @@ pub fn capture_json(core: &Core, live: Option<Value>) -> Value {
     })
 }
 
-pub fn live_name(name: &str) -> Option<(String, i64, u32)> {
-    let (rest, n) = name.strip_suffix(".mp4")?.rsplit_once('-')?;
-    let (who, ms) = rest.rsplit_once('-')?;
-    Some((who.to_string(), ms.parse().ok()?, n.parse().ok()?))
-}
-
-fn slashes(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
-}
-
-fn want(core: &Core) -> Option<Target> {
+fn want(core: &Core) -> Option<String> {
     let e = &core.engine;
     if e.source.lock().unwrap().is_null() || core.disk_full() {
         return None;
     }
     if let Some(s) = core.active_set.lock().unwrap().as_ref() {
-        return Some(Target { room: s.room.clone(), set: Some(s.id.clone()) });
+        return Some(s.room.clone());
     }
     let room = core.room_id()?;
-    (core.share.load(Ordering::Relaxed) && !e.source_lost.load(Ordering::Relaxed)).then_some(Target { room, set: None })
+    (core.share.load(Ordering::Relaxed) && !e.source_lost.load(Ordering::Relaxed)).then_some(room)
 }
 
 fn usable_codecs(core: &Core) -> Vec<String> {
@@ -206,7 +221,7 @@ fn usable_codecs(core: &Core) -> Vec<String> {
     usable
 }
 
-fn encode_command(size: (u32, u32), chosen: (&str, &str, f64), inputs: [u16; 2], outputs: &str) -> Command {
+fn encode_command(size: (u32, u32), chosen: (&str, &str, f64), inputs: [u16; 2], outputs: [u16; 2]) -> Command {
     let (rate, channels, fps) = (SAMPLE_RATE.to_string(), CHANNELS.to_string(), FPS.to_string());
     let mut command = Command::new(ffmpeg::path());
     command
@@ -217,7 +232,7 @@ fn encode_command(size: (u32, u32), chosen: (&str, &str, f64), inputs: [u16; 2],
         command.args(["-thread_queue_size", QUEUE_SIZE, "-f", "s16le", "-ar", &rate, "-ac", &channels, "-i", &format!("tcp://127.0.0.1:{port}")]);
     }
     command
-        .args(["-map", "0:v", "-map", "1:a", "-map", "2:a"])
+        .args(["-map", "0:v", "-map", "1:a"])
         .args(["-vf", &format!("scale={}:-2:flags=fast_bilinear,format=yuv420p", SHARED_MAX_WIDTH.min(size.0) & !1), "-r", &fps])
         .args(["-c:v", chosen.0, "-bf", "0", "-g", &fps, "-b:v", &format!("{}k", (BASE_BITRATE_KBPS * chosen.2) as u32)]);
     if chosen.0 == ffmpeg::FALLBACK.0 {
@@ -228,36 +243,76 @@ fn encode_command(size: (u32, u32), chosen: (&str, &str, f64), inputs: [u16; 2],
     }
     command
         .args(["-force_key_frames", "expr:gte(t,n_forced*1)"])
-        .args(["-c:a", "aac", "-b:a", AUDIO_BITRATE, "-metadata:s:a:0", "title=Game", "-metadata:s:a:1", "title=Microphone"])
-        .args(["-flags", "+global_header", "-f", "tee"])
-        .arg(outputs)
+        .args(["-c:a", "aac", "-b:a", AUDIO_BITRATE, "-metadata:s:a:0", "title=Game"])
+        .args(["-movflags", &format!("{FRAGMENTED}+skip_trailer"), "-f", "mp4", &format!("tcp://127.0.0.1:{}", outputs[0])])
+        .args(["-map", "2:a", "-c:a", "aac", "-b:a", AUDIO_BITRATE, "-metadata:s:a:0", "title=Microphone"])
+        .args(["-movflags", "empty_moov+default_base_moof+skip_trailer", "-frag_duration", VOICE_FRAGMENT_US, "-f", "mp4", &format!("tcp://127.0.0.1:{}", outputs[1])])
         .stdin(Stdio::piped())
         .stderr(Stdio::piped())
         .creation_flags(NO_WINDOW | BELOW_NORMAL);
     command
 }
 
+fn write_whole(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let part = part_of(path);
+    std::fs::write(&part, bytes)?;
+    std::fs::rename(part, path)
+}
+
+fn accept(listener: &TcpListener, closed: &AtomicBool) -> Option<TcpStream> {
+    listener.set_nonblocking(true).ok()?;
+    while !closed.load(Ordering::Relaxed) {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                stream.set_nonblocking(false).ok()?;
+                return Some(stream);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => thread::sleep(POLL),
+            Err(_) => return None,
+        }
+    }
+    None
+}
+
+fn ensure_rec(core: &Core, room: &str, set: &str, start_us: i64, meta: &Value) {
+    let _guard = core.engine.rec_lock.lock().unwrap();
+    if core.own_log(room).iter().any(|r| r["k"] == "rec" && r["set"] == set) {
+        return;
+    }
+    let by = core.active_set.lock().unwrap().as_ref().map(|s| s.by.clone()).unwrap_or_default();
+    let mut record = json!({"k": "rec", "room": room, "set": set, "start_us": start_us, "by": by});
+    merge(&mut record, meta);
+    core.append_log(room, &record);
+}
+
+fn log_cap(core: &Core, room: &str, capture: &str, cap: &Value) {
+    if core.own_log(room).iter().any(|r| r["k"] == "cap" && r["capture"] == capture) {
+        return;
+    }
+    let mut record = json!({"k": "cap", "room": room, "capture": capture});
+    merge(&mut record, cap);
+    core.append_log(room, &record);
+}
+
+fn seg_record(capture: &str, series: &str, n: u32, set: &str, t_us: i64, d_us: i64, size: u64, sha256: &str) -> Value {
+    json!({"k": "seg", "capture": capture, "series": series, "n": n, "set": set, "t_us": t_us, "d_us": d_us, "size": size, "sha256": sha256})
+}
+
 impl Sink {
-    fn start(core: &Arc<Core>, target: Target, size: (u32, u32)) -> Result<Arc<Self>, Err> {
+    fn start(core: &Arc<Core>, room: String, size: (u32, u32)) -> Result<Arc<Self>, Err> {
         if !ffmpeg::present() {
             return Err("ffmpeg is not installed yet".into());
         }
-        let id = core.ep.id().to_string();
-        let live_dir = core.live_dir(&target.room);
-        let live_prefix = format!("{id}-{}-", now_us() / 1000);
-        std::fs::create_dir_all(&live_dir)?;
-        let mut outputs = format!(
-            "[f=segment:segment_time={LIVE_SEGMENT_S}:reset_timestamps=1:segment_format=mp4:segment_format_options=movflags={FRAGMENTED}]{}/{live_prefix}%d.mp4",
-            slashes(&live_dir)
-        );
-        if let Some(set) = &target.set {
-            std::fs::create_dir_all(core.set_dir(&target.room, set))?;
-            outputs += &format!("|[f=mp4:movflags={FRAGMENTED}:flush_packets=1]{}", slashes(&core.own_file(&target.room, set)));
+        let capture = (now_us() / 1000).to_string();
+        let dir = core.capture_dir(&room, &core.me(), &capture);
+        for series in SERIES {
+            std::fs::create_dir_all(dir.join(series))?;
         }
         let chosen = ffmpeg::pick(&usable_codecs(core));
         let listeners = [TcpListener::bind("127.0.0.1:0")?, TcpListener::bind("127.0.0.1:0")?];
-        let inputs = [listeners[0].local_addr()?.port(), listeners[1].local_addr()?.port()];
-        let mut child = encode_command(size, chosen, inputs, &outputs).spawn()?;
+        let outputs = [TcpListener::bind("127.0.0.1:0")?, TcpListener::bind("127.0.0.1:0")?];
+        let port = |l: &TcpListener| l.local_addr().map(|a| a.port());
+        let mut child = encode_command(size, chosen, [port(&listeners[0])?, port(&listeners[1])?], [port(&outputs[0])?, port(&outputs[1])?]).spawn()?;
         if let Some(stderr) = child.stderr.take() {
             thread::spawn(move || {
                 use std::io::BufRead;
@@ -267,81 +322,157 @@ impl Sink {
             });
         }
         let names = core.engine.names.lock().unwrap().clone();
-        let mut meta = json!({
+        let meta = json!({
             "source_kind": names.kind, "source": names.source, "width": size.0, "height": size.1, "fps": FPS,
             "encoder": chosen.0, "codec": chosen.1, "audio": names.game, "mic": names.mic, "version": crate::VERSION,
         });
-        if let Some(set) = &target.set {
-            let by = core.active_set.lock().unwrap().as_ref().map(|s| s.by.clone()).unwrap_or_default();
-            merge(&mut meta, &json!({"set": set, "room": target.room, "file": format!("{id}.mp4"), "by": by}));
-        }
         let sink = Arc::new(Self {
-            target,
-            live_dir,
-            live_prefix,
-            segment: AtomicU32::new(0),
+            room,
+            capture,
+            dir,
             size,
+            codec: chosen.1,
             meta,
             video: Mutex::new(child.stdin.take()),
             child: Mutex::new(child),
             tracks: [Mutex::new(Track::default()), Mutex::new(Track::default())],
+            outputs: [Mutex::new(Series::default()), Mutex::new(Series::default())],
+            inits: Mutex::new([Value::Null, Value::Null]),
+            readers: Mutex::new(Vec::new()),
             closers: Mutex::new(Vec::new()),
             start: OnceLock::new(),
+            cap_logged: AtomicBool::new(false),
             closed: AtomicBool::new(false),
             dead: AtomicBool::new(false),
             born: Instant::now(),
         });
         for (track, listener) in listeners.into_iter().enumerate() {
             let sink = sink.clone();
-            thread::spawn(move || sink.accept(track, listener));
+            thread::spawn(move || {
+                if let Some(stream) = accept(&listener, &sink.closed) {
+                    if let Ok(closer) = stream.try_clone() {
+                        sink.closers.lock().unwrap().push(closer);
+                    }
+                    sink.tracks[track].lock().unwrap().stream = Some(stream);
+                }
+            });
+        }
+        for (which, listener) in outputs.into_iter().enumerate() {
+            let (sink2, core) = (sink.clone(), core.clone());
+            sink.readers.lock().unwrap().push(thread::spawn(move || sink2.read_output(&core, which, listener)));
         }
         Ok(sink)
     }
 
-    fn live_file(&self) -> Option<String> {
-        let name = |n: u32| format!("{}{n}.mp4", self.live_prefix);
-        let mut n = self.segment.load(Ordering::Relaxed);
-        while self.live_dir.join(name(n + 1)).exists() {
-            n += 1;
-        }
-        self.segment.store(n, Ordering::Relaxed);
-        Some(name(n)).filter(|f| self.live_dir.join(f).exists())
-    }
-
-    fn accept(&self, track: usize, listener: TcpListener) {
-        if listener.set_nonblocking(true).is_err() {
-            return;
-        }
-        while !self.closed.load(Ordering::Relaxed) {
-            match listener.accept() {
-                Ok((stream, _)) => {
-                    let _ = stream.set_nonblocking(false);
-                    if let Ok(closer) = stream.try_clone() {
-                        self.closers.lock().unwrap().push(closer);
+    fn read_output(&self, core: &Core, which: usize, listener: TcpListener) {
+        if let Some(mut stream) = accept(&listener, &self.closed) {
+            let mut splitter = media::Splitter::default();
+            let mut buf = vec![0u8; READ_CHUNK];
+            loop {
+                let n = match stream.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => n,
+                };
+                let Some(outs) = splitter.push(&buf[..n]) else { break };
+                for out in outs {
+                    match out {
+                        media::Out::Init(bytes) => self.take_init(core, which, &bytes),
+                        media::Out::Fragment(bytes) => self.take_fragment(core, which, &bytes),
                     }
-                    self.tracks[track].lock().unwrap().stream = Some(stream);
-                    return;
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => thread::sleep(POLL),
-                Err(_) => return,
             }
         }
+        let mut series = self.outputs[which].lock().unwrap();
+        self.close(core, which, &mut series, None);
+        if !self.closed.load(Ordering::Relaxed) {
+            self.dead.store(true, Ordering::Relaxed);
+        }
     }
 
-    fn write_video(&self, core: &Core, data: &[u8]) {
+    fn take_init(&self, core: &Core, which: usize, bytes: &[u8]) {
+        let path = self.dir.join(SERIES[which]).join(INIT);
+        if write_whole(&path, bytes).is_err() {
+            self.dead.store(true, Ordering::Relaxed);
+            return;
+        }
+        self.outputs[which].lock().unwrap().scales = media::timescales(bytes);
+        data::mark(core, &self.dir, &format!("{}/{INIT}", SERIES[which]), bytes.len() as u64, true);
+        let cap = {
+            let mut inits = self.inits.lock().unwrap();
+            inits[which] = json!({"size": bytes.len(), "sha256": hex(&Sha256::digest(bytes))});
+            let mut cap = json!({"start_us": self.start.get().map(|s| s.1), "init": {SERIES[0]: inits[0], SERIES[1]: inits[1]}});
+            merge(&mut cap, &self.meta);
+            cap
+        };
+        let _ = std::fs::write(self.dir.join(CAP), cap.to_string());
+    }
+
+    fn take_fragment(&self, core: &Core, which: usize, bytes: &[u8]) {
+        let Some(&(_, start_us)) = self.start.get() else { return };
+        let times = media::fragment_times(bytes, 0);
+        let mut series = self.outputs[which].lock().unwrap();
+        let Some(first) = times.first() else { return };
+        let t_us = start_us + media::micros(first, &series.scales);
+        let wanted = core.active_set.lock().unwrap().as_ref().filter(|a| a.room == self.room).map(|a| a.id.clone());
+        let open = series.open.as_ref();
+        if media::cut(open.is_some(), open.map_or(0, |o| o.count), FRAGMENTS_PER_SEGMENT, open.and_then(|o| o.set.as_deref()), wanted.as_deref()) {
+            self.close(core, which, &mut series, Some(t_us));
+            self.open(core, which, &mut series, wanted, t_us);
+        }
+        if series.last_us > 0 {
+            series.step_us = t_us - series.last_us;
+        }
+        series.last_us = t_us;
+        let Some(open) = series.open.as_mut() else { return };
+        if open.file.write_all(bytes).is_err() {
+            self.dead.store(true, Ordering::Relaxed);
+            return;
+        }
+        open.hasher.update(bytes);
+        open.size += bytes.len() as u64;
+        open.count += 1;
+    }
+
+    fn open(&self, core: &Core, which: usize, series: &mut Series, set: Option<String>, t_us: i64) {
+        let n = series.n + 1;
+        let dir = self.dir.join(SERIES[which]);
+        let Ok(file) = std::fs::File::create(part_of(&dir.join(seg_name(n)))) else {
+            self.dead.store(true, Ordering::Relaxed);
+            return;
+        };
+        series.n = n;
+        let _ = std::fs::write(dir.join(OPEN), json!({"n": n, "set": set}).to_string());
+        if let Some(set) = &set {
+            ensure_rec(core, &self.room, set, t_us, &self.meta);
+        }
+        series.open = Some(Open { n, set, file, hasher: Sha256::new(), size: 0, t_us, count: 0 });
+    }
+
+    fn close(&self, core: &Core, which: usize, series: &mut Series, next_us: Option<i64>) {
+        let Some(open) = series.open.take() else { return };
+        drop(open.file);
+        let dir = self.dir.join(SERIES[which]);
+        let path = dir.join(seg_name(open.n));
+        if let Some(set) = &open.set {
+            let d_us = next_us.map_or(series.last_us - open.t_us + series.step_us.max(0), |next| next - open.t_us);
+            let sha = hex(&open.hasher.finalize());
+            if !self.cap_logged.swap(true, Ordering::Relaxed) {
+                log_cap(core, &self.room, &self.capture, &read_json(&self.dir.join(CAP)));
+            }
+            data::mark(core, &self.dir, &format!("{}/{}", SERIES[which], seg_name(open.n)), open.size, true);
+            core.append_log(&self.room, &seg_record(&self.capture, SERIES[which], open.n, set, open.t_us, d_us, open.size, &sha));
+        }
+        let _ = std::fs::rename(part_of(&path), &path);
+        let _ = std::fs::remove_file(dir.join(OPEN));
+    }
+
+    fn write_video(&self, data: &[u8]) {
         if self.closed.load(Ordering::Relaxed) {
             return;
         }
         let mut pipe = self.video.lock().unwrap();
         let Some(out) = pipe.as_mut() else { return };
-        if self.start.set(Instant::now()).is_ok() && self.target.set.is_some() {
-            let mut record = json!({"k": "rec", "start_us": now_us()});
-            merge(&mut record, &self.meta);
-            core.append_log(&self.target.room, &record);
-            if let Some(active) = core.active_set.lock().unwrap().clone() {
-                crate::room::write_set_json(core, &active, false);
-            }
-        }
+        let _ = self.start.set((Instant::now(), now_us()));
         if out.write_all(data).is_err() {
             *pipe = None;
             self.dead.store(true, Ordering::Relaxed);
@@ -349,7 +480,7 @@ impl Sink {
     }
 
     pub fn write_audio(&self, track: usize, pcm: &[u8]) {
-        let Some(start) = self.start.get() else { return };
+        let Some((start, _)) = self.start.get() else { return };
         if self.closed.load(Ordering::Relaxed) {
             return;
         }
@@ -372,6 +503,16 @@ impl Sink {
         t.written += pad + pcm.len() as u64 / PCM_FRAME_BYTES;
     }
 
+    fn wait_cut(&self, set: &str) {
+        let deadline = Instant::now() + CUT_WAIT;
+        while Instant::now() < deadline && !self.dead.load(Ordering::Relaxed) {
+            if self.outputs.iter().all(|o| o.lock().unwrap().open.as_ref().is_none_or(|o| o.set.as_deref() != Some(set))) {
+                return;
+            }
+            thread::sleep(POLL);
+        }
+    }
+
     fn finish(&self) {
         self.closed.store(true, Ordering::Relaxed);
         for stream in self.closers.lock().unwrap().drain(..) {
@@ -385,26 +526,35 @@ impl Sink {
             }
             thread::sleep(POLL);
         }
-        let mut child = self.child.lock().unwrap();
-        while Instant::now() < deadline {
-            if matches!(child.try_wait(), Ok(Some(_))) {
-                return;
+        let mut exited = false;
+        {
+            let mut child = self.child.lock().unwrap();
+            while Instant::now() < deadline && !exited {
+                exited = matches!(child.try_wait(), Ok(Some(_)));
+                thread::sleep(POLL);
             }
-            thread::sleep(POLL);
+            if !exited {
+                tracing::warn!("ffmpeg did not finish in time, killing it");
+                let _ = child.kill();
+                let _ = child.wait();
+            }
         }
-        tracing::warn!("ffmpeg did not finish in time, killing it");
-        let _ = child.kill();
-        let _ = child.wait();
+        for reader in self.readers.lock().unwrap().drain(..) {
+            let _ = reader.join();
+        }
     }
 }
 
 fn current_sink(core: &Arc<Core>, canvas: Option<(u32, u32)>) -> Option<Arc<Sink>> {
     let e = &core.engine;
     let want = want(core);
+    let usable = usable_codecs(core);
+    let recording = core.active_set.lock().unwrap().is_some();
     let mut slot = e.sink.lock().unwrap();
     let stale = slot.as_ref().map(|sink| {
-        let resized = sink.target.set.is_none() && canvas.is_some_and(|c| c != sink.size);
-        (sink.dead.load(Ordering::Relaxed), resized || Some(&sink.target) != want.as_ref())
+        let resized = !recording && canvas.is_some_and(|c| c != sink.size);
+        let codec = ffmpeg::pick(&usable).1 != sink.codec && (!recording || !usable.iter().any(|c| c == sink.codec));
+        (sink.dead.load(Ordering::Relaxed), resized || codec || want.as_deref() != Some(sink.room.as_str()))
     });
     if let Some((dead, changed)) = stale.filter(|(dead, changed)| *dead || *changed) {
         let old = slot.take().unwrap();
@@ -414,12 +564,11 @@ fn current_sink(core: &Arc<Core>, canvas: Option<(u32, u32)>) -> Option<Arc<Sink
         thread::spawn(move || old.finish());
     }
     if slot.is_none() {
-        let (target, size) = (want?, canvas?);
-        let done = target.set.as_ref().is_some_and(|set| core.own_file(&target.room, set).exists());
-        if done || Instant::now() < *e.retry_at.lock().unwrap() {
+        let (room, size) = (want?, canvas?);
+        if Instant::now() < *e.retry_at.lock().unwrap() {
             return None;
         }
-        match Sink::start(core, target, size) {
+        match Sink::start(core, room, size) {
             Ok(sink) => *slot = Some(sink),
             Err(err) => e.failed(Instant::now(), &err.to_string()),
         }
@@ -428,16 +577,61 @@ fn current_sink(core: &Arc<Core>, canvas: Option<(u32, u32)>) -> Option<Arc<Sink
 }
 
 pub fn end_set(core: &Core) -> Option<crate::room::ActiveSet> {
-    let (active, sink) = {
-        let mut slot = core.engine.sink.lock().unwrap();
-        let active = core.active_set.lock().unwrap().take();
-        let sink = if slot.as_ref().is_some_and(|s| s.target.set.is_some()) { slot.take() } else { None };
-        (active, sink)
-    };
+    let active = core.active_set.lock().unwrap().take()?;
+    let sink = core.engine.sink.lock().unwrap().clone().filter(|s| s.room == active.room);
     if let Some(sink) = sink {
-        sink.finish();
+        sink.wait_cut(&active.id);
     }
-    active
+    Some(active)
+}
+
+fn recover_series(core: &Core, room: &str, capture: &str, dir: &Path, which: usize) {
+    let series_dir = dir.join(SERIES[which]);
+    let open: Value = read_json(&series_dir.join(OPEN));
+    let Some(n) = open["n"].as_u64().map(|n| n as u32) else { return };
+    let path = series_dir.join(seg_name(n));
+    let part = part_of(&path);
+    let (times, whole) = media::scan(&part);
+    let trimmed = whole > 0 && std::fs::OpenOptions::new().write(true).open(&part).and_then(|f| f.set_len(whole)).is_ok() && std::fs::rename(&part, &path).is_ok();
+    if !trimmed {
+        let _ = std::fs::remove_file(&part);
+    }
+    let _ = std::fs::remove_file(series_dir.join(OPEN));
+    let Some(set) = open["set"].as_str().filter(|_| trimmed) else { return };
+    let logged = core.own_log(room).iter().any(|r| r["k"] == "seg" && r["capture"] == capture && r["series"] == SERIES[which] && r["n"] == n);
+    if logged {
+        return;
+    }
+    let cap: Value = read_json(&dir.join(CAP));
+    let (Some(start_us), Some((size, sha))) = (cap["start_us"].as_i64(), data::sha256(&path)) else { return };
+    let scales = media::timescales(&std::fs::read(series_dir.join(INIT)).unwrap_or_default());
+    let track = times.first().map(|t| t.track);
+    let us: Vec<i64> = times.iter().filter(|t| Some(t.track) == track).map(|t| media::micros(t, &scales)).collect();
+    let (Some(first), Some(last)) = (us.first(), us.last()) else { return };
+    let step = if us.len() > 1 { last - us[us.len() - 2] } else { 0 };
+    log_cap(core, room, capture, &cap);
+    data::mark(core, dir, &format!("{}/{}", SERIES[which], seg_name(n)), size, true);
+    core.append_log(room, &seg_record(capture, SERIES[which], n, set, start_us + first, last - first + step, size, &sha));
+}
+
+pub fn recover(core: &Core) {
+    let me = core.me();
+    for room in std::fs::read_dir(core.dir.join("rooms")).into_iter().flatten().flatten() {
+        let room = room.file_name().to_string_lossy().to_string();
+        for capture in std::fs::read_dir(core.dir.join("rooms").join(&room).join(&me)).into_iter().flatten().flatten() {
+            let id = capture.file_name().to_string_lossy().to_string();
+            for which in 0..SERIES.len() {
+                recover_series(core, &room, &id, &capture.path(), which);
+            }
+        }
+        let own = core.own_log(&room);
+        let ended: Vec<&str> = own.iter().filter(|r| r["k"] == "rec_end").filter_map(|r| r["set"].as_str()).collect();
+        for rec in own.iter().filter(|r| r["k"] == "rec" && r["set"].as_str().is_some_and(|s| !ended.contains(&s))) {
+            let set = rec["set"].as_str().unwrap_or_default();
+            let end = own.iter().filter(|r| r["k"] == "seg" && r["set"] == set).filter_map(|r| Some(r["t_us"].as_i64()? + r["d_us"].as_i64()?)).max();
+            core.append_log(&room, &json!({"k": "rec_end", "set": set, "room": room, "t_us": end.or(rec["start_us"].as_i64()).unwrap_or_else(now_us)}));
+        }
+    }
 }
 
 fn fit(src: &[u8], (w, h): (u32, u32), (cw, ch): (u32, u32), out: &mut Vec<u8>) {
@@ -505,7 +699,7 @@ impl GraphicsCaptureApiHandler for Capture {
             fit(data, (w, h), size, &mut self.fitted);
         }
         if let Some(sink) = &sink {
-            sink.write_video(&self.core, if same { data } else { self.fitted.as_slice() });
+            sink.write_video(if same { data } else { self.fitted.as_slice() });
         }
         let mut last = e.last.lock().unwrap();
         if same {
@@ -585,7 +779,7 @@ fn repeat(core: Arc<Core>) {
             continue;
         }
         if let Some(sink) = sink.filter(|s| s.size == last.1) {
-            sink.write_video(&core, &last.0);
+            sink.write_video(&last.0);
         }
         last.2 = Instant::now() - (REPEAT_AFTER - REPEAT_POLL);
     }
@@ -601,27 +795,6 @@ fn meters(core: Arc<Core>) {
             let _ = core.app.emit("levels", json!({"game": game, "mic": mic}));
         }
         quiet = silent;
-    }
-}
-
-fn clean_live(core: &Core) {
-    let Ok(rooms) = std::fs::read_dir(core.dir.join("rooms")) else { return };
-    for room in rooms.flatten() {
-        let Ok(files) = std::fs::read_dir(room.path().join("live")) else { continue };
-        let mut all: Vec<(String, i64, u32, String)> = files
-            .flatten()
-            .map(|f| f.file_name().to_string_lossy().to_string())
-            .filter_map(|n| live_name(&n).map(|(who, ms, i)| (who, ms, i, n)))
-            .collect();
-        all.sort_by(|a, b| (&b.0, b.1, b.2).cmp(&(&a.0, a.1, a.2)));
-        let mut kept: HashMap<String, usize> = HashMap::new();
-        for (who, _, _, name) in &all {
-            let count = kept.entry(who.clone()).or_default();
-            *count += 1;
-            if *count > LIVE_KEEP {
-                let _ = std::fs::remove_file(room.path().join("live").join(name));
-            }
-        }
     }
 }
 
@@ -688,7 +861,6 @@ pub fn supervise(core: Arc<Core>) {
     let e = &core.engine;
     let mut scanned: Option<(Value, Instant)> = None;
     let mut found: Option<Found> = None;
-    let mut cleaned: Option<Instant> = None;
     loop {
         let source = e.source.lock().unwrap().clone();
         let ended = e.video.lock().unwrap().as_ref().is_some_and(|v| v.control.is_finished());
@@ -701,10 +873,6 @@ pub fn supervise(core: Arc<Core>) {
         audio::ensure(&core, MIC, mic);
         ensure_video(&core, found.as_ref().filter(|_| want(&core).is_some() && ffmpeg::encoders_ready()));
         check_sink(&core);
-        if cleaned.is_none_or(|t| t.elapsed() > CLEAN_EVERY) {
-            clean_live(&core);
-            cleaned = Some(Instant::now());
-        }
         thread::sleep(SUPERVISE_EVERY);
     }
 }

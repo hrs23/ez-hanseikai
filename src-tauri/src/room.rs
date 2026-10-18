@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -10,9 +10,26 @@ use serde_json::{json, Value};
 
 use tauri::Emitter;
 
-use crate::{clean_text, data, ffmpeg, file_len, hex, net, now_us, party, record, short, Core, Peer, PROTOCOL, ROOM_NAME_MAX, VERSION};
+use crate::{clean_text, data, ffmpeg, hex, net, now_us, party, record, short, stream, Core, Peer, PROTOCOL, ROOM_NAME_MAX, VERSION};
 
 pub const SOLO: &str = "solo";
+pub const LEGACY: &str = "legacy";
+pub const SERIES: [&str; 2] = ["v", "m"];
+pub const INIT: &str = "init.mp4";
+
+pub fn seg_name(n: u32) -> String {
+    format!("{n:06}.m4s")
+}
+
+pub fn seg_number(name: &str) -> Option<u32> {
+    name.strip_suffix(".part").unwrap_or(name).strip_suffix(".m4s")?.parse().ok()
+}
+
+pub fn part_of(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".part");
+    PathBuf::from(name)
+}
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct Room {
@@ -108,12 +125,16 @@ impl Core {
         self.set_dir(room, set).join(format!("{owner}.mp4"))
     }
 
-    pub fn own_file(&self, room: &str, set: &str) -> PathBuf {
-        self.set_file(room, set, &self.ep.id().to_string())
+    pub fn capture_dir(&self, room: &str, owner: &str, capture: &str) -> PathBuf {
+        self.dir.join("rooms").join(room).join(owner).join(capture)
     }
 
-    pub fn live_dir(&self, room: &str) -> PathBuf {
-        self.dir.join("rooms").join(room).join("live")
+    pub fn seg_path(&self, room: &str, set: &str, owner: &str, seg: &Seg) -> PathBuf {
+        if seg.capture == LEGACY {
+            self.set_file(room, set, owner)
+        } else {
+            self.capture_dir(room, owner, &seg.capture).join(&seg.series).join(seg_name(seg.n))
+        }
     }
 
     pub fn save_rooms(&self) {
@@ -421,47 +442,33 @@ pub fn adopt_room(core: &Arc<Core>, pending: &str, id: &str, name: &str, members
     }
 }
 
-pub fn write_set_json(core: &Core, set: &ActiveSet, ended: bool) {
-    let mut me = json!({"id": core.ep.id().to_string(), "name": *core.name.lock().unwrap()});
-    if let Some(rec) = core.own_log(&set.room).iter().find(|r| r["k"] == "rec" && r["set"] == set.id.as_str()) {
-        for key in ["source_kind", "source", "width", "height", "fps", "encoder", "codec", "audio", "mic"] {
-            me[key] = rec[key].clone();
-        }
-    }
-    let peers: Vec<Value> = core.peers.lock().unwrap().iter().map(|p| json!({"id": p.id.to_string(), "name": p.name, "offset_us": p.offset_us})).collect();
-    let value = json!({
-        "id": set.id, "room": set.room, "by": set.by, "start_us": set.start_us, "ended": ended,
-        "members": [me],
-        "peers": peers,
-        "layout": *core.layout.lock().unwrap(),
-    });
-    core.write_json(&core.set_dir(&set.room, &set.id).join("set.json"), value);
-}
-
 pub fn begin_set(core: &Arc<Core>, set: &str, by: &str, start_us: i64) -> Result<(), String> {
     ffmpeg::ready()?;
     let room = core.active_room_id();
     if core.is_deleted(&room, set) {
         return Err("That set was deleted on this PC.".into());
     }
-    std::fs::create_dir_all(core.set_dir(&room, set)).map_err(|e| e.to_string())?;
     let active = ActiveSet { id: set.to_string(), room, by: by.to_string(), start_us };
     {
         let mut slot = core.active_set.lock().unwrap();
         if slot.is_some() {
             return Err("already recording".into());
         }
-        *slot = Some(active.clone());
+        *slot = Some(active);
     }
-    write_set_json(core, &active, false);
     Ok(())
 }
 
 pub fn end_set(core: &Arc<Core>) {
     let Some(active) = record::end_set(core) else { return };
-    data::record_file(core, &active.room, &active.id);
     core.append_log(&active.room, &json!({"k": "rec_end", "set": active.id, "room": active.room, "t_us": now_us()}));
-    write_set_json(core, &active, true);
+}
+
+pub fn log_set_layout(core: &Core) {
+    let active = core.active_set.lock().unwrap().clone();
+    if let Some(active) = active {
+        core.append_log(&active.room, &json!({"k": "layout", "set": active.id, "t_us": now_us(), "layout": *core.layout.lock().unwrap()}));
+    }
 }
 
 pub fn start_set(core: &Arc<Core>) -> Result<(), String> {
@@ -469,6 +476,7 @@ pub fn start_set(core: &Arc<Core>) -> Result<(), String> {
     let set = set_id_for(start_us, core.tz_offset_s);
     let by = core.name.lock().unwrap().clone();
     begin_set(core, &set, &by, start_us)?;
+    log_set_layout(core);
     net::broadcast(core, json!({"t": "rec", "action": "start", "set": set, "room": core.active_room_id(), "by": by, "start_us": start_us}));
     Ok(())
 }
@@ -487,13 +495,55 @@ pub struct Log {
     pub records: Arc<Vec<Value>>,
 }
 
+#[derive(Debug, PartialEq)]
+pub struct Seg {
+    pub capture: String,
+    pub series: String,
+    pub n: u32,
+    pub t_us: i64,
+    pub d_us: i64,
+    pub size: u64,
+    pub sha256: String,
+}
+
 pub struct File {
     pub owner: String,
     pub start_us: i64,
     pub end_us: Option<i64>,
     pub offset_us: i64,
-    pub total: Option<u64>,
-    pub sha256: Option<String>,
+    pub segs: Vec<Seg>,
+    pub caps: HashMap<String, Value>,
+}
+
+impl File {
+    pub fn series(&self, series: &str) -> Vec<&Seg> {
+        self.segs.iter().filter(|s| s.series == series).collect()
+    }
+
+    pub fn captures(&self) -> Vec<&str> {
+        let mut out: Vec<&str> = Vec::new();
+        for s in &self.segs {
+            if !out.contains(&s.capture.as_str()) {
+                out.push(&s.capture);
+            }
+        }
+        out
+    }
+
+    pub fn init(&self, capture: &str, series: &str) -> Option<(u64, String)> {
+        let init = &self.caps.get(capture)?["init"][series];
+        Some((init["size"].as_u64()?, init["sha256"].as_str()?.to_string()))
+    }
+
+    pub fn total(&self) -> u64 {
+        let mut total: u64 = self.segs.iter().map(|s| s.size).sum();
+        for capture in self.captures() {
+            for series in SERIES.iter().filter(|x| self.segs.iter().any(|s| s.capture == capture && s.series == **x)) {
+                total += self.init(capture, series).map_or(0, |(size, _)| size);
+            }
+        }
+        total
+    }
 }
 
 pub struct Set {
@@ -516,8 +566,8 @@ impl Set {
     }
 }
 
-pub fn have_key(set: &str, owner: &str) -> String {
-    format!("{set}/{}", short(owner))
+pub fn have_key(set: &str, owner: &str, series: &str) -> String {
+    format!("{set}/{}/{series}", short(owner))
 }
 
 pub fn logs(core: &Core, room: &str) -> Vec<Log> {
@@ -543,11 +593,25 @@ pub fn sets(core: &Core, room: &str, logs: &[Log]) -> Vec<Set> {
     derive_sets(room, logs, &core.deleted.lock().unwrap())
 }
 
+fn seg_from(r: &Value) -> Option<Seg> {
+    let capture = r["capture"].as_str().filter(|c| !c.is_empty() && c.len() <= 20 && c.chars().all(|c| c.is_ascii_digit()))?;
+    let series = r["series"].as_str().filter(|s| SERIES.contains(s))?;
+    let n = r["n"].as_u64().filter(|n| *n > 0 && *n <= u32::MAX as u64)? as u32;
+    Some(Seg { capture: capture.into(), series: series.into(), n, t_us: r["t_us"].as_i64()?, d_us: r["d_us"].as_i64().unwrap_or(0), size: r["size"].as_u64()?, sha256: r["sha256"].as_str()?.into() })
+}
+
 pub fn derive_sets(room: &str, logs: &[Log], deleted: &HashSet<String>) -> Vec<Set> {
     let mut sets: BTreeMap<String, Set> = BTreeMap::new();
     for log in logs {
         let mut open: HashMap<&str, (usize, bool, bool)> = HashMap::new();
+        let mut caps: HashMap<&str, Value> = HashMap::new();
         for r in log.records.iter() {
+            if r["k"] == "cap" {
+                if let Some(capture) = r["capture"].as_str() {
+                    crate::merge(caps.entry(capture).or_insert_with(|| json!({})), r);
+                }
+                continue;
+            }
             let Some(id) = r["set"].as_str() else { continue };
             match r["k"].as_str() {
                 Some("rec") if valid_id(id) => {
@@ -556,7 +620,7 @@ pub fn derive_sets(room: &str, logs: &[Log], deleted: &HashSet<String>) -> Vec<S
                     }
                     let set = sets.entry(id.to_string()).or_insert_with(|| Set { id: id.to_string(), room: room.to_string(), files: Vec::new() });
                     open.insert(id, (set.files.len(), false, false));
-                    set.files.push(File { owner: log.owner.clone(), start_us: r["start_us"].as_i64().unwrap_or(0), end_us: None, offset_us: log.offset_us, total: None, sha256: None });
+                    set.files.push(File { owner: log.owner.clone(), start_us: r["start_us"].as_i64().unwrap_or(0), end_us: None, offset_us: log.offset_us, segs: Vec::new(), caps: HashMap::new() });
                 }
                 Some("rec_end") => {
                     if let Some((i, ended, _)) = open.get_mut(id).filter(|(_, ended, _)| !ended) {
@@ -568,8 +632,19 @@ pub fn derive_sets(room: &str, logs: &[Log], deleted: &HashSet<String>) -> Vec<S
                     if let Some((i, _, hashed)) = open.get_mut(id).filter(|(_, _, hashed)| !hashed) {
                         *hashed = true;
                         let f = &mut sets.get_mut(id).unwrap().files[*i];
-                        f.total = r["size"].as_u64();
-                        f.sha256 = r["sha256"].as_str().map(String::from);
+                        if let (Some(size), Some(sha256)) = (r["size"].as_u64(), r["sha256"].as_str()) {
+                            let d_us = f.end_us.map_or(0, |e| e - f.start_us);
+                            f.segs.push(Seg { capture: LEGACY.into(), series: SERIES[0].into(), n: 1, t_us: f.start_us, d_us, size, sha256: sha256.into() });
+                        }
+                    }
+                }
+                Some("seg") => {
+                    if let (Some((i, _, _)), Some(seg)) = (open.get(id), seg_from(r)) {
+                        let f = &mut sets.get_mut(id).unwrap().files[*i];
+                        if let Some(cap) = caps.get(seg.capture.as_str()) {
+                            f.caps.entry(seg.capture.clone()).or_insert_with(|| cap.clone());
+                        }
+                        f.segs.push(seg);
                     }
                 }
                 _ => {}
@@ -636,25 +711,12 @@ pub fn events(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> Vec<Value> {
     out
 }
 
-pub fn have_list(core: &Core, room: &str) -> Vec<String> {
-    let Ok(sets) = std::fs::read_dir(core.dir.join("rooms").join(room).join("sets")) else { return Vec::new() };
-    let mut out = Vec::new();
-    for set in sets.flatten() {
-        let id = set.file_name().to_string_lossy().to_string();
-        for file in data::verified_files(core, &set.path()) {
-            out.push(have_key(&id, file.trim_end_matches(".mp4")));
-        }
-    }
-    out
-}
-
 pub fn gone_list(core: &Core, room: &str) -> Vec<String> {
     core.deleted.lock().unwrap().iter().filter_map(|k| k.strip_prefix(&format!("{room}/")).map(String::from)).collect()
 }
 
-pub fn someone_else_has(core: &Core, set: &str, owner: &str) -> bool {
-    let key = have_key(set, owner);
-    core.peers.lock().unwrap().iter().any(|p| p.have.contains(&key))
+pub fn someone_else_has(core: &Core, key: &str, index: u64) -> bool {
+    core.peers.lock().unwrap().iter().any(|p| p.have.get(key).is_some_and(|n| *n > index))
 }
 
 pub fn delete_set(core: &Core, room: &str, set: &str) -> Result<(), String> {
@@ -664,8 +726,12 @@ pub fn delete_set(core: &Core, room: &str, set: &str) -> Result<(), String> {
     if core.is_recording(room, set) {
         return Err("This set is being recorded. Stop it first.".into());
     }
+    let found = sets(core, room, &logs(core, room)).into_iter().find(|s| s.id == set);
     core.deleted.lock().unwrap().insert(format!("{room}/{set}"));
     core.save_settings();
+    if let Some(found) = found {
+        data::remove_media(core, &found);
+    }
     let _ = std::fs::remove_dir_all(core.set_dir(room, set));
     Ok(())
 }
@@ -673,7 +739,7 @@ pub fn delete_set(core: &Core, room: &str, set: &str) -> Result<(), String> {
 struct Holder<'a> {
     id: &'a str,
     name: String,
-    have: &'a HashSet<String>,
+    have: &'a HashMap<String, u64>,
     gone: bool,
 }
 
@@ -706,40 +772,83 @@ pub fn holdings(logs: &[Log]) -> HashMap<String, u64> {
     logs.iter().map(|l| (l.owner.clone(), l.records.len() as u64)).collect()
 }
 
-pub fn sets_json(core: &Core, room: &str, logs: &[Log], events: &[Value]) -> Vec<Value> {
-    let me = core.ep.id().to_string();
-    let peers: Vec<(String, HashSet<String>, HashSet<String>)> = core.peers.lock().unwrap().iter().map(|p| (p.id.to_string(), p.have.clone(), p.gone.clone())).collect();
-    let names: Vec<String> = peers.iter().map(|(id, _, _)| display_name(core, id)).collect();
+pub fn full(have: &HashMap<String, u64>, set: &Set, f: &File) -> bool {
+    f.end_us.is_some() && SERIES.iter().all(|s| have.get(&have_key(&set.id, &f.owner, s)).copied().unwrap_or(0) >= f.series(s).len() as u64)
+}
+
+pub fn stuck(mine: &HashMap<String, u64>, others: &[&HashMap<String, u64>], set: &Set, f: &File) -> bool {
+    let count = |have: &HashMap<String, u64>, s: &str| have.get(&have_key(&set.id, &f.owner, s)).copied().unwrap_or(0);
+    let progressing = SERIES.iter().any(|s| others.iter().any(|o| count(o, s) > count(mine, s)));
+    !full(mine, set, f) && f.end_us.is_some() && !progressing
+}
+
+pub fn set_layout(logs: &[Log], set: &str) -> Value {
+    logs.iter().flat_map(|l| l.records.iter()).filter(|r| r["k"] == "layout" && r["set"] == set).max_by_key(|r| r["t_us"].as_i64()).map(|r| r["layout"].clone()).unwrap_or(Value::Null)
+}
+
+fn parts_json(core: &Core, room: &str, set: &Set, f: &File) -> Vec<Value> {
     let mut out = Vec::new();
-    for set in sets(core, room, logs) {
-        let dir = core.set_dir(room, &set.id);
-        let mine: HashSet<String> = data::verified_files(core, &dir).iter().map(|f| have_key(&set.id, f.trim_end_matches(".mp4"))).collect();
+    for capture in f.captures() {
+        let mut part = json!({"capture": capture});
+        for series in SERIES {
+            let Some(first) = f.segs.iter().find(|s| s.capture == capture && s.series == series) else { continue };
+            let size = stream::size(&stream::set_pieces(core, room, set, f, capture, series));
+            part[series] = json!({"path": format!("set/{room}/{}/{}/{series}/{capture}", set.id, f.owner), "start_us": first.t_us, "size": size});
+        }
+        out.push(part);
+    }
+    out
+}
+
+pub fn others_have(core: &Core) -> Vec<(String, HashMap<String, u64>, HashSet<String>, bool)> {
+    core.peers.lock().unwrap().iter().map(|p| (p.id.to_string(), p.have.clone(), p.gone.clone(), p.conn.is_some())).collect()
+}
+
+pub fn progress(core: &Core, set: &Set, mine: &HashMap<String, u64>, others: &[&HashMap<String, u64>]) -> (u64, u64, bool) {
+    let (mut have, mut total, mut stuck_all, mut lacking) = (0u64, 0u64, true, false);
+    for f in &set.files {
+        let (h, t) = data::held(core, &set.room, set, f);
+        have += h;
+        total += t;
+        if !full(mine, set, f) {
+            lacking = true;
+            stuck_all &= stuck(mine, others, set, f);
+        }
+    }
+    (have, total, lacking && stuck_all)
+}
+
+pub fn sets_json(core: &Core, room: &str, logs: &[Log], events: &[Value]) -> Vec<Value> {
+    let me = core.me();
+    let peers = others_have(core);
+    let names: Vec<String> = peers.iter().map(|(id, _, _, _)| display_name(core, id)).collect();
+    let online: Vec<&HashMap<String, u64>> = peers.iter().filter(|p| p.3).map(|p| &p.1).collect();
+    let all = sets(core, room, logs);
+    let mine = data::have_counts(core, room, &all);
+    let mut out = Vec::new();
+    for set in all {
         let mut holders = vec![Holder { id: &me, name: "You".into(), have: &mine, gone: false }];
-        holders.extend(peers.iter().zip(&names).map(|((id, have, gone), name)| Holder { id, name: name.clone(), have, gone: gone.contains(&set.id) }));
+        holders.extend(peers.iter().zip(&names).map(|((id, have, gone, _), name)| Holder { id, name: name.clone(), have, gone: gone.contains(&set.id) }));
         let mut players = Vec::new();
-        let (mut have, mut total) = (0u64, 0u64);
         for f in &set.files {
-            let path = core.set_file(room, &set.id, &f.owner);
-            let size = file_len(&path);
-            have += f.total.map_or(size, |t| size.min(t));
-            total += f.total.unwrap_or(size);
-            let hk = have_key(&set.id, &f.owner);
-            let by: Vec<&str> = holders.iter().filter(|h| h.have.contains(&hk)).map(|h| h.id).collect();
+            let (have, total) = data::held(core, room, &set, f);
+            let by: Vec<&str> = holders.iter().filter(|h| full(h.have, &set, f)).map(|h| h.id).collect();
             players.push(json!({
-                "owner": f.owner, "start_us": f.start_us, "offset_us": f.offset_us, "size": size, "total": f.total, "path": path,
-                "recording": f.end_us.is_none(), "verified_by": by, "sha256": f.sha256,
+                "owner": f.owner, "start_us": f.start_us, "end_us": f.end_us, "offset_us": f.offset_us, "have": have, "total": total,
+                "recording": f.end_us.is_none(), "verified_by": by, "stuck": stuck(&mine, &online, &set, f), "parts": parts_json(core, room, &set, f),
             }));
         }
-        let finished: Vec<&File> = set.files.iter().filter(|f| f.total.is_some()).collect();
-        let lacking = |h: &Holder| finished.iter().filter(|f| !h.have.contains(&have_key(&set.id, &f.owner))).count();
+        let (have, total, stuck_all) = progress(core, &set, &mine, &online);
+        let finished: Vec<&File> = set.files.iter().filter(|f| f.end_us.is_some()).collect();
+        let lacking = |h: &Holder| finished.iter().filter(|f| !full(h.have, &set, f)).count();
         let missing: Vec<(&str, usize)> = holders.iter().filter(|h| !h.gone).map(|h| (h.name.as_str(), lacking(h))).filter(|(_, n)| *n > 0).collect();
         let live = set.end().is_none();
         let all_verified = missing.is_empty() && finished.len() == set.files.len();
         let covered: Vec<&Value> = events.iter().filter(|e| covers(&set, e)).map(|e| &e["key"]).collect();
         out.push(json!({
             "id": set.id, "room": room, "start_us": set.start(), "end_us": set.end(), "live": live,
-            "players": players, "events": covered, "progress": {"have": have, "total": total}, "missing": missing.len(), "all_verified": all_verified,
-            "status": set_status(live, all_verified, &missing), "layout": core.json(&dir.join("set.json"))["layout"],
+            "players": players, "events": covered, "progress": {"have": have, "total": total, "stuck": stuck_all}, "missing": missing.len(), "all_verified": all_verified,
+            "status": set_status(live, all_verified, &missing), "layout": set_layout(logs, &set.id),
         }));
     }
     out
@@ -752,11 +861,6 @@ fn path_kind(conn: &Connection) -> (&'static str, u64) {
         }
     }
     ("none", 0)
-}
-
-fn live_json(core: &Core, room: &str, name: Option<String>) -> Option<Value> {
-    let path = core.live_dir(room).join(name?);
-    Some(json!({"size": file_len(&path), "path": path}))
 }
 
 fn peer_json(core: &Core, room: &str, p: &Peer) -> Value {
@@ -775,7 +879,7 @@ fn peer_json(core: &Core, room: &str, p: &Peer) -> Value {
         "version": p.info.as_ref().map(|(version, _)| version),
         "message": message,
         "sharing": sharing,
-        "live": live_json(core, room, p.live.clone().filter(|_| sharing)),
+        "live": if sharing { stream::live_json(core, room, &p.id.to_string()) } else { None },
     })
 }
 
@@ -834,7 +938,7 @@ pub fn state_json(core: &Core) -> Value {
         "previous_version": core.previous_version,
         "codec": ffmpeg::pick(&core.codecs.lock().unwrap()).1,
         "recording": core.active_set.lock().unwrap().is_some(),
-        "capture": record::capture_json(core, live_json(core, &room_id, core.engine.live_file())),
+        "capture": record::capture_json(core, stream::live_json(core, &room_id, &my_id)),
         "active_set": core.active_set_json(),
         "room": active.map(|r| json!({"id": r.id, "name": r.name, "pending": r.invite.is_some(), "waiting": r.waiting})),
         "rooms": room_list,
@@ -870,12 +974,50 @@ mod tests {
         assert_eq!(sets.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["s2", "s1"]);
         let s1 = &sets[1];
         assert_eq!(s1.files.len(), 2);
-        assert_eq!(s1.files[0].total, Some(10));
+        assert_eq!(s1.files[0].segs, vec![Seg { capture: LEGACY.into(), series: "v".into(), n: 1, t_us: 100, d_us: 800, size: 10, sha256: "ab".into() }]);
+        assert_eq!(s1.files[0].total(), 10);
         assert_eq!(s1.start(), 100);
         assert_eq!(s1.end(), None);
         assert!(sets[0].files[0].end_us.is_none());
         let deleted: HashSet<String> = ["r/s2".to_string()].into();
         assert_eq!(derive_sets("r", &[log("a", 0, vec![json!({"k": "rec", "set": "s2"})])], &deleted).len(), 0);
+    }
+
+    fn seg(capture: &str, series: &str, n: u32, set: &str) -> Value {
+        json!({"k": "seg", "capture": capture, "series": series, "n": n, "set": set, "t_us": n as i64 * 4_000_000, "d_us": 4_000_000, "size": 100, "sha256": "x"})
+    }
+
+    #[test]
+    fn set_contents_come_from_seg_records() {
+        let a = log("a", 0, vec![
+            json!({"k": "cap", "capture": "111", "start_us": 0, "init": {"v": {"size": 7, "sha256": "i"}, "m": {"size": 3, "sha256": "j"}}}),
+            seg("111", "v", 1, "s0"),
+            json!({"k": "rec", "set": "s1", "start_us": 8_000_000}),
+            seg("111", "v", 2, "s1"),
+            seg("111", "m", 2, "s1"),
+            seg("111", "v", 3, "s9"),
+            seg("../x", "v", 4, "s1"),
+            seg("111", "q", 4, "s1"),
+            json!({"k": "cap", "capture": "222", "start_us": 9}),
+            seg("222", "v", 1, "s1"),
+            json!({"k": "rec_end", "set": "s1", "t_us": 20_000_000}),
+        ]);
+        let sets = derive_sets("r", &[a], &HashSet::new());
+        let f = &sets[0].files[0];
+        assert_eq!(f.segs.iter().map(|s| (s.capture.as_str(), s.series.as_str(), s.n)).collect::<Vec<_>>(), [("111", "v", 2), ("111", "m", 2), ("222", "v", 1)]);
+        assert_eq!(f.captures(), ["111", "222"]);
+        assert_eq!(f.init("111", "m"), Some((3, "j".into())));
+        assert_eq!(f.init("222", "v"), None);
+        assert_eq!(f.total(), 300 + 7 + 3);
+        assert_eq!(f.series("v").len(), 2);
+        let key = |s: &str| have_key("s1", "a", s);
+        let all: HashMap<String, u64> = [(key("v"), 2), (key("m"), 1)].into();
+        let some: HashMap<String, u64> = [(key("v"), 1)].into();
+        assert!(full(&all, &sets[0], f));
+        assert!(!full(&some, &sets[0], f));
+        assert!(!stuck(&some, &[&all], &sets[0], f));
+        assert!(stuck(&some, &[&some], &sets[0], f));
+        assert!(!stuck(&all, &[], &sets[0], f));
     }
 
     #[test]
@@ -928,7 +1070,7 @@ mod tests {
 
     #[test]
     fn coverage_by_moment_or_set() {
-        let set = Set { id: "s1".into(), room: "r".into(), files: vec![File { owner: "a".into(), start_us: 100, end_us: Some(200), offset_us: 0, total: None, sha256: None }] };
+        let set = Set { id: "s1".into(), room: "r".into(), files: vec![File { owner: "a".into(), start_us: 100, end_us: Some(200), offset_us: 0, segs: Vec::new(), caps: HashMap::new() }] };
         assert!(covers(&set, &json!({"local_us": 150, "set": null})));
         assert!(!covers(&set, &json!({"local_us": 250, "set": null})));
         assert!(covers(&set, &json!({"local_us": null, "set": "s1"})));

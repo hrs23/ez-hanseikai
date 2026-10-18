@@ -190,7 +190,7 @@ function logLayout() {
 
 function swapIn(t, file, at) {
   const old = t.video;
-  const v = el("video", { muted: old.muted, volume: old.volume, preload: "auto" });
+  const v = el(old.tagName.toLowerCase(), { muted: old.muted, volume: old.volume, preload: "auto" });
   v.playbackRate = old.playbackRate;
   t.next = v;
   t.size = file.size;
@@ -208,6 +208,7 @@ function swapIn(t, file, at) {
       t.video = v;
     };
     if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(done);
+    else done();
     setTimeout(done, FRAME_WAIT_MS);
   };
   v.onerror = () => { if (t.next === v) { t.next = null; v.remove(); } };
@@ -215,7 +216,7 @@ function swapIn(t, file, at) {
   old.before(v);
 }
 function feed(t, file, following) {
-  const src = convertFileSrc(file.path);
+  const src = convertFileSrc(file.path, "ezh");
   if (t.next) {
     if (Date.now() - t.loadedAt < NEXT_TIMEOUT_MS) return;
     t.next.remove();
@@ -335,10 +336,21 @@ function players() {
 function base(list = players()) {
   return list.length ? Math.min(...list.map((p) => p.start - p.off)) : nowUs();
 }
-const deltaOf = (p, b) => (b + p.off - p.start) / 1e6;
+function partFor(p, series, wall) {
+  let pick = null;
+  for (const part of p.file.parts) if (part[series] && (!pick || part[series].start_us - p.off <= wall)) pick = part[series];
+  return pick;
+}
+const pathOf = (part) => (part ? part.path : null);
+const shiftOf = (p, part, b) => (b + p.off - part.start_us) / 1e6;
 function total(list = players()) {
   const b = base(list);
-  const ends = list.map((p) => ({ p, v: play.tiles[p.key] && play.tiles[p.key].video })).filter((x) => x.v && isFinite(x.v.duration)).map((x) => x.v.duration - deltaOf(x.p, b));
+  const ends = [];
+  for (const p of list) {
+    if (p.file.end_us) ends.push((p.file.end_us - p.off - b) / 1e6);
+    const t = play.tiles[p.key];
+    if (t && t.part && isFinite(t.video.duration)) ends.push(t.video.duration - shiftOf(p, t.part, b));
+  }
   return ends.length ? Math.max(...ends) : 0;
 }
 const nowM = () => (clock.playing ? clock.m + ((performance.now() - clock.at) / 1000) * rate : clock.m);
@@ -354,8 +366,9 @@ function applyAudio() {
   play.keys.forEach((key, i) => {
     const t = play.tiles[key];
     if (!t) return;
-    for (const v of [t.video, t.next]) if (v) {
-      v.muted = muted || !(play.view === i + 1 || (play.view === 0 && n === 1));
+    const heard = play.view === i + 1 || (play.view === 0 && n === 1);
+    for (const [slot, on] of [[t, heard], [t.mic, true]]) if (slot) for (const v of [slot.video, slot.next]) if (v) {
+      v.muted = muted || !on;
       v.volume = volume;
       v.playbackRate = rate;
     }
@@ -380,7 +393,7 @@ function renderPlayer() {
     t.dot.className = p.recording ? "dot rec" : "dot";
     t.dot.hidden = !p.recording;
     t.who.textContent = nameOf(p.key);
-    if (p.file.size > 0) feed(t, p.file, clock.playing);
+    feedParts(t, p, wallOf(nowM()));
   }
   place(play);
   applyAudio();
@@ -397,6 +410,17 @@ function renderPlayer() {
   renderSets();
   renderNotes();
   renderWatchParty();
+}
+function feedPart(slot, part) {
+  if (!part || !part.size) return;
+  slot.part = part;
+  feed(slot, part, clock.playing && slot.src === convertFileSrc(part.path, "ezh"));
+}
+function feedParts(t, p, wall) {
+  const mic = partFor(p, "m", wall);
+  if (mic && !t.mic) t.mic = { video: t.box.appendChild(el("audio", { preload: "auto" })) };
+  feedPart(t, partFor(p, "v", wall));
+  if (t.mic) feedPart(t.mic, mic);
 }
 function renderViews() {
   const names = play.keys.map(nameOf);
@@ -470,22 +494,14 @@ function tick() {
   for (const p of list) {
     const t = play.tiles[p.key];
     if (!t) continue;
-    const v = t.video;
-    const target = m + deltaOf(p, b);
-    const have = p.file.size > 0 && v.readyState > 0 && isFinite(v.duration) ? v.duration : 0;
-    const short = !!p.file.total && p.file.size < p.file.total && target > have;
+    const wall = b + m * 1e6;
+    if (pathOf(t.part) !== pathOf(partFor(p, "v", wall)) || pathOf(t.mic && t.mic.part) !== pathOf(partFor(p, "m", wall))) feedParts(t, p, wall);
+    const target = t.part ? m + shiftOf(p, t.part, b) : 0;
+    const have = t.part && t.video.readyState > 0 && isFinite(t.video.duration) ? t.video.duration : 0;
+    const short = !t.part || (!!p.file.total && p.file.have < p.file.total && target > have);
     t.box.classList.toggle("wait", short);
-    if (short) t.what.textContent = `Receiving ${Math.floor((p.file.size / p.file.total) * 100)}%`;
-    const inRange = target >= 0 && (!isFinite(v.duration) || target <= v.duration);
-    if (!inRange || !clock.playing) {
-      if (!v.paused) v.pause();
-      if (v.readyState > 0 && Math.abs(v.currentTime - Math.max(0, target)) > SEEK_TOLERANCE) v.currentTime = Math.max(0, Math.min(target, v.duration || target));
-    } else if (v.paused) {
-      v.currentTime = target;
-      v.play().catch(() => {});
-    } else if (Math.abs(v.currentTime - target) > DRIFT_MAX) {
-      v.currentTime = target;
-    }
+    if (short && p.file.total) t.what.textContent = `${p.file.stuck ? "Incomplete" : "Receiving"} ${Math.floor((p.file.have / p.file.total) * 100)}%`;
+    for (const slot of [t, t.mic]) if (slot && slot.part) sync(slot.video, m + shiftOf(p, slot.part, b));
   }
   $("clocknow").textContent = fmt(m);
   $("clocktotal").textContent = ` / ${fmt(tot)}`;
@@ -498,6 +514,19 @@ function tick() {
   $("play").classList.toggle("alt", clock.playing);
   $("play").setAttribute("aria-label", clock.playing ? "Pause" : "Play");
   if (st.active_set) $("timer").textContent = fmt((nowUs() - st.active_set.start_us) / 1e6);
+}
+
+function sync(v, target) {
+  const inRange = target >= 0 && (!isFinite(v.duration) || target <= v.duration);
+  if (!inRange || !clock.playing) {
+    if (!v.paused) v.pause();
+    if (v.readyState > 0 && Math.abs(v.currentTime - Math.max(0, target)) > SEEK_TOLERANCE) v.currentTime = Math.max(0, Math.min(target, v.duration || target));
+  } else if (v.paused) {
+    v.currentTime = target;
+    v.play().catch(() => {});
+  } else if (Math.abs(v.currentTime - target) > DRIFT_MAX) {
+    v.currentTime = target;
+  }
 }
 
 function osd(text, undo) {

@@ -71,7 +71,7 @@ pub fn extend(path: &Path, from: u64, data: &[u8]) -> std::io::Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
     use serde_json::json;
 
