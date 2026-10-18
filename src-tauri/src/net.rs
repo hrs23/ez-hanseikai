@@ -558,10 +558,17 @@ pub async fn accept_loop(core: Arc<Core>) {
                 conn.close(1u32.into(), b"not a member");
                 return;
             }
-            match core.update_peer(&from, |p| p.incoming.replace(conn.clone())) {
+            match core.update_peer(&from, |p| (p.incoming.replace(conn.clone()), p.conn.clone())) {
                 None => return conn.close(1u32.into(), b"not a member"),
-                Some(Some(old)) => old.close(0u32.into(), b"replaced"),
-                Some(None) => {}
+                Some((Some(old), outgoing)) => {
+                    if old.close_reason().is_none() {
+                        if let Some(outgoing) = outgoing {
+                            outgoing.close(0u32.into(), b"peer restarted");
+                        }
+                    }
+                    old.close(0u32.into(), b"replaced");
+                }
+                Some((None, _)) => {}
             }
             watch_paths(&core, &conn, format!("{} incoming", short(&from)));
             while let Ok((send, recv)) = conn.accept_bi().await {
