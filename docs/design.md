@@ -105,3 +105,15 @@ File > Export set writes one video on this PC, like a screen recording of the Pl
 - Transcription.
 - Cleanup of leftovers from rooms left and sets deleted, and of old reports.
 - Sync state as a colour in the top bar, with per-member connection, live delay and progress in the room menu.
+- From the previous app (Apex Hanseikai), in the Player:
+  - Notes overlaid on the video for a few seconds from their time, and "<name> is typing".
+  - A quick note box: C pauses and opens a small box over the video, with an option for a note without a time; Enter adds and resumes.
+  - Seekbar thumbnails on hover and the received part of each file.
+  - Fill the window (T) besides full screen; click toggles play; double-tap skips on touch screens.
+  - 3x speed, Ctrl+Left/Right and buttons for one minute, Shift+P/N for the previous and next set, A/D for the previous and next event of the chosen kind.
+  - In Watch Party: viewer count, typing indicator and shared speed.
+  - Copy a link to this moment and view, which opens the app there.
+- A summary board per room: one card for the team and one per member, short Markdown, with links to moments; and a page per tag.
+- Keeping only the parts of old sets around notes and events instead of deleting them whole.
+- A storage view: free space and the space each set uses.
+- A jobs view: plugin jobs with progress, retry and cancel.
