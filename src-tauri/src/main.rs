@@ -183,6 +183,8 @@ pub struct Core {
     pub asks: Mutex<Vec<room::Ask>>,
     pub party: Mutex<party::Party>,
     pub language: Mutex<String>,
+    pub hotkey: Mutex<String>,
+    pub hid_once: AtomicBool,
     logs: Mutex<HashMap<PathBuf, (Arc<Vec<Value>>, u64)>>,
     pub jsons: Mutex<HashMap<PathBuf, Value>>,
     pub writing: Mutex<HashSet<PathBuf>>,
@@ -268,6 +270,8 @@ impl Core {
             "quality": self.engine.quality.lock().unwrap().clone(),
             "language": *self.language.lock().unwrap(),
             "layout": *self.layout.lock().unwrap(),
+            "hotkey": *self.hotkey.lock().unwrap(),
+            "hid_once": self.hid_once.load(Ordering::Relaxed),
         });
         let _ = write_whole(&self.dir.join("settings.json"), value.to_string().as_bytes());
     }
@@ -319,15 +323,30 @@ async fn state(core: State<'_, Arc<Core>>) -> Result<Value, String> {
     Ok(room::state_json(&core))
 }
 
+fn display_sizes() -> Vec<(u32, u32)> {
+    windows_capture::monitor::Monitor::enumerate().unwrap_or_default().iter().map(|m| (m.width().unwrap_or(0), m.height().unwrap_or(0))).collect()
+}
+
+fn with_sizes(mut list: Vec<Value>, sizes: &[(u32, u32)]) -> Vec<Value> {
+    for s in list.iter_mut() {
+        let index = s["id"]["index"].as_u64().unwrap_or(0) as usize;
+        if let Some((w, h)) = index.checked_sub(1).and_then(|i| sizes.get(i)).filter(|(w, h)| *w > 0 && *h > 0) {
+            s["width"] = json!(w);
+            s["height"] = json!(h);
+        }
+    }
+    list
+}
+
 #[tauri::command]
 async fn list_sources() -> Vec<Value> {
-    sources::list()
+    with_sizes(sources::list(), &display_sizes())
 }
 
 #[tauri::command]
 fn set_source(core: State<Arc<Core>>, source: Value) -> Result<(), String> {
-    if !sources::valid(&source) {
-        return Err("unknown source".into());
+    if !sources::valid(&source) || source.is_null() {
+        return Err("That capture source is not available.".into());
     }
     *core.engine.source.lock().unwrap() = source;
     core.save_settings();
@@ -356,7 +375,7 @@ fn set_mix(core: State<Arc<Core>>, kind: String, volume: f64, muted: bool) -> Re
     let track = match kind.as_str() {
         "app" => record::APP,
         "mic" => record::MIC,
-        _ => return Err("unknown kind".into()),
+        _ => return Err(format!("unknown kind {kind}")),
     };
     let key = core.engine.mix_key(track);
     core.engine.mix.lock().unwrap()[&key] = json!({"volume": volume.clamp(0.0, 1.0), "muted": muted});
@@ -367,7 +386,7 @@ fn set_mix(core: State<Arc<Core>>, kind: String, volume: f64, muted: bool) -> Re
 #[tauri::command]
 fn set_quality(core: State<Arc<Core>>, id: String) -> Result<(), String> {
     if !record::QUALITIES.iter().any(|q| q.0 == id) {
-        return Err("unknown quality".into());
+        return Err(format!("unknown quality {id}"));
     }
     *core.engine.quality.lock().unwrap() = id;
     core.save_settings();
@@ -377,7 +396,7 @@ fn set_quality(core: State<Arc<Core>>, id: String) -> Result<(), String> {
 #[tauri::command]
 fn set_language(core: State<Arc<Core>>, language: String) -> Result<(), String> {
     if !["", "en", "ja"].contains(&language.as_str()) {
-        return Err("unknown language".into());
+        return Err(format!("unknown language {language}"));
     }
     *core.language.lock().unwrap() = language;
     core.save_settings();
@@ -476,13 +495,13 @@ fn open_set_folder(core: State<Arc<Core>>, room: String, set: String) {
 #[tauri::command]
 async fn export_set(core: State<'_, Arc<Core>>, room: String, set: String) -> Result<Value, String> {
     if !room::valid_id(&room) || !room::valid_id(&set) {
-        return Err("Unknown set.".into());
+        return Err("That session is not on this PC.".into());
     }
     let core = core.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         export::check(&core)?;
         let name = format!("{set}.mp4");
-        let Some(path) = (if test_mode() { Some(core.dir.join(name)) } else { shell::pick_file(true, &name) }) else { return Ok(Value::Null) };
+        let Some(path) = (if test_mode() { Some(core.dir.join(name)) } else { shell::save_file(&core.app, &name, "MP4", "mp4") }) else { return Ok(Value::Null) };
         export::start(&core, &room, &set, path).map(|skipped| json!({"skipped": skipped}))
     })
     .await
@@ -650,16 +669,41 @@ fn dismiss_recovery(core: State<Arc<Core>>) {
 #[tauri::command]
 fn add_event(core: State<Arc<Core>>, kind: String, text: String, target: Value, values: Value) -> Result<i64, String> {
     if !EVENT_KINDS.contains(&kind.as_str()) || !target.is_object() || values.to_string().len() > VALUES_MAX {
-        return Err("not a valid event".into());
+        return Err(format!("not a valid {kind} event"));
     }
     let text = clean_note(&text, if kind == "board" { BOARD_MAX } else { NOTE_MAX });
     if kind == "note" && text.trim().is_empty() {
-        return Err("empty note".into());
+        return Err("Write something first.".into());
     }
+    Ok(log_event(&core, &core.active_room_id(), &kind, &text, target, values))
+}
+
+fn log_event(core: &Arc<Core>, room: &str, kind: &str, text: &str, target: Value, values: Value) -> i64 {
     let id = now_us();
-    core.append_log(&core.active_room_id(), &json!({"k": "event", "id": id, "t_us": id, "kind": kind, "target": target, "text": text, "values": values, "tags": room::tags(&text)}));
-    party::send(&core);
-    Ok(id)
+    core.append_log(room, &json!({"k": "event", "id": id, "t_us": id, "kind": kind, "target": target, "text": text, "values": values, "tags": room::tags(text)}));
+    party::send(core);
+    id
+}
+
+pub fn mark_moment(core: &Arc<Core>) -> Result<i64, String> {
+    let room = core.active_set.lock().unwrap().as_ref().map(|s| s.room.clone()).ok_or("Start a session first.")?;
+    Ok(log_event(core, &room, "mark", "", json!({"t_us": now_us()}), Value::Null))
+}
+
+#[tauri::command]
+fn mark(core: State<Arc<Core>>) -> Result<i64, String> {
+    mark_moment(&core)
+}
+
+#[tauri::command]
+fn set_hotkey(core: State<Arc<Core>>, keys: String) -> Result<(), String> {
+    shell::set_hotkey(&core, &keys)
+}
+
+#[tauri::command]
+fn retry_ffmpeg(core: State<Arc<Core>>) {
+    let core = core.inner().clone();
+    std::thread::spawn(move || prepare_ffmpeg(&core));
 }
 
 #[tauri::command]
@@ -760,6 +804,8 @@ async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
         asks: Mutex::new(Vec::new()),
         party: Mutex::new(party::Party::default()),
         language: Mutex::new(settings["language"].as_str().unwrap_or_default().to_string()),
+        hotkey: Mutex::new(settings["hotkey"].as_str().filter(|h| shell::hotkey(h).is_some()).unwrap_or(shell::DEFAULT_HOTKEY).to_string()),
+        hid_once: AtomicBool::new(settings["hid_once"].as_bool().unwrap_or(false)),
         logs: Mutex::new(HashMap::new()),
         jsons: Mutex::new(HashMap::new()),
         writing: Mutex::new(HashSet::new()),
@@ -769,13 +815,10 @@ async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
 
 fn prepare_ffmpeg(core: &Core) {
     if !ffmpeg::present() {
-        *core.ffmpeg_status.lock().unwrap() = "downloading ffmpeg...".into();
+        *core.ffmpeg_status.lock().unwrap() = "downloading".into();
         tracing::info!("downloading ffmpeg");
         let result = ffmpeg::download();
-        *core.ffmpeg_status.lock().unwrap() = match &result {
-            Ok(()) => String::new(),
-            Err(e) => format!("ffmpeg download failed: {e}"),
-        };
+        *core.ffmpeg_status.lock().unwrap() = if result.is_ok() { String::new() } else { "failed".into() };
         if let Err(e) = result {
             tracing::warn!("ffmpeg download failed: {e}");
         }
@@ -790,10 +833,28 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_window_state::Builder::default().with_denylist(&["debug"]).build())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _, event| {
+                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        if let Some(core) = app.try_state::<Arc<Core>>() {
+                            shell::marked(core.inner());
+                        }
+                    }
+                })
+                .build(),
+        )
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                let _ = window.hide();
+                match window.app_handle().try_state::<Arc<Core>>() {
+                    Some(core) if window.label() == "main" => shell::close_main(window.app_handle(), core.inner()),
+                    _ => {
+                        let _ = window.hide();
+                    }
+                }
             }
         })
         .register_asynchronous_uri_scheme_protocol("ezh", |ctx, request, responder| {
@@ -827,7 +888,7 @@ fn main() {
             std::thread::spawn(move || jobs::worker(c));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug::debug_view, debug::debug_report, debug::set_report_sharing, save_report, start_recording, stop_recording, delete_set, open_set_folder, export_set, cancel_export, set_layout, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, set_share, set_limit, set_codecs, cancel_invites, list_sources, set_source, use_display, list_mics, set_mic, set_mix, set_audio_process, set_keep_days, event_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_event, answer_ask, focus_set, party_on, party_act, jobs::room_plugins, jobs::set_room_plugin, jobs::prepare_plugin, jobs::jobs, jobs::retry_job, jobs::cancel_job, set_quality, set_language, rename_room, check_room, draw, party_typing, open_debug])
+        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug::debug_view, debug::debug_report, debug::set_report_sharing, save_report, start_recording, stop_recording, delete_set, open_set_folder, export_set, cancel_export, set_layout, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, set_share, set_limit, set_codecs, cancel_invites, list_sources, set_source, use_display, list_mics, set_mic, set_mix, set_audio_process, set_keep_days, event_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_event, answer_ask, focus_set, party_on, party_act, jobs::room_plugins, jobs::set_room_plugin, jobs::prepare_plugin, jobs::jobs, jobs::retry_job, jobs::cancel_job, set_quality, set_language, rename_room, check_room, draw, party_typing, open_debug, mark, set_hotkey, retry_ffmpeg])
         .run(tauri::generate_context!())
         .expect("failed to run");
 }
@@ -843,6 +904,15 @@ mod tests {
         let value: Value = read_json(&path);
         let _ = std::fs::remove_file(&path);
         assert_eq!(value["name"], "Ren");
+    }
+
+    #[test]
+    fn displays_get_their_size_and_windows_do_not() {
+        let list = vec![json!({"id": {"kind": "window", "exe": "a.exe", "title": "A"}}), json!({"id": {"kind": "display", "index": 2}}), json!({"id": {"kind": "display", "index": 3}})];
+        let out = with_sizes(list, &[(1920, 1080), (2560, 1440)]);
+        assert!(out[0]["width"].is_null());
+        assert_eq!((out[1]["width"].as_u64(), out[1]["height"].as_u64()), (Some(2560), Some(1440)));
+        assert!(out[2]["width"].is_null());
     }
 
     #[test]

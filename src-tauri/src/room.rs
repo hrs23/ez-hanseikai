@@ -155,7 +155,7 @@ impl Core {
 }
 
 fn idle(core: &Core) -> Result<(), String> {
-    if core.active_set.lock().unwrap().is_some() { Err("Stop recording before switching rooms.".into()) } else { Ok(()) }
+    if core.active_set.lock().unwrap().is_some() { Err("End the session before switching rooms.".into()) } else { Ok(()) }
 }
 
 pub fn display_name(core: &Core, id: &str) -> String {
@@ -470,8 +470,8 @@ pub fn apply_removals(core: &Arc<Core>) {
     core.save_rooms();
     apply_active(core);
     for (by, member) in news {
-        let who = if member == me { "you".to_string() } else { display_name(core, &member) };
-        let _ = core.app.emit("flash", format!("{} removed {who}", display_name(core, &by)));
+        let code = if member == me { "removed_you" } else { "removed" };
+        let _ = core.app.emit("flash", json!({"code": code, "by": display_name(core, &by), "name": display_name(core, &member)}));
     }
 }
 
@@ -502,13 +502,13 @@ pub fn begin_set(core: &Arc<Core>, set: &str, by: &str, start_us: i64) -> Result
     ffmpeg::ready()?;
     let room = core.active_room_id();
     if core.is_deleted(&room, set) {
-        return Err("That set was deleted on this PC.".into());
+        return Err("That session was deleted on this PC.".into());
     }
     let active = ActiveSet { id: set.to_string(), room, by: by.to_string(), start_us };
     {
         let mut slot = core.active_set.lock().unwrap();
         if slot.is_some() {
-            return Err("already recording".into());
+            return Err("A session is already recording.".into());
         }
         *slot = Some(active);
     }
@@ -802,13 +802,13 @@ pub fn someone_else_has(core: &Core, key: &str, index: u64) -> bool {
 
 pub fn delete_set(core: &Core, room: &str, set: &str) -> Result<(), String> {
     if !valid_id(room) || !valid_id(set) {
-        return Err("Unknown set.".into());
+        return Err("That session is not on this PC.".into());
     }
     if core.is_recording(room, set) {
-        return Err("This set is being recorded. Stop it first.".into());
+        return Err("This session is still recording.".into());
     }
     if core.in_use(room, set) {
-        return Err("This set is being exported. Cancel the export first.".into());
+        return Err("This session is being exported. Cancel the export first.".into());
     }
     let found = sets(core, room, &logs(core, room)).into_iter().find(|s| s.id == set);
     core.deleted.lock().unwrap().insert(format!("{room}/{set}"));
@@ -950,7 +950,7 @@ fn path_kind(conn: &Connection) -> (&'static str, u64) {
 fn peer_json(core: &Core, room: &str, p: &Peer) -> Value {
     let alive = p.conn.iter().chain(p.incoming.iter()).find(|c| c.close_reason().is_none());
     let (path, rtt) = alive.map(path_kind).unzip();
-    let message = p.info.as_ref().filter(|(_, proto)| *proto != PROTOCOL).map(|(version, proto)| format!("peer has version {version} (protocol {proto}, ours {PROTOCOL}), update needed"));
+    let other_version = p.info.as_ref().is_some_and(|(_, proto)| *proto != PROTOCOL);
     let sharing = p.sharing && alive.is_some();
     json!({
         "id": p.id.to_string(),
@@ -961,7 +961,7 @@ fn peer_json(core: &Core, room: &str, p: &Peer) -> Value {
         "failures": p.failures,
         "offset_us": p.offset_us,
         "version": p.info.as_ref().map(|(version, _)| version),
-        "message": message,
+        "other_version": other_version,
         "sharing": sharing,
         "live": if sharing { stream::live_json(core, room, &p.id.to_string()) } else { None },
     })
@@ -1009,7 +1009,7 @@ pub fn state_json(core: &Core) -> Value {
     }
     let people = active.as_ref().map(Room::people).unwrap_or_default();
     let rooms = core.rooms.lock().unwrap();
-    let room_list: Vec<Value> = rooms.list.iter().map(|r| json!({"id": r.id, "name": r.name, "active": rooms.active.as_deref() == Some(&r.id), "members": r.members.len()})).collect();
+    let room_list: Vec<Value> = rooms.list.iter().map(|r| json!({"id": r.id, "name": r.name, "active": rooms.active.as_deref() == Some(&r.id), "members": r.members, "names": r.names, "colors": colors(&r.people())})).collect();
     drop(rooms);
     json!({
         "version": VERSION,
@@ -1036,6 +1036,7 @@ pub fn state_json(core: &Core) -> Value {
         "room": active.map(|r| json!({"id": r.id, "name": r.name, "pending": r.invite.is_some(), "waiting": r.waiting})),
         "rooms": room_list,
         "layout": core.layout.lock().unwrap().clone(),
+        "hotkey": core.hotkey.lock().unwrap().clone(),
         "sets": sets,
         "peers": peers,
         "events": events,
