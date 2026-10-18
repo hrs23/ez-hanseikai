@@ -203,7 +203,7 @@ pub fn apply_active(core: &Arc<Core>) {
         peers.retain(|p| {
             let keep = wanted.contains(&p.id);
             if !keep {
-                for conn in p.conn.iter().chain(p.incoming.iter()) {
+                for conn in p.conn.iter() {
                     conn.close(2u32.into(), b"left");
                 }
             }
@@ -217,7 +217,7 @@ pub fn apply_active(core: &Arc<Core>) {
         }
     }
     for id in fresh {
-        tauri::async_runtime::spawn(net::dial_loop(core.clone(), id));
+        tauri::async_runtime::spawn(net::peer_loop(core.clone(), id));
     }
 }
 
@@ -953,7 +953,7 @@ fn path_kind(conn: &Connection) -> (&'static str, u64) {
 }
 
 fn peer_json(core: &Core, room: &str, p: &Peer) -> Value {
-    let alive = p.conn.iter().chain(p.incoming.iter()).find(|c| c.close_reason().is_none());
+    let alive = p.alive();
     let (path, rtt) = alive.map(path_kind).unzip();
     let other_version = p.info.as_ref().is_some_and(|(_, proto)| *proto != PROTOCOL);
     let sharing = p.sharing && alive.is_some();
@@ -1005,7 +1005,7 @@ pub fn state_json(core: &Core) -> Value {
         e["mine"] = json!(mine);
     }
     let mut asks: Vec<Value> = core.asks.lock().unwrap().iter().filter(|a| a.answer.is_none()).map(|a| json!({"id": a.id, "name": a.name})).collect();
-    for p in core.peers.lock().unwrap().iter().filter(|p| p.conn.is_some() || p.incoming.is_some()) {
+    for p in core.peers.lock().unwrap().iter().filter(|p| p.alive().is_some()) {
         for a in &p.asks {
             if !asks.iter().any(|b| b["id"] == a["id"]) {
                 asks.push(a.clone());

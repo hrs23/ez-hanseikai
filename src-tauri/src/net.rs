@@ -19,6 +19,11 @@ const CHUNK: usize = 64 << 10;
 pub const LOG_SYNC: Duration = Duration::from_secs(2);
 const FILE_WATCH: Duration = Duration::from_millis(250);
 const RETRY: Duration = Duration::from_secs(2);
+const RETRY_MAX: Duration = Duration::from_secs(30);
+const RETRY_DOUBLINGS: u32 = 4;
+const RETRY_JITTER: f64 = 0.25;
+const STABLE_FOR: Duration = Duration::from_secs(10);
+const PING_WAIT: Duration = Duration::from_secs(3);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 const FAREWELL_WAIT: Duration = Duration::from_secs(2);
@@ -488,23 +493,23 @@ pub fn answer(core: &Arc<Core>, id: &str, approve: bool) {
     }
 }
 
-async fn join(core: &Arc<Core>, from: EndpointId, mut send: SendStream, mut recv: RecvStream) -> Result<()> {
+async fn join(core: &Arc<Core>, from: EndpointId, mut send: SendStream, mut recv: RecvStream) -> Result<Option<room::Step>> {
     let req: Value = serde_json::from_slice(&recv.read_to_end(JOIN_MAX).await?)?;
     let room_id = core.active_room_id();
     let (token, id, name) = (req["token"].as_str().unwrap_or_default(), from.to_string(), crate::clean_name(req["name"].as_str().unwrap_or_default()));
     if req["t"] != "join" {
         send.finish()?;
-        return Ok(());
+        return Ok(None);
     }
     let step = {
         let mut invites = core.invites.lock().unwrap();
         let mut asks = core.asks.lock().unwrap();
         room::ask_step(&mut invites, &mut asks, &room_id, token, &id, &name)
     };
-    let reply = match step {
+    let reply = match &step {
         room::Step::Refused => json!({"ok": false}),
         room::Step::Wait(changed) => {
-            if changed {
+            if *changed {
                 broadcast(core, asks_message(core));
             }
             json!({"wait": true})
@@ -516,13 +521,18 @@ async fn join(core: &Arc<Core>, from: EndpointId, mut send: SendStream, mut recv
         room::Step::Admitted => {
             broadcast(core, asks_message(core));
             room::admit(core, &room_id, &id);
+            tracing::info!("admitted {} ({name}) to room {room_id}", short(&id));
             json!({"ok": true, "room": room_info(core)})
         }
     };
     send.write_all(&serde_json::to_vec(&reply)?).await?;
     send.finish()?;
     send.stopped().await.ok();
-    Ok(())
+    Ok(Some(step))
+}
+
+fn path_name(conn: &Connection) -> &'static str {
+    conn.paths().iter().find(|p| p.is_selected()).map_or("none", |p| if p.is_ip() { "direct" } else { "relay" })
 }
 
 fn watch_paths(core: &Arc<Core>, conn: &Connection, label: String) {
@@ -531,17 +541,28 @@ fn watch_paths(core: &Arc<Core>, conn: &Connection, label: String) {
     let started = Instant::now();
     tokio::spawn(async move {
         use tokio_stream::StreamExt;
-        let mut direct = false;
+        let mut last = "";
         while let Some(event) = events.next().await {
             if let iroh::endpoint::PathEvent::Selected { remote_addr, .. } = &event {
-                if remote_addr.is_ip() && !direct {
-                    direct = true;
-                    debug::event(&core, started, format!("{label}: switched to a direct path"));
+                let now = if remote_addr.is_ip() { "direct" } else { "relay" };
+                if now != last {
+                    last = now;
+                    debug::event(&core, started, format!("{label}: {now} path"));
                 }
             }
-            debug::event(&core, started, format!("{label}: {event:?}"));
         }
     });
+}
+
+async fn admitted(core: &Arc<Core>, from: EndpointId, conn: &Connection) -> bool {
+    while let Ok((send, recv)) = conn.accept_bi().await {
+        match join(core, from, send, recv).await {
+            Ok(None | Some(room::Step::Wait(_))) | Err(_) => continue,
+            Ok(Some(room::Step::Admitted)) => return core.has_peer(&from),
+            Ok(Some(_)) => return false,
+        }
+    }
+    false
 }
 
 pub async fn accept_loop(core: Arc<Core>) {
@@ -551,29 +572,15 @@ pub async fn accept_loop(core: Arc<Core>) {
             let Ok(accepting) = incoming.accept() else { return };
             let Ok(conn) = accepting.await else { return };
             let from = conn.remote_id();
-            if !core.has_peer(&from) {
-                if let Ok((send, recv)) = conn.accept_bi().await {
-                    let _ = join(&core, from, send, recv).await;
-                }
+            if !core.has_peer(&from) && !admitted(&core, from, &conn).await {
                 conn.close(1u32.into(), b"not a member");
                 return;
             }
-            match core.update_peer(&from, |p| (p.incoming.replace(conn.clone()), p.conn.clone())) {
-                None => return conn.close(1u32.into(), b"not a member"),
-                Some((Some(old), outgoing)) => {
-                    if old.close_reason().is_none() {
-                        if let Some(outgoing) = outgoing {
-                            outgoing.close(0u32.into(), b"peer restarted");
-                        }
-                    }
-                    old.close(0u32.into(), b"replaced");
-                }
-                Some((None, _)) => {}
+            if !adopt(&core, &from, &conn).await {
+                conn.close(0u32.into(), b"duplicate");
+                return;
             }
-            watch_paths(&core, &conn, format!("{} incoming", short(&from)));
-            while let Ok((send, recv)) = conn.accept_bi().await {
-                tokio::spawn(handle(core.clone(), from, send, recv));
-            }
+            run(&core, from, conn, false).await;
         });
     }
 }
@@ -801,29 +808,34 @@ async fn hello(core: &Arc<Core>, id: &EndpointId, conn: &Connection) -> bool {
     learn_hello(core, id, &reply) == PROTOCOL
 }
 
-async fn present_invite(core: &Arc<Core>, id: &EndpointId, conn: &Connection) {
-    let pending = core.active_room().and_then(|r| r.invite.filter(|(peer, _)| *peer == id.to_string()).map(|(_, token)| (r.id, token)));
-    let Some((pending, token)) = pending else { return };
-    let name = core.name.lock().unwrap().clone();
-    let Ok(reply) = request(conn, &json!({"t": "join", "token": token, "name": name})).await else { return };
-    let Ok(reply) = serde_json::from_slice::<Value>(&reply) else { return };
-    if reply["declined"] == true {
-        room::leave_room(core, &pending);
-        *core.notice.lock().unwrap() = "Your request to join was declined.".into();
-        return;
-    }
-    if reply["wait"] == true {
-        if let Some(r) = core.rooms.lock().unwrap().list.iter_mut().find(|r| r.id == pending) {
-            r.waiting = true;
+async fn present_invite(core: &Arc<Core>, id: &EndpointId, conn: &Connection) -> bool {
+    loop {
+        let pending = core.active_room().and_then(|r| r.invite.filter(|(peer, _)| *peer == id.to_string()).map(|(_, token)| (r.id, token)));
+        let Some((pending, token)) = pending else { return true };
+        let name = core.name.lock().unwrap().clone();
+        let Ok(reply) = request(conn, &json!({"t": "join", "token": token, "name": name})).await else { return false };
+        let Ok(reply) = serde_json::from_slice::<Value>(&reply) else { return false };
+        if reply["declined"] == true {
+            room::leave_room(core, &pending);
+            *core.notice.lock().unwrap() = "Your request to join was declined.".into();
+            return false;
         }
-        return;
+        if reply["wait"] == true {
+            if let Some(r) = core.rooms.lock().unwrap().list.iter_mut().find(|r| r.id == pending) {
+                r.waiting = true;
+            }
+            sleep(LOG_SYNC).await;
+            continue;
+        }
+        if reply["ok"] != true {
+            return false;
+        }
+        let (Some(real), Some(name)) = (reply["room"]["id"].as_str(), reply["room"]["name"].as_str()) else { return false };
+        tracing::info!("joined room {real} through {}", short(id));
+        room::adopt_room(core, &pending, real, name, &strings::<Vec<String>>(&reply["room"]["members"]));
+        room::apply_active(core);
+        return true;
     }
-    if reply["ok"] != true {
-        return;
-    }
-    let (Some(real), Some(name)) = (reply["room"]["id"].as_str(), reply["room"]["name"].as_str()) else { return };
-    room::adopt_room(core, &pending, real, name, &strings::<Vec<String>>(&reply["room"]["members"]));
-    room::apply_active(core);
 }
 
 async fn sync(core: &Arc<Core>, id: &EndpointId, conn: &Connection) -> Result<()> {
@@ -868,11 +880,83 @@ async fn sync(core: &Arc<Core>, id: &EndpointId, conn: &Connection) -> Result<()
     }
 }
 
-pub async fn dial_loop(core: Arc<Core>, id: EndpointId) {
+pub fn backoff(failures: u32, jitter: f64) -> Duration {
+    let base = RETRY.saturating_mul(1 << failures.min(RETRY_DOUBLINGS)).min(RETRY_MAX);
+    base.mul_f64(1.0 + RETRY_JITTER * (2.0 * jitter.clamp(0.0, 1.0) - 1.0))
+}
+
+fn jitter() -> f64 {
+    iroh::SecretKey::generate().to_bytes()[0] as f64 / 255.0
+}
+
+pub fn dials(me: &EndpointId, peer: &EndpointId, inviter: bool) -> bool {
+    inviter || me < peer
+}
+
+fn alive(core: &Core, id: &EndpointId) -> Option<Connection> {
+    core.peers.lock().unwrap().iter().find(|p| p.id == *id).and_then(|p| p.alive().cloned())
+}
+
+async fn adopt(core: &Core, id: &EndpointId, conn: &Connection) -> bool {
+    if let Some(old) = alive(core, id).filter(|c| c.stable_id() != conn.stable_id()) {
+        if request_within(&old, &json!({"t": "ping"}), PING_WAIT).await.is_ok() {
+            return false;
+        }
+        old.close(0u32.into(), b"replaced");
+    }
+    core.update_peer(id, |p| p.conn = Some(conn.clone())).is_some()
+}
+
+async fn serve(core: Arc<Core>, from: EndpointId, conn: Connection) {
+    while let Ok((send, recv)) = conn.accept_bi().await {
+        tokio::spawn(handle(core.clone(), from, send, recv));
+    }
+}
+
+async fn run(core: &Arc<Core>, id: EndpointId, conn: Connection, outgoing: bool) {
+    let started = Instant::now();
+    let label = format!("{} {}", short(&id), if outgoing { "outgoing" } else { "incoming" });
+    debug::event(core, started, format!("{label}: connected"));
+    watch_paths(core, &conn, label.clone());
+    let serving = tokio::spawn(serve(core.clone(), id, conn.clone()));
+    if !outgoing || present_invite(core, &id, &conn).await {
+        if hello(core, &id, &conn).await {
+            if let Err(e) = sync(core, &id, &conn).await {
+                debug::event(core, started, format!("{label}: sync stopped: {e}"));
+            }
+        } else {
+            debug::event(core, started, format!("{label}: protocol differs from ours {PROTOCOL}"));
+            sleep(MISMATCH_WAIT).await;
+        }
+    }
+    serving.abort();
+    let path = path_name(&conn);
+    conn.close(0u32.into(), b"done");
+    let lived = started.elapsed();
+    core.update_peer(&id, |p| {
+        if p.conn.as_ref().is_some_and(|c| c.stable_id() == conn.stable_id()) {
+            p.conn = None;
+            p.sharing = false;
+        }
+        p.failures = if lived < STABLE_FOR { p.failures + 1 } else { 0 };
+    });
+    debug::event(core, started, format!("{label}: closed on the {path} path after {:.0} s", lived.as_secs_f64()));
+}
+
+pub async fn peer_loop(core: Arc<Core>, id: EndpointId) {
     loop {
-        sleep(RETRY).await;
+        let Some(failures) = core.update_peer(&id, |p| p.failures) else { return };
+        sleep(backoff(failures, jitter())).await;
         if !core.has_peer(&id) {
             return;
+        }
+        if let Some(conn) = alive(&core, &id) {
+            conn.closed().await;
+            continue;
+        }
+        let inviter = core.active_room().and_then(|r| r.invite).is_some_and(|(peer, _)| peer == id.to_string());
+        if !dials(&core.ep.id(), &id, inviter) {
+            continue;
         }
         let dialing = Instant::now();
         let conn = match timeout(CONNECT_TIMEOUT, core.ep.connect(id, ALPN)).await {
@@ -883,25 +967,11 @@ pub async fn dial_loop(core: Arc<Core>, id: EndpointId) {
                 continue;
             }
         };
-        debug::event(&core, dialing, format!("{} connected", short(&id)));
-        core.update_peer(&id, |p| {
-            p.conn = Some(conn.clone());
-            p.failures = 0;
-        });
-        watch_paths(&core, &conn, format!("{} outgoing", short(&id)));
-        present_invite(&core, &id, &conn).await;
-        let compatible = hello(&core, &id, &conn).await;
-        if !compatible {
-            debug::event(&core, dialing, format!("{} protocol differs from ours {PROTOCOL}", short(&id)));
-            sleep(MISMATCH_WAIT).await;
-        } else {
-            let _ = sync(&core, &id, &conn).await;
+        if !adopt(&core, &id, &conn).await {
+            conn.close(0u32.into(), b"duplicate");
+            continue;
         }
-        core.update_peer(&id, |p| {
-            p.conn = None;
-            p.sharing = false;
-        });
-        conn.close(0u32.into(), b"done");
+        run(&core, id, conn, true).await;
     }
 }
 
@@ -924,6 +994,23 @@ mod tests {
         assert!(restored(500, false, Some(500)));
         assert!(!restored(500, false, Some(501)));
         assert!(!restored(500, false, None));
+    }
+
+    #[test]
+    fn redials_back_off_with_jitter_up_to_a_limit() {
+        assert_eq!(backoff(0, 0.5), RETRY);
+        assert_eq!(backoff(1, 0.5), RETRY * 2);
+        assert_eq!(backoff(3, 0.5), RETRY * 8);
+        assert_eq!(backoff(9, 0.5), RETRY_MAX);
+        assert_eq!(backoff(0, 0.0), RETRY.mul_f64(1.0 - RETRY_JITTER));
+        assert_eq!(backoff(9, 1.0), RETRY_MAX.mul_f64(1.0 + RETRY_JITTER));
+    }
+
+    #[test]
+    fn one_side_of_each_pair_dials() {
+        let (a, b) = (iroh::SecretKey::generate().public(), iroh::SecretKey::generate().public());
+        assert_ne!(dials(&a, &b, false), dials(&b, &a, false));
+        assert!(dials(&a, &b, true) && dials(&b, &a, true));
     }
 
     #[test]

@@ -311,7 +311,7 @@ fn work_root(core: &Core) -> PathBuf {
 }
 
 fn online(core: &Core) -> HashSet<String> {
-    core.peers.lock().unwrap().iter().filter(|p| p.conn.is_some() || p.incoming.is_some()).map(|p| p.id.to_string()).collect()
+    core.peers.lock().unwrap().iter().filter(|p| p.alive().is_some()).map(|p| p.id.to_string()).collect()
 }
 
 fn bundled() -> Vec<(&'static str, &'static str, bool)> {

@@ -411,7 +411,7 @@ fn connections_json(core: &Core, since: u64, addresses: bool) -> Value {
         .unwrap()
         .iter()
         .map(|p| {
-            let conns: Vec<Value> = [("outgoing", &p.conn), ("incoming", &p.incoming)].into_iter().filter_map(|(label, c)| c.as_ref().map(|c| conn_json(label, c, addresses))).collect();
+            let conns: Vec<Value> = p.conn.iter().map(|c| conn_json("connection", c, addresses)).collect();
             json!({
                 "id": p.id.to_string(), "short": short(p.id), "name": p.name, "failures": p.failures, "offset_us": p.offset_us,
                 "version": p.info.as_ref().map(|i| &i.0), "proto": p.info.as_ref().map(|i| i.1), "codecs": p.codecs, "sharing": p.sharing, "conns": conns,
@@ -643,8 +643,8 @@ pub fn shared_report(core: &Core) -> String {
     report_text(core, SHARE_ADDRESSES.load(Ordering::Relaxed), false, None)
 }
 
-fn describe(conn: &Connection, label: &str, addresses: bool, out: &mut String) {
-    out.push_str(&format!("{label} connection to {}\n", conn.remote_id().fmt_short()));
+fn describe(conn: &Connection, addresses: bool, out: &mut String) {
+    out.push_str(&format!("connection to {}\n", conn.remote_id().fmt_short()));
     for p in path_json(conn, addresses) {
         out.push_str(&format!(
             "  path {}{} {}rtt {:.1} ms sent {} B received {} B mtu {}\n",
@@ -666,15 +666,12 @@ pub fn text(core: &Core, peer_addresses: bool) -> String {
     out.push_str(&format!("encoder {} ({})\n", ffmpeg::encoder(), ffmpeg::path().display()));
     out.push_str(&format!("encoder probe {:?}\n", ffmpeg::encoder_results()));
     out.push_str(&format!("endpoint {}\n", endpoint_json(core, true)));
-    let peers: Vec<(String, Option<Connection>, Option<Connection>, Option<i64>)> =
-        core.peers.lock().unwrap().iter().map(|p| (p.id.to_string(), p.conn.clone(), p.incoming.clone(), p.offset_us)).collect();
-    for (id, conn, incoming, offset) in peers {
+    let peers: Vec<(String, Option<Connection>, Option<i64>)> = core.peers.lock().unwrap().iter().map(|p| (p.id.to_string(), p.conn.clone(), p.offset_us)).collect();
+    for (id, conn, offset) in peers {
         out.push_str(&format!("peer {id} clock offset {offset:?} us\n"));
-        for (label, conn) in [("outgoing", conn), ("incoming", incoming)] {
-            match conn {
-                Some(conn) => describe(&conn, label, peer_addresses, &mut out),
-                None => out.push_str(&format!("{label} connection: none\n")),
-            }
+        match conn {
+            Some(conn) => describe(&conn, peer_addresses, &mut out),
+            None => out.push_str("connection: none\n"),
         }
     }
     let room = core.active_room_id();

@@ -34,7 +34,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, State};
 
 pub const ALPN: &[u8] = b"ez-hanseikai/0";
-pub const PROTOCOL: u32 = 4;
+pub const PROTOCOL: u32 = 5;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub use proc::{BELOW_NORMAL, NO_WINDOW};
 const NOTE_MAX: usize = 500;
@@ -131,7 +131,6 @@ pub struct Peer {
     pub id: EndpointId,
     pub name: String,
     pub conn: Option<Connection>,
-    pub incoming: Option<Connection>,
     pub offset_us: Option<i64>,
     pub failures: u32,
     pub announce: bool,
@@ -145,8 +144,12 @@ pub struct Peer {
 }
 
 impl Peer {
+    pub fn alive(&self) -> Option<&Connection> {
+        self.conn.as_ref().filter(|c| c.close_reason().is_none())
+    }
+
     pub fn new(id: EndpointId, name: String) -> Self {
-        Self { id, name, conn: None, incoming: None, offset_us: None, failures: 0, announce: true, codecs: default_codecs(), info: None, sharing: false, have: HashMap::new(), logs: HashMap::new(), gone: HashSet::new(), asks: Vec::new() }
+        Self { id, name, conn: None, offset_us: None, failures: 0, announce: true, codecs: default_codecs(), info: None, sharing: false, have: HashMap::new(), logs: HashMap::new(), gone: HashSet::new(), asks: Vec::new() }
     }
 }
 
