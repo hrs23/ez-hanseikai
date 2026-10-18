@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::Ordering;
@@ -10,7 +9,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::room::{self, Set};
-use crate::{debug, now_us, Core};
+use crate::{debug, hex, now_us, read_json, Core};
 
 pub const LOW_SHARE: f64 = 0.10;
 pub const FULL_SHARE: f64 = 0.01;
@@ -18,6 +17,17 @@ const KEEP_EVERY: Duration = Duration::from_secs(5);
 const AGE_EVERY: Duration = Duration::from_secs(3600);
 const DAY_US: i64 = 86_400_000_000;
 const CHECKS: &str = "verified.json";
+
+impl Core {
+    pub fn json(&self, path: &Path) -> Value {
+        self.jsons.lock().unwrap().entry(path.to_path_buf()).or_insert_with(|| read_json(path)).clone()
+    }
+
+    pub fn write_json(&self, path: &Path, value: Value) {
+        let _ = std::fs::write(path, value.to_string());
+        self.jsons.lock().unwrap().insert(path.to_path_buf(), value);
+    }
+}
 
 pub fn migrate(old: &Path, new: &Path) {
     if old == new || !old.exists() {
@@ -48,23 +58,14 @@ pub fn used_bytes(dir: &Path) -> u64 {
         .sum()
 }
 
-pub fn disk(dir: &Path) -> (u64, u64) {
-    let Some(letter) = dir.to_string_lossy().chars().next() else { return (0, 0) };
-    let out = Command::new("powershell")
-        .args(["-NoProfile", "-Command", &format!("$d = Get-PSDrive {letter}; \"$($d.Free) $($d.Used)\"")])
-        .creation_flags(0x08000000)
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-        .unwrap_or_default();
-    let mut parts = out.split_whitespace().filter_map(|n| n.parse::<u64>().ok());
-    match (parts.next(), parts.next()) {
-        (Some(free), Some(used)) => (free, free + used),
-        _ => (0, 0),
-    }
-}
-
 pub fn refresh_disk(core: &Core) {
-    let (free, total) = disk(&core.dir);
+    use ::windows::core::PCWSTR;
+    use ::windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+    let wide: Vec<u16> = core.dir.as_os_str().to_string_lossy().encode_utf16().chain([0]).collect();
+    let (mut free, mut total) = (0u64, 0u64);
+    if unsafe { GetDiskFreeSpaceExW(PCWSTR(wide.as_ptr()), Some(&mut free as *mut u64), Some(&mut total as *mut u64), None) }.is_err() {
+        (free, total) = (0, 0);
+    }
     core.free_bytes.store(free, Ordering::Relaxed);
     core.total_bytes.store(total, Ordering::Relaxed);
 }
@@ -75,7 +76,7 @@ pub fn open_folder(dir: &Path) {
 
 pub fn reset(dir: &Path, everything: bool) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
-    let settings = ["ffmpeg.exe", "ffmpeg.exe.part", "ffmpeg.zip", "log.txt", "log.old.txt", "report.txt", "peers.txt", "settings.json", "id.txt", "version.txt"];
+    let settings = ["ffmpeg.exe", "ffmpeg.exe.part", "ffmpeg.zip", "log.txt", "log.old.txt", "report.txt", "settings.json", "id.txt", "version.txt"];
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
         if name == "EBWebView" || name == "webview" || name == "running.marker" {
@@ -89,19 +90,21 @@ pub fn reset(dir: &Path, everything: bool) {
 }
 
 pub fn tz_offset_seconds() -> i64 {
-    Command::new("powershell")
-        .args(["-NoProfile", "-Command", "[int][TimeZoneInfo]::Local.GetUtcOffset([DateTime]::UtcNow).TotalSeconds"])
-        .creation_flags(0x08000000)
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok())
-        .unwrap_or(0)
+    use ::windows::Win32::System::Time::{GetTimeZoneInformation, TIME_ZONE_INFORMATION};
+    let mut tz = TIME_ZONE_INFORMATION::default();
+    let bias = match unsafe { GetTimeZoneInformation(&mut tz) } {
+        1 => tz.Bias + tz.StandardBias,
+        2 => tz.Bias + tz.DaylightBias,
+        u32::MAX => 0,
+        _ => tz.Bias,
+    };
+    -(bias as i64) * 60
 }
 
 pub fn sha256(path: &Path) -> Option<(u64, String)> {
     let mut hasher = Sha256::new();
     let size = std::io::copy(&mut std::fs::File::open(path).ok()?, &mut hasher).ok()?;
-    Some((size, hasher.finalize().iter().map(|b| format!("{b:02x}")).collect()))
+    Some((size, hex(&hasher.finalize())))
 }
 
 fn stamp(path: &Path) -> Option<(u64, u128)> {
@@ -109,23 +112,23 @@ fn stamp(path: &Path) -> Option<(u64, u128)> {
     Some((meta.len(), meta.modified().ok()?.duration_since(UNIX_EPOCH).ok()?.as_millis()))
 }
 
-fn checks(dir: &Path) -> Value {
-    std::fs::read_to_string(dir.join(CHECKS)).ok().and_then(|t| serde_json::from_str(&t).ok()).filter(Value::is_object).unwrap_or_else(|| json!({}))
+fn checks(core: &Core, dir: &Path) -> Value {
+    Some(core.json(&dir.join(CHECKS))).filter(Value::is_object).unwrap_or_else(|| json!({}))
 }
 
 fn current(entry: &Value, path: &Path) -> bool {
     stamp(path).is_some_and(|(size, mtime)| entry["size"] == size && entry["mtime"] == mtime as u64)
 }
 
-pub fn verified_files(dir: &Path) -> HashSet<String> {
-    let all = checks(dir);
+pub fn verified_files(core: &Core, dir: &Path) -> HashSet<String> {
+    let all = checks(core, dir);
     let Some(map) = all.as_object() else { return HashSet::new() };
     map.iter().filter(|(file, e)| e["ok"] == true && current(e, &dir.join(file))).map(|(file, _)| file.clone()).collect()
 }
 
 fn verify_set(core: &Core, set: &Set) {
     let dir = core.set_dir(&set.room, &set.id);
-    let mut all = checks(&dir);
+    let mut all = checks(core, &dir);
     let mut changed = false;
     for f in &set.files {
         let (Some(total), Some(sha)) = (f.total, f.sha256.as_deref()) else { continue };
@@ -159,7 +162,7 @@ fn verify_set(core: &Core, set: &Set) {
         }
     }
     if changed {
-        let _ = std::fs::write(dir.join(CHECKS), all.to_string());
+        core.write_json(&dir.join(CHECKS), all);
     }
 }
 
@@ -177,15 +180,11 @@ fn all_sets(core: &Core) -> Vec<(Set, bool)> {
     out
 }
 
-fn active(core: &Core, set: &Set) -> bool {
-    core.active_set.lock().unwrap().as_ref().is_some_and(|a| a.id == set.id && a.room == set.room)
-}
-
 fn delete_old(core: &Core) {
     let Some(days) = *core.keep_days.lock().unwrap() else { return };
     let limit = days as i64 * DAY_US;
     for (set, _) in all_sets(core) {
-        if !active(core, &set) && set.end().is_some_and(|end| now_us() - end > limit) {
+        if !core.is_recording(&set.room, &set.id) && set.end().is_some_and(|end| now_us() - end > limit) {
             let _ = room::delete_set(core, &set.room, &set.id);
         }
     }
@@ -195,8 +194,11 @@ fn free_space(core: &Core) {
     if !core.disk_low() {
         return;
     }
-    let mut old: Vec<(bool, i64, Set)> =
-        all_sets(core).into_iter().filter(|(s, _)| !active(core, s) && s.end().is_some() && core.set_dir(&s.room, &s.id).exists()).map(|(s, noted)| (noted, s.start(), s)).collect();
+    let mut old: Vec<(bool, i64, Set)> = all_sets(core)
+        .into_iter()
+        .filter(|(s, _)| !core.is_recording(&s.room, &s.id) && s.end().is_some() && core.set_dir(&s.room, &s.id).exists())
+        .map(|(s, noted)| (noted, s.start(), s))
+        .collect();
     old.sort_by_key(|(noted, start, _)| (*noted, *start));
     let mut removed = Vec::new();
     for (_, _, set) in old {
@@ -216,25 +218,27 @@ fn free_space(core: &Core) {
 
 pub fn unhashed(core: &Core) -> Vec<(String, String)> {
     let own = core.own_log();
+    let hashed: HashSet<(&str, &str)> = own.iter().filter(|r| r["k"] == "file").filter_map(|r| Some((r["room"].as_str()?, r["set"].as_str()?))).collect();
     own.iter()
-        .filter(|r| r["k"] == "rec" && !own.iter().any(|f| f["k"] == "file" && f["set"] == r["set"] && f["room"] == r["room"]))
-        .filter_map(|r| Some((r["room"].as_str()?.to_string(), r["set"].as_str()?.to_string())))
+        .filter(|r| r["k"] == "rec")
+        .filter_map(|r| Some((r["room"].as_str()?, r["set"].as_str()?)))
+        .filter(|key| !hashed.contains(key))
+        .map(|(room, set)| (room.to_string(), set.to_string()))
         .collect()
 }
 
 pub fn record_file(core: &Core, room: &str, set: &str) {
-    let file = format!("{}.mp4", core.ep.id());
-    if let Some((size, sha)) = sha256(&core.set_dir(room, set).join(&file)) {
-        core.append_log(&json!({"k": "file", "room": room, "set": set, "file": file, "size": size, "sha256": sha, "t_us": now_us()}));
+    if let Some((size, sha)) = sha256(&core.own_file(room, set)) {
+        core.append_log(&json!({"k": "file", "room": room, "set": set, "file": format!("{}.mp4", core.ep.id()), "size": size, "sha256": sha, "t_us": now_us()}));
     }
 }
 
 pub fn keeper(core: Arc<Core>, unhashed: Vec<(String, String)>) {
     let own = core.own_log();
+    let ended: HashSet<&str> = own.iter().filter(|r| r["k"] == "rec_end").filter_map(|r| r["set"].as_str()).collect();
     for (room, set) in unhashed {
-        let path = core.set_dir(&room, &set).join(format!("{}.mp4", core.ep.id()));
-        if !own.iter().any(|r| r["k"] == "rec_end" && r["set"] == set.as_str()) {
-            let end = stamp(&path).map(|(_, mtime)| mtime as i64 * 1000).unwrap_or_else(now_us);
+        if !ended.contains(set.as_str()) {
+            let end = stamp(&core.own_file(&room, &set)).map(|(_, mtime)| mtime as i64 * 1000).unwrap_or_else(now_us);
             core.append_log(&json!({"k": "rec_end", "set": set, "room": room, "t_us": end}));
         }
         record_file(&core, &room, &set);

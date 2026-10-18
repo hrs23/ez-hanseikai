@@ -1,12 +1,14 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use iroh::endpoint::Connection;
 use iroh::EndpointId;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::{data, log, net, now_us, record, short, Core, Peer};
+use crate::{clean_text, data, ffmpeg, file_len, hex, net, now_us, record, short, Core, Peer, PROTOCOL, ROOM_NAME_MAX, VERSION};
 
 pub const SOLO: &str = "solo";
 
@@ -17,6 +19,8 @@ pub struct Room {
     pub members: Vec<String>,
     #[serde(default)]
     pub names: HashMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invite: Option<(String, String)>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -34,7 +38,7 @@ pub struct ActiveSet {
 }
 
 pub fn random_hex(bytes: usize) -> String {
-    iroh::SecretKey::generate().to_bytes()[..bytes].iter().map(|b| format!("{b:02x}")).collect()
+    hex(&iroh::SecretKey::generate().to_bytes()[..bytes])
 }
 
 pub fn valid_id(text: &str) -> bool {
@@ -67,12 +71,25 @@ impl Core {
         rooms.list.iter().find(|r| &r.id == id).cloned()
     }
 
+    pub fn room_id(&self) -> Option<String> {
+        let rooms = self.rooms.lock().unwrap();
+        rooms.active.clone().filter(|id| rooms.list.iter().any(|r| &r.id == id))
+    }
+
     pub fn active_room_id(&self) -> String {
-        self.active_room().map(|r| r.id).unwrap_or_else(|| SOLO.to_string())
+        self.room_id().unwrap_or_else(|| SOLO.to_string())
     }
 
     pub fn set_dir(&self, room: &str, set: &str) -> PathBuf {
         self.dir.join("rooms").join(room).join("sets").join(set)
+    }
+
+    pub fn set_file(&self, room: &str, set: &str, owner: &str) -> PathBuf {
+        self.set_dir(room, set).join(format!("{owner}.mp4"))
+    }
+
+    pub fn own_file(&self, room: &str, set: &str) -> PathBuf {
+        self.set_file(room, set, &self.ep.id().to_string())
     }
 
     pub fn live_dir(&self, room: &str) -> PathBuf {
@@ -90,6 +107,22 @@ impl Core {
             None => Value::Null,
         }
     }
+
+    pub fn is_recording(&self, room: &str, set: &str) -> bool {
+        self.active_set.lock().unwrap().as_ref().is_some_and(|a| a.id == set && a.room == room)
+    }
+}
+
+fn idle(core: &Core) -> Result<(), String> {
+    if core.active_set.lock().unwrap().is_some() { Err("Stop recording before switching rooms.".into()) } else { Ok(()) }
+}
+
+pub fn display_name(core: &Core, id: &str) -> String {
+    if id == core.ep.id().to_string() {
+        return core.name.lock().unwrap().clone();
+    }
+    let peer = core.peers.lock().unwrap().iter().find(|p| p.id.to_string() == id && !p.name.is_empty()).map(|p| p.name.clone());
+    peer.or_else(|| core.active_room().and_then(|r| r.names.get(id).cloned())).unwrap_or_else(|| short(id))
 }
 
 pub fn remember_name(core: &Core, id: &str, name: &str, replace: bool) {
@@ -117,12 +150,7 @@ pub fn remember_name(core: &Core, id: &str, name: &str, replace: bool) {
 
 pub fn apply_active(core: &Arc<Core>) {
     let room = core.active_room().unwrap_or_default();
-    let wanted: Vec<EndpointId> = room
-        .members
-        .iter()
-        .filter_map(|m| m.parse().ok())
-        .filter(|id| *id != core.ep.id())
-        .collect();
+    let wanted: Vec<EndpointId> = room.members.iter().filter_map(|m| m.parse().ok()).filter(|id| *id != core.ep.id()).collect();
     let mut fresh = Vec::new();
     {
         let mut peers = core.peers.lock().unwrap();
@@ -137,8 +165,7 @@ pub fn apply_active(core: &Arc<Core>) {
         });
         for id in &wanted {
             if !peers.iter().any(|p| p.id == *id) {
-                let announce = core.ready.load(std::sync::atomic::Ordering::Relaxed);
-                peers.push(Peer { id: *id, name: room.names.get(&id.to_string()).cloned().unwrap_or_default(), conn: None, incoming: None, offset_us: None, failures: 0, announce, codecs: vec!["h264".to_string()], info: None, sharing: false, live: None, have: HashSet::new(), gone: HashSet::new() });
+                peers.push(Peer::new(*id, room.names.get(&id.to_string()).cloned().unwrap_or_default()));
                 fresh.push(*id);
             }
         }
@@ -148,23 +175,43 @@ pub fn apply_active(core: &Arc<Core>) {
     }
 }
 
-pub fn create_room(core: &Arc<Core>, name: &str) -> String {
-    let id = random_hex(4);
-    let name = if name.trim().is_empty() { format!("{}'s room", core.name.lock().unwrap()) } else { name.trim().chars().take(40).collect() };
+fn activate(core: &Arc<Core>, room: Room) {
     {
         let mut rooms = core.rooms.lock().unwrap();
-        rooms.list.push(Room { id: id.clone(), name, members: vec![core.ep.id().to_string()], names: HashMap::new() });
-        rooms.active = Some(id.clone());
+        rooms.list.retain(|r| r.id != room.id);
+        rooms.active = Some(room.id.clone());
+        rooms.list.push(room);
     }
     core.save_rooms();
     apply_active(core);
-    id
+}
+
+pub fn create_room(core: &Arc<Core>, name: &str) -> Result<String, String> {
+    idle(core)?;
+    let id = random_hex(4);
+    let name = match clean_text(name, ROOM_NAME_MAX) {
+        n if n.is_empty() => format!("{}'s room", core.name.lock().unwrap()),
+        n => n,
+    };
+    activate(core, Room { id: id.clone(), name, members: vec![core.ep.id().to_string()], ..Default::default() });
+    Ok(id)
+}
+
+pub fn join_room(core: &Arc<Core>, code: &str) -> Result<(), String> {
+    let bad = || "That invite code is not valid. Ask for a new one.".to_string();
+    let text: String = code.split_whitespace().collect();
+    let (id, token) = text.strip_prefix("ezh-").and_then(|t| t.split_once('-')).ok_or_else(bad)?;
+    id.parse::<EndpointId>().map_err(|_| bad())?;
+    idle(core)?;
+    core.removed.lock().unwrap().remove(id);
+    let members = vec![core.ep.id().to_string(), id.to_string()];
+    let invite = Some((id.to_string(), token.to_string()));
+    activate(core, Room { id: format!("pending-{token}"), name: "Joining...".into(), members, names: HashMap::new(), invite });
+    Ok(())
 }
 
 pub fn switch_room(core: &Arc<Core>, id: &str) -> Result<(), String> {
-    if core.active_set.lock().unwrap().is_some() {
-        return Err("Stop recording before switching rooms.".into());
-    }
+    idle(core)?;
     {
         let mut rooms = core.rooms.lock().unwrap();
         if !rooms.list.iter().any(|r| r.id == id) {
@@ -233,7 +280,8 @@ pub fn adopt_room(core: &Arc<Core>, pending: &str, id: &str, name: &str, members
         rooms.list.retain(|r| r.id != id);
         if let Some(r) = rooms.list.iter_mut().find(|r| r.id == pending) {
             r.id = id.to_string();
-            r.name = name.chars().take(40).collect();
+            r.name = clean_text(name, ROOM_NAME_MAX);
+            r.invite = None;
         }
         if rooms.active.as_deref() == Some(pending) {
             rooms.active = Some(id.to_string());
@@ -247,7 +295,7 @@ pub fn adopt_room(core: &Arc<Core>, pending: &str, id: &str, name: &str, members
 
 pub fn write_set_json(core: &Core, set: &ActiveSet, ended: bool) {
     let mut me = json!({"id": core.ep.id().to_string(), "name": *core.name.lock().unwrap()});
-    if let Some(rec) = core.own_log().into_iter().find(|r| r["k"] == "rec" && r["set"] == set.id.as_str()) {
+    if let Some(rec) = core.own_log().iter().find(|r| r["k"] == "rec" && r["set"] == set.id.as_str()) {
         for key in ["source_kind", "source", "width", "height", "fps", "encoder", "codec", "audio", "mic"] {
             me[key] = rec[key].clone();
         }
@@ -259,13 +307,11 @@ pub fn write_set_json(core: &Core, set: &ActiveSet, ended: bool) {
         "peers": peers,
         "layout": *core.layout.lock().unwrap(),
     });
-    let _ = std::fs::write(core.set_dir(&set.room, &set.id).join("set.json"), value.to_string());
+    core.write_json(&core.set_dir(&set.room, &set.id).join("set.json"), value);
 }
 
 pub fn begin_set(core: &Arc<Core>, set: &str, by: &str, start_us: i64) -> Result<(), String> {
-    if !record::ffmpeg_present() {
-        return Err("The video tool is still downloading. Wait a minute and try again.".into());
-    }
+    ffmpeg::ready()?;
     let room = core.active_room_id();
     if core.is_deleted(&room, set) {
         return Err("That set was deleted on this PC.".into());
@@ -310,7 +356,7 @@ pub fn stop_set(core: &Arc<Core>) {
 pub struct Log {
     pub owner: String,
     pub offset_us: i64,
-    pub records: Vec<Value>,
+    pub records: Arc<Vec<Value>>,
 }
 
 pub struct File {
@@ -320,7 +366,6 @@ pub struct File {
     pub offset_us: i64,
     pub total: Option<u64>,
     pub sha256: Option<String>,
-    pub rec: Value,
 }
 
 pub struct Set {
@@ -344,7 +389,7 @@ impl Set {
 }
 
 pub fn have_key(set: &str, owner: &str) -> String {
-    format!("{set}/{}", owner.chars().take(10).collect::<String>())
+    format!("{set}/{}", short(owner))
 }
 
 pub fn logs(core: &Core, room: &str) -> Vec<Log> {
@@ -353,15 +398,14 @@ pub fn logs(core: &Core, room: &str) -> Vec<Log> {
         own.iter().filter(|r| r["k"] == "offset").filter_map(|r| Some((r["peer"].as_str()?.to_string(), r["offset_us"].as_i64()?))).collect();
     for p in core.peers.lock().unwrap().iter() {
         if let Some(offset) = p.offset_us {
-            offsets.insert(short(&p.id), offset);
+            offsets.insert(short(p.id), offset);
         }
     }
     let members = core.rooms.lock().unwrap().list.iter().find(|r| r.id == room).map(|r| r.members.clone()).unwrap_or_default();
-    let me = core.ep.id().to_string();
-    let mut out = vec![Log { owner: me.clone(), offset_us: 0, records: own }];
-    for id in members.iter().filter(|m| **m != me).filter_map(|m| m.parse::<EndpointId>().ok()) {
-        let records = log::read(&core.peer_dir(&id).join("log.bin"));
-        out.push(Log { owner: id.to_string(), offset_us: offsets.get(&short(&id)).copied().unwrap_or(0), records });
+    let me = core.ep.id();
+    let mut out = vec![Log { owner: me.to_string(), offset_us: 0, records: own }];
+    for id in members.iter().filter_map(|m| m.parse::<EndpointId>().ok()).filter(|id| *id != me) {
+        out.push(Log { owner: id.to_string(), offset_us: offsets.get(&short(id)).copied().unwrap_or(0), records: core.log(&id) });
     }
     out
 }
@@ -369,40 +413,52 @@ pub fn logs(core: &Core, room: &str) -> Vec<Log> {
 pub fn sets(core: &Core, room: &str, logs: &[Log]) -> Vec<Set> {
     let mut sets: BTreeMap<String, Set> = BTreeMap::new();
     for log in logs {
-        for (i, r) in log.records.iter().enumerate() {
-            let Some(id) = r["set"].as_str().filter(|s| r["k"] == "rec" && r["room"] == room && valid_id(s)) else { continue };
-            if core.is_deleted(room, id) || sets.get(id).is_some_and(|s| s.files.iter().any(|f| f.owner == log.owner)) {
-                continue;
+        let mut open: HashMap<&str, (usize, bool, bool)> = HashMap::new();
+        for r in log.records.iter() {
+            let Some(id) = r["set"].as_str() else { continue };
+            match r["k"].as_str() {
+                Some("rec") if r["room"] == room && valid_id(id) => {
+                    if core.is_deleted(room, id) || sets.get(id).is_some_and(|s| s.files.iter().any(|f| f.owner == log.owner)) {
+                        continue;
+                    }
+                    let set = sets.entry(id.to_string()).or_insert_with(|| Set { id: id.to_string(), room: room.to_string(), files: Vec::new() });
+                    open.insert(id, (set.files.len(), false, false));
+                    set.files.push(File { owner: log.owner.clone(), start_us: r["start_us"].as_i64().unwrap_or(0), end_us: None, offset_us: log.offset_us, total: None, sha256: None });
+                }
+                Some("rec_end") => {
+                    if let Some((i, ended, _)) = open.get_mut(id).filter(|(_, ended, _)| !ended) {
+                        *ended = true;
+                        sets.get_mut(id).unwrap().files[*i].end_us = r["t_us"].as_i64();
+                    }
+                }
+                Some("file") => {
+                    if let Some((i, _, hashed)) = open.get_mut(id).filter(|(_, _, hashed)| !hashed) {
+                        *hashed = true;
+                        let f = &mut sets.get_mut(id).unwrap().files[*i];
+                        f.total = r["size"].as_u64();
+                        f.sha256 = r["sha256"].as_str().map(String::from);
+                    }
+                }
+                _ => {}
             }
-            let find = |kind: &str| log.records[i..].iter().find(|e| e["k"] == kind && e["set"] == id);
-            let file = find("file");
-            let set = sets.entry(id.to_string()).or_insert_with(|| Set { id: id.to_string(), room: room.to_string(), files: Vec::new() });
-            set.files.push(File {
-                owner: log.owner.clone(),
-                start_us: r["start_us"].as_i64().unwrap_or(0),
-                end_us: find("rec_end").and_then(|e| e["t_us"].as_i64()),
-                offset_us: log.offset_us,
-                total: file.and_then(|f| f["size"].as_u64()),
-                sha256: file.and_then(|f| f["sha256"].as_str().map(String::from)),
-                rec: r.clone(),
-            });
         }
     }
     sets.into_values().rev().collect()
 }
 
 pub fn notes(logs: &[Log], room: &str) -> Vec<Value> {
-    let old: HashSet<&str> = logs.iter().flat_map(|l| &l.records).filter(|r| r["k"] == "rec" && r["room"] == room).filter_map(|r| r["set"].as_str()).collect();
+    let old: HashSet<&str> = logs.iter().flat_map(|l| l.records.iter()).filter(|r| r["k"] == "rec" && r["room"] == room).filter_map(|r| r["set"].as_str()).collect();
     let mut out = Vec::new();
     for log in logs {
         let mut notes: Vec<Value> = Vec::new();
-        for r in &log.records {
+        let mut index: HashMap<i64, usize> = HashMap::new();
+        for r in log.records.iter() {
             let id = r["id"].as_i64().or_else(|| r["t_us"].as_i64()).unwrap_or(0);
-            let existing = notes.iter().position(|n| n["id"] == id);
             let here = r["room"] == room || r["room"].is_null() && r["set"].as_str().is_some_and(|s| old.contains(s));
-            match (r["k"].as_str(), existing) {
+            match (r["k"].as_str(), index.get(&id).copied()) {
                 (Some("note"), None) if here => {
                     let at = r["at_us"].as_i64().unwrap_or(id);
+                    index.insert(id, notes.len());
                     notes.push(json!({"key": format!("{}/{id}", log.owner), "id": id, "author": log.owner, "at_us": at, "local_us": at - log.offset_us, "text": r["text"], "deleted": false}));
                 }
                 (Some("note_edit"), Some(i)) => notes[i]["text"] = r["text"].clone(),
@@ -422,7 +478,7 @@ pub fn have_list(core: &Core, room: &str) -> Vec<String> {
     let mut out = Vec::new();
     for set in sets.flatten() {
         let id = set.file_name().to_string_lossy().to_string();
-        for file in data::verified_files(&set.path()) {
+        for file in data::verified_files(core, &set.path()) {
             out.push(have_key(&id, file.trim_end_matches(".mp4")));
         }
     }
@@ -442,7 +498,7 @@ pub fn delete_set(core: &Core, room: &str, set: &str) -> Result<(), String> {
     if !valid_id(room) || !valid_id(set) {
         return Err("Unknown set.".into());
     }
-    if core.active_set.lock().unwrap().as_ref().is_some_and(|a| a.id == set && a.room == room) {
+    if core.is_recording(room, set) {
         return Err("This set is being recorded. Stop it first.".into());
     }
     core.deleted.lock().unwrap().insert(format!("{room}/{set}"));
@@ -451,10 +507,10 @@ pub fn delete_set(core: &Core, room: &str, set: &str) -> Result<(), String> {
     Ok(())
 }
 
-struct Holder {
-    key: String,
+struct Holder<'a> {
+    id: &'a str,
     name: String,
-    have: HashSet<String>,
+    have: &'a HashSet<String>,
     gone: bool,
 }
 
@@ -462,70 +518,150 @@ fn plural(n: usize) -> &'static str {
     if n == 1 { "" } else { "s" }
 }
 
-pub fn sets_json(core: &Core, room: &str, logs: &[Log], notes: &mut [Value]) -> Vec<Value> {
+fn set_status(live: bool, all_verified: bool, missing: &[(&str, usize)]) -> String {
+    if live {
+        return "Recording".into();
+    }
+    if all_verified {
+        return "Everyone has it".into();
+    }
+    if missing.is_empty() {
+        return "Checking files".into();
+    }
+    let mut by_count: BTreeMap<usize, Vec<&str>> = BTreeMap::new();
+    for (name, n) in missing {
+        by_count.entry(*n).or_default().push(name);
+    }
+    by_count.iter().rev().map(|(n, names)| format!("{}: {n} file{} left", names.join(", "), plural(*n))).collect::<Vec<_>>().join(" · ")
+}
+
+pub fn sets_json(core: &Core, room: &str, logs: &[Log], notes: &[Value]) -> Vec<Value> {
     let me = core.ep.id().to_string();
-    let peers: Vec<(String, String, HashSet<String>, HashSet<String>)> =
-        core.peers.lock().unwrap().iter().map(|p| (p.id.to_string(), if p.name.is_empty() { short(&p.id) } else { p.name.clone() }, p.have.clone(), p.gone.clone())).collect();
+    let peers: Vec<(String, HashSet<String>, HashSet<String>)> = core.peers.lock().unwrap().iter().map(|p| (p.id.to_string(), p.have.clone(), p.gone.clone())).collect();
+    let names: Vec<String> = peers.iter().map(|(id, _, _)| display_name(core, id)).collect();
     let mut out = Vec::new();
     for set in sets(core, room, logs) {
         let dir = core.set_dir(room, &set.id);
-        let saved: Value = std::fs::read_to_string(dir.join("set.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
-        let mine: HashSet<String> = data::verified_files(&dir).iter().map(|f| have_key(&set.id, f.trim_end_matches(".mp4"))).collect();
-        let mut holders = vec![Holder { key: "me".into(), name: "You".into(), have: mine, gone: false }];
-        holders.extend(peers.iter().map(|(id, name, have, gone)| Holder { key: id.clone(), name: name.clone(), have: have.clone(), gone: gone.contains(&set.id) }));
-        let key_of = |owner: &str| if owner == me { "me".to_string() } else { owner.to_string() };
+        let mine: HashSet<String> = data::verified_files(core, &dir).iter().map(|f| have_key(&set.id, f.trim_end_matches(".mp4"))).collect();
+        let mut holders = vec![Holder { id: &me, name: "You".into(), have: &mine, gone: false }];
+        holders.extend(peers.iter().zip(&names).map(|((id, have, gone), name)| Holder { id, name: name.clone(), have, gone: gone.contains(&set.id) }));
         let mut players = Vec::new();
         let (mut have, mut total) = (0u64, 0u64);
         for f in &set.files {
-            let path = dir.join(format!("{}.mp4", f.owner));
-            let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            let path = core.set_file(room, &set.id, &f.owner);
+            let size = file_len(&path);
             have += f.total.map_or(size, |t| size.min(t));
             total += f.total.unwrap_or(size);
             let hk = have_key(&set.id, &f.owner);
-            let by: Vec<&str> = holders.iter().filter(|h| h.have.contains(&hk)).map(|h| h.key.as_str()).collect();
+            let by: Vec<&str> = holders.iter().filter(|h| h.have.contains(&hk)).map(|h| h.id).collect();
             players.push(json!({
-                "key": key_of(&f.owner), "owner": f.owner, "start_us": f.start_us, "offset_us": f.offset_us, "size": size, "total": f.total, "path": path,
-                "recording": f.end_us.is_none(), "by": f.rec["by"], "verified": by.contains(&"me"), "verified_by": by, "sha256": f.sha256,
-                "meta": {"encoder": f.rec["encoder"], "codec": f.rec["codec"], "width": f.rec["width"], "height": f.rec["height"]},
+                "owner": f.owner, "start_us": f.start_us, "offset_us": f.offset_us, "size": size, "total": f.total, "path": path,
+                "recording": f.end_us.is_none(), "verified_by": by, "sha256": f.sha256,
             }));
         }
         let finished: Vec<&File> = set.files.iter().filter(|f| f.total.is_some()).collect();
-        let missing: Vec<Value> = holders
-            .iter()
-            .filter(|h| !h.gone)
-            .filter_map(|h| {
-                let lack: Vec<String> = finished.iter().filter(|f| !h.have.contains(&have_key(&set.id, &f.owner))).map(|f| key_of(&f.owner)).collect();
-                (!lack.is_empty()).then(|| json!({"key": h.key, "name": h.name, "files": lack}))
-            })
-            .collect();
-        let verified_by: Vec<&str> = holders.iter().filter(|h| !finished.is_empty() && finished.iter().all(|f| h.have.contains(&have_key(&set.id, &f.owner)))).map(|h| h.key.as_str()).collect();
+        let lacking = |h: &Holder| finished.iter().filter(|f| !h.have.contains(&have_key(&set.id, &f.owner))).count();
+        let missing: Vec<(&str, usize)> = holders.iter().filter(|h| !h.gone).map(|h| (h.name.as_str(), lacking(h))).filter(|(_, n)| *n > 0).collect();
         let live = set.end().is_none();
         let all_verified = missing.is_empty() && finished.len() == set.files.len();
-        let status = if live {
-            "Recording".to_string()
-        } else if all_verified {
-            "Everyone has it".to_string()
-        } else if missing.is_empty() {
-            "Checking files".to_string()
-        } else {
-            let mut by_count: BTreeMap<usize, Vec<&str>> = BTreeMap::new();
-            for m in &missing {
-                by_count.entry(m["files"].as_array().map_or(0, |a| a.len())).or_default().push(m["name"].as_str().unwrap_or_default());
-            }
-            by_count.iter().rev().map(|(n, names)| format!("{}: {n} file{} left", names.join(", "), plural(*n))).collect::<Vec<_>>().join(" · ")
-        };
-        let mut covered = Vec::new();
-        for n in notes.iter_mut().filter(|n| n["local_us"].as_i64().is_some_and(|t| set.covers(t))) {
-            covered.push(n["key"].clone());
-            n["sets"].as_array_mut().unwrap().push(json!(set.id));
-            if have > 0 {
-                n["seekable"] = json!(true);
-            }
-        }
+        let covered: Vec<&Value> = notes.iter().filter(|n| n["local_us"].as_i64().is_some_and(|t| set.covers(t))).map(|n| &n["key"]).collect();
         out.push(json!({
-            "id": set.id, "room": room, "start_us": set.start(), "end_us": set.end(), "live": live, "by": players.first().map(|p| p["by"].clone()),
-            "players": players, "notes": covered, "progress": {"have": have, "total": total}, "verified_by": verified_by, "missing": missing, "all_verified": all_verified, "status": status, "layout": saved["layout"],
+            "id": set.id, "room": room, "start_us": set.start(), "end_us": set.end(), "live": live,
+            "players": players, "notes": covered, "progress": {"have": have, "total": total}, "missing": missing.len(), "all_verified": all_verified,
+            "status": set_status(live, all_verified, &missing), "layout": core.json(&dir.join("set.json"))["layout"],
         }));
     }
     out
+}
+
+fn path_kind(conn: &Connection) -> (&'static str, u64) {
+    for path in conn.paths().iter() {
+        if path.is_selected() {
+            return (if path.is_ip() { "direct" } else { "relay" }, path.rtt().as_millis() as u64);
+        }
+    }
+    ("none", 0)
+}
+
+fn live_json(core: &Core, room: &str, name: Option<String>) -> Option<Value> {
+    let path = core.live_dir(room).join(name?);
+    Some(json!({"size": file_len(&path), "path": path}))
+}
+
+fn peer_json(core: &Core, room: &str, p: &Peer) -> Value {
+    let alive = p.conn.iter().chain(p.incoming.iter()).find(|c| c.close_reason().is_none());
+    let (path, rtt) = alive.map(path_kind).unzip();
+    let message = p.info.as_ref().filter(|(_, proto)| *proto != PROTOCOL).map(|(version, proto)| format!("peer has version {version} (protocol {proto}, ours {PROTOCOL}), update needed"));
+    let sharing = p.sharing && alive.is_some();
+    json!({
+        "id": p.id.to_string(),
+        "name": p.name,
+        "connected": alive.is_some(),
+        "path": path,
+        "rtt_ms": rtt,
+        "failures": p.failures,
+        "offset_us": p.offset_us,
+        "version": p.info.as_ref().map(|(version, _)| version),
+        "message": message,
+        "sharing": sharing,
+        "live": live_json(core, room, p.live.clone().filter(|_| sharing)),
+    })
+}
+
+pub fn state_json(core: &Core) -> Value {
+    let room_id = core.active_room_id();
+    let my_id = core.ep.id().to_string();
+    let active = core.active_room();
+    let mut names: HashMap<String, String> = active.as_ref().map(|r| r.names.clone()).unwrap_or_default();
+    let peers: Vec<Value> = core
+        .peers
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|p| {
+            if !p.name.is_empty() {
+                names.insert(p.id.to_string(), p.name.clone());
+            }
+            peer_json(core, &room_id, p)
+        })
+        .collect();
+    names.insert(my_id.clone(), "You".to_string());
+    let logs = logs(core, &room_id);
+    let mut notes = notes(&logs, &room_id);
+    let sets = sets_json(core, &room_id, &logs, &notes);
+    let seekable: HashSet<&str> = sets.iter().filter(|s| s["progress"]["have"].as_u64() > Some(0)).flat_map(|s| s["notes"].as_array().into_iter().flatten().filter_map(|k| k.as_str())).collect();
+    for n in notes.iter_mut() {
+        let (can_seek, mine) = (seekable.contains(n["key"].as_str().unwrap_or_default()), n["author"] == my_id.as_str());
+        n["seekable"] = json!(can_seek);
+        n["mine"] = json!(mine);
+    }
+    let rooms = core.rooms.lock().unwrap();
+    let room_list: Vec<Value> = rooms.list.iter().map(|r| json!({"id": r.id, "name": r.name, "active": rooms.active.as_deref() == Some(&r.id), "members": r.members.len()})).collect();
+    drop(rooms);
+    json!({
+        "version": VERSION,
+        "ffmpeg": core.ffmpeg_status.lock().unwrap().clone(),
+        "id": my_id,
+        "name": core.name.lock().unwrap().clone(),
+        "share": core.share.load(Ordering::Relaxed),
+        "audio_process": core.audio_process.lock().unwrap().clone(),
+        "keep_days": *core.keep_days.lock().unwrap(),
+        "invites": core.invites.lock().unwrap().len(),
+        "limit_mbps": *core.limit_mbps.lock().unwrap(),
+        "recovery": core.recovery.lock().unwrap().clone(),
+        "notice": core.notice.lock().unwrap().clone(),
+        "disk": {"free": core.free_bytes.load(Ordering::Relaxed), "low": core.disk_low()},
+        "previous_version": core.previous_version,
+        "codec": ffmpeg::pick(&core.codecs.lock().unwrap()).1,
+        "recording": core.active_set.lock().unwrap().is_some(),
+        "capture": record::capture_json(core, live_json(core, &room_id, core.engine.live_file())),
+        "active_set": core.active_set_json(),
+        "room": active.map(|r| json!({"id": r.id, "name": r.name, "pending": r.invite.is_some()})),
+        "rooms": room_list,
+        "layout": core.layout.lock().unwrap().clone(),
+        "sets": sets,
+        "peers": peers,
+        "notes": notes,
+        "names": names,
+    })
 }

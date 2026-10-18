@@ -1,5 +1,6 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -11,35 +12,40 @@ use regex::Regex;
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::EnvFilter;
 
-use crate::Core;
+use crate::{ffmpeg, room, short, Core, NO_WINDOW};
 
 const MAX_LOG: u64 = 2 << 20;
+const EVENTS_KEPT: usize = 60;
+const REPORT_LINES: usize = 400;
 
 #[derive(Clone)]
 struct RollingFile {
     path: PathBuf,
-    file: Arc<Mutex<File>>,
+    file: Arc<Mutex<(File, u64)>>,
 }
 
 impl RollingFile {
     fn open(path: PathBuf) -> std::io::Result<Self> {
         let file = OpenOptions::new().create(true).append(true).open(&path)?;
-        Ok(Self { path, file: Arc::new(Mutex::new(file)) })
+        let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+        Ok(Self { path, file: Arc::new(Mutex::new((file, len))) })
     }
 }
 
 impl Write for RollingFile {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let mut file = self.file.lock().unwrap();
-        if file.metadata().map(|m| m.len()).unwrap_or(0) > MAX_LOG {
+        if file.1 > MAX_LOG {
             let _ = fs::rename(&self.path, self.path.with_extension("old.txt"));
-            *file = OpenOptions::new().create(true).append(true).open(&self.path)?;
+            *file = (OpenOptions::new().create(true).append(true).open(&self.path)?, 0);
         }
-        file.write(buf)
+        let n = file.0.write(buf)?;
+        file.1 += n as u64;
+        Ok(n)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        self.file.lock().unwrap().flush()
+        self.file.lock().unwrap().0.flush()
     }
 }
 
@@ -87,7 +93,7 @@ fn describe(conn: &Connection, label: &str, out: &mut String) {
 
 pub fn text(core: &Core) -> String {
     let mut out = String::new();
-    out.push_str(&format!("encoder {} ({})\n", crate::record::encoder(), crate::record::ffmpeg().display()));
+    out.push_str(&format!("encoder {} ({})\n", ffmpeg::encoder(), ffmpeg::path().display()));
     out.push_str(&format!("endpoint id {}\n", core.ep.id()));
     out.push_str(&format!("bound sockets {:?}\n", core.ep.bound_sockets()));
     out.push_str(&format!("address {:?}\n", core.ep.addr()));
@@ -105,18 +111,17 @@ pub fn text(core: &Core) -> String {
         }
     }
     let room = core.active_room_id();
-    let logs = crate::room::logs(core, &room);
-    let mut notes = Vec::new();
-    for set in crate::room::sets_json(core, &room, &logs, &mut notes) {
+    let logs = room::logs(core, &room);
+    for set in room::sets_json(core, &room, &logs, &[]) {
         out.push_str(&format!("set {} {}\n", set["id"].as_str().unwrap_or_default(), set["status"].as_str().unwrap_or_default()));
         for p in set["players"].as_array().into_iter().flatten() {
             out.push_str(&format!(
                 "  {} have {} of {:?} B sha256 {} verified by {}\n",
-                p["owner"].as_str().unwrap_or_default().chars().take(10).collect::<String>(),
+                short(p["owner"].as_str().unwrap_or_default()),
                 p["size"],
                 p["total"].as_u64(),
                 p["sha256"].as_str().unwrap_or("unknown"),
-                p["verified_by"].as_array().into_iter().flatten().filter_map(|k| k.as_str()).map(|k| k.chars().take(10).collect::<String>()).collect::<Vec<_>>().join(", ")
+                p["verified_by"].as_array().into_iter().flatten().filter_map(|k| k.as_str()).map(short).collect::<Vec<_>>().join(", ")
             ));
         }
     }
@@ -131,15 +136,16 @@ pub fn event(core: &Core, since: Instant, line: String) {
     let line = format!("+{:.2}s {line}", since.elapsed().as_secs_f64());
     tracing::info!("{line}");
     let mut events = core.events.lock().unwrap();
-    events.push(line);
-    if events.len() > 60 {
-        events.remove(0);
+    events.push_back(line);
+    if events.len() > EVENTS_KEPT {
+        events.pop_front();
     }
 }
 
-fn command_line(program: &str, args: &[&str]) -> String {
+pub fn command_line(program: &str, args: &[&str]) -> String {
     Command::new(program)
         .args(args)
+        .creation_flags(NO_WINDOW)
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_else(|e| format!("unavailable: {e}"))
@@ -162,7 +168,7 @@ fn redact(text: &str) -> String {
 
 pub fn report(core: &Core, include_addresses: bool, check: &str) -> std::io::Result<PathBuf> {
     let log = fs::read_to_string(core.dir.join("log.txt")).unwrap_or_default();
-    let recent: Vec<&str> = log.lines().rev().take(400).collect();
+    let recent: Vec<&str> = log.lines().rev().take(REPORT_LINES).collect();
     let recent: Vec<&str> = recent.into_iter().rev().collect();
     let mut out = String::new();
     out.push_str(&format!("ez-hanseikai {} on {} {}\n", crate::VERSION, std::env::consts::OS, command_line("cmd", &["/c", "ver"])));
@@ -171,10 +177,9 @@ pub fn report(core: &Core, include_addresses: bool, check: &str) -> std::io::Res
     if include_addresses {
         out.push_str(&format!("name {}\n", core.name.lock().unwrap()));
     }
-    out.push_str(&format!("encoder {}\n", crate::record::encoder()));
-    out.push_str(&format!("ffmpeg {}\n", command_line(&crate::record::ffmpeg().to_string_lossy(), &["-version"]).lines().next().unwrap_or("")));
-    out.push_str(&format!("iroh {}\n\n", "1.3.0"));
-    let infos: Vec<String> = core.peers.lock().unwrap().iter().map(|p| format!("{} {:?}", crate::short(&p.id), p.info)).collect();
+    out.push_str(&format!("encoder {}\n", ffmpeg::encoder()));
+    out.push_str(&format!("ffmpeg {}\n\n", command_line(&ffmpeg::path().to_string_lossy(), &["-version"]).lines().next().unwrap_or("")));
+    let infos: Vec<String> = core.peers.lock().unwrap().iter().map(|p| format!("{} {:?}", short(p.id), p.info)).collect();
     out.push_str(&format!("peers {}\n\nenvironment check\n{check}\n\n", infos.join(", ")));
     out.push_str(&text(core));
     out.push_str("\nrecent log\n");

@@ -19,7 +19,7 @@
 <div id="notice" class="notice" hidden><span id="noticetext"></span><button id="updatebtn" class="primary" hidden>Update</button><button id="exportcancel" hidden>Cancel</button></div>
 
 <main id="recordtab" class="tab">
-  <aside id="capture" class="col left">
+  <aside class="col left">
     <h3>Source</h3>
     <select id="source" aria-label="Source"></select>
     <div id="lost" class="lost" hidden><span>Source lost</span><button id="usedisplay">Use display instead</button></div>
@@ -74,7 +74,7 @@
         <button id="play" class="icon" aria-label="Play"><svg viewBox="0 0 16 16" class="solid"><path class="on" d="M4 3l9 5-9 5z"/><path class="off" d="M4 3h3v10H4zM9 3h3v10H9z"/></svg></button>
         <button id="back" class="icon text" aria-label="Back 5 seconds">-5</button>
         <button id="fwd" class="icon text" aria-label="Forward 5 seconds">+5</button>
-        <span id="clock" class="clock"></span>
+        <span class="clock"><span id="clocknow"></span><span id="clocktotal" class="muted"></span></span>
         <span class="spacer"></span>
         <span id="extra" class="extra">
           <select id="speed" aria-label="Speed"><option value="0.5">0.5x</option><option value="0.75">0.75x</option><option value="1" selected>1x</option><option value="1.25">1.25x</option><option value="1.5">1.5x</option><option value="2">2x</option></select>

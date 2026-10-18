@@ -26,4 +26,4 @@ anyhow = "1"
 [target.'cfg(windows)'.dependencies]
 windows-capture = "2.0.1"
 wasapi = "0.26"
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Time", "Win32_UI_WindowsAndMessaging"] }

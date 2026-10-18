@@ -9,11 +9,10 @@ use tauri::menu::{Menu, MenuBuilder, MenuItem, MenuItemBuilder, SubmenuBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{App, AppHandle, Emitter, Manager, Theme, WebviewUrl, WebviewWindowBuilder};
 
-use crate::{room, Core, VERSION};
+use crate::{room, Core, NO_WINDOW, VERSION};
 
 const REPO: &str = "https://github.com/hrs23/ez-hanseikai";
 const TRAY_POLL: Duration = Duration::from_secs(1);
-const NO_WINDOW: u32 = 0x08000000;
 const DEBUG_SIZE: (f64, f64) = (760.0, 640.0);
 
 fn powershell(script: &str) -> String {
@@ -94,7 +93,7 @@ fn export_identity(core: &Core) {
     }
 }
 
-fn import_identity(app: &AppHandle, core: &Core) {
+fn import_identity(app: &AppHandle, core: &Arc<Core>) {
     let Some(path) = pick_file(false, "") else { return };
     let valid = std::fs::read(&path).map(|b| b.len() == 32).unwrap_or(false);
     if !valid {
@@ -198,20 +197,24 @@ pub fn setup(app: &App, core: Arc<Core>) -> tauri::Result<()> {
     let menu_core = core.clone();
     app.on_menu_event(move |app, event| {
         let core = &menu_core;
+        let dialog = |run: fn(&AppHandle, &Arc<Core>)| {
+            let (app, core) = (app.clone(), core.clone());
+            std::thread::spawn(move || run(&app, &core));
+        };
         match event.id().as_ref() {
             "open-folder" => crate::data::open_folder(&core.dir),
-            "export-identity" => export_identity(core),
-            "import-identity" => import_identity(app, core),
-            "exit" => exit_app(app, core),
+            "export-identity" => dialog(|_, core| export_identity(core)),
+            "import-identity" => dialog(import_identity),
+            "exit" => dialog(exit_app),
             "open" => show_window(app),
             "toggle-recording" => toggle_recording(core),
             "debug" => open_debug(app),
             "github" => open_url(REPO),
             "issues" => open_url(&format!("{REPO}/issues/new")),
             "releases" => open_url(&format!("{REPO}/releases")),
-            "about" => {
+            "about" => dialog(|_, _| {
                 message(&format!("EZ Hanseikai\nVersion {VERSION}\nMIT or Apache-2.0\n{REPO}"), "OK");
-            }
+            }),
             other => {
                 show_window(app);
                 let _ = app.emit("menu", other.to_string());

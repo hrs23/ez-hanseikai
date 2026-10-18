@@ -1,19 +1,17 @@
-use std::process::Command;
 use std::sync::Arc;
 
 use iroh::Watcher;
 use serde_json::{json, Value};
-use wasapi::{initialize_mta, AudioClient, DeviceEnumerator, Direction, SampleType, StreamMode, WaveFormat};
+use wasapi::{initialize_mta, AudioClient, DeviceEnumerator, Direction};
 
-use crate::{record, Core};
+use crate::{audio, debug, ffmpeg, record, Core};
 
 fn line(level: &str, text: impl Into<String>) -> Value {
     json!({"level": level, "text": text.into()})
 }
 
 fn windows_build() -> Option<u32> {
-    let out = Command::new("cmd").args(["/c", "ver"]).output().ok()?;
-    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let text = debug::command_line("cmd", &["/c", "ver"]);
     let version = text.split("Version").nth(1)?;
     version.trim().trim_end_matches(']').split('.').nth(2)?.trim().parse().ok()
 }
@@ -36,8 +34,7 @@ fn audio_lines(pid: Option<u32>) -> Vec<Value> {
     match pid {
         None => lines.push(line("info", "no game process selected, so game sound is not checked")),
         Some(pid) => {
-            let format = WaveFormat::new(32, 32, &SampleType::Float, 48000, 2, None);
-            let mode = StreamMode::EventsShared { autoconvert: true, buffer_duration_hns: 0 };
+            let (format, mode) = audio::capture_format();
             let result = AudioClient::new_application_loopback_client(pid, true)
                 .and_then(|mut client| client.initialize_client(&format, &Direction::Capture, &mode));
             match result {
@@ -73,14 +70,14 @@ pub fn run(core: &Arc<Core>, audio_pid: Option<u32>) -> Vec<Value> {
         lines.push(line(level, text));
     }
     lines.extend(audio_lines(audio_pid));
-    if !record::ffmpeg_present() {
+    if !ffmpeg::present() {
         lines.push(line("fail", "ffmpeg is not installed yet; it is downloaded on first run"));
     }
-    for (name, ok) in record::encoder_results() {
+    for (name, ok) in ffmpeg::encoder_results() {
         lines.push(line(if ok { "ok" } else { "info" }, format!("encoder {name}: {}", if ok { "works" } else { "not available" })));
     }
     let usable = core.codecs.lock().unwrap().clone();
-    let (encoder, codec, _) = record::pick(&usable);
+    let (encoder, codec, _) = ffmpeg::pick(&usable);
     lines.push(line("info", format!("recording with {encoder} ({codec})")));
     let relay = format!("{:?}", core.ep.home_relay_status().get());
     if relay.contains("Connected") {

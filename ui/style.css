@@ -238,7 +238,6 @@ dialog::backdrop { background: rgba(0, 0, 0, .5); }
 
 .stage.full { position: fixed; inset: 0; z-index: 40; padding: 0; background: #000; }
 .stage.full .toolbar { display: none; }
-.stage.full #playtiles { flex: 1; }
 .stage.full .transport { position: absolute; left: 0; right: 0; bottom: 0; z-index: 4; padding: var(--s5) var(--s4) var(--s3); background: linear-gradient(transparent, rgba(0, 0, 0, .85)); transition: opacity var(--panel); }
 .stage.full .ring { display: none; }
 .stage.idle { cursor: none; }

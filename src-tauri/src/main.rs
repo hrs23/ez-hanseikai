@@ -1,41 +1,84 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod audio;
 mod check;
 mod data;
 mod debug;
 mod export;
+mod ffmpeg;
 mod log;
 mod net;
 mod record;
 mod room;
 mod shell;
+mod sources;
 
-use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use iroh::endpoint::{presets, Connection};
 use iroh::{Endpoint, EndpointId, SecretKey, Watcher};
+use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, State};
 
 pub const ALPN: &[u8] = b"ez-hanseikai/0";
 pub const PROTOCOL: u32 = 1;
-const NOTE_MAX: usize = 500;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const NO_WINDOW: u32 = 0x08000000;
+pub const BELOW_NORMAL: u32 = 0x00004000;
+const NOTE_MAX: usize = 500;
+const NAME_MAX: usize = 24;
+pub const ROOM_NAME_MAX: usize = 40;
+const DISK_EVERY: Duration = Duration::from_secs(20);
 
 pub fn now_us() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros() as i64
 }
 
-pub fn short(id: &EndpointId) -> String {
+pub fn short(id: impl std::fmt::Display) -> String {
     id.to_string().chars().take(10).collect()
 }
 
+pub fn clean_text(raw: &str, max: usize) -> String {
+    raw.chars().filter(|c| !c.is_control()).collect::<String>().trim().chars().take(max).collect::<String>().trim().to_string()
+}
+
 pub fn clean_name(raw: &str) -> String {
-    raw.chars().filter(|c| !c.is_control()).collect::<String>().trim().chars().take(24).collect::<String>().trim().to_string()
+    clean_text(raw, NAME_MAX)
+}
+
+fn clean_note(raw: &str) -> String {
+    raw.chars().filter(|c| !c.is_control()).take(NOTE_MAX).collect()
+}
+
+pub fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+pub fn file_len(path: &Path) -> u64 {
+    std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+}
+
+pub fn read_json<T: DeserializeOwned + Default>(path: &Path) -> T {
+    std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+}
+
+pub fn strings<C: FromIterator<String>>(value: &Value) -> C {
+    value.as_array().into_iter().flatten().filter_map(|v| v.as_str().map(String::from)).collect()
+}
+
+pub fn merge(into: &mut Value, from: &Value) {
+    if let (Some(into), Some(from)) = (into.as_object_mut(), from.as_object()) {
+        into.extend(from.clone());
+    }
+}
+
+pub fn default_codecs() -> Vec<String> {
+    vec!["h264".to_string()]
 }
 
 pub struct Peer {
@@ -54,6 +97,12 @@ pub struct Peer {
     pub gone: HashSet<String>,
 }
 
+impl Peer {
+    pub fn new(id: EndpointId, name: String) -> Self {
+        Self { id, name, conn: None, incoming: None, offset_us: None, failures: 0, announce: true, codecs: default_codecs(), info: None, sharing: false, live: None, have: HashSet::new(), gone: HashSet::new() }
+    }
+}
+
 pub struct Core {
     pub dir: PathBuf,
     pub ep: Endpoint,
@@ -68,10 +117,8 @@ pub struct Core {
     pub tz_offset_s: i64,
     pub audio_process: Mutex<String>,
     pub keep_days: Mutex<Option<u32>>,
-    pub ready: AtomicBool,
     pub codecs: Mutex<Vec<String>>,
     pub removed: Mutex<HashSet<String>>,
-    pub pending_join: Mutex<HashMap<EndpointId, String>>,
     pub following: Mutex<HashSet<String>>,
     pub recovery: Mutex<Option<String>>,
     pub notice: Mutex<String>,
@@ -81,12 +128,14 @@ pub struct Core {
     pub pacers: [Mutex<Instant>; 2],
     pub previous_version: String,
     pub ffmpeg_status: Mutex<String>,
-    pub events: Mutex<Vec<String>>,
+    pub events: Mutex<VecDeque<String>>,
     pub started: Instant,
     pub engine: record::Engine,
     pub layout: Mutex<Value>,
     pub export: Mutex<Option<export::Running>>,
-    log_lock: Mutex<()>,
+    pub log_lock: Mutex<()>,
+    logs: Mutex<HashMap<PathBuf, (Arc<Vec<Value>>, u64)>>,
+    pub jsons: Mutex<HashMap<PathBuf, Value>>,
 }
 
 impl Core {
@@ -95,8 +144,30 @@ impl Core {
         let _ = log::append(&self.dir.join("log.bin"), record);
     }
 
-    pub fn own_log(&self) -> Vec<Value> {
-        log::read(&self.dir.join("log.bin"))
+    pub fn log_path(&self, id: &EndpointId) -> PathBuf {
+        if *id == self.ep.id() { self.dir.join("log.bin") } else { self.peer_dir(id).join("log.bin") }
+    }
+
+    pub fn log(&self, id: &EndpointId) -> Arc<Vec<Value>> {
+        let path = self.log_path(id);
+        let mut cache = self.logs.lock().unwrap();
+        let entry = cache.entry(path.clone()).or_default();
+        let len = file_len(&path);
+        if len < entry.1 {
+            *entry = Default::default();
+        }
+        if len > entry.1 {
+            let (more, used) = log::scan(&path, entry.1);
+            if !more.is_empty() {
+                Arc::make_mut(&mut entry.0).extend(more);
+            }
+            entry.1 += used;
+        }
+        entry.0.clone()
+    }
+
+    pub fn own_log(&self) -> Arc<Vec<Value>> {
+        self.log(&self.ep.id())
     }
 
     pub fn save_settings(&self) {
@@ -104,13 +175,13 @@ impl Core {
             "name": *self.name.lock().unwrap(),
             "share": self.share.load(Ordering::Relaxed),
             "limit_mbps": *self.limit_mbps.lock().unwrap(),
-            "removed": *self.removed.lock().unwrap(),
             "audio_process": *self.audio_process.lock().unwrap(),
             "keep_days": *self.keep_days.lock().unwrap(),
+            "removed": *self.removed.lock().unwrap(),
+            "deleted_sets": *self.deleted.lock().unwrap(),
             "source": self.engine.source.lock().unwrap().clone(),
             "mic": self.engine.mic.lock().unwrap().clone(),
             "mix": self.engine.mix.lock().unwrap().clone(),
-            "deleted_sets": *self.deleted.lock().unwrap(),
             "layout": *self.layout.lock().unwrap(),
         });
         let _ = std::fs::write(self.dir.join("settings.json"), value.to_string());
@@ -136,6 +207,10 @@ impl Core {
         self.deleted.lock().unwrap().contains(&format!("{room}/{set}"))
     }
 
+    pub fn sharing_live(&self) -> bool {
+        self.engine.sink.lock().unwrap().is_some() && self.share.load(Ordering::Relaxed)
+    }
+
     fn disk_below(&self, share: f64) -> bool {
         let total = self.total_bytes.load(Ordering::Relaxed);
         total > 0 && (self.free_bytes.load(Ordering::Relaxed) as f64) < total as f64 * share
@@ -150,49 +225,9 @@ impl Core {
     }
 }
 
-fn path_kind(conn: &Connection) -> (&'static str, u64) {
-    for path in conn.paths().iter() {
-        if path.is_selected() {
-            return (if path.is_ip() { "direct" } else { "relay" }, path.rtt().as_millis() as u64);
-        }
-    }
-    ("none", 0)
-}
-
-fn size(path: PathBuf) -> u64 {
-    std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
-}
-
-pub fn audio_target(wanted: &str) -> (String, u32) {
-    processes()
-        .into_iter()
-        .find(|(name, _)| if wanted.is_empty() { name.to_lowercase().starts_with("r5apex") } else { name.eq_ignore_ascii_case(wanted) })
-        .unwrap_or_default()
-}
-
-fn pid_of(name: &str) -> Option<u32> {
-    processes().into_iter().find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, pid)| pid)
-}
-
-pub fn processes() -> Vec<(String, u32)> {
-    use std::os::windows::process::CommandExt;
-    let Ok(out) = std::process::Command::new("tasklist").args(["/FO", "CSV", "/NH"]).creation_flags(0x08000000).output() else {
-        return Vec::new();
-    };
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .filter_map(|line| {
-            let mut cells = line.trim().trim_matches('"').split("\",\"");
-            let name = cells.next()?.to_string();
-            let pid = cells.next()?.parse().ok()?;
-            Some((name, pid))
-        })
-        .collect()
-}
-
 #[tauri::command]
 async fn list_processes() -> Vec<String> {
-    let mut names: Vec<String> = processes().into_iter().map(|(name, _)| name).collect();
+    let mut names: Vec<String> = sources::processes().into_iter().map(|(name, _)| name).collect();
     names.sort_by_key(|n| (!n.to_lowercase().contains("apex"), n.to_lowercase()));
     names.dedup();
     names
@@ -200,122 +235,17 @@ async fn list_processes() -> Vec<String> {
 
 #[tauri::command]
 async fn state(core: State<'_, Arc<Core>>) -> Result<Value, String> {
-    let core = core.inner().clone();
-    let room_id = core.active_room_id();
-    let my_id = core.ep.id().to_string();
-    type Snapshot = (EndpointId, String, Option<Connection>, Option<Connection>, Option<i64>, Option<(String, u32)>, u32, bool, Option<String>);
-    let snapshot: Vec<Snapshot> = core
-        .peers
-        .lock()
-        .unwrap()
-        .iter()
-        .map(|p| (p.id, p.name.clone(), p.conn.clone(), p.incoming.clone(), p.offset_us, p.info.clone(), p.failures, p.sharing, p.live.clone()))
-        .collect();
-    let mut peers = Vec::new();
-    let mut names: HashMap<String, String> = core.active_room().map(|r| r.names).unwrap_or_default();
-    names.insert(my_id.clone(), "You".to_string());
-    let live_of = |name: Option<String>| {
-        name.map(|n| {
-            let path = core.live_dir(&room_id).join(&n);
-            json!({"path": path, "size": size(path.clone())})
-        })
-    };
-    for (id, name, conn, incoming, offset_us, info, failures, sharing, live) in snapshot {
-        if !name.is_empty() {
-            names.insert(id.to_string(), name.clone());
-        }
-        let alive = conn.iter().chain(incoming.iter()).find(|c| c.close_reason().is_none());
-        let message = info.as_ref().filter(|(_, proto)| *proto != PROTOCOL).map(|(version, proto)| {
-            format!("peer has version {version} (protocol {proto}, ours {PROTOCOL}), update needed")
-        });
-        peers.push(json!({
-            "id": id.to_string(),
-            "short": short(&id),
-            "name": name,
-            "connected": alive.is_some(),
-            "path": alive.map(|c| path_kind(c).0),
-            "rtt_ms": alive.map(|c| path_kind(c).1),
-            "failures": failures,
-            "offset_us": offset_us,
-            "version": info.map(|(version, _)| version),
-            "message": message,
-            "sharing": sharing && alive.is_some(),
-            "live": live_of(live.filter(|_| sharing && alive.is_some())),
-        }));
-    }
-    let logs = room::logs(&core, &room_id);
-    let mut notes = room::notes(&logs, &room_id);
-    for n in notes.iter_mut() {
-        let author = n["author"].as_str().unwrap_or_default().to_string();
-        n["mine"] = json!(author == my_id);
-        n["who"] = json!(names.get(&author).cloned().unwrap_or_else(|| author.chars().take(10).collect()));
-        n["sets"] = json!([]);
-        n["seekable"] = json!(false);
-    }
-    let sets = room::sets_json(&core, &room_id, &logs, &mut notes);
-    let (free, total) = (core.free_bytes.load(Ordering::Relaxed), core.total_bytes.load(Ordering::Relaxed));
-    let rooms = core.rooms.lock().unwrap();
-    let room_list: Vec<Value> = rooms.list.iter().map(|r| json!({"id": r.id, "name": r.name, "active": rooms.active.as_deref() == Some(&r.id), "members": r.members.len()})).collect();
-    drop(rooms);
-    Ok(json!({
-        "version": VERSION,
-        "ffmpeg": core.ffmpeg_status.lock().unwrap().clone(),
-        "id": my_id,
-        "name": core.name.lock().unwrap().clone(),
-        "share": core.share.load(Ordering::Relaxed),
-        "audio_process": core.audio_process.lock().unwrap().clone(),
-        "keep_days": *core.keep_days.lock().unwrap(),
-        "invites": core.invites.lock().unwrap().len(),
-        "limit_mbps": *core.limit_mbps.lock().unwrap(),
-        "recovery": core.recovery.lock().unwrap().clone(),
-        "notice": core.notice.lock().unwrap().clone(),
-        "disk": {"free": free, "total": total, "low": core.disk_low(), "full": core.disk_full()},
-        "previous_version": core.previous_version,
-        "codec": record::pick(&core.codecs.lock().unwrap()).1,
-        "recording": core.active_set.lock().unwrap().is_some(),
-        "capture": capture_json(&core, live_of(core.engine.live_file())),
-        "active_set": core.active_set_json(),
-        "room": core.active_room().map(|r| json!({"id": r.id, "name": r.name})),
-        "rooms": room_list,
-        "layout": core.layout.lock().unwrap().clone(),
-        "sets": sets,
-        "peers": peers,
-        "notes": notes,
-        "names": names,
-    }))
-}
-
-fn capture_json(core: &Core, live: Option<Value>) -> Value {
-    let e = &core.engine;
-    let names = e.names.lock().unwrap().clone();
-    let mix = |track| {
-        let key = e.mix_key(track);
-        let m = e.mix.lock().unwrap()[&key].clone();
-        json!({"volume": m["volume"].as_f64().unwrap_or(1.0), "muted": m["muted"].as_bool().unwrap_or(false)})
-    };
-    json!({
-        "source": e.source.lock().unwrap().clone(),
-        "source_name": names.source,
-        "source_kind": names.kind,
-        "source_lost": e.source_lost.load(Ordering::Relaxed),
-        "sharing": e.sink.lock().unwrap().is_some() && core.share.load(Ordering::Relaxed),
-        "status": e.status.lock().unwrap().clone(),
-        "game": names.game,
-        "mic": e.mic.lock().unwrap().clone(),
-        "mic_name": names.mic,
-        "mix": {"game": mix(record::GAME), "mic": mix(record::MIC)},
-        "live": live,
-    })
+    Ok(room::state_json(&core))
 }
 
 #[tauri::command]
 async fn list_sources() -> Vec<Value> {
-    record::list_sources()
+    sources::list()
 }
 
 #[tauri::command]
 fn set_source(core: State<Arc<Core>>, source: Value) -> Result<(), String> {
-    if !record::valid_source(&source) {
+    if !sources::valid(&source) {
         return Err("unknown source".into());
     }
     *core.engine.source.lock().unwrap() = source;
@@ -325,13 +255,13 @@ fn set_source(core: State<Arc<Core>>, source: Value) -> Result<(), String> {
 
 #[tauri::command]
 fn use_display(core: State<Arc<Core>>) {
-    *core.engine.source.lock().unwrap() = record::primary_display();
+    *core.engine.source.lock().unwrap() = sources::primary_display();
     core.save_settings();
 }
 
 #[tauri::command]
 async fn list_mics() -> Result<Vec<Value>, String> {
-    tauri::async_runtime::spawn_blocking(record::list_mics).await.map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(audio::list_mics).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -363,7 +293,7 @@ async fn warm(core: &Core) {
 async fn check(core: State<'_, Arc<Core>>, audio_process: String) -> Result<Vec<Value>, String> {
     let core = core.inner().clone();
     warm(&core).await;
-    tauri::async_runtime::spawn_blocking(move || check::run(&core, pid_of(&audio_process)))
+    tauri::async_runtime::spawn_blocking(move || check::run(&core, sources::pid_of(&audio_process)))
         .await
         .map_err(|e| e.to_string())
 }
@@ -378,7 +308,7 @@ async fn save_report(core: State<'_, Arc<Core>>, include_addresses: bool, audio_
     let core = core.inner().clone();
     warm(&core).await;
     tauri::async_runtime::spawn_blocking(move || {
-        let lines = check::run(&core, pid_of(&audio_process));
+        let lines = check::run(&core, sources::pid_of(&audio_process));
         debug::report(&core, include_addresses, &check::text(&lines)).map(|p| p.display().to_string()).map_err(|e| e.to_string())
     })
     .await
@@ -409,14 +339,14 @@ fn open_set_folder(core: State<Arc<Core>>, room: String, set: String) {
 }
 
 #[tauri::command]
-async fn export_set(core: State<'_, Arc<Core>>, room: String, set: String, path: Option<String>) -> Result<Value, String> {
+async fn export_set(core: State<'_, Arc<Core>>, room: String, set: String) -> Result<Value, String> {
     if !room::valid_id(&room) || !room::valid_id(&set) {
         return Err("Unknown set.".into());
     }
     let core = core.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         export::check(&core)?;
-        let Some(path) = path.map(PathBuf::from).or_else(|| shell::pick_file(true, &format!("{set}.mp4"))) else { return Ok(Value::Null) };
+        let Some(path) = shell::pick_file(true, &format!("{set}.mp4")) else { return Ok(Value::Null) };
         export::start(&core, &room, &set, path).map(|skipped| json!({"skipped": skipped}))
     })
     .await
@@ -446,13 +376,15 @@ fn remove_peer(core: State<Arc<Core>>, id: String) {
 #[tauri::command]
 fn create_invite(core: State<Arc<Core>>, reuse: bool) -> String {
     let room = core.active_room_id();
-    if reuse {
-        if let Some((token, _)) = core.invites.lock().unwrap().iter().rev().find(|(_, r)| *r == room) {
-            return format!("ezh-{}-{token}", core.ep.id());
+    let mut invites = core.invites.lock().unwrap();
+    let token = match invites.iter().rev().find(|(_, r)| *r == room).filter(|_| reuse) {
+        Some((token, _)) => token.clone(),
+        None => {
+            let token = room::random_hex(8);
+            invites.push((token.clone(), room));
+            token
         }
-    }
-    let token = room::random_hex(8);
-    core.invites.lock().unwrap().push((token.clone(), room));
+    };
     format!("ezh-{}-{token}", core.ep.id())
 }
 
@@ -480,33 +412,12 @@ fn set_keep_days(core: State<Arc<Core>>, days: Option<u32>) {
 
 #[tauri::command]
 fn create_room(core: State<Arc<Core>>, name: String) -> Result<String, String> {
-    if core.active_set.lock().unwrap().is_some() {
-        return Err("Stop recording before switching rooms.".into());
-    }
-    Ok(room::create_room(&core, &name))
+    room::create_room(&core, &name)
 }
 
 #[tauri::command]
 fn join_room(core: State<Arc<Core>>, code: String) -> Result<(), String> {
-    let bad = || "That invite code is not valid. Ask for a new one.".to_string();
-    let text: String = code.split_whitespace().collect();
-    let (id, token) = text.strip_prefix("ezh-").and_then(|t| t.split_once('-')).ok_or_else(bad)?;
-    let peer: EndpointId = id.parse().map_err(|_| bad())?;
-    if core.active_set.lock().unwrap().is_some() {
-        return Err("Stop recording before switching rooms.".into());
-    }
-    core.removed.lock().unwrap().remove(id);
-    let pending = format!("pending-{token}");
-    {
-        let mut rooms = core.rooms.lock().unwrap();
-        rooms.list.retain(|r| r.id != pending);
-        rooms.list.push(room::Room { id: pending.clone(), name: "Joining...".into(), members: vec![core.ep.id().to_string(), id.to_string()], names: HashMap::new() });
-        rooms.active = Some(pending.clone());
-    }
-    core.save_rooms();
-    core.pending_join.lock().unwrap().insert(peer, token.to_string());
-    room::apply_active(&core);
-    Ok(())
+    room::join_room(&core, &code)
 }
 
 #[tauri::command]
@@ -539,8 +450,7 @@ fn note_action(core: State<Arc<Core>>, kind: String, id: i64, text: String) {
         "restore" => "note_restore",
         _ => return,
     };
-    let text: String = text.chars().filter(|c| !c.is_control()).take(NOTE_MAX).collect();
-    core.append_log(&json!({"k": kind, "id": id, "t_us": now_us(), "text": text}));
+    core.append_log(&json!({"k": kind, "id": id, "t_us": now_us(), "text": clean_note(&text)}));
 }
 
 #[tauri::command]
@@ -550,8 +460,7 @@ fn log_layout(core: State<Arc<Core>>, layout: Value) {
 
 #[tauri::command]
 fn set_name(core: State<Arc<Core>>, name: String) {
-    let name = clean_name(&name);
-    *core.name.lock().unwrap() = name;
+    *core.name.lock().unwrap() = clean_name(&name);
     core.save_settings();
 }
 
@@ -594,7 +503,7 @@ fn dismiss_recovery(core: State<Arc<Core>>) {
 
 #[tauri::command]
 fn add_note(core: State<Arc<Core>>, text: String, at_us: i64) {
-    let text: String = text.chars().filter(|c| !c.is_control()).take(NOTE_MAX).collect();
+    let text = clean_note(&text);
     if text.trim().is_empty() {
         return;
     }
@@ -603,9 +512,8 @@ fn add_note(core: State<Arc<Core>>, text: String, at_us: i64) {
 }
 
 #[tauri::command]
-async fn control(core: State<'_, Arc<Core>>, cmd: String, wall_us: i64, set: String, sent_us: i64, origin: String) -> Result<(), String> {
-    net::send_control(&core, &json!({"t": "ctl", "cmd": cmd, "wall_us": wall_us, "set": set, "sent_us": sent_us, "origin": origin})).await;
-    Ok(())
+fn control(core: State<Arc<Core>>, cmd: String, wall_us: i64, set: String, sent_us: i64, origin: String) {
+    net::broadcast(&core, json!({"t": "ctl", "cmd": cmd, "wall_us": wall_us, "set": set, "sent_us": sent_us, "origin": origin}));
 }
 
 async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
@@ -619,7 +527,7 @@ async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
     };
     std::fs::create_dir_all(dir.join("peer"))?;
     debug::init(&dir);
-    record::set_data_dir(dir.clone());
+    ffmpeg::set_data_dir(dir.clone());
     log::repair(&dir.join("log.bin"));
     let marker = dir.join("running.marker");
     let mut recovery = marker.exists().then(|| "The app did not start properly last time.".to_string());
@@ -646,43 +554,58 @@ async fn init(app: AppHandle) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
     }
     let ep = builder.bind().await?;
     std::fs::write(dir.join("id.txt"), ep.id().to_string())?;
-    let rooms: room::Rooms = std::fs::read_to_string(dir.join("rooms.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
-    let settings: Value = std::fs::read_to_string(dir.join("settings.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
-    let name = settings["name"].as_str().map(clean_name).unwrap_or_else(|| "player".into());
+    let rooms: room::Rooms = read_json(&dir.join("rooms.json"));
+    let settings: Value = read_json(&dir.join("settings.json"));
     Ok(Arc::new(Core {
         dir,
         ep,
         app,
         peers: Mutex::new(Vec::new()),
-        rooms: Mutex::new(rooms),
-        active_set: Mutex::new(None),
-        tz_offset_s: data::tz_offset_seconds(),
-        name: Mutex::new(name),
+        name: Mutex::new(settings["name"].as_str().map(clean_name).unwrap_or_else(|| "player".into())),
         share: AtomicBool::new(settings["share"].as_bool().unwrap_or(true)),
         limit_mbps: Mutex::new(settings["limit_mbps"].as_f64()),
         invites: Mutex::new(Vec::new()),
+        rooms: Mutex::new(rooms),
+        active_set: Mutex::new(None),
+        tz_offset_s: data::tz_offset_seconds(),
         audio_process: Mutex::new(settings["audio_process"].as_str().unwrap_or_default().to_string()),
         keep_days: Mutex::new(settings["keep_days"].as_u64().map(|d| d as u32)),
-        ready: AtomicBool::new(false),
-        codecs: Mutex::new(vec!["h264".to_string()]),
-        removed: Mutex::new(settings["removed"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default()),
-        pending_join: Mutex::new(HashMap::new()),
+        codecs: Mutex::new(default_codecs()),
+        removed: Mutex::new(strings(&settings["removed"])),
         following: Mutex::new(HashSet::new()),
         recovery: Mutex::new(recovery),
         notice: Mutex::new(String::new()),
         free_bytes: AtomicU64::new(0),
         total_bytes: AtomicU64::new(0),
-        deleted: Mutex::new(settings["deleted_sets"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default()),
+        deleted: Mutex::new(strings(&settings["deleted_sets"])),
         pacers: [Mutex::new(Instant::now()), Mutex::new(Instant::now())],
         previous_version,
         ffmpeg_status: Mutex::new(String::new()),
-        events: Mutex::new(Vec::new()),
+        events: Mutex::new(VecDeque::new()),
         started: Instant::now(),
         engine: record::Engine::new(&settings),
         layout: Mutex::new(settings["layout"].clone()),
         export: Mutex::new(None),
         log_lock: Mutex::new(()),
+        logs: Mutex::new(HashMap::new()),
+        jsons: Mutex::new(HashMap::new()),
     }))
+}
+
+fn prepare_ffmpeg(core: &Core) {
+    if !ffmpeg::present() {
+        *core.ffmpeg_status.lock().unwrap() = "downloading ffmpeg...".into();
+        tracing::info!("downloading ffmpeg");
+        let result = ffmpeg::download();
+        *core.ffmpeg_status.lock().unwrap() = match &result {
+            Ok(()) => String::new(),
+            Err(e) => format!("ffmpeg download failed: {e}"),
+        };
+        if let Err(e) = result {
+            tracing::warn!("ffmpeg download failed: {e}");
+        }
+    }
+    ffmpeg::probe_encoders();
 }
 
 fn main() {
@@ -699,35 +622,20 @@ fn main() {
             let core = tauri::async_runtime::block_on(init(app.handle().clone()))?;
             app.manage(core.clone());
             shell::setup(app, core.clone())?;
-            core.ready.store(true, Ordering::Relaxed);
-            let keep_core = core.clone();
             let unhashed = data::unhashed(&core);
-            std::thread::spawn(move || data::keeper(keep_core, unhashed));
+            let c = core.clone();
+            std::thread::spawn(move || data::keeper(c, unhashed));
             tauri::async_runtime::spawn(net::accept_loop(core.clone()));
             room::apply_active(&core);
-            let capture_core = core.clone();
-            std::thread::spawn(move || record::supervise(capture_core));
-            let free_core = core.clone();
+            let c = core.clone();
+            std::thread::spawn(move || record::supervise(c));
+            let c = core.clone();
             std::thread::spawn(move || loop {
-                data::refresh_disk(&free_core);
-                std::thread::sleep(Duration::from_secs(20));
+                data::refresh_disk(&c);
+                std::thread::sleep(DISK_EVERY);
             });
-            let setup_core = core.clone();
-            std::thread::spawn(move || {
-                if !record::ffmpeg_present() {
-                    *setup_core.ffmpeg_status.lock().unwrap() = "downloading ffmpeg...".into();
-                    tracing::info!("downloading ffmpeg");
-                    let result = record::download_ffmpeg();
-                    *setup_core.ffmpeg_status.lock().unwrap() = match &result {
-                        Ok(()) => String::new(),
-                        Err(e) => format!("ffmpeg download failed: {e}"),
-                    };
-                    if let Err(e) = result {
-                        tracing::warn!("ffmpeg download failed: {e}");
-                    }
-                }
-                record::encoder_results();
-            });
+            let c = core.clone();
+            std::thread::spawn(move || prepare_ffmpeg(&c));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![state, check, list_processes, debug_text, save_report, start_recording, stop_recording, delete_set, open_set_folder, export_set, cancel_export, set_layout, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, set_share, set_limit, set_codecs, cancel_invites, list_sources, set_source, use_display, list_mics, set_mic, set_mix, set_audio_process, set_keep_days, note_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_note, control])

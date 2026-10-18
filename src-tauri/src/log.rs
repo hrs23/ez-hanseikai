@@ -1,13 +1,15 @@
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use serde_json::Value;
 
-fn scan(path: &Path) -> (Vec<Value>, u64) {
+pub fn scan(path: &Path, from: u64) -> (Vec<Value>, u64) {
     let mut bytes = Vec::new();
     if let Ok(mut f) = File::open(path) {
-        let _ = f.read_to_end(&mut bytes);
+        if f.seek(SeekFrom::Start(from)).is_ok() {
+            let _ = f.read_to_end(&mut bytes);
+        }
     }
     let mut records = Vec::new();
     let mut at = 0usize;
@@ -25,12 +27,8 @@ fn scan(path: &Path) -> (Vec<Value>, u64) {
     (records, at as u64)
 }
 
-pub fn read(path: &Path) -> Vec<Value> {
-    scan(path).0
-}
-
 pub fn repair(path: &Path) {
-    let (_, valid) = scan(path);
+    let (_, valid) = scan(path, 0);
     if let Ok(f) = OpenOptions::new().write(true).open(path) {
         let _ = f.set_len(valid);
     }
