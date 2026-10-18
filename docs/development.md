@@ -20,6 +20,6 @@ To run a second instance on one PC for testing, set `EZH_DIR` to a folder inside
 
 To try a change on another Windows PC over SSH without pushing: `scripts/deploy.sh <user@host>`. It sends the working tree, builds, and starts the app.
 
-A deploy builds without an installer (`tauri build --no-bundle`); set `INSTALLER=1` to also build the installer.
+A deploy builds without an installer (`tauri build --no-bundle`); set `INSTALLER=1` to also build the installer, or `TEST=1` to only run the unit tests (`cargo test` in `src-tauri`). GitHub Actions runs the same tests on every push to main.
 
 Set `EZH_RELAY_ONLY=1` to start an instance that uses only the relay, to test the slow path.

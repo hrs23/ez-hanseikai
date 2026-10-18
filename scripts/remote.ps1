@@ -1,8 +1,7 @@
-param([switch]$Installer)
+param([switch]$Installer, [switch]$Test)
 $ErrorActionPreference = "Stop"
 $env:Path += ";$env:USERPROFILE\.cargo\bin"
 $root = Join-Path $env:USERPROFILE "ezh"
-Get-Process ez-hanseikai -ErrorAction SilentlyContinue | Stop-Process -Force
 New-Item -ItemType Directory -Force $root | Out-Null
 Get-ChildItem $root -Force | Where-Object { $_.Name -ne "node_modules" } | ForEach-Object {
     if ($_.Name -eq "src-tauri") {
@@ -13,12 +12,18 @@ Get-ChildItem $root -Force | Where-Object { $_.Name -ne "node_modules" } | ForEa
 }
 Expand-Archive (Join-Path $env:USERPROFILE "ezh.zip") $root -Force
 Set-Location $root
+if ($Test) {
+    Set-Location (Join-Path $root "src-tauri")
+    cargo test
+    exit $LASTEXITCODE
+}
+Get-Process ez-hanseikai -ErrorAction SilentlyContinue | Stop-Process -Force
 if ($Installer) {
     & (Join-Path $root "scripts\build-installer.ps1")
 } else {
     $release = Join-Path $root "src-tauri\target\release"
     New-Item -ItemType Directory -Force $release | Out-Null
-    Copy-Item (Get-Command ffmpeg).Source (Join-Path $release "ffmpeg.exe") -Force
+    if (!(Test-Path (Join-Path $release "ffmpeg.exe"))) { Copy-Item (Get-Command ffmpeg).Source (Join-Path $release "ffmpeg.exe") }
     npm install --no-audit --no-fund | Out-Null
     npx tauri build --no-bundle
 }
