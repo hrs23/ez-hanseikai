@@ -1152,7 +1152,7 @@ pub fn state_json(core: &Core) -> Value {
         "rooms": room_list,
         "layout": core.layout.lock().unwrap().clone(),
         "hotkey": core.hotkey.lock().unwrap().clone(),
-        "api": {"on": *core.api_on.lock().unwrap(), "address": crate::api::address(), "error": core.api_error.lock().unwrap().clone()},
+        "api": {"on": *core.api_on.lock().unwrap(), "lan": *core.api_lan.lock().unwrap(), "address": crate::api::address(), "error": core.api_error.lock().unwrap().clone()},
         "sets": sets,
         "gone": gone_json(&room_id, &logs, &core.deleted.lock().unwrap(), &events),
         "peers": peers,

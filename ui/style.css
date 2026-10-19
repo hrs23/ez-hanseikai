@@ -757,3 +757,13 @@ body.full .side, body.full .notices { display: none !important; }
 .state.idle, .state.off { color: var(--muted); }
 .prompttext { width: 100%; height: 320px; font: var(--t-sm)/1.6 var(--mono); color: var(--soft); resize: vertical; }
 .logview { margin: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); font: var(--t-sm)/1.5 var(--mono); color: var(--soft); white-space: pre-wrap; overflow-wrap: anywhere; }
+.apibadge { display: inline-flex; align-items: center; gap: 4px; font-size: var(--t-xs); height: 24px; padding: 0 9px; border-radius: var(--r-full); border: 0; flex: none; color: var(--ok); background: var(--ok-soft); }
+.apibadge.lan { color: var(--warn); background: var(--warn-soft); }
+.apibadge small { font-size: var(--t-xs); }
+.apibadge svg { width: 12px; height: 12px; }
+.apiref { display: flex; flex-direction: column; gap: 4px; }
+.apiep { border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg); }
+.apiep summary { cursor: pointer; padding: 6px 10px; font-family: var(--mono); font-size: var(--t-sm); word-break: break-all; }
+.apibody { padding: 0 10px 8px; display: flex; flex-direction: column; gap: 6px; }
+.apibody pre { margin: 0; padding: 8px 10px; background: var(--raised-2); border-radius: var(--r-xs); font-family: var(--mono); font-size: var(--t-xs); overflow: auto; max-height: 220px; white-space: pre-wrap; word-break: break-all; }
+.apibody p { margin: 0; }

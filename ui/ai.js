@@ -1,5 +1,20 @@
 const apiUrl = (address) => `http://${address}`;
 
+function apiBadge(api) {
+  if (!api.on) return null;
+  return api.lan ? { lan: true, title: t("Other devices on your network can control the app") } : { lan: false, title: t("The local API is on") };
+}
+
+function apiReferenceBlocks(lines) {
+  return lines.map((text) => {
+    try {
+      const value = JSON.parse(text);
+      if (value && typeof value === "object") return { code: true, text: JSON.stringify(value, null, 2) };
+    } catch {}
+    return { code: false, text };
+  });
+}
+
 function aiPurposes() {
   return [
     { id: "notes", icon: "note", label: t("Write notes from the transcript"), task: t("Task: read the transcript, chapters and events of the recording. Then add a short note, with a tag such as #callout or #mistake, at each moment that matters: a decision, a good call or a mistake. Do not repeat notes that already exist.") },

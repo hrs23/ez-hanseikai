@@ -9,7 +9,7 @@ const ui = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "ui");
 const read = (f) => fs.readFileSync(path.join(ui, f), "utf8");
 const source = ["util.js", "i18n.js", "layout.js", "events.js", "review.js", "members.js", "recordings.js", "plugins.js", "ai.js"].map(read).join("\n");
 const context = vm.createContext({ window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, nameOf: (id) => id });
-const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, flowAt, flowBands, flowSteps, isReview, voiceOnly, BOARD_TEMPLATE, memberStatus, receivingPercent, recordingRows, recentRows, recordingMatches, recordingWords, RECENT_SHOWN, deletePreview, oldSessions, soundKey, pluginProgress, isBusy, workerState, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, aiPreview, apiUrl, rateOf, liveEdge, netState, summaryLines, leftText, JA, t, sessionName, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, flowAt, flowBands, flowSteps, isReview, voiceOnly, BOARD_TEMPLATE, memberStatus, receivingPercent, recordingRows, recentRows, recordingMatches, recordingWords, RECENT_SHOWN, deletePreview, oldSessions, soundKey, pluginProgress, isBusy, workerState, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, aiPreview, apiUrl, apiBadge, apiReferenceBlocks, rateOf, liveEdge, netState, summaryLines, leftText, JA, t, sessionName, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 const plain = (v) => JSON.parse(JSON.stringify(v));
 
 const moment = (m, extra = {}) => ({ role: "moment", m, plugin: { id: "apex-matches" }, tags: ["match"], ...extra });
@@ -256,6 +256,36 @@ test("Settings has one switch for the local API with its address and token butto
   assert.match(html, /<button id="aiplay"[^>]*>[^]*?data-t="AI"/);
   assert.equal((html.match(/id="apion"/g) || []).length, 1);
   for (const word of ["API", "Local API", "Copy token", "New token", "AI", "The port is in use"]) assert.ok(word in ui$.JA, word);
+});
+
+test("Settings > API has the access choice with its warning, the endpoint reference and llms.txt, and the room header has a badge that opens it", () => {
+  const html = read("index.html");
+  assert.match(html, /<section data-pane="api">[^]*?id="apiaccess"[^]*?data-lan="0"[^]*?data-lan="1"[^]*?id="apilanbox"[^]*?data-t="Other devices on your network can control the app"[^]*?id="apidoc"[^]*?id="apiref"[^]*?<\/section>/);
+  assert.match(html, /<button id="apibadge" class="apibadge" hidden><\/button>\s*<button id="aibtn"/);
+  const pages = read("pages.js");
+  assert.match(pages, /\$\("apibadge"\)\.onclick = \(\) => openSettings\("api"\)/);
+  assert.match(pages, /run\("set_api_lan"/);
+  assert.match(pages, /run\("open_llms"/);
+  assert.match(pages, /invoke\("api_reference"\)/);
+  assert.match(pages, /el\("details"/);
+  for (const word of ["Access", "This PC only", "Other devices", "Other devices on your network can control the app", "The local API is on", "Endpoints", "Open llms.txt"]) assert.ok(word in ui$.JA, word);
+});
+
+test("the badge shows only while the API runs and warns when other devices can reach it", () => {
+  ui$.setLanguage("en");
+  assert.equal(ui$.apiBadge({ on: false, lan: true }), null);
+  assert.deepEqual(plain(ui$.apiBadge({ on: true, lan: false })), { lan: false, title: "The local API is on" });
+  assert.deepEqual(plain(ui$.apiBadge({ on: true, lan: true })), { lan: true, title: "Other devices on your network can control the app" });
+  ui$.setLanguage("ja");
+  assert.equal(ui$.apiBadge({ on: true, lan: true }).title, "ネットワーク上のほかの端末からアプリを操作できます");
+  ui$.setLanguage("en");
+});
+
+test("endpoint examples that are JSON are shown as indented code and the rest as text", () => {
+  const blocks = plain(ui$.apiReferenceBlocks(['{"a": 1, "b": [2]}', "Newest first.", '{"x": 1}   or   {"y": 2}', "42"]));
+  assert.deepEqual(blocks.map((b) => b.code), [true, false, false, false]);
+  assert.equal(blocks[0].text, '{\n  "a": 1,\n  "b": [\n    2\n  ]\n}');
+  assert.equal(blocks[1].text, "Newest first.");
 });
 
 test("an imported recording is named by its title and the others by their time", () => {

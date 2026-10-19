@@ -290,12 +290,12 @@ async function connects(app, peer, since = 0) {
   return view.events.filter((e) => e.text.startsWith(peer.id.slice(0, 10)) && e.text.includes(": connected")).length;
 }
 
-function api(app, method, route, { token, host, body } = {}) {
+function api(app, method, route, { token, host, body, connect } = {}) {
   const port = API_PORTS[app.key];
   return new Promise((resolve, reject) => {
     const payload = body === undefined ? null : Buffer.from(typeof body === "string" ? body : JSON.stringify(body));
     const headers = { Host: host || `127.0.0.1:${port}`, ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(payload ? { "Content-Type": "application/json", "Content-Length": payload.length } : {}) };
-    const req = http.request({ host: "127.0.0.1", port, method, path: route, headers, agent: false, timeout: CALL_S * 1000 }, (res) => {
+    const req = http.request({ host: connect || "127.0.0.1", port, method, path: route, headers, agent: false, timeout: CALL_S * 1000 }, (res) => {
       const chunks = [];
       res.on("data", (c) => chunks.push(c));
       res.on("end", () => {
@@ -851,6 +851,8 @@ async function scenario(ctx) {
     check((await api(a, "GET", "/v1/rooms", { token: "0".repeat(TOKEN_CHARS) })).status === 401, "a wrong token was not refused");
     check((await api(a, "GET", "/v1/rooms", { token, host: "evil.example" })).status === 403, "a foreign Host header was not refused");
     check((await api(a, "GET", "/v1/rooms", { token, host: `localhost.evil.example:${API_PORTS.a}` })).status === 403, "a look-alike Host header was not refused");
+    const info = readJson(path.join(a.data, "api.json"));
+    check(info?.token === token && info.address === `127.0.0.1:${API_PORTS.a}`, "api.json does not hold the address and token");
     const rooms = await api(a, "GET", "/v1/rooms", { token });
     const mine = rooms.json?.rooms?.find((r) => r.id === ctx.room);
     check(rooms.status === 200 && mine?.active && mine.members.length === 3, `rooms: ${brief(rooms.json)}`);
@@ -878,12 +880,22 @@ async function scenario(ctx) {
     check(tagged.json.events.some((e) => e.key === made.json.key), "the note is not found by its tag");
     await evaluate(a, `side = "notes"; openSession(${JSON.stringify(ctx.set)}); true`);
     await waitFor("A lists the note in the player", within(UI_REFRESH_S * 5), () => evaluate(a, `$("notelist").textContent.includes("Noted through the API")`));
+    const status = await api(a, "GET", "/v1/status", { token });
+    check(status.status === 200 && status.json.room === ctx.room && status.json.recording === false && ["idle", "standby"].includes(status.json.state) && status.json.members.length === 3 && status.json.members.some((m) => m.id === a.id && m.state === status.json.state), `status: ${status.status} ${brief(status.json)}`);
+    const opened = await api(a, "POST", `${room}/open`, { token });
+    check(opened.status === 200 && opened.json.room === ctx.room, `open: ${opened.status} ${brief(opened.text)}`);
+    check((await api(a, "POST", "/v1/rooms/nope/open", { token })).status === 404 && (await api(a, "GET", `${room}/open`, { token })).status === 405, "open takes any room or method");
     const board = "# Through the API\n**Goal: hold the high ground**";
     const put = await api(a, "PUT", `${room}/board`, { token, body: { text: board } });
     check(put.status === 200 && put.json.text === board, `the game plan: ${put.status} ${brief(put.text)}`);
     await allSee([a, b, c], "the game plan written through the API", within(LOG_SYNC_S * 2), (st) => st.events.some((e) => e.kind === "board" && e.text === board));
     check((await api(a, "GET", `${room}/board`, { token })).json.text === board, "the game plan reads back differently");
     await waitFor("A shows the game plan", within(UI_REFRESH_S * 5), () => evaluate(a, `boardText() === ${JSON.stringify(board)}`));
+    await evaluate(a, `$("settings").close(); go("room"); true`);
+    await waitFor("A shows the API badge", within(UI_REFRESH_S * 5), () => evaluate(a, `!$("apibadge").hidden && !$("apibadge").classList.contains("lan")`));
+    await evaluate(a, `$("apibadge").click(); true`);
+    check(await evaluate(a, `$("settings").open && settingsPane === "api" && !$("settings").querySelector('section[data-pane="api"]').hidden`), "the badge does not open Settings > API");
+    await waitFor("A lists the endpoints", within(UI_REFRESH_S * 5), () => evaluate(a, `$("apiref").querySelectorAll("details").length > 15 && $("apiref").textContent.includes("/v1/status") && $("apiref").querySelector("pre") !== null`));
     await evaluate(a, `$("settings").close(); go("room"); true`);
     await evaluate(a, `$("aibtn").click(); true`);
     await waitFor("A opens the AI menu", within(UI_REFRESH_S * 5), () => evaluate(a, `!$("menu").hidden && $("menu").querySelectorAll("button").length === 3`));
@@ -901,10 +913,29 @@ async function scenario(ctx) {
       return next !== token && next;
     });
     check((await api(a, "GET", "/v1", { token })).status === 401 && (await api(a, "GET", "/v1", { token: fresh })).status === 200, "the old token still works or the new one does not");
+    check(readJson(path.join(a.data, "api.json"))?.token === fresh, "api.json keeps the old token");
+    const hosts = (await invoke(a, "api_info")).hosts;
+    check(hosts.length === 0, "the PC's addresses are listed while only this PC may connect");
+    await evaluate(a, `document.querySelector('#apiaccess [data-lan="1"]').click(); true`);
+    await waitFor("A allows other devices", within(UI_REFRESH_S * 5), () => evaluate(a, `st.api.lan && !$("apilanbox").hidden`));
+    const own = (await invoke(a, "api_info")).hosts.find((h) => /^\d+\.\d+\.\d+\.\d+:/.test(h));
+    check(readJson(path.join(a.data, "settings.json")).api_lan === true, "settings.json does not keep the access choice");
+    if (own) {
+      const [address] = own.split(":");
+      const reached = await api(a, "GET", "/v1", { token: fresh, host: own, connect: address });
+      check(reached.status === 200, `this PC's own address: ${reached.status}`);
+      check((await api(a, "GET", "/v1", { host: own, connect: address })).status === 401, "an address without the token was not refused");
+      check((await api(a, "GET", "/v1", { token: fresh, host: `evil.example:${API_PORTS.a}`, connect: address })).status === 403, "a foreign Host header was not refused for other devices");
+    }
+    await waitFor("A shows the warning on the badge", within(UI_REFRESH_S * 5), () => evaluate(a, `go("room"), $("apibadge").classList.contains("lan") && $("apibadge").title.includes("Other devices on your network")`));
+    await evaluate(a, `openSettings("api"); document.querySelector('#apiaccess [data-lan="0"]').click(); true`);
+    await waitFor("A limits the API to this PC", within(UI_REFRESH_S * 5), () => evaluate(a, `!st.api.lan && $("apilanbox").hidden`));
+    if (own) check(await api(a, "GET", "/v1", { token: fresh, host: own, connect: "127.0.0.1" }).then((r) => r.status === 403), "this PC's own address is accepted again for this PC only");
     await evaluate(a, `$("apion").click(); true`);
     await waitFor("A switches the API off", within(UI_REFRESH_S * 5), () => evaluate(a, `!st.api.on && $("apirows").hidden`));
     check(await api(a, "GET", "/llms.txt").then(() => false, () => true), "the API still answers after it was switched off");
     check(readJson(path.join(a.data, "settings.json")).api === false, "settings.json does not keep the switch");
+    check(!fs.existsSync(path.join(a.data, "api.json")), "api.json stays after the API stopped");
     await evaluate(a, `$("settings").close(); true`);
   });
 

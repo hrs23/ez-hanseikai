@@ -4,13 +4,23 @@ A local HTTP API lets a person, an AI agent or another program read a room's rec
 
 ## Turn it on
 
-Off by default. Settings > API > Local API starts it. The page shows the address, `http://127.0.0.1:47625`, and Copy token puts the token on the clipboard; New token replaces it (programs using the old one stop working). The switch and the token are kept in `settings.json`. The AI button in a room, and in the player, copies a ready prompt with the address, the token and a pointer to `/llms.txt`, or turns the API on.
+Off by default. Settings > API > Local API starts it. The page shows the address, `http://127.0.0.1:47625`, and Copy token puts the token on the clipboard; New token replaces it (programs using the old one stop working). Below them the page lists the endpoints with an example each, and opens `/llms.txt`. The switch, the token and the exposure are kept in `settings.json` (`api`, `api_token`, `api_lan`). An API badge in the room header shows while the API runs; it opens this page. The AI button in a room, and in the player, copies a ready prompt with the address, the token and a pointer to `/llms.txt`, or turns the API on.
+
+Starting the app with `--api`, or with `EZH_API=1`, turns the API on at start (and keeps the switch on). `"api": true` in `settings.json` does the same.
+
+While the API runs, the address and token are also written to `api.json` in the data folder, `%LOCALAPPDATA%\dev.ez-hanseikai.app\api.json`, readable by the current Windows user only: `{"address": "127.0.0.1:47625", "token": "<token>"}`. The file is removed when the API stops or the app exits, and rewritten with a new token. A program on this PC can read it instead of asking the person.
 
 The port is 47625. If another program holds it, Settings says so. `EZH_API_PORT` sets another port, for tests.
 
+## Other devices
+
+Settings > API > Access has two choices. This PC only (the default) listens on `127.0.0.1`. Other devices listens on all interfaces, so another PC on the LAN or a Tailscale network can use the API at the PC's address, such as `http://192.0.2.20:47625`. Settings and the API badge warn that other devices on the network can control the app. The token is still needed, and the change applies at once.
+
+The traffic is plain HTTP, not encrypted: use it on networks you trust only. Windows may ask to allow the app through its firewall.
+
 ## Rules
 
-- It listens on `127.0.0.1` only. A request whose `Host` header is not `127.0.0.1:<port>` or `localhost:<port>` gets 403, which stops DNS rebinding. There are no CORS headers.
+- It listens on `127.0.0.1` only, unless Other devices is on. A request whose `Host` header is not `127.0.0.1:<port>` or `localhost:<port>` gets 403, which stops DNS rebinding; with Other devices on, this PC's own IPv4 addresses and its computer name (with the port) are accepted too, and anything else still gets 403. There are no CORS headers.
 - Every request except `GET /llms.txt` needs `Authorization: Bearer <token>`; otherwise 401. The token is 48 random hex characters.
 - JSON in and out, UTF-8, one request per connection. Errors are `{"error": "..."}` with 400, 401, 403, 404, 405, 409, 413 or 503.
 - Times inside a recording are seconds from its start, rounded to 0.1 (`at_s`, `from_s`, `to_s`). Clock times are milliseconds since 1970 (`start_ms`, `end_ms`, `updated_ms`).
@@ -33,6 +43,14 @@ The text of [llms.txt](llms.txt). No token.
 ```
 
 `room` is the open room (or `null`); `recording` is true while a recording runs.
+
+### `GET /v1/status`
+
+```json
+{"room": "ab12", "recording": false, "state": "standby", "members": [{"id": "<id>", "name": "Ann", "online": true, "state": "standby"}]}
+```
+
+`state` is `offline`, `idle` (no screen shared), `standby` (sharing a screen) or `recording`. The top-level `state` is this PC's; `members` are those of the open room.
 
 ### `GET /v1/rooms`
 
@@ -115,6 +133,10 @@ Replaces the game plan for the whole room and answers 200 with the new board (sa
 ```
 
 `kind` is `note` (default) or `mark`. A note needs `text`; `at_s` is optional, and a note without it belongs to the whole recording. A mark needs `at_s` and has no text. `tags` are appended to the text as `#tag` unless it already has them. Answers 201 with the event, shaped as in the list.
+
+### `POST /v1/rooms/{room}/open`
+
+No body. Opens the room in the app, so that writes go to it, and answers 200 `{"room": "ab12"}`. 409 while this PC records. Starting and stopping a recording is not in the API: it needs the person's confirmation in the app.
 
 ### `POST /v1/rooms/{room}/recordings/import`
 

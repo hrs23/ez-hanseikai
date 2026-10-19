@@ -1,6 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
-use std::net::{Ipv4Addr, TcpListener, TcpStream};
+use std::net::{IpAddr, Ipv4Addr, TcpListener, TcpStream, ToSocketAddrs};
+use std::os::windows::process::CommandExt;
+use std::path::Path;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::thread::JoinHandle;
@@ -13,6 +16,7 @@ use crate::{party, Core};
 
 pub const DEFAULT_PORT: u16 = 47625;
 pub const TOKEN_BYTES: usize = 24;
+const INFO_FILE: &str = "api.json";
 const HEAD_MAX: usize = 16 << 10;
 const BODY_MAX: usize = 64 << 10;
 const CHUNK: usize = 4 << 10;
@@ -22,6 +26,7 @@ const CONNECTIONS_MAX: usize = 8;
 const TAGS_MAX: usize = 16;
 const AT_MAX_S: f64 = 7.0 * 24.0 * 3600.0;
 const LLMS: &str = include_str!("../../docs/llms.txt");
+const METHODS: [&str; 3] = ["GET ", "POST ", "PUT "];
 const DEFAULT_HIDDEN: [&str; 3] = ["speech", "drawing", "board"];
 static PORT: LazyLock<u16> = LazyLock::new(|| std::env::var("EZH_API_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(DEFAULT_PORT));
 
@@ -31,6 +36,69 @@ pub fn port() -> u16 {
 
 pub fn address() -> String {
     format!("127.0.0.1:{}", port())
+}
+
+pub fn requested() -> bool {
+    std::env::args().any(|a| a == "--api") || std::env::var("EZH_API").is_ok_and(|v| v == "1")
+}
+
+fn computer_name() -> String {
+    std::env::var("COMPUTERNAME").unwrap_or_default()
+}
+
+fn own_addresses() -> Vec<String> {
+    let name = computer_name();
+    if name.is_empty() {
+        return Vec::new();
+    }
+    let found = (name.as_str(), 0).to_socket_addrs().into_iter().flatten();
+    let mut out: Vec<String> = found.filter_map(|a| if let IpAddr::V4(ip) = a.ip() { (!ip.is_loopback()).then(|| ip.to_string()) } else { None }).collect();
+    out.dedup();
+    out
+}
+
+pub fn local_hosts() -> Vec<String> {
+    let mut out = own_addresses();
+    let name = computer_name();
+    if !name.is_empty() {
+        out.push(name);
+    }
+    out
+}
+
+pub fn lan_addresses() -> Vec<String> {
+    local_hosts().into_iter().map(|h| format!("{h}:{}", port())).collect()
+}
+
+fn restrict(path: &Path) -> std::io::Result<()> {
+    let user = std::env::var("USERNAME").map_err(std::io::Error::other)?;
+    let status = Command::new("icacls").arg(path).args(["/inheritance:r", "/grant:r"]).arg(format!("{user}:F")).creation_flags(crate::proc::NO_WINDOW).stdout(Stdio::null()).stderr(Stdio::null()).status()?;
+    if status.success() { Ok(()) } else { Err(std::io::Error::other("icacls failed")) }
+}
+
+fn write_info(dir: &Path, token: &str) -> std::io::Result<()> {
+    let path = dir.join(INFO_FILE);
+    let made = std::fs::write(&path, b"").and_then(|_| restrict(&path)).and_then(|_| std::fs::write(&path, json!({"address": address(), "token": token}).to_string()));
+    if made.is_err() {
+        let _ = std::fs::remove_file(&path);
+    }
+    made
+}
+
+pub fn open_docs() {
+    let _ = Command::new("explorer").arg(format!("http://{}/llms.txt", address())).creation_flags(crate::proc::NO_WINDOW).spawn();
+}
+
+pub fn forget(dir: &Path) {
+    let _ = std::fs::remove_file(dir.join(INFO_FILE));
+}
+
+pub fn refresh(core: &Core) {
+    if SERVER.lock().unwrap().is_some() {
+        if let Err(e) = write_info(&core.dir, &core.api_token.lock().unwrap()) {
+            tracing::warn!("the local API address file was not written: {e}");
+        }
+    }
 }
 
 pub fn token_valid(token: &str) -> bool {
@@ -86,9 +154,9 @@ fn error(status: u16, text: &str) -> Response {
     reply(status, json!({"error": text}))
 }
 
-pub fn host_ok(host: Option<&str>, port: u16) -> bool {
+pub fn host_ok(host: Option<&str>, port: u16, own: &[String]) -> bool {
     let Some((name, given)) = host.and_then(|h| h.rsplit_once(':')) else { return false };
-    ["127.0.0.1", "localhost"].contains(&name) && given.parse::<u16>().ok() == Some(port)
+    given.parse::<u16>().ok() == Some(port) && (["127.0.0.1", "localhost"].contains(&name) || own.iter().any(|h| h.eq_ignore_ascii_case(name)))
 }
 
 fn same(a: &[u8], b: &[u8]) -> bool {
@@ -205,8 +273,29 @@ pub struct Head {
     pub names: HashMap<String, String>,
 }
 
+pub struct Row {
+    pub id: String,
+    pub online: bool,
+    pub sharing: bool,
+    pub recording: bool,
+}
+
+fn state_of(row: &Row) -> &'static str {
+    if !row.online {
+        "offline"
+    } else if row.recording {
+        "recording"
+    } else if row.sharing {
+        "standby"
+    } else {
+        "idle"
+    }
+}
+
 pub trait Backend {
     fn app(&self) -> Value;
+    fn status(&self) -> Vec<Row>;
+    fn open(&self, room: &str) -> Result<(), String>;
     fn me(&self) -> String;
     fn now_us(&self) -> i64;
     fn heads(&self) -> Vec<Head>;
@@ -253,6 +342,23 @@ fn rooms_json(heads: &[Head]) -> Value {
         .filter(|h| !h.id.starts_with("pending-"))
         .map(|h| json!({"id": h.id, "name": h.name, "active": h.active, "members": h.members.iter().map(|(id, online)| json!({"id": id, "name": name(h, id), "online": online})).collect::<Vec<_>>()}))
         .collect()
+}
+
+fn status_reply(be: &dyn Backend) -> Response {
+    let app = be.app();
+    let me = be.me();
+    let rows = be.status();
+    let names = be.heads().into_iter().find(|h| h.active).map(|h| h.names).unwrap_or_default();
+    let members: Vec<Value> = rows.iter().map(|r| json!({"id": r.id, "name": names.get(&r.id).filter(|n| !n.is_empty()).cloned().unwrap_or_else(|| crate::short(&r.id)), "online": r.online, "state": state_of(r)})).collect();
+    let own = rows.iter().find(|r| r.id == me).map_or("idle", state_of);
+    reply(200, json!({"room": app["room"], "recording": app["recording"], "state": own, "members": members}))
+}
+
+fn open_room(be: &dyn Backend, room: &str) -> Response {
+    match be.open(room) {
+        Ok(()) => reply(200, json!({"room": room})),
+        Err(e) => error(409, &e),
+    }
 }
 
 fn recording_json(l: &Loaded, set: &Set, debriefs: &HashMap<String, Vec<Value>>, now_us: i64) -> Value {
@@ -538,7 +644,8 @@ fn segments(path: &str) -> Option<Vec<String>> {
 fn route(req: &Request, be: &dyn Backend, parts: &[&str]) -> Response {
     let allowed: &[&str] = match parts {
         ["v1", "rooms", _, "recordings", "import"] => &["POST"],
-        ["v1"] | ["v1", "rooms"] | ["v1", "rooms", _, "recordings"] | ["v1", "rooms", _, "recordings", _] => &["GET"],
+        ["v1", "rooms", _, "open"] => &["POST"],
+        ["v1"] | ["v1", "status"] | ["v1", "rooms"] | ["v1", "rooms", _, "recordings"] | ["v1", "rooms", _, "recordings", _] => &["GET"],
         ["v1", "rooms", _, "recordings", _, "chapters" | "transcript"] | ["v1", "rooms", _, "plugins" | "jobs"] => &["GET"],
         ["v1", "rooms", _, "recordings", _, "events"] => &["GET", "POST"],
         ["v1", "rooms", _, "recordings", _, "export"] => &["POST"],
@@ -551,12 +658,14 @@ fn route(req: &Request, be: &dyn Backend, parts: &[&str]) -> Response {
     let ["v1", "rooms", room, rest @ ..] = parts else {
         return match parts {
             ["v1", "rooms"] => reply(200, json!({"rooms": rooms_json(&be.heads())})),
+            ["v1", "status"] => status_reply(be),
             _ => reply(200, be.app()),
         };
     };
     let Some(head) = be.heads().into_iter().find(|h| h.id == *room && !h.id.starts_with("pending-")) else { return error(404, "No such room.") };
     let l = Loaded::new(be, head);
     match rest {
+        ["open"] => open_room(be, room),
         ["board"] if req.method == "PUT" => put_board(be, &l, req),
         ["board"] => reply(200, board_json(&l)),
         ["plugins"] => reply(200, plugins_json(&l, be.plugins(room))),
@@ -582,9 +691,9 @@ fn route(req: &Request, be: &dyn Backend, parts: &[&str]) -> Response {
     }
 }
 
-pub fn handle(req: &Request, be: &dyn Backend, token: &str, port: u16) -> Response {
-    if !host_ok(req.header("host"), port) {
-        return error(403, "The Host header must be the loopback address and port.");
+pub fn handle(req: &Request, be: &dyn Backend, token: &str, port: u16, own: &[String]) -> Response {
+    if !host_ok(req.header("host"), port, own) {
+        return error(403, "The Host header must be an address of this PC and the port.");
     }
     if req.method == "GET" && req.path == "/llms.txt" {
         return Response { status: 200, kind: "text/plain; charset=utf-8", body: LLMS.as_bytes().to_vec() };
@@ -606,6 +715,30 @@ impl Backend for Live {
 
     fn me(&self) -> String {
         self.0.me()
+    }
+
+    fn status(&self) -> Vec<Row> {
+        let core = &self.0;
+        let (Some(room), Some(active)) = (core.room_id(), core.active_room()) else { return Vec::new() };
+        let me = core.me();
+        let sets = room::sets(core, &room, &room::logs(core, &room));
+        let recording: HashSet<&str> = sets.iter().flat_map(|s| &s.files).filter(|f| f.end_us.is_none() && f.view.is_none()).map(|f| f.owner.as_str()).collect();
+        let peers = core.peers.lock().unwrap();
+        active
+            .members
+            .iter()
+            .map(|id| {
+                if *id == me {
+                    return Row { id: id.clone(), online: true, sharing: !core.engine.source.lock().unwrap().is_null(), recording: recording.contains(id.as_str()) && core.engine.working() };
+                }
+                let peer = peers.iter().find(|p| p.id.to_string() == *id);
+                Row { id: id.clone(), online: peer.is_some_and(|p| p.alive().is_some()), sharing: peer.is_some_and(|p| p.sharing), recording: recording.contains(id.as_str()) }
+            })
+            .collect()
+    }
+
+    fn open(&self, room: &str) -> Result<(), String> {
+        room::switch_room(&self.0, room)
     }
 
     fn now_us(&self) -> i64 {
@@ -695,7 +828,8 @@ fn serve_one(mut stream: TcpStream, core: &Arc<Core>) {
     let response = match read_request(&mut stream) {
         Ok(request) => {
             let token = core.api_token.lock().unwrap().clone();
-            handle(&request, &Live(core.clone()), &token, port())
+            let own = if *core.api_lan.lock().unwrap() { local_hosts() } else { Vec::new() };
+            handle(&request, &Live(core.clone()), &token, port(), &own)
         }
         Err(response) => response,
     };
@@ -724,6 +858,22 @@ fn serve(listener: TcpListener, core: Arc<Core>, stop: Arc<AtomicBool>) {
     }
 }
 
+pub fn reference() -> Vec<Value> {
+    let mut out: Vec<(String, Vec<String>)> = Vec::new();
+    let mut inside = false;
+    for line in LLMS.lines() {
+        if METHODS.iter().any(|m| line.starts_with(m)) {
+            out.push((line.to_string(), Vec::new()));
+            inside = true;
+        } else if inside && line.starts_with("  ") {
+            out.last_mut().unwrap().1.push(line.trim().to_string());
+        } else {
+            inside = false;
+        }
+    }
+    out.into_iter().map(|(title, lines)| json!({"title": title, "lines": lines})).collect()
+}
+
 struct Running {
     stop: Arc<AtomicBool>,
     thread: JoinHandle<()>,
@@ -737,16 +887,20 @@ pub fn apply(core: &Arc<Core>) {
         running.stop.store(true, Ordering::Relaxed);
         let _ = running.thread.join();
     }
+    forget(&core.dir);
     core.api_error.lock().unwrap().clear();
     if !*core.api_on.lock().unwrap() {
         return;
     }
-    match TcpListener::bind((Ipv4Addr::LOCALHOST, port())).and_then(|l| l.set_nonblocking(true).map(|_| l)) {
+    let bind = if *core.api_lan.lock().unwrap() { Ipv4Addr::UNSPECIFIED } else { Ipv4Addr::LOCALHOST };
+    match TcpListener::bind((bind, port())).and_then(|l| l.set_nonblocking(true).map(|_| l)) {
         Ok(listener) => {
-            tracing::info!("the local API listens on {}", address());
+            tracing::info!("the local API listens on {bind}:{}", port());
             let stop = Arc::new(AtomicBool::new(false));
             let (c, s) = (core.clone(), stop.clone());
             *server = Some(Running { stop, thread: std::thread::spawn(move || serve(listener, c, s)) });
+            drop(server);
+            refresh(core);
         }
         Err(e) => {
             tracing::warn!("the local API cannot listen on {}: {e}", address());
@@ -784,6 +938,17 @@ mod tests {
         }
         fn me(&self) -> String {
             "a".into()
+        }
+        fn status(&self) -> Vec<Row> {
+            vec![Row { id: "a".into(), online: true, sharing: true, recording: false }, Row { id: "b".into(), online: true, sharing: true, recording: true }, Row { id: "c".into(), online: false, sharing: true, recording: true }, Row { id: "d".into(), online: true, sharing: false, recording: false }]
+        }
+        fn open(&self, room: &str) -> Result<(), String> {
+            if self.heads.iter().any(|(id, _)| id == room) && room != "r2" {
+                self.calls.lock().unwrap().push(format!("open {room}"));
+                Ok(())
+            } else {
+                Err("Stop recording before switching rooms.".into())
+            }
         }
         fn now_us(&self) -> i64 {
             self.clock.fetch_add(1, Ordering::Relaxed)
@@ -876,7 +1041,7 @@ mod tests {
     fn call(be: &dyn Backend, method: &str, path: &str, body: &str) -> (u16, Value) {
         let text = format!("{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{PORT_FOR_TESTS}\r\nAuthorization: Bearer {TOKEN}\r\nContent-Length: {}\r\n\r\n{body}", body.len());
         let request = read_request(&mut text.as_bytes()).ok().unwrap();
-        let response = handle(&request, be, TOKEN, PORT_FOR_TESTS);
+        let response = handle(&request, be, TOKEN, PORT_FOR_TESTS, &[]);
         (response.status, serde_json::from_slice(&response.body).unwrap_or(Value::Null))
     }
 
@@ -886,11 +1051,35 @@ mod tests {
 
     #[test]
     fn only_the_loopback_address_and_port_are_a_valid_host() {
-        assert!(host_ok(Some("127.0.0.1:4000"), 4000));
-        assert!(host_ok(Some("localhost:4000"), 4000));
+        assert!(host_ok(Some("127.0.0.1:4000"), 4000, &[]));
+        assert!(host_ok(Some("localhost:4000"), 4000, &[]));
         for bad in [None, Some("127.0.0.1"), Some("127.0.0.1:4001"), Some("evil.example:4000"), Some("127.0.0.1.evil.example:4000"), Some("localhost.evil.example:4000"), Some("[::1]:4000"), Some("0.0.0.0:4000"), Some("")] {
-            assert!(!host_ok(bad, 4000), "{bad:?}");
+            assert!(!host_ok(bad, 4000, &[]), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn a_pcs_own_addresses_and_name_are_valid_hosts_only_when_given() {
+        let own = vec!["192.0.2.20".to_string(), "198.51.100.7".to_string(), "Gaming-PC".to_string()];
+        for good in ["192.0.2.20:4000", "198.51.100.7:4000", "gaming-pc:4000", "GAMING-PC:4000", "127.0.0.1:4000", "localhost:4000"] {
+            assert!(host_ok(Some(good), 4000, &own), "{good}");
+        }
+        for bad in ["192.0.2.21:4000", "192.0.2.20:4001", "192.0.2.20", "gaming-pc.evil.example:4000", "evil.example:4000", "gaming-pc:80", "0.0.0.0:4000", ""] {
+            assert!(!host_ok(Some(bad), 4000, &own), "{bad}");
+        }
+        assert!(!host_ok(Some("192.0.2.20:4000"), 4000, &[]));
+    }
+
+    #[test]
+    fn the_whole_handler_uses_the_hosts_it_is_given() {
+        let fake = fixture();
+        let text = format!("GET /v1 HTTP/1.1\r\nHost: 192.0.2.20:4000\r\nAuthorization: Bearer {TOKEN}\r\n\r\n");
+        let request = read_request(&mut text.as_bytes()).ok().unwrap();
+        assert_eq!(handle(&request, &fake, TOKEN, 4000, &[]).status, 403);
+        assert_eq!(handle(&request, &fake, TOKEN, 4000, &["192.0.2.20".to_string()]).status, 200);
+        let wrong = text.replace(TOKEN, "nope");
+        let request = read_request(&mut wrong.as_bytes()).ok().unwrap();
+        assert_eq!(handle(&request, &fake, TOKEN, 4000, &["192.0.2.20".to_string()]).status, 401);
     }
 
     #[test]
@@ -936,7 +1125,7 @@ mod tests {
         let fake = fixture();
         let send = |host: &str, auth: &str, path: &str| {
             let text = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\n{auth}\r\n");
-            handle(&read_request(&mut text.as_bytes()).ok().unwrap(), &fake, TOKEN, PORT_FOR_TESTS)
+            handle(&read_request(&mut text.as_bytes()).ok().unwrap(), &fake, TOKEN, PORT_FOR_TESTS, &[])
         };
         let ok_auth = format!("Authorization: Bearer {TOKEN}\r\n");
         assert_eq!(send("evil.example:4000", &ok_auth, "/v1/rooms").status, 403);
@@ -1160,8 +1349,65 @@ mod tests {
     }
 
     #[test]
+    fn status_tells_the_state_of_this_pc_and_every_member() {
+        let (status, body) = get(&fixture(), "/v1/status");
+        assert_eq!(status, 200);
+        assert_eq!(body["state"], "standby");
+        assert_eq!(body["recording"], Value::Null);
+        let states: Vec<(&str, &str, bool)> = body["members"].as_array().unwrap().iter().map(|m| (m["name"].as_str().unwrap(), m["state"].as_str().unwrap(), m["online"].as_bool().unwrap())).collect();
+        assert_eq!(states[..2], [("Ann", "standby", true), ("Ben", "recording", true)]);
+        assert_eq!(states[2].1, "offline");
+        assert!(!states[2].2);
+        assert_eq!(states[3].1, "idle");
+        assert_eq!(call(&fixture(), "POST", "/v1/status", "").0, 405);
+    }
+
+    #[test]
+    fn a_room_is_opened_without_a_body_and_a_refusal_is_a_conflict() {
+        let fake = fixture();
+        assert_eq!(call(&fake, "POST", "/v1/rooms/r1/open", ""), (200, json!({"room": "r1"})));
+        assert_eq!(fake.calls.lock().unwrap().as_slice(), ["open r1"]);
+        assert_eq!(call(&fake, "POST", "/v1/rooms/r2/open", "").0, 409);
+        assert_eq!(call(&fake, "POST", "/v1/rooms/nope/open", "").0, 404);
+        assert_eq!(call(&fake, "POST", "/v1/rooms/pending-x/open", "").0, 404);
+        assert_eq!(call(&fake, "GET", "/v1/rooms/r1/open", "").0, 405);
+    }
+
+    #[test]
+    fn the_reference_lists_every_endpoint_of_the_api_page_with_an_example() {
+        let list = reference();
+        let titles: Vec<&str> = list.iter().map(|e| e["title"].as_str().unwrap()).collect();
+        let page = include_str!("../../docs/api.md");
+        let documented: Vec<&str> = page.lines().filter_map(|l| l.strip_prefix("### `")?.strip_suffix('`')).filter(|e| *e != "GET /llms.txt").collect();
+        assert!(documented.len() > 15);
+        for endpoint in documented {
+            assert!(titles.iter().any(|t| t.split('[').next().unwrap() == endpoint), "{endpoint}");
+        }
+        for entry in &list {
+            assert!(!entry["lines"].as_array().unwrap().is_empty(), "{entry}");
+        }
+        assert!(list.iter().any(|e| e["title"] == "GET /v1/status") && list.iter().any(|e| e["title"] == "POST /v1/rooms/{room}/open"));
+    }
+
+    #[test]
+    fn the_address_file_holds_the_address_and_token_for_this_user_only() {
+        let dir = crate::log::tests::temp("api-info");
+        write_info(&dir, TOKEN).unwrap();
+        let info: Value = serde_json::from_str(&std::fs::read_to_string(dir.join(INFO_FILE)).unwrap()).unwrap();
+        assert_eq!((info["address"].as_str(), info["token"].as_str()), (Some(address().as_str()), Some(TOKEN)));
+        let access = Command::new("icacls").arg(dir.join(INFO_FILE)).output().unwrap();
+        let access = String::from_utf8_lossy(&access.stdout).to_string();
+        assert!(!access.contains("Everyone") && !access.contains("BUILTIN\\Users") && !access.contains("Administrators"), "{access}");
+        write_info(&dir, "0".repeat(48).as_str()).unwrap();
+        assert!(std::fs::read_to_string(dir.join(INFO_FILE)).unwrap().contains(&"0".repeat(48)));
+        forget(&dir);
+        assert!(!dir.join(INFO_FILE).exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn llms_txt_describes_every_endpoint() {
-        for path in ["/v1/rooms", "recordings", "events", "chapters", "transcript", "board", "plugins", "jobs"] {
+        for path in ["/v1/rooms", "recordings", "events", "chapters", "transcript", "board", "plugins", "jobs", "/v1/status", "/open", "api.json", "--api"] {
             assert!(LLMS.contains(path), "{path}");
         }
         assert!(LLMS.contains("Authorization: Bearer") && LLMS.contains("127.0.0.1"));

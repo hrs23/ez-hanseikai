@@ -52,6 +52,7 @@
         <h1 id="homename"></h1>
         <span id="homesub" class="sub"></span>
         <span class="sp"></span>
+        <button id="apibadge" class="apibadge" hidden></button>
         <button id="aibtn" class="ghost" aria-haspopup="menu"><span data-icon="sparkles" data-icon-class="sm"></span><span data-t="AI">AI</span></button>
       </div>
       <div class="ptabs" role="tablist">
@@ -205,6 +206,10 @@
       <div id="apirows" hidden>
         <div class="srow2"><span class="lab" data-t="Address">Address</span><span id="apiaddr" class="mono"></span></div>
         <div class="srow2"><span class="lab" data-t="Token">Token</span><button id="apicopy"><span data-icon="copy" data-icon-class="sm"></span><span data-t="Copy token">Copy token</span></button><button id="apinew"><span data-icon="refresh" data-icon-class="sm"></span><span data-t="New token">New token</span></button></div>
+        <div class="srow2"><span class="lab" data-t="Access">Access</span><div id="apiaccess" class="seg" role="radiogroup" data-t-label="Access"><button data-lan="0" data-t="This PC only">This PC only</button><button data-lan="1" data-t="Other devices">Other devices</button></div></div>
+        <div id="apilanbox" class="warnbox" hidden><span data-icon="alert" data-icon-class="sm"></span><span data-t="Other devices on your network can control the app">Other devices on your network can control the app</span><span class="sp"></span><span id="apihosts" class="mono"></span></div>
+        <div class="srow2"><span class="lab" data-t="Endpoints">Endpoints</span><button id="apidoc"><span data-icon="link" data-icon-class="sm"></span><span data-t="Open llms.txt">Open llms.txt</span></button></div>
+        <div id="apiref" class="apiref"></div>
       </div>
       <div class="srow2" id="apierrrow" hidden><span class="lab"></span><span id="apierr" class="err"></span></div>
     </section>

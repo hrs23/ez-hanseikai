@@ -102,6 +102,14 @@ function renderRoom() {
   const online = 1 + st.peers.filter((p) => p.connected).length;
   $("homename").textContent = st.room.name;
   $("homesub").textContent = t("{n} members · {online} online", { n: all.length, online });
+  const badge = apiBadge(st.api);
+  $("apibadge").hidden = !badge;
+  if (badge) {
+    $("apibadge").className = "apibadge" + (badge.lan ? " lan" : "");
+    $("apibadge").replaceChildren(icon(badge.lan ? "alert" : "terminal", "sm"), "API", ...(badge.lan ? [el("small", { textContent: t("Other devices") })] : []));
+    $("apibadge").title = badge.title;
+    $("apibadge").setAttribute("aria-label", badge.title);
+  }
   for (const b of document.querySelectorAll("#roompage .ptabs button")) { const on = b.dataset.tab === roomTab; b.classList.toggle("on", on); b.setAttribute("aria-selected", on); }
   const failed = jobInfo ? jobInfo.jobs.filter((j) => j.state !== "done").length : 0;
   $("jobcount").hidden = !failed;
@@ -454,9 +462,20 @@ function renderSettings() {
   if (document.activeElement !== $("apion")) $("apion").checked = st.api.on;
   $("apirows").hidden = !st.api.on;
   $("apiaddr").textContent = apiUrl(st.api.address);
+  for (const b of $("apiaccess").children) press(b, (b.dataset.lan === "1") === st.api.lan);
+  $("apilanbox").hidden = !st.api.lan;
+  if (st.api.on && settingsPane === "api") renderApiReference();
   $("apierrrow").hidden = !st.api.error;
   $("apierr").textContent = st.api.error ? t(st.api.error) : "";
   if (settingsPane === "storage") renderStorage();
+}
+function renderApiReference() {
+  if (st.api.lan) invoke("api_info").then((info) => { $("apihosts").textContent = info.hosts.map(apiUrl).join("  "); }).catch(() => {});
+  else $("apihosts").textContent = "";
+  if ($("apiref").children.length) return;
+  invoke("api_reference").then((list) => {
+    $("apiref").replaceChildren(...list.map((e) => el("details", { className: "apiep" }, el("summary", { textContent: e.title }), el("div", { className: "apibody" }, ...apiReferenceBlocks(e.lines).map((b) => b.code ? el("pre", { textContent: b.text }) : el("p", { className: "muted small", textContent: b.text }))))));
+  }).catch(fail);
 }
 function loadStorage() {
   invoke("data_info").then((info) => { storageInfo = info; delete sigs.storage; renderStorage(); }).catch(fail);
@@ -636,6 +655,9 @@ for (const b of $("setnav").querySelectorAll("button")) b.onclick = () => { sett
 $("promptcopy").onclick = () => navigator.clipboard.writeText(promptFull).then(() => { $("promptdlg").close(); flash(t("Prompt copied")); }).catch(fail);
 $("aibtn").onclick = (e) => openAiMenu(e.currentTarget, newestRecording());
 $("aiplay").onclick = (e) => openAiMenu(e.currentTarget, selected);
+$("apibadge").onclick = () => openSettings("api");
+for (const b of $("apiaccess").children) b.onclick = () => run("set_api_lan", { lan: b.dataset.lan === "1" });
+$("apidoc").onclick = () => run("open_llms", null, null);
 $("apion").onchange = () => run("set_api", { on: $("apion").checked });
 $("apicopy").onclick = () => invoke("api_info").then((info) => navigator.clipboard.writeText(info.token)).then(() => flash(t("Token copied"))).catch(fail);
 $("apinew").onclick = async () => {
