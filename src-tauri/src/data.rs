@@ -352,7 +352,8 @@ pub fn adopt(core: &Core, set: &Set) {
             for series in SERIES {
                 let [kept, live] = core.init_paths(&set.room, &set.id, &f.owner, capture, series);
                 let Some((size, _)) = f.init(capture, series) else { continue };
-                if kept.exists() || !live.exists() || init_check(core, &set.room, f, capture, series) != Some(true) {
+                let moved = f.series(series).iter().any(|seg| seg.capture == capture && core.seg_paths(&set.room, &f.owner, seg)[0].exists());
+                if !moved || kept.exists() || !live.exists() || init_check(core, &set.room, f, capture, series) != Some(true) {
                     continue;
                 }
                 if kept.parent().is_some_and(|d| std::fs::create_dir_all(d).is_ok()) && std::fs::copy(&live, &kept).is_ok() {

@@ -414,6 +414,7 @@ async function onlyOnDownload(others, holder, set) {
     check(row && row.progress.have === 0 && !row.wanted && row.progress.total > 0, `${app.key} fetched a finished recording nobody asked for: ${brief(row?.progress)}`);
     const shown = await evaluate(app, `(() => { const row = [...document.querySelectorAll("#sessions .srow.gone")].find((r) => r.textContent.includes(sessionName(${JSON.stringify(set)}))); return row ? [row.textContent.includes(t("Not on this PC")), !!row.querySelector("button"), row.textContent.includes(bytes(setById(${JSON.stringify(set)}).progress.total))] : null; })()`);
     check(shown && shown.every(Boolean), `${app.key} does not list the recording as not on this PC with its size and Download: ${brief(shown)}`);
+    check(!fs.existsSync(path.join(roomDir(app, (await state(app)).room.id), "recordings", set)), `${app.key} holds a folder of a recording it did not fetch`);
   }
   for (const app of others) await invoke(app, "download_set", { room: (await state(app)).room.id, set });
   check((await state(holder)).sets.find((x) => x.id === set).progress.have > 0, `${holder.key} lost its own recording`);
