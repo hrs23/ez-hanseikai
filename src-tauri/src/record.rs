@@ -31,6 +31,7 @@ pub const AUDIO_KBPS: u32 = 128;
 const QUEUE_SIZE: &str = "512";
 const VOICE_FRAGMENT_US: &str = "1000000";
 const REPEAT_AFTER: Duration = Duration::from_millis(250);
+const STALLED_AFTER: Duration = Duration::from_secs(5);
 const REPEAT_POLL: Duration = Duration::from_millis(100);
 const PCM_FRAME_BYTES: u64 = 4;
 const PAD_AFTER_FRAMES: u64 = SAMPLE_RATE as u64 / 50;
@@ -202,6 +203,7 @@ pub struct Engine {
     video: Mutex<Option<Video>>,
     pub(crate) canvas: Mutex<Option<(u32, u32)>>,
     pub(crate) last: Mutex<(Arc<Vec<u8>>, (u32, u32), Instant)>,
+    pub(crate) fresh: Mutex<Instant>,
     failures: AtomicU32,
     strikes: Mutex<(&'static str, u32)>,
     retry_at: Mutex<Instant>,
@@ -225,6 +227,7 @@ impl Engine {
             video: Mutex::new(None),
             canvas: Mutex::new(None),
             last: Mutex::new((Arc::new(Vec::new()), (0, 0), Instant::now())),
+            fresh: Mutex::new(Instant::now()),
             failures: AtomicU32::new(0),
             strikes: Mutex::new(("", 0)),
             retry_at: Mutex::new(Instant::now()),
@@ -280,6 +283,10 @@ pub fn starting_mix(saved: &Value) -> Value {
     mix
 }
 
+fn stalled(window: bool, capturing: bool, quiet: Duration) -> bool {
+    window && capturing && quiet >= STALLED_AFTER
+}
+
 pub fn capture_json(core: &Core, live: Option<Value>) -> Value {
     let e = &core.engine;
     let mix = |track: usize| {
@@ -292,6 +299,7 @@ pub fn capture_json(core: &Core, live: Option<Value>) -> Value {
         "source_lost": e.source_lost.load(Ordering::Relaxed),
         "sharing": core.sharing_live(),
         "working": e.working(),
+        "stalled": stalled(e.names.lock().unwrap().kind == "window", e.video.lock().unwrap().is_some(), e.fresh.lock().unwrap().elapsed()),
         "status": e.status.lock().unwrap().clone(),
         "mic": e.mic.lock().unwrap().clone(),
         "mix": {"app": mix(APP), "mic": mix(MIC)},
@@ -994,6 +1002,7 @@ fn ensure_video(core: &Arc<Core>, wanted: Option<&Found>) {
     match started {
         Ok(control) => {
             *e.canvas.lock().unwrap() = None;
+            *e.fresh.lock().unwrap() = Instant::now();
             *video = Some(Video { control, key: f.key });
         }
         Err(err) => e.failed(false, &format!("screen capture could not start: {err}")),
@@ -1066,6 +1075,15 @@ pub fn supervise(core: Arc<Core>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_window_that_sends_no_frames_for_a_while_is_stalled() {
+        let secs = Duration::from_secs;
+        assert!(stalled(true, true, secs(5)));
+        assert!(!stalled(true, true, secs(2)));
+        assert!(!stalled(false, true, secs(60)));
+        assert!(!stalled(true, false, secs(60)));
+    }
 
     #[test]
     fn every_start_has_the_microphone_muted_and_keeps_the_volumes() {

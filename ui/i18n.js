@@ -76,6 +76,7 @@ const JA = {
   "Capture": "キャプチャ",
   "Capture source closed": "キャプチャ対象が閉じられました",
   "Capture stopped. Retrying…": "キャプチャが止まりました。再試行中…",
+  "The captured window is not updating": "取り込み中のウィンドウが更新されていません",
   "Capture without a border was refused ({error}); falling back to the default border": "枠なしのキャプチャが拒否されました({error})。標準の枠で続けます",
   "Catching up with {name}": "{name} のログに追いつき中",
   "Change": "変更",

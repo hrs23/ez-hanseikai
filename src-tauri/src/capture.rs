@@ -269,6 +269,7 @@ impl GraphicsCaptureApiHandler for Capture {
         self.last = Instant::now();
         let core = self.core.clone();
         let e = &core.engine;
+        *e.fresh.lock().unwrap() = Instant::now();
         let recording = core.active_set.lock().unwrap().is_some();
         let canvas = {
             let mut canvas = e.canvas.lock().unwrap();

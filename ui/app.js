@@ -322,6 +322,7 @@ function captureProblem(c) {
   if (!c.source) return "";
   if (c.source_lost) return t("Capture source closed");
   if (c.status) return t("Capture stopped. Retrying…");
+  if (c.stalled) return t("The captured window is not updating");
   return "";
 }
 
