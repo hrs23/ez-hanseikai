@@ -491,10 +491,7 @@ function headerSub(set) {
     const r = reviewSet();
     return r ? [fmt(reviewTotal()), t("Watch Party replay"), t("voices of {names}", { names: r.players.map((p) => nameOf(p.owner)).join(", ") })].join(" · ") : "";
   }
-  if (!set) {
-    const online = 1 + st.peers.filter((p) => p.connected).length;
-    return t("{n} online", { n: online });
-  }
+  if (!set) return st.active_set ? t("{n} online", { n: 1 + st.peers.filter((p) => p.connected).length }) : "";
   const matches = matchEnds(items).length;
   if (set.live) return [t("This recording"), matchNow(nowM())].filter(Boolean).join(" · ");
   return [setLength(set), matches ? t(matches === 1 ? "{n} match" : "{n} matches", { n: matches }) : null].filter(Boolean).join(" · ");

@@ -1,7 +1,5 @@
 use std::collections::HashSet;
-use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
-use std::process::Command;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -12,7 +10,7 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Modifiers, Shortcut};
 use tauri_plugin_notification::NotificationExt;
 
-use crate::{room, Core, NO_WINDOW, VERSION};
+use crate::{room, Core, VERSION};
 
 pub const DEFAULT_HOTKEY: &str = "Ctrl+Alt+M";
 const REPO: &str = "https://github.com/hrs23/ez-hanseikai";
@@ -36,13 +34,13 @@ const JA: [(&str, &str); 55] = [
     ("Leave room…", "ルームを離れる…"),
     ("Members", "メンバー"),
     ("Plugins", "プラグイン"),
-    ("Start recording", "セッション開始"),
-    ("Stop recording", "セッション終了"),
-    ("Record review", "反省を録音"),
+    ("Start recording", "録画開始"),
+    ("Stop recording", "録画終了"),
+    ("Record debrief", "反省会を録画"),
     ("Mark this moment", "この瞬間をマーク"),
     ("Add note", "メモを追加"),
-    ("Previous recording", "前のセッション"),
-    ("Next recording", "次のセッション"),
+    ("Previous recording", "前の録画"),
+    ("Next recording", "次の録画"),
     ("Export video…", "動画をエクスポート…"),
     ("Export to folder…", "フォルダにエクスポート…"),
     ("Import recording…", "録画をインポート…"),
@@ -62,8 +60,8 @@ const JA: [(&str, &str); 55] = [
     ("Report a problem", "問題を報告"),
     ("Release notes", "リリースノート"),
     ("About", "バージョン情報"),
-    ("Stop recording for everyone and exit?", "全員のセッションを終了してアプリを終了しますか?"),
-    ("Stop recording and exit", "セッションを終了して終了"),
+    ("Stop recording for everyone and exit?", "全員の録画を終了してアプリを終了しますか?"),
+    ("Stop recording and exit", "録画を終了して終了"),
     ("Cancel the export and exit?", "エクスポートを中止してアプリを終了しますか?"),
     ("Files are still arriving. Exit anyway?", "まだファイルを受け取っています。それでも終了しますか?"),
     ("Cancel", "キャンセル"),
@@ -149,13 +147,12 @@ pub fn link_ok(url: &str) -> bool {
 }
 
 pub fn open_link(url: &str) {
+    use windows::core::{w, HSTRING, PCWSTR};
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
     if link_ok(url) {
-        let _ = Command::new("explorer").arg(url).creation_flags(NO_WINDOW).spawn();
+        unsafe { ShellExecuteW(None, w!("open"), &HSTRING::from(url), PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL) };
     }
-}
-
-fn open_url(url: &str) {
-    let _ = Command::new("cmd").args(["/c", "start", "", url]).creation_flags(NO_WINDOW).spawn();
 }
 
 pub fn already_running() {
@@ -301,7 +298,7 @@ fn item(app: &AppHandle, lang: &str, id: &str, text: &'static str, accel: Option
 fn toggle_text(recording: bool, reviewing: bool) -> &'static str {
     match (recording, reviewing) {
         (true, _) => "Stop recording",
-        (false, true) => "Record review",
+        (false, true) => "Record debrief",
         (false, false) => "Start recording",
     }
 }
@@ -434,9 +431,9 @@ pub fn setup(app: &tauri::App, core: Arc<Core>) -> tauri::Result<()> {
             "import-identity" => dialog(import_identity),
             "exit" => dialog(exit_app),
             "mark" => marked(core),
-            "github" => open_url(REPO),
-            "issues" => open_url(&format!("{REPO}/issues/new")),
-            "releases" => open_url(&format!("{REPO}/releases")),
+            "github" => open_link(REPO),
+            "issues" => open_link(&format!("{REPO}/issues/new")),
+            "releases" => open_link(&format!("{REPO}/releases")),
             "about" => dialog(|app, core| tell(app, &format!("EZ Hanseikai\n{} {VERSION}\nMIT or Apache-2.0\n{REPO}", tr(&lang(core), "Version")))),
             other => {
                 show_window(app);
@@ -504,7 +501,7 @@ mod tests {
     #[test]
     fn the_start_command_says_what_it_records() {
         assert_eq!(toggle_text(false, false), "Start recording");
-        assert_eq!(toggle_text(false, true), "Record review");
+        assert_eq!(toggle_text(false, true), "Record debrief");
         assert_eq!(toggle_text(true, true), "Stop recording");
     }
 
@@ -512,6 +509,9 @@ mod tests {
     fn only_plain_web_links_open() {
         assert!(link_ok("https://example.com/a?b=1&c=2"));
         assert!(link_ok("http://example.com"));
+        assert!(link_ok("https://www.google.com/maps/@48.85,2.35,15z"));
+        assert!(link_ok("https://ja.wikipedia.org/wiki/%E6%88%A6%E8%A1%93"));
+        assert!(!link_ok("https://ja.wikipedia.org/wiki/戦術"));
         assert!(!link_ok("file:///C:/Windows/notepad.exe"));
         assert!(!link_ok("javascript:alert(1)"));
         assert!(!link_ok("ezh://moment/x/1/all"));

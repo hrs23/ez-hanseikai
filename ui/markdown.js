@@ -23,7 +23,11 @@ const MD_INLINE = new RegExp([
   "(?<![\\p{L}\\p{N}_&])#([\\p{L}\\p{N}_-]+)",
 ].join("|"), "gu");
 
-const openWeb = (url) => invoke("open_link", { url }).catch(warn);
+async function openWeb(url, label) {
+  const host = new URL(url).host;
+  if (label !== undefined && !label.toLowerCase().includes(host) && !(await ask(t("Open {host}?", { host }), t("Open"), false, url))) return;
+  invoke("open_link", { url }).catch(warn);
+}
 const mdHooks = (over = {}) => ({ onTag: filterTag, onLink: openLink, onOpen: openWeb, onTask: null, ...over });
 
 function mdHref(url) {
@@ -31,12 +35,13 @@ function mdHref(url) {
     const link = parseLink(url);
     return link ? { kind: "moment", link } : null;
   }
-  return MD_WEB.test(url) ? { kind: "web", url } : null;
+  if (!MD_WEB.test(url)) return null;
+  try { return { kind: "web", url: new URL(url).href }; } catch { return null; }
 }
 
-function mdLink(url, label, raw) {
+function mdLink(url, label, raw, masked = false) {
   const href = mdHref(url);
-  return href ? { link: href, children: label } : { text: raw };
+  return href ? { link: href, children: label, masked } : { text: raw };
 }
 
 function mdInline(text) {
@@ -47,7 +52,7 @@ function mdInline(text) {
     last = m.index + m[0].length;
     if (m[1] !== undefined) out.push({ text: m[1] });
     else if (m[3] !== undefined) out.push({ code: m[3].trim() });
-    else if (m[5] !== undefined) out.push(m[0].startsWith("!") ? { text: m[0] } : mdLink(m[5], mdInline(m[4]), m[0]));
+    else if (m[5] !== undefined) out.push(m[0].startsWith("!") ? { text: m[0] } : mdLink(m[5], mdInline(m[4]), m[0], true));
     else if (m[6] !== undefined) out.push(mdLink(m[6], [{ text: m[6] }], m[0]));
     else if (m[7] !== undefined) out.push(mdLink(m[7], [{ text: m[7] }], m[0]));
     else if (m[8] !== undefined) out.push(mdLink(m[8], [], m[0]));
@@ -169,6 +174,8 @@ function toggleTask(text, n) {
   return lines.join("\n");
 }
 
+const mdText = (nodes) => nodes.map((n) => n.text ?? n.code ?? mdText(n.strong || n.em || n.strike || n.mark || n.children || [])).join("");
+
 function mdSpans(nodes, hooks) {
   const wrap = (tag, children, props = {}) => el(tag, props, ...mdSpans(children, hooks));
   return nodes.flatMap((n) => {
@@ -186,8 +193,8 @@ function mdSpans(nodes, hooks) {
       const label = n.children.length ? n.children.map((c) => c.text || "").join("") : t("Moment");
       return [el("button", { className: "link", onclick: (e) => { e.stopPropagation(); hooks.onLink(n.link.link); } }, icon("play", "sm"), `${label} ${fmt(n.link.link.m)}`)];
     }
-    const open = (e) => { e.preventDefault(); e.stopPropagation(); hooks.onOpen(n.link.url); };
-    const a = el("a", { className: "ext", role: "link", tabIndex: 0, title: n.link.url, onclick: open, onauxclick: open, onkeydown: (e) => { if (e.key === "Enter") open(e); } }, ...(n.children.length ? mdSpans(n.children, hooks) : [n.link.url]));
+    const open = (e) => { e.preventDefault(); e.stopPropagation(); hooks.onOpen(n.link.url, n.masked ? mdText(n.children) : undefined); };
+    const a = el("a", { className: "ext", role: "link", tabIndex: 0, title: n.link.url, onclick: open, onauxclick: (e) => { if (e.button === 1) open(e); }, onkeydown: (e) => { if (e.key === "Enter") open(e); } }, ...(n.children.length ? mdSpans(n.children, hooks) : [n.link.url]));
     return [a];
   });
 }
@@ -227,7 +234,7 @@ function boardParts(text) {
     if (fence) fenced = fenced && line.trim().startsWith(fenced) ? null : fenced || fence[1][0];
     const h1 = !fenced && line.match(/^#\s+(.*)$/);
     const h2 = !fenced && line.match(/^##\s+(.*)$/);
-    if (h1 && !out.title && !out.sections.length) { flush(); out.title = h1[1]; cur = out.lead; cur.line = n + 1; return; }
+    if (h1 && !out.title && !out.sections.length) { out.title = h1[1]; body.push(""); return; }
     if (h2) { flush(); cur = { title: h2[1], text: "", line: n + 1 }; out.sections.push(cur); return; }
     body.push(line);
   });

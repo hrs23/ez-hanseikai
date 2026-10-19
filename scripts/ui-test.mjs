@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 const ui = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "ui");
 const read = (f) => fs.readFileSync(path.join(ui, f), "utf8");
 const source = ["util.js", "i18n.js", "layout.js", "events.js", "markdown.js", "review.js", "members.js", "recordings.js", "plugins.js", "ai.js", "diag.js"].map(read).join("\n");
-const context = vm.createContext({ window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, nameOf: (id) => id });
+const context = vm.createContext({ window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id });
 const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, flowAt, flowBands, flowSteps, isReview, voiceOnly, BOARD_TEMPLATE, memberStatus, receivingPercent, recordingRows, recordingMatches, recordingWords, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, discardable, DISCARD_MAX_S, soundKey, pluginProgress, isBusy, workerState, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, aiPreview, apiUrl, apiBadge, apiReferenceBlocks, rateOf, liveEdge, netState, summaryLines, leftText, pcCards, clockPairs, clockSummary, flowRows, timeRow, skewText, agoText, JA, t, sessionName, mdParse, mdInline, toggleTask, boardParts, boardDom, markdownDom, mdHooks, runBy, PERSONAL_TEMPLATE, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 const plain = (v) => JSON.parse(JSON.stringify(v));
 
@@ -549,7 +549,9 @@ test("the sidebar opens on Live, which shows everyone who shares a screen before
   assert.match(app, /const idle = page === "player" && showingNow\(\) && !playSet\(\);\s*\$\("livetiles"\)\.hidden = !idle;/);
   assert.match(app, /const title = review \? sessionName\(review\.id\) : !set \? t\("Live"\)/);
   const side = read("side.js");
-  assert.match(side, /return !playSet\(\) && !review \? "live" : "";/);
+  assert.match(side, /return !nowView && !playSet\(\) && !review \? "live" : "";/);
+  assert.match(side, /const on = page === "player" && nowView && !review;/);
+  assert.match(app, /if \(!set\) return st\.active_set \? t\("\{n\} online", [^\n]*\) : "";/);
   assert.match(side, /\$\("standby"\)\.onclick = openLive/);
   const pages = read("pages.js");
   assert.match(pages, /switch_room", \{ id: r\.id \}, openLive/);
@@ -564,7 +566,7 @@ test("the sidebar width is dragged, kept between limits and never scrolls sidewa
   assert.equal(ui$.clampSide(null), ui$.SIDE_MIN);
   assert.ok(ui$.SIDE_MIN < ui$.SIDE_DEFAULT && ui$.SIDE_DEFAULT < ui$.SIDE_MAX);
   const html = read("index.html");
-  assert.match(html, /<div id="splitter" class="splitter" role="separator" aria-orientation="vertical" tabindex="0"/);
+  assert.match(html, /<\/aside>\s*<div id="splitter" class="splitter" role="separator" aria-orientation="vertical" tabindex="0"/);
   const side = read("side.js");
   assert.match(side, /store\("sideWidth", sideWidth\)/);
   assert.match(side, /stored\("sideWidth", SIDE_DEFAULT\)/);
@@ -574,6 +576,8 @@ test("the sidebar width is dragged, kept between limits and never scrolls sidewa
   assert.match(css, /\.side \{[^}]*width: var\(--side\)[^}]*overflow: hidden/);
   assert.match(css, /\.sessions \{[^}]*overflow-y: auto; overflow-x: hidden/);
   assert.match(css, /\.roombtn \.nm \{[^}]*text-overflow: ellipsis/);
+  assert.match(css, /\.splitter \{[^}]*left: calc\(var\(--side\) - 3px\); width: 7px/);
+  assert.match(css, /body\.noside \.splitter, body\.boardfull \.splitter \{ display: none/);
 });
 
 const blocks = (text) => plain(ui$.mdParse(text));
@@ -601,6 +605,11 @@ test("markdown inline reads emphasis, code, links and tags, and only safe links 
   assert.deepEqual(node("**b** *i* ~~s~~ ==m== `c`").filter((n) => !n.text).map((n) => Object.keys(n)[0]), ["strong", "em", "strike", "mark", "code"]);
   assert.deepEqual(node("snake_case_name 2 * 3 * 4"), [{ text: "snake_case_name 2 * 3 * 4" }]);
   assert.equal(node("[site](https://example.com/a)")[0].link.url, "https://example.com/a");
+  assert.equal(node("[site](https://example.com/a)")[0].masked, true);
+  assert.equal(node("https://example.com/a")[0].masked, false);
+  assert.equal(node("[wiki](https://ja.wikipedia.org/wiki/戦術)")[0].link.url, "https://ja.wikipedia.org/wiki/%E6%88%A6%E8%A1%93");
+  assert.equal(node("https://例え.jp/a?q=作戦")[0].link.url, "https://xn--r8jz45g.jp/a?q=%E4%BD%9C%E6%88%A6");
+  assert.equal(node("<https://www.google.com/maps/@48.85,2.35,15z>")[0].link.url, "https://www.google.com/maps/@48.85,2.35,15z");
   assert.equal(node("see https://example.com/a_b_c.")[1].link.url, "https://example.com/a_b_c");
   assert.equal(node("[x](ezh://moment/s1/12.5/all)")[0].link.link.m, 12.5);
   for (const bad of ["[x](javascript:alert(1))", "[x](file:///C:/Windows/notepad.exe)", "[x](data:text/html;base64,AAAA)", "![img](https://example.com/a.png)", "[x](ezh://moment/s1/-3/all)", "[x](//evil.example/a)"]) assert.ok(node(bad).every((n) => !n.link), bad);
@@ -627,6 +636,11 @@ test("a board is a title, a goal line and cards, and a heading inside code does 
   assert.match(parts.sections[0].text, /## nope/);
   assert.equal(parts.sections[1].line, 8);
   assert.equal(plain(ui$.boardParts("no title\n## A\nb")).sections.length, 1);
+  const early = plain(ui$.boardParts("Warm up together\n# Week 12\n- [ ] Win first fight\n## Rules\n- [ ] x"));
+  assert.equal(early.title, "Week 12");
+  assert.match(early.lead.text, /^Warm up together\n[^]*- \[ \] Win first fight$/);
+  assert.equal(plain(ui$.mdParse(early.lead.text, early.lead.line)).find((b) => b.type === "list").items[0].n, 2);
+  assert.equal(early.sections[0].line, 4);
   for (const lang of ["en", "ja"]) {
     const lines = ui$.PERSONAL_TEMPLATE[lang].split("\n");
     assert.ok(lines.length <= 12);
@@ -651,7 +665,7 @@ class Fake {
 function page(files, globals = {}) {
   const boxes = {};
   const document = { createElement: (tag) => new Fake(tag), createElementNS: (ns, tag) => new Fake(tag), getElementById: (id) => (boxes[id] ||= new Fake("div")), querySelectorAll: () => [], documentElement: {} };
-  const ctx = vm.createContext({ window: { __TAURI__: { core: {} } }, document, console, Intl, Date, ...globals });
+  const ctx = vm.createContext({ window: { __TAURI__: { core: {} } }, document, console, Intl, Date, URL, ...globals });
   vm.runInContext(files.map(read).join("\n"), ctx);
   return { ctx, boxes };
 }
@@ -693,14 +707,27 @@ test("the personal game plan stays on this PC and the room's goes to the log", (
   assert.match(personal, /store\(personalKey\(\)/);
   assert.doesNotMatch(personal, /invoke|add_event/);
   assert.match(write, /invoke\("add_event", \{ kind: "board", text, target: \{\}, values: \{ card: "team" \} \}\)/);
-  assert.match(pages, /const personalKey = \(\) => `board\/\$\{st\.room \? st\.room\.id : ""\}`/);
+  assert.match(pages, /const planKey = \(id\) => `board\/\$\{id\}`;\nconst personalKey = \(\) => planKey\(st\.room \? st\.room\.id : ""\);/);
+  assert.match(pages, /run\("remove_room", \{ id: r\.id \}, \(\) => \{ forgetPlan\(r\.id\);/);
+  assert.match(pages, /run\("remove_room", \{ id \}, \(\) => \{ forgetPlan\(id\);/);
+  assert.match(pages, /if \(!keepRooms\) unstore\(\(k\) => k\.startsWith\(planKey\(""\)\)\);\n  run\("reset"/);
+  assert.match(pages, /onTask: \(n\) => \{ boardDraft = toggleTask\(boardDraft, n\); writeBoard\(boardDraft\); \}/);
+  assert.match(pages, /b\.disabled = boardEditing;/);
+  assert.doesNotMatch(pages, /\$\("boardscope"\)\.hidden/);
   assert.match(pages, /editBoard\(scope\)/);
   assert.match(read("app.js"), /editBoard\("room"\)/);
   for (const word of ["Personal", "Only on this PC"]) assert.ok(word in ui$.JA, word);
 });
 
 test("web links open in the browser through the app, and the plugin runner is named in the jobs list", () => {
-  assert.match(read("markdown.js"), /invoke\("open_link", \{ url \}\)/);
+  const md = read("markdown.js");
+  assert.match(md, /invoke\("open_link", \{ url \}\)/);
+  assert.match(md, /onauxclick: \(e\) => \{ if \(e\.button === 1\) open\(e\); \}/);
+  assert.match(md, /!label\.toLowerCase\(\)\.includes\(host\) && !\(await ask\(t\("Open \{host\}\?"/);
+  assert.ok("Open {host}?" in ui$.JA);
+  const pages = read("pages.js");
+  assert.match(pages, /disabled: j\.state !== "waiting" \|\| !j\.here \|\| !plugin \|\| !plugin\.process_here \|\| !plugin\.ready \|\| \(plugin\.runner && plugin\.runner !== st\.id\)/);
+  assert.match(pages, /t\(st\.recording \? "Stop recording and leave \{room\}\?" : "Leave \{room\}\?"/);
   ui$.setLanguage("en");
   assert.equal(ui$.runBy({ by: "b", runner: "a" }), "b's PC");
   assert.equal(ui$.runBy({ by: null, runner: "a" }), "a's PC");

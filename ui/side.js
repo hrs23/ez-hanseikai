@@ -25,7 +25,7 @@ function renderRoomHead() {
   $("roomname").setAttribute("aria-label", name);
 }
 function navActive() {
-  if (page === "player") return !playSet() && !review ? "live" : "";
+  if (page === "player") return !nowView && !playSet() && !review ? "live" : "";
   return { board: "board", members: "members", plugins: "plugins", jobs: "plugins" }[roomTab] || "";
 }
 function renderNav() {
@@ -186,7 +186,7 @@ function lackingText(s) {
 function liveRow() {
   const a = st.active_set;
   const who = liveSet() ? liveSet().players.map((p) => p.owner) : [];
-  const on = page === "player" && showingNow() && !review;
+  const on = page === "player" && nowView && !review;
   const detail = a.voice ? null : matchNow(nowM()) || t("by {name}", { name: a.by || "" });
   const row = el("div", { className: "srow liverow recording" + (on ? " on" : ""), role: "option", tabIndex: 0, ariaSelected: on },
     thumbBox(null, who, "xs", THUMB_FACES, true),
@@ -249,7 +249,7 @@ function sourceLabel(c) {
 function renderDock() {
   const c = st.capture;
   const problem = captureProblem(c);
-  const state = captureStates(c, st.recording, problem).screen;
+  const { screen: state, mic: micState } = captureStates(c, st.recording, problem);
   const sub = { off: t("Click to choose"), warn: problem, recording: t("Recording · live"), on: c.sharing && c.live ? t("Sending live") : t("Starting…") }[state];
   if (changed("screencap", [state, sourceLabel(c), sub, lang])) {
     $("screencap").className = "cap " + state;
@@ -259,7 +259,6 @@ function renderDock() {
     $("screenbtn").title = c.source ? t("Stop sending your screen") : t("Choose what to send");
   }
   const mute = c.mix.mic.muted;
-  const micState = captureStates(c, st.recording, problem).mic;
   if (changed("miccap", [mute, micState, lang])) {
     $("miccap").className = "cap mic " + micState;
     $("micbtn").firstElementChild.replaceChildren(icon(mute ? "mic-off" : "mic"));

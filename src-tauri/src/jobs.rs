@@ -416,6 +416,12 @@ pub fn workers(logs: &[Log]) -> HashMap<(String, String), Worker> {
     out
 }
 
+fn room_members(core: &Core, room: &str) -> Vec<String> {
+    let me = core.me();
+    let others: Vec<String> = core.rooms.lock().unwrap().list.iter().find(|r| r.id == room).map(|r| r.members.iter().map(|m| m.to_string()).filter(|m| *m != me).collect()).unwrap_or_default();
+    std::iter::once(me).chain(others).collect()
+}
+
 pub fn assigned(runner: Option<&str>, members: &[String], plugin: &str, known: &HashMap<(String, String), Worker>) -> Option<String> {
     if let Some(runner) = runner {
         return Some(runner.to_string());
@@ -631,8 +637,7 @@ pub fn plugins_json(core: &Core, room: &str) -> Vec<Value> {
     let logs = room::logs(core, room);
     let configs = configs(&logs, None);
     let known = workers(&logs);
-    let members: Vec<String> = core.rooms.lock().unwrap().list.iter().find(|r| r.id == room).map(|r| r.members.iter().map(|m| m.to_string()).collect()).unwrap_or_default();
-    let me = core.me();
+    let members = room_members(core, room);
     plugins::ALL
         .iter()
         .map(|p| {
@@ -648,8 +653,7 @@ pub fn plugins_json(core: &Core, room: &str) -> Vec<Value> {
             v["download"] = crate::download::progress(p.id);
             v["process_here"] = json!(!skipped(core, p.id));
             v["runner"] = json!(config.and_then(|c| c.runner.clone()));
-            let others = members.iter().filter(|m| **m != me);
-            v["workers"] = std::iter::once(&me).chain(others).map(|m| {
+            v["workers"] = members.iter().map(|m| {
                 let w = known.get(&(p.id.to_string(), m.clone()));
                 json!({"id": m, "on": w.is_none_or(|w| w.on), "ready": w.map(|w| w.ready)})
             }).collect();
@@ -687,9 +691,8 @@ pub fn set_plugin_runner(core: State<Arc<Core>>, id: String, runner: Option<Stri
     let plugin = plugins::find(&id).ok_or("Unknown plugin.")?;
     let room = core.active_room_id();
     let logs = room::logs(&core, &room);
-    let members: Vec<String> = core.rooms.lock().unwrap().list.iter().find(|r| r.id == room).map(|r| r.members.iter().map(|m| m.to_string()).collect()).unwrap_or_default();
     let runner = runner.filter(|m| !m.is_empty());
-    if runner.as_ref().is_some_and(|m| *m != core.me() && !members.contains(m)) {
+    if runner.as_ref().is_some_and(|m| !room_members(&core, &room).contains(m)) {
         return Err("Unknown member.".into());
     }
     let config = configs(&logs, None).get(plugin.id).cloned();
@@ -728,10 +731,7 @@ pub fn jobs_json(core: &Core, room: &str) -> Value {
     let inputs = if on.is_empty() { Vec::new() } else { inputs(core, room, &logs, |file| open(file, &me, &prefixes, &tracks)) };
     let chosen = chosen(&logs, None);
     let known = workers(&logs);
-    let mut members: Vec<String> = core.rooms.lock().unwrap().list.iter().find(|r| r.id == room).map(|r| r.members.iter().map(|m| m.to_string()).collect()).unwrap_or_default();
-    if !members.contains(&me) {
-        members.push(me.clone());
-    }
+    let members = room_members(core, room);
     let mut list = Vec::new();
     for (id, config, prefix) in &on {
         let runner = assigned(config.runner.as_deref(), &members, id, &known);

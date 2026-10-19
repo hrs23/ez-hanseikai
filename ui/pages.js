@@ -34,6 +34,7 @@ let checks = {};
 let checking = {};
 let jobFilter = "all";
 let boardEditing = false;
+let boardDraft = "";
 let boardScope = stored("boardScope", "room") === "personal" ? "personal" : "room";
 let boardFull = false;
 let zoom = stored("boardZoom", 0);
@@ -74,7 +75,7 @@ function renderStart() {
   }));
 }
 async function removeRoom(r) {
-  if (await ask(t("Remove {room} from this PC?", { room: r.name }), t("Remove"), true, t("Its recordings and notes on this PC are deleted. Other members keep theirs."))) run("remove_room", { id: r.id });
+  if (await ask(t("Remove {room} from this PC?", { room: r.name }), t("Remove"), true, t("Its recordings and notes on this PC are deleted. Other members keep theirs."))) run("remove_room", { id: r.id }, () => { forgetPlan(r.id); refresh(); });
 }
 function joinWith(input) {
   if (joining) return;
@@ -91,8 +92,9 @@ async function switchRoom() {
 }
 async function leaveRoom() {
   if (!st.room) return;
-  if (!(await ask(t("Leave {room}?", { room: st.room.name }), t("Leave room"), true, t("Its recordings and notes on this PC are deleted. Other members keep theirs.")))) return;
-  run("remove_room", { id: st.room.id }, () => { endReview(); selectSet(null); openLive(); });
+  const { id, name: room } = st.room;
+  if (!(await ask(t(st.recording ? "Stop recording and leave {room}?" : "Leave {room}?", { room }), t("Leave room"), true, t("Its recordings and notes on this PC are deleted. Other members keep theirs.")))) return;
+  run("remove_room", { id }, () => { forgetPlan(id); endReview(); selectSet(null); openLive(); });
 }
 async function removeMember(id) {
   if (await ask(t("Remove {name} from the room?", { name: nameOf(id) }), t("Remove from room"), true, t("Everyone stops sending to them. What they already have stays with them."))) { drawerFor = null; run("remove_peer", { id }); }
@@ -117,9 +119,8 @@ const ROOM_TITLES = { members: "Members", plugins: "Plugins", jobs: "Plugins", b
 
 function renderRoom() {
   if (page !== "room" || !inRoom()) return;
-  const online = 1 + st.peers.filter((p) => p.connected).length;
   $("homename").textContent = t(ROOM_TITLES[roomTab]);
-  if (roomTab !== "board") $("homesub").textContent = roomTab === "members" ? t("{n} members · {online} online", { n: people().length, online }) : "";
+  if (roomTab !== "board") $("homesub").textContent = roomTab === "members" ? t("{n} members", { n: people().length }) : "";
   $("boardpane").hidden = roomTab !== "board";
   $("roomtab").parentElement.hidden = roomTab === "board";
   if (roomTab === "board") renderBoard();
@@ -266,7 +267,7 @@ function jobMenu(j, anchor) {
   const model = plugin && plugin.options.find((o) => o.key === "model");
   const running = jobInfo.running && jobInfo.running.job === j.job;
   openMenu([
-    { label: t("Run next on this PC"), icon: "play", disabled: j.state !== "waiting" || !j.here || !(plugin && plugin.process_here), run: () => invoke("run_job_next", { job: j.job }).then(pollPlugins) },
+    { label: t("Run next on this PC"), icon: "play", disabled: j.state !== "waiting" || !j.here || !plugin || !plugin.process_here || !plugin.ready || (plugin.runner && plugin.runner !== st.id), run: () => invoke("run_job_next", { job: j.job }).then(pollPlugins) },
     { label: t("Retry"), icon: "refresh", disabled: j.state !== "failed", run: () => invoke("retry_job", { job: j.job }).then(pollPlugins).catch(fail) },
     { label: t("Stop"), icon: "stop", disabled: !running, run: () => invoke("cancel_job").then(pollPlugins) },
     ...(model ? [{ separator: true }, { label: t("Rerun with another model"), icon: "cpu", more: true, run: (b) => openMenu(model.choices.map((c) => ({ label: c, check: plugin.settings.model === c, run: () => rerunWith(plugin, c) })), b, true) }] : []),
@@ -330,7 +331,9 @@ function boardEvent() {
 }
 const onBoard = () => page === "room" && roomTab === "board";
 const personal = () => boardScope === "personal";
-const personalKey = () => `board/${st.room ? st.room.id : ""}`;
+const planKey = (id) => `board/${id}`;
+const personalKey = () => planKey(st.room ? st.room.id : "");
+const forgetPlan = (id) => unstore((k) => k === planKey(id));
 const starterOf = (templates) => templates[lang === "ja" ? "ja" : "en"];
 function showBoard() {
   roomTab = "board";
@@ -358,7 +361,7 @@ function writeBoard(text) {
   }
   return invoke("add_event", { kind: "board", text, target: {}, values: { card: "team" } }).then(() => refresh()).catch(fail);
 }
-const boardHooks = () => mdHooks({ onTask: (n) => writeBoard(toggleTask(boardText(), n)) });
+const boardHooks = () => mdHooks({ onTask: (n) => { boardDraft = toggleTask(boardDraft, n); writeBoard(boardDraft); } });
 function fitZoom() {
   const w = $("boardwrap").clientWidth - 2 * BOARD_PAD;
   return Math.max(ZOOM_MIN, Math.min(1, w / BOARD_WIDTH));
@@ -376,13 +379,15 @@ function renderBoard() {
   $("boardview").hidden = boardEditing;
   $("boardedits").hidden = !boardEditing;
   $("boardbadge").hidden = !boardEditing;
-  $("boardscope").hidden = boardEditing;
-  for (const b of $("boardscope").children) press(b, b.dataset.scope === boardScope);
+  for (const b of $("boardscope").children) { press(b, b.dataset.scope === boardScope); b.disabled = boardEditing; }
   const e = boardEvent();
   const sub = personal() ? t("Only on this PC") : e ? t("Updated by {name} · {time}", { name: nameOf(e.author), time: new Date((e.local_us || e.id) / 1000).toLocaleString(lang === "ja" ? "ja-JP" : "en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) }) : "";
   $("homesub").textContent = boardEditing ? "" : sub;
   if (boardEditing) return;
-  if (changed("board", [boardText(), boardScope, st.room.id, lang, st.names, jobInfo && jobInfo.tags])) $("canvas").replaceChildren(boardDom(boardText(), boardHooks()));
+  if (changed("board", [boardText(), boardScope, st.room.id, lang, st.names, jobInfo && jobInfo.tags])) {
+    boardDraft = boardText();
+    $("canvas").replaceChildren(boardDom(boardDraft, boardHooks()));
+  }
   placeBoard();
 }
 function editBoard(scope) {
@@ -684,7 +689,12 @@ for (const b of $("diagdlg").querySelectorAll("[data-dtab]")) b.onclick = () => 
 $("diagcopy").onclick = () => diagnosticsText().then((text) => navigator.clipboard.writeText(text)).then(() => flash(t("Copied"))).catch(fail);
 $("diagsave").onclick = () => diagnosticsText().then((text) => invoke("save_text", { name: "ez-hanseikai-diagnostics.txt", text })).then((saved) => { if (saved) flash(t("Saved")); }).catch(fail);
 $("resetno").onclick = () => $("resetdlg").close();
-$("resetyes").onclick = () => { $("resetdlg").close(); run("reset", { keepRooms: $("keeprooms").checked }, null); };
+$("resetyes").onclick = () => {
+  $("resetdlg").close();
+  const keepRooms = $("keeprooms").checked;
+  if (!keepRooms) unstore((k) => k.startsWith(planKey("")));
+  run("reset", { keepRooms }, null);
+};
 $("hotkey").onclick = () => {
   listening = true;
   $("hotkey").classList.add("listening");

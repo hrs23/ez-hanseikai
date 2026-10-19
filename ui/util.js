@@ -52,6 +52,9 @@ function stored(key, fallback) {
 function store(key, value) {
   try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { console.warn(e); }
 }
+function unstore(match) {
+  try { for (const key of Object.keys(localStorage)) if (match(key)) localStorage.removeItem(key); } catch (e) { console.warn(e); }
+}
 const warn = (e) => console.warn(e);
 const playFailed = (e) => { if (e.name !== "AbortError" && e.name !== "NotAllowedError") warn(e); };
 const sessionDay = (id) => id.slice(0, 10);

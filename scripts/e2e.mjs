@@ -597,6 +597,10 @@ async function scenario(ctx) {
     }
     check(await evaluate(a, `$("miccap").classList.contains("off") && $("screencap").classList.contains("recording") && getComputedStyle($("miccap")).borderTopStyle === "dashed" && !!$("miclvl")`), "the bottom-left buttons are not in the shared off/recording states");
     await screenshot(a, "live-recording");
+    await waitFor("A marks only Live, not the running recording, and names the online count once", within(UI_REFRESH_S * 3), () => evaluate(a, `!$("sessions").querySelector(".liverow.on") && $("sidenav").querySelector("[aria-current=page]").dataset.nav === "live" && $("psub").textContent === t("{n} online", { n: 3 })`));
+    await evaluate(a, `$("sessions").querySelector(".liverow").click(); true`);
+    await waitFor("A marks only the running recording after opening it", within(UI_REFRESH_S * 3), () => evaluate(a, `!!$("sessions").querySelector(".liverow.on") && !$("sidenav").querySelector("[aria-current=page]")`));
+    await evaluate(a, `openLive(); true`);
   });
 
   await step("a note with a tag, its edit and its deletion reach everyone", async () => {
@@ -833,8 +837,9 @@ async function scenario(ctx) {
     check(dom.cards === 4 && dom.boxes === 2 && dom.moments === 1 && dom.images === 0 && dom.links.length === 1 && dom.links[0][0] === null && dom.links[0][1] === "https://example.com/x", `the game plan shows ${brief(dom)}`);
     check(dom.text.includes("javascript:alert(1)") && dom.text.includes("<img src=x onerror=alert(1)>"), "the unsafe link and tag are not shown as plain text");
     await screenshot(a, "board-room");
-    await evaluate(a, `$("canvas").querySelector("input[type=checkbox]").click(); true`);
-    for (const app of [a, b, c]) await waitFor(`${app.key} sees the first task ticked`, within(LOG_SYNC_S * 2 + UI_REFRESH_S * 2), async () => (await state(app)).events.filter((e) => e.kind === "board").some((e) => e.text === plan.replace("- [ ] first", "- [x] first")));
+    await evaluate(a, `(() => { const [one, two] = $("canvas").querySelectorAll("input[type=checkbox]"); one.click(); two.click(); return true; })()`);
+    const ticked = plan.replace("- [ ] first", "- [x] first").replace("- [x] second", "- [ ] second");
+    for (const app of [a, b, c]) await waitFor(`${app.key} sees both quick ticks`, within(LOG_SYNC_S * 2 + UI_REFRESH_S * 2), async () => (await evaluate(app, `boardEvent() && boardEvent().text`)) === ticked);
     const boards = async (app) => (await state(app)).events.filter((e) => e.kind === "board").length;
     const before = { a: await boards(a), b: await boards(b), c: await boards(c) };
     await evaluate(a, `setBoardScope("personal"); editBoard("personal"); $("boardtext").value = "# Mine\\n- [ ] only me"; renderMini(); saveBoard(); true`);
@@ -871,6 +876,7 @@ async function scenario(ctx) {
     await waitFor("dragging the splitter widens the sidebar and keeps the width", within(UI_REFRESH_S * 3), () => evaluate(a, `Math.round($("side").getBoundingClientRect().width) === 324 && localStorage.getItem("sideWidth") === "324"`));
     await evaluate(a, `$("splitter").dispatchEvent(new MouseEvent("dblclick", { bubbles: true })); true`);
     check(await evaluate(a, `Math.round($("side").getBoundingClientRect().width) === 264`), "a double click on the splitter does not reset the width");
+    check(await evaluate(a, `(() => { const r = $("sessions").getBoundingClientRect(); const hit = document.elementFromPoint(r.right - 6, r.top + 10); return $("sessions").contains(hit) && document.elementFromPoint(r.right + 1, r.top + 10) === $("splitter"); })()`), "the splitter covers the recordings list's scrollbar");
   });
 
   await step("each member row says one short state", async () => {
@@ -880,7 +886,7 @@ async function scenario(ctx) {
     check(await evaluate(a, `(() => { $("name").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 300, clientY: 300 })); const labels = [...$("menu").querySelectorAll("button")].map((b) => b.textContent).join(); closeMenu(); $("settings").close(); return labels === [t("Cut"), t("Copy"), t("Paste"), t("Select all")].join(); })()`), "a text field has no edit menu");
     check(await evaluate(a, `!$("sessions").querySelector(".liverow") && !$("standby").hidden && $("standby").textContent.includes(t("Standby"))`), "the idle list holds a live entry or the start box lacks Standby");
     await evaluate(a, `openLive(); true`);
-    await waitFor("A shows the live tiles while idle", within(UI_REFRESH_S * 10), () => evaluate(a, `!$("livetiles").hidden && Object.keys(rec.tiles).length === 3 && navActive() === "live"`));
+    await waitFor("A shows the live tiles while idle", within(UI_REFRESH_S * 10), () => evaluate(a, `!$("livetiles").hidden && Object.keys(rec.tiles).length === 3 && navActive() === "live" && $("psub").textContent === ""`));
     await screenshot(a, "live-idle");
     check(rows.length === 3 && rows.every((x) => x === "Standby" || /^Receiving \d+%$/.test(x)), `member states ${brief(rows)}`);
   });
