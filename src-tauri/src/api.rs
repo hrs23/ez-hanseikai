@@ -72,7 +72,7 @@ pub fn lan_addresses() -> Vec<String> {
 
 fn restrict(path: &Path) -> std::io::Result<()> {
     let user = std::env::var("USERNAME").map_err(std::io::Error::other)?;
-    let status = Command::new("icacls").arg(path).args(["/inheritance:r", "/grant:r"]).arg(format!("{user}:F")).creation_flags(crate::proc::NO_WINDOW).stdout(Stdio::null()).stderr(Stdio::null()).status()?;
+    let status = Command::new("icacls").arg(path).args(["/inheritance:r", "/grant:r"]).arg(format!("{user}:F")).args(["/remove:g", "*S-1-5-18", "*S-1-5-32-544"]).creation_flags(crate::proc::NO_WINDOW).stdout(Stdio::null()).stderr(Stdio::null()).status()?;
     if status.success() { Ok(()) } else { Err(std::io::Error::other("icacls failed")) }
 }
 
@@ -1397,7 +1397,7 @@ mod tests {
         assert_eq!((info["address"].as_str(), info["token"].as_str()), (Some(address().as_str()), Some(TOKEN)));
         let access = Command::new("icacls").arg(dir.join(INFO_FILE)).output().unwrap();
         let access = String::from_utf8_lossy(&access.stdout).to_string();
-        assert!(!access.contains("Everyone") && !access.contains("BUILTIN\\Users") && !access.contains("Administrators"), "{access}");
+        assert!(!access.contains("Everyone") && !access.contains("BUILTIN\\Users") && !access.contains("Administrators") && !access.contains("SYSTEM"), "{access}");
         write_info(&dir, "0".repeat(48).as_str()).unwrap();
         assert!(std::fs::read_to_string(dir.join(INFO_FILE)).unwrap().contains(&"0".repeat(48)));
         forget(&dir);
