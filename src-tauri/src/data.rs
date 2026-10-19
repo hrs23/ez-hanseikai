@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -17,6 +17,7 @@ pub const WARN_CHOICES: [u64; 5] = [2, 5, 10, 20, 50];
 const RATE_SETS: usize = 5;
 const KEEP_EVERY: Duration = Duration::from_secs(5);
 const AGE_EVERY: Duration = Duration::from_secs(3600);
+const MAX_REMOVED: usize = 3;
 const CHECKS: &str = "verified.json";
 const OLD_AFTER: Duration = Duration::from_secs(7 * 86_400);
 pub const LIVE_KEEP: u32 = 2 * crate::stream::LIVE_WINDOW + 1;
@@ -420,6 +421,15 @@ pub fn remove_media(core: &Core, set: &Set) {
             unmark(core, &home(&live), &seg_file(seg));
         }
     }
+    for f in &set.files {
+        for capture in f.captures() {
+            let live = core.capture_dir(&set.room, &f.owner, capture);
+            if !holds(&live, "m4s") && !live.join("v").join(record::OPEN).exists() && !live.join("m").join(record::OPEN).exists() {
+                let _ = std::fs::remove_dir_all(&live);
+                core.jsons.lock().unwrap().remove(&live.join(CHECKS));
+            }
+        }
+    }
     let dir = core.recording_dir(&set.room, &set.id);
     let _ = std::fs::remove_dir_all(&dir);
     core.jsons.lock().unwrap().retain(|path, _| !path.starts_with(&dir));
@@ -448,7 +458,10 @@ fn clean_media(core: &Core) {
     let writing: Vec<PathBuf> = core.writing.lock().unwrap().iter().cloned().collect();
     for room in room_ids(core) {
         let mut kept: HashMap<(String, String, String), HashSet<u32>> = HashMap::new();
-        for set in room::sets(core, &room, &room::logs(core, &room)) {
+        let all = room::sets(core, &room, &room::logs(core, &room));
+        let referenced = referenced_captures(&all);
+        let mut stale: Vec<PathBuf> = Vec::new();
+        for set in &all {
             for f in &set.files {
                 for seg in &f.segs {
                     kept.entry((f.owner.clone(), seg.capture.clone(), seg.series.clone())).or_default().insert(seg.n);
@@ -466,13 +479,10 @@ fn clean_media(core: &Core) {
             for capture in captures {
                 let dir = owner.path().join(&capture);
                 let live = room == active && if id == me { own_live.as_ref() == Some(&(room.clone(), capture.clone())) } else { newest.as_ref() == Some(&capture) };
-                let any_kept = kept.iter().any(|((o, c, s), numbers)| *o == id && *c == capture && numbers.iter().any(|n| dir.join(s).join(seg_name(*n)).exists() || part_of(&dir.join(s).join(seg_name(*n))).exists()));
+                let any_kept = referenced.contains(&(id.clone(), capture.clone()));
                 let fresh = SERIES.iter().any(|series| changed_since(&dir.join(series), since) || dir.join(series).join(record::OPEN).exists());
                 if !any_kept && !live && !fresh && !writing.iter().any(|w| w.starts_with(&dir)) {
-                    if std::fs::remove_dir_all(&dir).is_ok() {
-                        core.jsons.lock().unwrap().remove(&dir.join(CHECKS));
-                        debug::event(core, core.started, format!("removed {}", dir.strip_prefix(&core.dir).unwrap_or(&dir).display()));
-                    }
+                    stale.push(dir);
                     continue;
                 }
                 for series in SERIES {
@@ -492,6 +502,46 @@ fn clean_media(core: &Core) {
                     }
                 }
             }
+        }
+        drop_stale(core, stale);
+    }
+}
+
+pub fn referenced_captures(sets: &[Set]) -> HashSet<(String, String)> {
+    let mut out = HashSet::new();
+    for f in sets.iter().flat_map(|s| &s.files) {
+        for capture in f.captures() {
+            out.insert((f.owner.clone(), capture.to_string()));
+        }
+    }
+    out
+}
+
+pub fn verified_media(dir: &Path) -> bool {
+    let all: Value = read_json(&dir.join(CHECKS));
+    all.as_object().is_some_and(|map| map.iter().any(|(name, entry)| entry["ok"] == true && dir.join(name).exists()))
+}
+
+pub fn safe_to_remove(stale: &[PathBuf]) -> bool {
+    stale.len() <= MAX_REMOVED && !stale.iter().any(|dir| verified_media(dir))
+}
+
+static KEPT_STALE: AtomicUsize = AtomicUsize::new(0);
+
+fn drop_stale(core: &Core, stale: Vec<PathBuf>) {
+    if stale.is_empty() {
+        return;
+    }
+    if !safe_to_remove(&stale) {
+        if KEPT_STALE.swap(stale.len(), Ordering::Relaxed) != stale.len() {
+            debug::event(core, core.started, format!("kept {} capture folders that no recording refers to; a delete removes them", stale.len()));
+        }
+        return;
+    }
+    for dir in stale {
+        if std::fs::remove_dir_all(&dir).is_ok() {
+            core.jsons.lock().unwrap().remove(&dir.join(CHECKS));
+            debug::event(core, core.started, format!("removed {}", dir.strip_prefix(&core.dir).unwrap_or(&dir).display()));
         }
     }
 }
@@ -609,6 +659,38 @@ mod tests {
         assert_eq!(doomed(&[1, 2, 3, 4, 5, 6, 7], &kept, None), [1, 4, 5, 6, 7]);
         assert_eq!(doomed(&[1, 2, 3, 4, 5, 6, 7], &kept, Some(6)), [1, 4, 5]);
         assert!(doomed(&[], &kept, Some(1)).is_empty());
+    }
+
+    #[test]
+    fn old_layout_captures_stay_and_the_safety_net_holds() {
+        let dir = temp("oldlayout");
+        let touch = |p: &str, body: &str| {
+            let path = dir.join(p);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, body).unwrap();
+        };
+        touch("a/1700000000000/v/init.mp4", "i");
+        touch("a/1700000000000/v/000001.m4s", "s");
+        touch("a/1700000000000/verified.json", r#"{"v/000001.m4s": {"size": 1, "ok": true}}"#);
+        touch("a/1700000009999/v/000001.m4s", "x");
+        let records = vec![
+            json!({"k": "rec", "set": "s1", "start_us": 100}),
+            json!({"k": "seg", "set": "s1", "capture": "1700000000000", "series": "v", "n": 1, "t_us": 100, "d_us": 10, "size": 1, "sha256": "ab"}),
+            json!({"k": "rec_end", "set": "s1", "t_us": 900}),
+        ];
+        let logs = [room::Log { owner: "a".into(), offset_us: 0, records: Arc::new(records) }];
+        let sets = room::derive_sets("r", &logs);
+        let referenced = referenced_captures(&sets);
+        assert!(referenced.contains(&("a".to_string(), "1700000000000".to_string())));
+        assert!(!referenced.contains(&("a".to_string(), "1700000009999".to_string())));
+        assert!(verified_media(&dir.join("a/1700000000000")));
+        assert!(!verified_media(&dir.join("a/1700000009999")));
+        assert!(safe_to_remove(&[dir.join("a/1700000009999")]));
+        assert!(!safe_to_remove(&[dir.join("a/1700000000000")]));
+        let many: Vec<PathBuf> = (0..=MAX_REMOVED).map(|i| dir.join(format!("none/{i}"))).collect();
+        assert!(!safe_to_remove(&many));
+        assert!(safe_to_remove(&many[..MAX_REMOVED]));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
