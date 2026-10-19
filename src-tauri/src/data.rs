@@ -704,6 +704,84 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    fn snapshot(dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+        let mut out = std::collections::BTreeMap::new();
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(at) = stack.pop() {
+            for entry in std::fs::read_dir(&at).into_iter().flatten().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    out.insert(path.strip_prefix(dir).unwrap().to_string_lossy().replace('\\', "/"), std::fs::read(&path).unwrap());
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_restart_removes_nothing_under_recordings_and_never_touches_old_folders() {
+        use crate::media::tests::fragment;
+        let dir = temp("restart");
+        let (me, other) = (iroh::SecretKey::generate().public().to_string(), iroh::SecretKey::generate().public().to_string());
+        let (one, two, three) = (fragment(&[(1, 0)], b"aaaa"), fragment(&[(1, 1000)], b"bbbb"), fragment(&[(1, 2000)], b"cccc"));
+        let torn = [one.clone(), two.clone(), three[..three.len() / 2].to_vec()].concat();
+        let files = [
+            (format!("rooms/r/recordings/s1/{me}/1000/v/init.mp4"), b"init v".to_vec()),
+            (format!("rooms/r/recordings/s1/{me}/1000/v/000001.m4s"), one.clone()),
+            (format!("rooms/r/recordings/s1/{me}/1000/v/000002.m4s"), two.clone()),
+            (format!("rooms/r/recordings/s1/{me}/1000/m/init.mp4"), b"init m".to_vec()),
+            (format!("rooms/r/recordings/s1/{me}/1000/m/000001.m4s"), one.clone()),
+            (format!("rooms/r/recordings/s1/{me}/1000/verified.json"), br#"{"v/000001.m4s": {"size": 1, "ok": false}}"#.to_vec()),
+            (format!("rooms/r/recordings/s1/{other}/2000/v/init.mp4"), b"init".to_vec()),
+            (format!("rooms/r/recordings/s1/{other}/2000/v/000001.m4s"), one.clone()),
+            (format!("rooms/r/recordings/s1/{other}/2000/v/000002.m4s.part"), torn.clone()),
+            (format!("rooms/r/recordings/s2/{me}/3000/v/init.mp4"), b"init v".to_vec()),
+            (format!("rooms/r/recordings/s2/{me}/3000/v/000001.m4s"), one.clone()),
+            (format!("rooms/r/recordings/s2/{me}/3000/v/000002.m4s.part"), torn.clone()),
+            (format!("rooms/r/recordings/s2/{me}/3000/m/init.mp4"), b"init m".to_vec()),
+            (format!("rooms/r/recordings/s2/{me}/3000/m/000001.m4s.part"), two.clone()),
+            (format!("rooms/r/recordings/x9/{other}/7000/v/000001.m4s"), one.clone()),
+            (format!("rooms/r/recordings/s3/{me}/4000/v/init.mp4"), b"init v".to_vec()),
+            (format!("rooms/r/recordings/s3/{me}/4000/v/000001.m4s"), one.clone()),
+            ("rooms/r/thumbs/s1.jpg".to_string(), b"jpg".to_vec()),
+            ("rooms/r/thumbs/s3.jpg".to_string(), b"jpg".to_vec()),
+            (format!("rooms/r/standby/{me}/5000/v/init.mp4"), b"init".to_vec()),
+            (format!("rooms/r/standby/{me}/5000/v/000009.m4s"), one.clone()),
+            (format!("rooms/r/standby/{other}/6000/m/000004.m4s.part"), torn.clone()),
+            (format!("rooms/r/{me}/1000/v/init.mp4"), b"init v".to_vec()),
+            (format!("rooms/r/{me}/1000/v/000001.m4s"), one.clone()),
+            (format!("rooms/r/{me}/1000/v/000003.m4s.part"), torn.clone()),
+            (format!("rooms/r/{me}/1000/v/open.json"), br#"{"n": 3, "set": "s1"}"#.to_vec()),
+            (format!("rooms/r/{me}/1000/cap.json"), br#"{"start_us": 1}"#.to_vec()),
+            (format!("rooms/r/{me}/1000/verified.json"), br#"{"v/000001.m4s": {"size": 1, "ok": true}}"#.to_vec()),
+            (format!("rooms/r/{other}/8000/m/000001.m4s"), one.clone()),
+            ("rooms/r/sets/s1/a.mp4".to_string(), b"old".to_vec()),
+            ("rooms/r/live/someone.mp4".to_string(), b"old".to_vec()),
+            (format!("rooms/r/logs/{me}.bin"), b"log".to_vec()),
+            ("rooms/gone/recordings/s5/x/1/v/000001.m4s".to_string(), one.clone()),
+            ("export/x".to_string(), b"partial".to_vec()),
+            ("report.txt".to_string(), b"report".to_vec()),
+        ];
+        for (name, body) in &files {
+            let path = dir.join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, body).unwrap();
+        }
+        let before = snapshot(&dir);
+        let later = SystemTime::now() + OLD_AFTER + Duration::from_secs(60);
+        for path in leftovers(&dir, &["r".to_string()].into(), false, later) {
+            let _ = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
+        }
+        let after = snapshot(&dir);
+        let gone: Vec<&String> = before.keys().filter(|k| !after.contains_key(*k)).collect();
+        assert_eq!(gone, ["export/x", "report.txt"]);
+        assert!(after.keys().all(|k| before.contains_key(k)));
+        assert!(after.iter().all(|(k, body)| before[k] == *body));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn copies_are_checked_by_size_and_hash_and_counted_in_order() {
         let dir = temp("verify");

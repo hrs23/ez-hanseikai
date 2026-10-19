@@ -201,7 +201,7 @@ pub fn cut(open: bool, count: u32, per_segment: u32, current: Option<&str>, want
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
 
     fn boxed(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
@@ -215,7 +215,7 @@ mod tests {
         boxed(kind, &[&[version, 0, 0, 0][..], fields].concat())
     }
 
-    fn init(tracks: &[(u32, u32)]) -> Vec<u8> {
+    pub fn init(tracks: &[(u32, u32)]) -> Vec<u8> {
         let traks: Vec<u8> = tracks
             .iter()
             .flat_map(|(track, scale)| {
@@ -227,7 +227,7 @@ mod tests {
         [boxed(b"ftyp", b"iso6"), boxed(b"moov", &traks)].concat()
     }
 
-    fn fragment(times: &[(u32, u64)], data: &[u8]) -> Vec<u8> {
+    pub fn fragment(times: &[(u32, u64)], data: &[u8]) -> Vec<u8> {
         let trafs: Vec<u8> = times
             .iter()
             .flat_map(|(track, t)| boxed(b"traf", &[full(b"tfhd", 0, &track.to_be_bytes()), full(b"tfdt", 1, &t.to_be_bytes())].concat()))
