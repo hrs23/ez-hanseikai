@@ -66,11 +66,34 @@ function rateOf(samples, now) {
   return Math.max(0, ((last.have - first.have) * 1000) / (last.t - first.t));
 }
 
-function deletePreview(sets, me) {
+const DISCARD_MAX_S = 30;
+
+function onThisPc(s) {
+  return s.progress.have > 0 || !!s.wanted;
+}
+
+function sizeOf(s) {
+  return s.progress.have > 0 ? s.progress.have : s.progress.total;
+}
+
+function canDelete(s) {
+  return !s.live && (onThisPc(s) || !s.shared);
+}
+
+function deleteForm(s) {
+  return s.shared ? "Others still have it" : "This deletes it completely";
+}
+
+function discardable(seconds) {
+  return seconds <= DISCARD_MAX_S;
+}
+
+function deletePreview(sets) {
   return sets.map((s) => ({
     id: s.id,
     bytes: s.progress.have,
-    players: s.players.filter((p) => p.have > 0).map((p) => ({ owner: p.owner, bytes: p.have, alone: !(p.verified_by || []).some((id) => id !== me) })),
+    form: deleteForm(s),
+    players: s.players.filter((p) => p.have > 0).map((p) => ({ owner: p.owner, bytes: p.have })),
   }));
 }
 

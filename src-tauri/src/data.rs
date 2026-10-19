@@ -235,12 +235,12 @@ fn seg_file(seg: &Seg) -> String {
 }
 
 pub fn seg_check(core: &Core, room: &str, owner: &str, seg: &Seg) -> Option<bool> {
-    checked(core, &core.capture_dir(room, owner, &seg.capture), &seg_file(seg), seg.size)
+    core.dirs(room, &seg.set, owner, &seg.capture).iter().find_map(|dir| checked(core, dir, &seg_file(seg), seg.size))
 }
 
 pub fn init_check(core: &Core, room: &str, f: &File, capture: &str, series: &str) -> Option<bool> {
     let (size, _) = f.init(capture, series)?;
-    checked(core, &core.capture_dir(room, &f.owner, capture), &format!("{series}/{INIT}"), size)
+    core.dirs(room, &f.set, &f.owner, capture).iter().find_map(|dir| checked(core, dir, &format!("{series}/{INIT}"), size))
 }
 
 pub fn prefix(oks: impl IntoIterator<Item = bool>) -> u64 {
@@ -271,10 +271,11 @@ pub fn have_counts(core: &Core, room: &str, sets: &[Set]) -> HashMap<String, u64
 }
 
 pub fn held(core: &Core, room: &str, f: &File) -> (u64, u64) {
-    let mut have: u64 = f.segs.iter().filter(|seg| seg_check(core, room, &f.owner, seg) == Some(true)).map(|seg| seg.size).sum();
+    let ok = |seg: &&Seg| seg_check(core, room, &f.owner, seg) == Some(true);
+    let mut have: u64 = f.segs.iter().filter(ok).map(|seg| seg.size).sum();
     for capture in f.captures() {
         for series in SERIES {
-            if init_check(core, room, f, capture, series) == Some(true) {
+            if init_check(core, room, f, capture, series) == Some(true) && f.segs.iter().any(|seg| seg.capture == capture && seg.series == series && ok(&seg)) {
                 have += f.init(capture, series).map_or(0, |(size, _)| size);
             }
         }
@@ -291,8 +292,8 @@ pub struct Run {
     pub index: u64,
 }
 
-fn present(core: &Core, path: &Path) -> bool {
-    path.exists() || core.writing.lock().unwrap().contains(path)
+fn present(core: &Core, paths: &[PathBuf]) -> bool {
+    paths.iter().any(|path| path.exists() || core.writing.lock().unwrap().contains(path))
 }
 
 pub fn missing(core: &Core, room: &str, f: &File, series: &str) -> Option<Run> {
@@ -301,15 +302,16 @@ pub fn missing(core: &Core, room: &str, f: &File, series: &str) -> Option<Run> {
         if init_check(core, room, f, &seg.capture, series) == Some(true) && seg_check(core, room, &f.owner, seg) == Some(true) {
             continue;
         }
-        let lacks_init = !present(core, &core.capture_dir(room, &f.owner, &seg.capture).join(series).join(INIT));
-        let path = core.seg_path(room, &f.owner, seg);
-        let here = present(core, &path);
+        let lacks_init = !present(core, &core.init_paths(room, &f.set, &f.owner, &seg.capture, series));
+        let paths = core.seg_paths(room, &f.owner, seg);
+        let path = paths[0].clone();
+        let here = present(core, &paths);
         if !lacks_init && here {
             continue;
         }
         let mut to = if here { seg.n - 1 } else { seg.n };
         for next in segs[i + 1..].iter().filter(|_| !here) {
-            if next.capture != seg.capture || next.n != to + 1 || present(core, &core.seg_path(room, &f.owner, next)) {
+            if next.capture != seg.capture || next.n != to + 1 || present(core, &core.seg_paths(room, &f.owner, next)) {
                 break;
             }
             to = next.n;
@@ -328,15 +330,48 @@ fn bad(core: &Core, set: &Set, f: &File, path: &Path, dir: &Path, name: &str, ke
     }
 }
 
+fn home(path: &Path) -> PathBuf {
+    path.parent().and_then(Path::parent).map(Path::to_path_buf).unwrap_or_default()
+}
+
+pub fn adopt(core: &Core, set: &Set) {
+    for f in set.files.iter().filter(|f| f.end_us.is_some()) {
+        for seg in &f.segs {
+            let [kept, live] = core.seg_paths(&set.room, &f.owner, seg);
+            if kept.exists() || !live.exists() || seg_check(core, &set.room, &f.owner, seg) != Some(true) {
+                continue;
+            }
+            let (kept_dir, live_dir) = (home(&kept), home(&live));
+            if kept.parent().is_some_and(|d| std::fs::create_dir_all(d).is_ok()) && std::fs::rename(&live, &kept).is_ok() {
+                mark(core, &kept_dir, &seg_file(seg), seg.size, true);
+                unmark(core, &live_dir, &seg_file(seg));
+            }
+        }
+        for capture in f.captures() {
+            for series in SERIES {
+                let [kept, live] = core.init_paths(&set.room, &set.id, &f.owner, capture, series);
+                let Some((size, _)) = f.init(capture, series) else { continue };
+                if kept.exists() || !live.exists() || init_check(core, &set.room, f, capture, series) != Some(true) {
+                    continue;
+                }
+                if kept.parent().is_some_and(|d| std::fs::create_dir_all(d).is_ok()) && std::fs::copy(&live, &kept).is_ok() {
+                    mark(core, &home(&kept), &format!("{series}/{INIT}"), size, true);
+                }
+            }
+        }
+    }
+}
+
 fn verify(core: &Core, set: &Set) {
+    adopt(core, set);
     for f in &set.files {
         for series in SERIES {
             let key = room::have_key(&set.id, &f.owner, series);
             for (i, seg) in f.series(series).into_iter().enumerate() {
                 let i = i as u64;
-                let dir = core.capture_dir(&set.room, &f.owner, &seg.capture);
                 let name = format!("{series}/{INIT}");
-                let path = dir.join(&name);
+                let path = core.init_path(&set.room, &set.id, &f.owner, &seg.capture, series);
+                let dir = home(&path);
                 match (f.init(&seg.capture, series), init_check(core, &set.room, f, &seg.capture, series)) {
                     (Some((size, sha)), None) if path.exists() => {
                         let ok = matches(&path, size, &sha);
@@ -349,7 +384,8 @@ fn verify(core: &Core, set: &Set) {
                     _ => {}
                 }
                 let name = seg_file(seg);
-                let path = dir.join(&name);
+                let path = core.seg_path(&set.room, &f.owner, seg);
+                let dir = home(&path);
                 match seg_check(core, &set.room, &f.owner, seg) {
                     Some(true) => {}
                     Some(false) => bad(core, set, f, &path, &dir, &name, &key, i),
@@ -376,11 +412,17 @@ fn verify(core: &Core, set: &Set) {
 pub fn remove_media(core: &Core, set: &Set) {
     for f in &set.files {
         for seg in &f.segs {
-            let path = core.seg_path(&set.room, &f.owner, seg);
-            let _ = std::fs::remove_file(part_of(&path));
-            let _ = std::fs::remove_file(path);
+            let [kept, live] = core.seg_paths(&set.room, &f.owner, seg);
+            for path in [kept, live.clone()] {
+                let _ = std::fs::remove_file(part_of(&path));
+                let _ = std::fs::remove_file(path);
+            }
+            unmark(core, &home(&live), &seg_file(seg));
         }
     }
+    let dir = core.recording_dir(&set.room, &set.id);
+    let _ = std::fs::remove_dir_all(&dir);
+    core.jsons.lock().unwrap().retain(|path, _| !path.starts_with(&dir));
 }
 
 pub fn doomed(present: &[u32], kept: &HashSet<u32>, live_from: Option<u32>) -> Vec<u32> {
@@ -424,7 +466,7 @@ fn clean_media(core: &Core) {
             for capture in captures {
                 let dir = owner.path().join(&capture);
                 let live = room == active && if id == me { own_live.as_ref() == Some(&(room.clone(), capture.clone())) } else { newest.as_ref() == Some(&capture) };
-                let any_kept = kept.keys().any(|(o, c, _)| *o == id && *c == capture);
+                let any_kept = kept.iter().any(|((o, c, s), numbers)| *o == id && *c == capture && numbers.iter().any(|n| dir.join(s).join(seg_name(*n)).exists() || part_of(&dir.join(s).join(seg_name(*n))).exists()));
                 let fresh = SERIES.iter().any(|series| changed_since(&dir.join(series), since) || dir.join(series).join(record::OPEN).exists());
                 if !any_kept && !live && !fresh && !writing.iter().any(|w| w.starts_with(&dir)) {
                     if std::fs::remove_dir_all(&dir).is_ok() {
@@ -473,7 +515,9 @@ pub fn keeper(core: Arc<Core>) {
             aged = Some(Instant::now());
         }
         let room = core.active_room_id();
-        for set in room::sets(&core, &room, &room::logs(&core, &room)) {
+        let logs = room::logs(&core, &room);
+        room::sweep_dropped(&core, &room, &logs);
+        for set in room::sets(&core, &room, &logs) {
             verify(&core, &set);
         }
         clean_media(&core);

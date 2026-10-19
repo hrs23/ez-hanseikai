@@ -195,7 +195,7 @@ fn count_holdings(core: &Core, room: &str) -> Value {
     let logs = room::logs(core, &room);
     let sets = room::sets(core, &room, &logs);
     let lengths: HashMap<String, u64> = logs.iter().map(|l| (l.owner.clone(), file_len(&core.log_path(&room, &l.owner)))).collect();
-    json!({"have": data::have_counts(core, &room, &sets), "gone": room::gone_list(core, &room), "logs": lengths})
+    json!({"have": data::have_counts(core, &room, &sets), "logs": lengths})
 }
 
 fn learn_holdings(core: &Core, id: &EndpointId, message: &Value) {
@@ -204,7 +204,6 @@ fn learn_holdings(core: &Core, id: &EndpointId, message: &Value) {
     }
     core.update_peer(id, |p| {
         p.have = message["have"].as_object().into_iter().flatten().filter_map(|(k, v)| Some((k.clone(), v.as_u64()?))).collect();
-        p.gone = strings(&message["gone"]);
         p.logs = message["logs"].as_object().into_iter().flatten().filter_map(|(k, v)| Some((format!("{}/{k}", message["room"]["id"].as_str()?), v.as_u64()?))).collect();
     });
 }
@@ -291,19 +290,25 @@ async fn follow(core: &Core, from: EndpointId, send: &mut SendStream, req: &Valu
     let sets = if own { Vec::new() } else { room::sets(core, &room, &room::logs(core, &room)) };
     let files: Vec<&room::File> = sets.iter().flat_map(|s| s.files.iter().filter(|f| f.owner == owner)).collect();
     let verified = |n: u32| files.iter().any(|f| f.segs.iter().any(|g| g.capture == capture && g.series == series && g.n == n && data::seg_check(core, &room, &f.owner, g) == Some(true)));
-    let dir = core.capture_dir(&room, &owner, &capture).join(&series);
+    let set = text("set");
+    let dirs = if valid_id(&set) { core.dirs(&room, &set, &owner, &capture) } else { [core.capture_dir(&room, &owner, &capture), core.capture_dir(&room, &owner, &capture)] };
+    let dirs = dirs.map(|d| d.join(&series));
+    let place = |name: &str| {
+        let kept = dirs[0].join(name);
+        if kept.exists() || part_of(&kept).exists() { kept } else { dirs[1].join(name) }
+    };
     let tail = || own && core.engine.live().is_some_and(|(r, c, _)| r == room && c == capture);
     let history = !live;
     if req["init"] == true {
         let ok = own || files.iter().any(|f| f.segs.iter().any(|g| g.capture == capture) && data::init_check(core, &room, f, &capture, &series) == Some(true));
-        if !ok || !send_file(core, send, 0, &dir.join(INIT), 0, history, &|| false, &what).await? {
+        if !ok || !send_file(core, send, 0, &place(INIT), 0, history, &|| false, &what).await? {
             return Ok(());
         }
     }
     let to = req["to"].as_u64().map(|t| t as u32);
     let (mut n, mut at) = (req["from"].as_u64().unwrap_or(1) as u32, req["at"].as_u64().unwrap_or(0));
     while to.is_none_or(|to| n <= to) {
-        if !(own || verified(n)) || !send_file(core, send, n, &dir.join(seg_name(n)), at, history, &tail, &what).await? {
+        if !(own || verified(n)) || !send_file(core, send, n, &place(&seg_name(n)), at, history, &tail, &what).await? {
             break;
         }
         n += 1;
@@ -314,10 +319,11 @@ async fn follow(core: &Core, from: EndpointId, send: &mut SendStream, req: &Valu
 
 fn react_to_set(core: &Arc<Core>, set: &Value) {
     let (Some(id), Some(room)) = (set["id"].as_str(), set["room"].as_str()) else { return };
-    if !valid_id(id) || room != core.active_room_id() || core.is_deleted(room, id) {
+    if !valid_id(id) || room != core.active_room_id() {
         return;
     }
-    if !room::may_join(&core.own_log(room), id) || room::stopped(&room::logs(core, room), id) {
+    let logs = room::logs(core, room);
+    if !room::may_join(&core.own_log(room), id) || room::stopped(&logs, id) || room::dropped(&logs).contains(id) {
         return;
     }
     let (by, start_us, voice) = (set["by"].as_str().unwrap_or_default().to_string(), set["start_us"].as_i64().unwrap_or(0), set["voice"] == true);
@@ -618,8 +624,8 @@ async fn pull_log(core: &Core, room: &str, of: &str, conn: &Connection) -> Resul
     }
 }
 
-fn target(core: &Core, room: &str, owner: &str, capture: &str, series: &str, n: u32) -> PathBuf {
-    let dir = core.capture_dir(room, owner, capture).join(series);
+fn target(core: &Core, room: &str, set: &str, owner: &str, capture: &str, series: &str, n: u32) -> PathBuf {
+    let dir = if valid_id(set) { core.set_dir(room, set, owner, capture) } else { core.capture_dir(room, owner, capture) }.join(series);
     if n == 0 { dir.join(INIT) } else { dir.join(seg_name(n)) }
 }
 
@@ -650,11 +656,11 @@ async fn receive(core: &Core, conn: &Connection, req: Value) -> Result<u64> {
     while recv.read_exact(&mut head).await.is_ok() {
         let n = u32::from_le_bytes(head[..4].try_into()?);
         let len = u32::from_le_bytes(head[4..].try_into()?) as usize;
-        if len > CHUNK || core.disk_full() || (!set.is_empty() && core.is_deleted(&room, &set)) {
+        if len > CHUNK || core.disk_full() || (!set.is_empty() && room::wants(core, &room, &set) == Some(false)) {
             break;
         }
         if current.as_ref().is_none_or(|(k, _, _, _)| *k != n) {
-            let path = target(core, &room, &owner, &capture, &series, n);
+            let path = target(core, &room, &set, &owner, &capture, &series, n);
             if let Some(dir) = path.parent() {
                 tokio::fs::create_dir_all(dir).await?;
             }
@@ -742,6 +748,11 @@ fn fetch_history(core: &Arc<Core>, peer: &EndpointId, conn: &Connection, room: &
     sets.sort_by_key(|s| Some(&s.id) != focus.as_ref());
     let mut waiting = false;
     for set in &sets {
+        let here = set.files.iter().any(|f| data::held(core, room, f).0 > 0);
+        if !room::auto_receive(set.end().is_none(), here, room::wants(core, room, &set.id)) {
+            continue;
+        }
+        data::adopt(core, set);
         let focused = Some(&set.id) == focus.as_ref();
         for f in &set.files {
             for series in [SERIES[1], SERIES[0]] {

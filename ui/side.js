@@ -7,7 +7,6 @@ const CLIP_HOLD_MS = 3000;
 
 const meters = { app: { v: 0, peak: 0, at: 0, clip: 0 }, mic: { v: 0, peak: 0, at: 0, clip: 0 } };
 const rates = {};
-let showGone = stored("showGone", true);
 
 function renderSide() {
   if (!inRoom()) return;
@@ -123,52 +122,42 @@ function liveRow() {
 }
 function sessionRow(s) {
   const on = page === "player" && !showingNow() && (review ? review.id === s.id : selected === s.id);
-  const state = sessionState(s);
+  const here = onThisPc(s);
+  const state = here ? sessionState(s) : null;
   let l2;
   if (state && state.kind === "bar") l2 = el("div", { className: "prog", title: state.title || "" }, el("div", { className: "l2" }, icon(state.icon, "sm"), el("span", { textContent: state.text }), el("span", { className: "r", textContent: state.right || "" })), el("div", { className: "bar" }, el("i", { style: `width:${Math.round(state.frac * 100)}%` })));
   else if (state && state.kind === "line") l2 = el("div", { className: "l2 " + (state.cls || ""), title: state.title || "" }, icon(state.icon, "sm"), el("span", { textContent: state.text }));
   else l2 = el("div", { className: "l2" }, el("span", { textContent: setLength(s) }), ...marksOf(s), state ? el("span", { className: "r " + (state.cls || ""), title: state.title || "" }, icon(state.icon, "sm"), state.text) : null);
-  const row = el("div", { className: "srow" + (on ? " on" : "") + (state && state.icon === "users" ? " wp" : ""), role: "option", tabIndex: 0, ariaSelected: on },
+  const row = el("div", { className: "srow" + (on ? " on" : "") + (here ? "" : " gone") + (state && state.icon === "users" ? " wp" : ""), role: "option", tabIndex: 0, ariaSelected: on },
     thumbBox(s, s.players.map((p) => p.owner), "xs", THUMB_FACES, false),
-    el("div", { className: "txt" }, el("div", { className: "l1" }, el("b", { textContent: sessionName(s.id) })), l2));
-  row.onclick = () => openSession(s.id);
-  row.onkeydown = (e) => { if (e.key === "Enter") openSession(s.id); };
+    el("div", { className: "txt" }, el("div", { className: "l1" }, el("b", { textContent: sessionName(s.id) })), l2, whereLine(s)));
+  row.onclick = () => { if (onThisPc(s)) openSession(s.id); };
+  row.onkeydown = (e) => { if (e.key === "Enter" && onThisPc(s)) openSession(s.id); };
   row.oncontextmenu = (e) => { e.preventDefault(); sessionMenu(s.id, e); };
-  return row;
-}
-function restoreSet(g) {
-  return run("restore_set", { room: g.room, set: g.id });
-}
-function goneRow(g) {
-  const get = el("button", { className: "sm", onclick: (e) => { e.stopPropagation(); restoreSet(g); } }, icon("download", "sm"), t("Download"));
-  const row = el("div", { className: "srow gone" }, thumbBox(null, g.players.map((p) => p.owner), "xs", THUMB_FACES, false), el("div", { className: "txt" }, el("div", { className: "l1" }, el("b", { textContent: sessionName(g.id) })), el("div", { className: "l2" }, el("span", { textContent: t("Not on this PC") }), el("span", { className: "sp" }), get)));
   return row;
 }
 function renderSessions() {
   if (!inRoom()) return;
   const keep = review ? review.id : selected;
-  const rows = recentRows(recordingRows(showGone), keep);
+  const rows = recentRows(recordingRows(), keep);
   const sig = [rows.map(rowSignature), page, nowView, selected, review && review.id, st.active_set, st.peers.map((p) => p.connected), lang, st.colors, st.names, dayOf(new Date())];
   if (!changed("sessions", sig)) return;
-  $("sessions").replaceChildren(...(st.active_set ? [liveRow()] : []), ...rows.map((r) => (r.s ? sessionRow(r.s) : goneRow(r.g))), rows.length || st.active_set ? "" : el("div", { className: "none", textContent: t("No recordings yet") }));
+  $("sessions").replaceChildren(...(st.active_set ? [liveRow()] : []), ...rows.map((r) => sessionRow(r.s)), rows.length || st.active_set ? "" : el("div", { className: "none", textContent: t("No recordings yet") }));
 }
 function sessionMenu(id, anchor) {
   const set = setById(id);
   if (!set) return;
   const failed = jobInfo ? jobInfo.jobs.filter((j) => j.set === id && j.state === "failed") : [];
   openMenu([
-    { heading: `${sessionName(id)} · ${t("{size} on this PC", { size: bytes(set.progress.have) })}` },
-    { label: t("Export video…"), icon: "film", disabled: set.live || voiceOnly(set), run: () => exportSet(set) },
-    { label: t("Export to folder…"), icon: "upload", disabled: set.live, run: () => exportFolder(set) },
-    { label: t("Open folder"), icon: "folder", run: () => run("open_set_folder", { room: set.room, set: set.id }, null) },
+    { heading: `${sessionName(id)} · ${bytes(sizeOf(set))}` },
+    { label: t("Export video…"), icon: "film", disabled: set.live || !onThisPc(set) || voiceOnly(set), run: () => exportSet(set) },
+    { label: t("Export to folder…"), icon: "upload", disabled: set.live || !onThisPc(set), run: () => exportFolder(set) },
+    { label: t("Open folder"), icon: "folder", disabled: set.live || set.progress.have === 0, run: () => run("open_set_folder", { room: set.room, set: set.id }, null) },
     { label: t("Copy link"), icon: "link", run: () => navigator.clipboard.writeText(momentLink(set.id, 0, null)).then(() => flash(t("Link copied"))).catch(fail) },
     ...(failed.length ? [{ label: t("Retry analysis"), icon: "rotate-cw", run: () => Promise.all(failed.map((j) => invoke("retry_job", { job: j.job }))).then(pollPlugins).catch(fail) }] : []),
     { separator: true },
-    { label: t("Delete from this PC…"), icon: "trash", danger: true, disabled: set.live, run: () => confirmDelete([set.id]) },
+    { label: t("Delete…"), icon: "trash", danger: true, disabled: !canDelete(set), run: () => confirmDelete([set.id]) },
   ], anchor);
-}
-function goneMenu(anchor) {
-  openMenu([{ label: t("Show recordings not on this PC"), check: showGone, run: () => { showGone = !showGone; store("showGone", showGone); delete sigs.sessions; renderSessions(); } }], anchor);
 }
 function renderBanner() {
   const d = st.disk;
@@ -303,7 +292,6 @@ $("startbtn").onclick = () => toggleRecording();
 $("startmore").onclick = () => startMenu($("startbtn").parentElement);
 $("standby").onclick = openNow;
 $("allrecs").onclick = () => { roomTab = "recordings"; delete sigs.roomtab; go("room"); };
-$("sessmore").onclick = (e) => goneMenu(e.currentTarget);
 $("diskbanner").onclick = () => openSettings("storage");
 $("diskbanner").onkeydown = (e) => { if (e.key === "Enter") openSettings("storage"); };
 $("screenbtn").onclick = (e) => { if (st.capture.source) stopScreen(); else openSource($("screenmore")); };

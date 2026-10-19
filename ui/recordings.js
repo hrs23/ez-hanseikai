@@ -4,10 +4,8 @@ const CARD_FACES = 4;
 
 const thumbSrc = (set) => convertFileSrc(`thumb/${set.room}/${set.id}`, "ezh");
 
-function recordingRows(withGone) {
-  const sets = st.sets.filter((s) => !s.live).map((s) => ({ id: s.id, s }));
-  const gone = withGone ? st.gone.map((g) => ({ id: g.id, g })) : [];
-  return [...sets, ...gone].sort((a, b) => (a.id < b.id ? 1 : -1));
+function recordingRows() {
+  return st.sets.filter((s) => !s.live).map((s) => ({ id: s.id, s })).sort((a, b) => (a.id < b.id ? 1 : -1));
 }
 
 function recentRows(rows, keep) {
@@ -21,14 +19,9 @@ function recordingWords(text) {
 }
 
 function recordingText(row) {
-  const parts = [sessionName(row.id), row.id];
-  if (row.s) {
-    parts.push(...row.s.players.map((p) => nameOf(p.owner)));
-    if (isReview(row.s)) parts.push("debrief", t("Debrief"));
-    if (row.s.imported_by) parts.push("imported", t("Imported"), row.s.imported_by);
-  } else {
-    parts.push(...row.g.players.map((p) => nameOf(p.owner)));
-  }
+  const parts = [sessionName(row.id), row.id, ...row.s.players.map((p) => nameOf(p.owner))];
+  if (isReview(row.s)) parts.push("debrief", t("Debrief"));
+  if (row.s.imported_by) parts.push("imported", t("Imported"), row.s.imported_by);
   return parts.join(" ").toLowerCase();
 }
 
@@ -63,7 +56,13 @@ function detailText(s) {
 }
 
 function rowSignature(r) {
-  if (!r.s) return [r.id, r.g.end_us, r.g.players.map((p) => p.owner)];
   const s = r.s;
-  return [r.id, setLength(s), sessionState(s), isReview(s), s.imported_by, s.title, s.thumb, matchCount(s), noteCount(s), s.players.map((p) => p.owner)];
+  return [r.id, setLength(s), sessionState(s), isReview(s), s.imported_by, s.title, s.thumb, matchCount(s), noteCount(s), s.players.map((p) => p.owner), onThisPc(s), sizeOf(s), s.shared];
+}
+
+function whereLine(s) {
+  const here = onThisPc(s);
+  const parts = [el("span", { textContent: t(here ? "On this PC" : "Not on this PC") }), el("span", { textContent: bytes(sizeOf(s)) })];
+  if (!here) parts.push(el("span", { className: "sp" }), el("button", { className: "sm", onclick: (e) => { e.stopPropagation(); run("download_set", { room: s.room, set: s.id }); } }, icon("download", "sm"), t("Download")));
+  return el("div", { className: "l2 where" }, ...parts);
 }

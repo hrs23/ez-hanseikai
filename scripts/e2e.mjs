@@ -361,18 +361,24 @@ function segsOf(owned, set, series) {
   return owned.filter((r) => r.k === "seg" && r.set === set && (!series || r.series === series));
 }
 
+function mediaFile(app, room, set, owner, capture, series, name) {
+  const kept = path.join(roomDir(app, room), "recordings", set, owner, capture, series, name);
+  const live = path.join(roomDir(app, room), owner, capture, series, name);
+  return fs.existsSync(kept) || !fs.existsSync(live) ? kept : live;
+}
+
 function pieces(owned, set, limit = Infinity) {
   const caps = Object.fromEntries(owned.filter((r) => r.k === "cap").map((r) => [r.capture, r]));
   const segs = SERIES.flatMap((series) => segsOf(owned, set, series).slice(0, limit));
   const runs = [...new Set(segs.map((s) => `${s.capture}/${s.series}`))].map((k) => k.split("/"));
   const inits = runs.map(([capture, series]) => ({ capture, series, name: "init.mp4", ...(caps[capture]?.init?.[series] || {}) }));
-  return [...inits, ...segs.map((s) => ({ capture: s.capture, series: s.series, name: segName(s.n), size: s.size, sha256: s.sha256 }))];
+  return [...inits.map((i) => ({ ...i, set })), ...segs.map((s) => ({ set, capture: s.capture, series: s.series, name: segName(s.n), size: s.size, sha256: s.sha256 }))];
 }
 
 function badCopies(holder, room, owner, list) {
   return list
     .filter((p) => {
-      const file = path.join(roomDir(holder, room), owner, p.capture, p.series, p.name);
+      const file = mediaFile(holder, room, p.set, owner, p.capture, p.series, p.name);
       return !p.sha256 || fileSize(file) !== p.size || sha256(file) !== p.sha256;
     })
     .map((p) => `${p.capture}/${p.series}/${p.name}`);
@@ -394,6 +400,23 @@ function wholeFragments(file) {
 
 function setOf(st, set) {
   return st.sets.find((s) => s.id === set);
+}
+
+function heldByAll(st, set, list) {
+  const found = setOf(st, set);
+  return !!found && found.players.length > 0 && found.players.every((p) => list.every((x) => p.verified_by.includes(x.id)));
+}
+
+async function onlyOnDownload(others, holder, set) {
+  await sleep(within(SYNC_ROUND_S * 2) * 1000);
+  for (const app of others) {
+    const row = setOf(await state(app), set);
+    check(row && row.progress.have === 0 && !row.wanted && row.progress.total > 0, `${app.key} fetched a finished recording nobody asked for: ${brief(row?.progress)}`);
+    const shown = await evaluate(app, `(() => { const row = [...document.querySelectorAll("#sessions .srow.gone")].find((r) => r.textContent.includes(sessionName(${JSON.stringify(set)}))); return row ? [row.textContent.includes(t("Not on this PC")), !!row.querySelector("button"), row.textContent.includes(bytes(setById(${JSON.stringify(set)}).progress.total))] : null; })()`);
+    check(shown && shown.every(Boolean), `${app.key} does not list the recording as not on this PC with its size and Download: ${brief(shown)}`);
+  }
+  for (const app of others) await invoke(app, "download_set", { room: (await state(app)).room.id, set });
+  check((await state(holder)).sets.find((x) => x.id === set).progress.have > 0, `${holder.key} lost its own recording`);
 }
 
 function connected(st, ids) {
@@ -428,9 +451,9 @@ function recordedFrame(app, room, name) {
   const mine = logOf(app, room, app.id).filter((r) => r.k === "seg" && r.series === "v");
   const last = mine[mine.length - 1];
   if (!last) return;
-  const dir = path.join(roomDir(app, room), app.id, last.capture, "v");
   const joined = path.join(OUT, `${name}.mp4`);
-  fs.writeFileSync(joined, Buffer.concat([fs.readFileSync(path.join(dir, "init.mp4")), fs.readFileSync(path.join(dir, segName(last.n)))]));
+  const file = (leaf) => mediaFile(app, room, last.set, app.id, last.capture, "v", leaf);
+  fs.writeFileSync(joined, Buffer.concat([fs.readFileSync(file("init.mp4")), fs.readFileSync(file(segName(last.n)))]));
   ffmpeg("ffmpeg", ["-v", "error", "-y", "-i", joined, "-frames:v", "1", path.join(OUT, `${name}.png`)]);
   fs.rmSync(joined, { force: true });
 }
@@ -616,7 +639,7 @@ async function scenario(ctx) {
     const all = [a, b, c];
     await invoke(c, "stop_recording");
     await allSee(all, "the set ended", within(LOG_SYNC_S * 2), (st) => !st.active_set && setOf(st, ctx.set) && !setOf(st, ctx.set).live);
-    await allSee(all, "Everyone has it", within((SEGMENT_S + SYNC_ROUND_S) * 2), (st) => setOf(st, ctx.set)?.all_verified && setOf(st, ctx.set).status === "Everyone has it");
+    await allSee(all, "Everyone has it", within((SEGMENT_S + SYNC_ROUND_S) * 2), (st) => heldByAll(st, ctx.set, all));
     const st = await state(a);
     const players = setOf(st, ctx.set).players.map((p) => p.owner).sort();
     check(players.join() === all.map((x) => x.id).sort().join(), `players are ${brief(players)}`);
@@ -820,6 +843,8 @@ async function scenario(ctx) {
     await waitFor("C logs its seek as a party record", within(LOG_SYNC_S * 2), () => logOf(c, ctx.room, c.id).some((r) => r.k === "party" && r.set === ctx.review && r.shared.set === ctx.set));
     const ending = await pressAndConfirm(a, "toggleRecording()");
     check(ending === "Stop recording for everyone?", `A was asked "${ending}"`);
+    await waitFor("A offers to discard the short debrief", within(UI_REFRESH_S * 5), () => evaluate(a, `$("confirm").open && $("confirmtitle").textContent === t("Discard this recording?")`));
+    await evaluate(a, `$("confirmno").click(); true`);
     await waitFor("B is told who ended", within(LOG_SYNC_S * 2), () => evaluate(b, `e2eNotes.includes(${JSON.stringify(a.name + " stopped recording")})`));
     await allSee(all, "the review ended", within(LOG_SYNC_S * 2), (st) => !st.active_set && setOf(st, ctx.review) && !setOf(st, ctx.review).live);
     for (const app of all) {
@@ -1021,7 +1046,8 @@ async function scenario(ctx) {
       check(owners.every((o) => !all.some((x) => x.id === o) && names.split(",").includes(st.names[o])), `${app.key} names the imported views ${brief(owners.map((o) => st.names[o]))}`);
       check(st.rooms.find((r) => r.id === ctx.room).members.length === 3 && st.peers.length === 2, `${app.key} counts ${st.peers.length} peers and ${st.rooms.find((r) => r.id === ctx.room).members.length} members`);
     }
-    await allSee(all, "everyone has the imported recording", within((SEGMENT_S + SYNC_ROUND_S) * 3), (st) => setOf(st, made.id)?.all_verified);
+    await onlyOnDownload([b, c], a, made.id);
+    await allSee(all, "everyone has the imported recording", within((SEGMENT_S + SYNC_ROUND_S) * 3), (st) => heldByAll(st, made.id, all));
     for (const owner of owners) {
       const list = pieces(logOf(a, ctx.room, owner), made.id);
       check(list.length > 2, `the imported view has ${list.length} pieces`);
@@ -1069,7 +1095,8 @@ async function scenario(ctx) {
     const made = await invokeLong(b, "import_recording", { spec: { folder: media } }, IMPORT_S, "the import of the hand-made folder");
     check(made.views === 3 && made.notes === 2, `import: ${brief(made)}`);
     await allSee(all, "the walkthrough", within(LOG_SYNC_S * 3), (st) => setOf(st, made.id)?.imported_by === b.name && setOf(st, made.id).title === "Walkthrough");
-    await allSee(all, "everyone has the walkthrough", within((SEGMENT_S + SYNC_ROUND_S) * 3), (st) => setOf(st, made.id)?.all_verified);
+    await onlyOnDownload([a, c], b, made.id);
+    await allSee(all, "everyone has the walkthrough", within((SEGMENT_S + SYNC_ROUND_S) * 3), (st) => heldByAll(st, made.id, all));
     await waitFor("B makes the walkthrough's thumbnail", within(30), async () => setOf(await state(b), made.id)?.thumb === true);
     const seen = await state(a);
     const set = setOf(seen, made.id);
@@ -1115,6 +1142,7 @@ async function scenario(ctx) {
     check((await api(a, "POST", `${room}/recordings/import`, { token, body: { files: "x" } })).status === 400, "a bad body was not refused");
     const made = await api(a, "POST", `${room}/recordings/import`, { token, body: { folder: bare } });
     check(made.status === 201 && made.json.views === 2, `import: ${made.status} ${brief(made.text)}`);
+    ctx.bare = made.json.id;
     const one = await api(a, "GET", `${room}/recordings/${encodeURIComponent(made.json.id)}`, { token });
     check(one.status === 200 && one.json.title === "Review night" && one.json.imported_by?.id === a.id && one.json.members.length === 2 && one.json.members.every((m) => m.imported) && one.json.members.map((m) => m.name).sort().join() === "Ann POV,Ben POV", `recording: ${brief(one.json)}`);
     await allSee([b, c], "the bare folder's recording", within(LOG_SYNC_S * 3), (st) => setOf(st, made.json.id)?.imported_by === a.name);
@@ -1132,16 +1160,57 @@ async function scenario(ctx) {
     await invoke(a, "set_api", { on: false });
   });
 
-  await step("a deleted session stays listed and comes back with Download", async () => {
-    const preview = await evaluate(b, `JSON.stringify(deletePreview([setById(${JSON.stringify(ctx.review)})], st.id))`);
-    const parts = JSON.parse(preview)[0];
-    check(parts.players.length === 3 && parts.players.every((p) => p.bytes > 0), `the delete preview lists ${brief(parts)}`);
-    await invoke(b, "delete_set", { room: ctx.room, set: ctx.review });
-    await waitFor("B lists the review as not on this PC", within(UI_REFRESH_S * 3), async () => { const st = await state(b); return !setOf(st, ctx.review) && st.gone.some((g) => g.id === ctx.review); });
-    const gone = logOf(a, ctx.room, b.id).filter((r) => r.k === "seg" && r.set === ctx.review);
-    check(gone.every((r) => !fs.existsSync(path.join(roomDir(b, ctx.room), b.id, r.capture, r.series, segName(r.n)))), "B kept its own review segments after deleting them");
-    await invoke(b, "restore_set", { room: ctx.room, set: ctx.review });
-    await waitFor("B fetches the review again", within((SEGMENT_S + SYNC_ROUND_S) * 3), async () => setOf(await state(b), ctx.review)?.all_verified);
+  const confirmDeletion = async (app, set, form) => {
+    await evaluate(app, `confirmDelete([${JSON.stringify(set)}]); true`);
+    await waitFor(`${app.key} asks before deleting`, within(UI_REFRESH_S * 5), () => evaluate(app, `$("deletedlg").open`));
+    const said = await evaluate(app, `[$("deltitle").textContent, ...[...$("dellist").querySelectorAll(".delcard .small")].map((x) => x.textContent)]`);
+    check(said[0] === "Delete this recording?" && said.length === 2 && said[1] === form, `${app.key} says ${brief(said)} instead of "${form}"`);
+    await evaluate(app, `$("delyes").click(); true`);
+  };
+  const mediaLeft = (app, set) => logOf(app, ctx.room, app.id).filter((r) => r.k === "seg" && r.set === set).filter((r) => fs.existsSync(mediaFile(app, ctx.room, set, app.id, r.capture, r.series, segName(r.n)))).length;
+
+  await step("deleting a recording others still hold keeps the row as not on this PC until Download", async () => {
+    const all = [a, b, c];
+    const mine = setOf(await state(b), ctx.review);
+    check(mine.shared === true && mine.progress.have > 0 && await evaluate(b, `canDelete(setById(${JSON.stringify(ctx.review)}))`), `the review before deleting: ${brief({ shared: mine.shared, have: mine.progress.have })}`);
+    await confirmDeletion(b, ctx.review, "Others still have it");
+    await waitFor("B lists the review as not on this PC", within(UI_REFRESH_S * 3), async () => { const row = setOf(await state(b), ctx.review); return row && row.progress.have === 0 && !row.wanted; });
+    check(mediaLeft(b, ctx.review) === 0 && !fs.existsSync(path.join(roomDir(b, ctx.room), "recordings", ctx.review)), "B kept media of the review after deleting it");
+    check(!logOf(b, ctx.room, b.id).some((r) => r.k === "set_del"), "B removed the review for everyone although others hold it");
+    await onlyOnDownload([b], a, ctx.review);
+    await allSee(all, "everyone still lists the review", within(SYNC_ROUND_S), (st) => !!setOf(st, ctx.review));
+    for (const app of [a, c]) check(setOf(await state(app), ctx.review).progress.have > 0, `${app.key} lost the review`);
+    await waitFor("B fetches the review on request", within((SEGMENT_S + SYNC_ROUND_S) * 3), async () => heldByAll(await state(b), ctx.review, [b]) && !holdEverything([b], ctx.room, ctx.review, all));
+  });
+
+  await step("deleting a recording nobody else holds removes it, its jobs and its entry everywhere", async () => {
+    const all = [a, b, c];
+    const bare = ctx.bare;
+    await allSee(all, "the bare recording listed", within(LOG_SYNC_S * 3), (st) => !!setOf(st, bare));
+    const rowsOf = async (app) => (await invoke(app, "jobs")).jobs.filter((j) => j.set === bare).length;
+    await waitFor("A and B list a job row for the bare recording", within(JOB_CHECK_S + LOG_SYNC_S * 3), async () => (await rowsOf(a)) > 0 && (await rowsOf(b)) > 0);
+    check((await state(a)).sets.find((x) => x.id === bare).shared === false, "A thinks others hold the bare recording");
+    check(await evaluate(b, `!canDelete(setById(${JSON.stringify(bare)}))`), "B may delete a recording it does not hold while A does");
+    await waitFor("A made the thumbnail", within(30), async () => setOf(await state(a), bare)?.thumb === true);
+    await confirmDeletion(a, bare, "This deletes it completely");
+    await allSee(all, "the bare recording gone from the list", within(LOG_SYNC_S * 3), (st) => !setOf(st, bare));
+    for (const app of all) await waitFor(`${app.key} has no job row for it`, within(JOB_CHECK_S + LOG_SYNC_S), async () => (await rowsOf(app)) === 0);
+    check(logOf(a, ctx.room, a.id).some((r) => r.k === "set_del" && r.set === bare), "A did not log the removal");
+    check(mediaLeft(a, bare) === 0 && !fs.existsSync(path.join(roomDir(a, ctx.room), "recordings", bare)) && !fs.existsSync(path.join(roomDir(a, ctx.room), "thumbs", `${bare}.jpg`)), "A kept media or the thumbnail");
+    await waitFor("B's sidebar drops the bare recording", within(UI_REFRESH_S * 5), () => evaluate(b, `![...document.querySelectorAll("#sessions .srow")].some((r) => r.textContent.includes(sessionName(${JSON.stringify(bare)})))`));
+  });
+
+  await step("a short recording is offered for discarding when stopped and goes everywhere", async () => {
+    const all = [a, b, c];
+    await pressAndConfirm(a, "toggleRecording()");
+    ctx.short = (await waitFor("A records", within(UI_REFRESH_S * 5), async () => (await state(a)).active_set?.id)) || "";
+    await allSee(all, "recording the short one", within(LOG_SYNC_S * 2), (st) => st.active_set?.id === ctx.short);
+    await waitFor("A logs a segment", within(SEGMENT_S * 3), () => segsOf(logOf(a, ctx.room, a.id), ctx.short).length > 0);
+    await pressAndConfirm(a, "toggleRecording()");
+    await waitFor("A offers to discard", within(UI_REFRESH_S * 5), () => evaluate(a, `$("confirm").open && $("confirmtitle").textContent === t("Discard this recording?")`));
+    await evaluate(a, `$("confirmyes").click(); true`);
+    await allSee(all, "the short recording gone", within(LOG_SYNC_S * 3), (st) => !st.active_set && !setOf(st, ctx.short));
+    for (const app of all) await waitFor(`${app.key} removed the media`, within(SYNC_ROUND_S * 2), () => mediaLeft(app, ctx.short) === 0 && !fs.existsSync(path.join(roomDir(app, ctx.room), "recordings", ctx.short)));
   });
 
   await step("the update channel is kept in the settings", async () => {

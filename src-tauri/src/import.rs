@@ -448,7 +448,7 @@ pub fn item_records(items: &[Item], subtitles: &[(String, Vec<Cue>)], set: &str,
 }
 
 fn unused_set(core: &Core, room_id: &str, start_us: i64) -> String {
-    let taken: HashSet<String> = room::sets(core, room_id, &room::logs(core, room_id)).into_iter().map(|s| s.id).chain(core.deleted.lock().unwrap().iter().filter_map(|d| d.strip_prefix(&format!("{room_id}/")).map(String::from))).collect();
+    let taken: HashSet<String> = room::sets(core, room_id, &room::logs(core, room_id)).into_iter().map(|s| s.id).chain(room::dropped(&room::logs(core, room_id))).collect();
     (0..).map(|i| room::set_id_for(start_us + i * 1_000_000, core.tz_offset_s)).find(|id| !taken.contains(id)).unwrap_or_default()
 }
 
@@ -522,8 +522,8 @@ fn import(core: &Arc<Core>, room_id: &str, plan: &Plan) -> Result<Value, String>
             let id = iroh::SecretKey::generate().public().to_string();
             let view_start = start_us + view.offset_ms * 1000;
             let capture = (view_start / 1000).to_string();
-            let capture_dir = core.capture_dir(room_id, &id, &capture);
-            written.push(capture_dir.parent().map(Path::to_path_buf).unwrap_or(capture_dir.clone()));
+            let capture_dir = core.set_dir(room_id, &set, &id, &capture);
+            written.push(core.recording_dir(room_id, &set));
             let (mut init, mut segs, mut end_us) = (json!({}), Vec::new(), view_start);
             let (mut width, mut height) = (0, 0);
             let has_picture = info.picture.is_some();

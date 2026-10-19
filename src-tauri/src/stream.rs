@@ -44,17 +44,17 @@ fn growing(dir: &Path, mut n: u32, out: &mut Vec<Piece>) {
 }
 
 pub fn set_pieces(core: &Core, room: &str, f: &File, capture: &str, series: &str) -> Vec<Piece> {
-    let dir = core.capture_dir(room, &f.owner, capture).join(series);
-    let init = dir.join(INIT);
+    let init = core.init_path(room, &f.set, &f.owner, capture, series);
     if !init.exists() {
         return Vec::new();
     }
+    let dir = core.capture_dir(room, &f.owner, capture).join(series);
     let mut out = vec![piece(init)];
     let recording = f.end_us.is_none();
     let own = f.owner == core.me();
     let mut next = None;
     for seg in f.segs.iter().filter(|s| s.capture == capture && s.series == series) {
-        let path = dir.join(seg_name(seg.n));
+        let path = core.seg_path(room, &f.owner, seg);
         let check = data::seg_check(core, room, &f.owner, seg);
         if !(check == Some(true) || (own || (recording && check.is_none())) && path.exists()) {
             return out;

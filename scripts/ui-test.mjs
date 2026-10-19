@@ -9,7 +9,7 @@ const ui = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "ui");
 const read = (f) => fs.readFileSync(path.join(ui, f), "utf8");
 const source = ["util.js", "i18n.js", "layout.js", "events.js", "review.js", "members.js", "recordings.js", "plugins.js", "ai.js"].map(read).join("\n");
 const context = vm.createContext({ window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, nameOf: (id) => id });
-const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, flowAt, flowBands, flowSteps, isReview, voiceOnly, BOARD_TEMPLATE, memberStatus, receivingPercent, recordingRows, recentRows, recordingMatches, recordingWords, RECENT_SHOWN, deletePreview, oldSessions, soundKey, pluginProgress, isBusy, workerState, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, aiPreview, apiUrl, apiBadge, apiReferenceBlocks, rateOf, liveEdge, netState, summaryLines, leftText, JA, t, sessionName, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, flowAt, flowBands, flowSteps, isReview, voiceOnly, BOARD_TEMPLATE, memberStatus, receivingPercent, recordingRows, recentRows, recordingMatches, recordingWords, RECENT_SHOWN, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, discardable, DISCARD_MAX_S, soundKey, pluginProgress, isBusy, workerState, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, aiPreview, apiUrl, apiBadge, apiReferenceBlocks, rateOf, liveEdge, netState, summaryLines, leftText, JA, t, sessionName, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 const plain = (v) => JSON.parse(JSON.stringify(v));
 
 const moment = (m, extra = {}) => ({ role: "moment", m, plugin: { id: "apex-matches" }, tags: ["match"], ...extra });
@@ -95,11 +95,49 @@ test("a review session has voices only and Watch Party records", () => {
   assert.equal(ui$.voiceOnly({ players: [] }), false);
 });
 
-test("the delete preview lists every part and warns when nobody else has one", () => {
-  const set = { id: "s1", progress: { have: 30 }, players: [{ owner: "me", have: 10, verified_by: ["me", "b"] }, { owner: "b", have: 20, verified_by: ["me"] }, { owner: "c", have: 0, verified_by: [] }] };
-  assert.deepEqual(plain(ui$.deletePreview([set], "me")), [{ id: "s1", bytes: 30, players: [{ owner: "me", bytes: 10, alone: false }, { owner: "b", bytes: 20, alone: true }] }]);
+test("the delete preview lists every part that is here and says whether the recording goes completely", () => {
+  const set = { id: "s1", shared: true, progress: { have: 30 }, players: [{ owner: "me", have: 10 }, { owner: "b", have: 20 }, { owner: "c", have: 0 }] };
+  assert.deepEqual(plain(ui$.deletePreview([set])), [{ id: "s1", bytes: 30, form: "Others still have it", players: [{ owner: "me", bytes: 10 }, { owner: "b", bytes: 20 }] }]);
+  assert.equal(ui$.deletePreview([{ ...set, shared: false }])[0].form, "This deletes it completely");
   const sets = ["s5", "s4", "s3", "s2", "s1"].map((id) => ({ id, live: false, progress: { have: id === "s2" ? 0 : 1 } }));
   assert.deepEqual([...ui$.oldSessions(sets, 2)], ["s3", "s1"]);
+});
+
+test("a row is on this PC or not, always shows a size, and deleting needs media here or nobody else", () => {
+  const set = (extra) => ({ id: "s1", live: false, shared: false, wanted: false, progress: { have: 0, total: 900 }, ...extra });
+  assert.equal(ui$.onThisPc(set()), false);
+  assert.equal(ui$.sizeOf(set()), 900);
+  assert.equal(ui$.onThisPc(set({ progress: { have: 400, total: 900 } })), true);
+  assert.equal(ui$.sizeOf(set({ progress: { have: 400, total: 900 } })), 400);
+  assert.equal(ui$.onThisPc(set({ wanted: true })), true);
+  assert.equal(ui$.canDelete(set({ shared: true })), false);
+  assert.equal(ui$.canDelete(set({ shared: false })), true);
+  assert.equal(ui$.canDelete(set({ shared: true, progress: { have: 5, total: 9 } })), true);
+  assert.equal(ui$.canDelete(set({ live: true, progress: { have: 5, total: 9 } })), false);
+});
+
+test("the two delete confirmations read the same in both languages", () => {
+  for (const [form, en, ja] of [[true, "Others still have it", "ほかの人は持っています"], [false, "This deletes it completely", "完全に消えます"]]) {
+    const text = ui$.deleteForm({ shared: form });
+    assert.equal(text, en);
+    ui$.setLanguage("ja");
+    assert.equal(ui$.t(text), ja);
+    ui$.setLanguage("en");
+  }
+  assert.equal(ui$.t("Discard this recording?"), "Discard this recording?");
+  ui$.setLanguage("ja");
+  assert.match(ui$.t("Discard this recording?"), /破棄しますか/);
+  ui$.setLanguage("en");
+});
+
+test("a recording of 30 seconds or less is offered for discarding when it is stopped", () => {
+  assert.equal(ui$.DISCARD_MAX_S, 30);
+  assert.equal(ui$.discardable(0), true);
+  assert.equal(ui$.discardable(30), true);
+  assert.equal(ui$.discardable(30.5), false);
+  const app = read("app.js");
+  assert.match(app, /discardable\(seconds\) && \(await ask\(t\("Discard this recording\?"\)/);
+  assert.match(app, /run\("discard_set"/);
 });
 
 test("receiving speed and the live edge", () => {
@@ -382,15 +420,14 @@ test("receiving counts only recent recordings a member still lacks", () => {
 test("the recordings list is one newest-first list, the sidebar keeps the recent few, and search reads names and marks", () => {
   const sets = Array.from({ length: 9 }, (_, i) => ({ id: `2026-10-0${i + 1} 10-00-00`, live: false, players: [{ owner: "a" }], party: [], imported_by: i === 2 ? "Ann" : null }));
   sets.push({ id: "live", live: true, players: [] });
-  ui$.setStorage({ sets, gone: [{ id: "2026-10-10 10-00-00", players: [{ owner: "a" }] }] });
-  const rows = ui$.recordingRows(true);
-  assert.equal(rows.length, 10);
-  assert.equal(rows[0].id, "2026-10-10 10-00-00");
+  ui$.setStorage({ sets });
+  const rows = ui$.recordingRows();
+  assert.equal(rows.length, 9);
+  assert.equal(rows[0].id, "2026-10-09 10-00-00");
   assert.ok(rows.every((r, i) => !i || rows[i - 1].id > r.id));
-  assert.equal(ui$.recordingRows(false).length, 9);
-  const recent = ui$.recentRows(ui$.recordingRows(false), "2026-10-01 10-00-00");
+  const recent = ui$.recentRows(rows, "2026-10-01 10-00-00");
   assert.equal(recent.length, ui$.RECENT_SHOWN + 1);
-  assert.equal(ui$.recentRows(ui$.recordingRows(false), null).length, ui$.RECENT_SHOWN);
+  assert.equal(ui$.recentRows(rows, null).length, ui$.RECENT_SHOWN);
   assert.ok(ui$.recordingMatches(rows.find((r) => r.id.startsWith("2026-10-03")), ui$.recordingWords("imported")));
   assert.ok(!ui$.recordingMatches(rows.find((r) => r.id.startsWith("2026-10-04")), ui$.recordingWords("imported")));
 });

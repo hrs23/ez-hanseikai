@@ -319,7 +319,7 @@ impl Loaded {
     }
 
     fn sets(&self) -> Vec<Set> {
-        room::derive_sets(&self.head.id, &self.logs, &HashSet::new())
+        room::derive_sets(&self.head.id, &self.logs)
     }
 
     fn name(&self, id: &str) -> String {

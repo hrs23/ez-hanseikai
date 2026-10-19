@@ -224,7 +224,7 @@ fn progress(core: &Core, room: &str, logs: &[room::Log], set: &Value) -> Progres
     let Some(found) = all.iter().find(|s| set.as_str() == Some(s.id.as_str())) else { return (None, false) };
     let mine = crate::data::have_counts(core, room, std::slice::from_ref(found));
     let others = room::others_have(core);
-    let online: Vec<&Heads> = others.iter().filter(|o| o.3).map(|o| &o.1).collect();
+    let online: Vec<&Heads> = others.iter().filter(|o| o.2).map(|o| &o.1).collect();
     let (have, total, stuck) = room::progress(core, found, &mine, &online);
     ((total > 0).then(|| have as f64 / total as f64), stuck)
 }

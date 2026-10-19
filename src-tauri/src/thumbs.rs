@@ -106,7 +106,7 @@ fn make_missing(core: &Core) {
     let room = core.active_room_id();
     for set in room::sets(core, &room, &room::logs(core, &room)) {
         let key = format!("{room}/{}", set.id);
-        if set.end().is_none() || exists(core, &room, &set.id) || core.is_deleted(&room, &set.id) || given_up(&key) {
+        if set.end().is_none() || exists(core, &room, &set.id) || given_up(&key) {
             continue;
         }
         match pick(core, &room, &set) {

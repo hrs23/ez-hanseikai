@@ -504,7 +504,7 @@ fn set_detail(core: &Core, room: &str, set: &room::Set) -> Value {
                 }
                 let key = room::have_key(&set.id, &f.owner, s);
                 let mut have = json!({"you": mine.get(&key).copied().unwrap_or(0)});
-                for (id, h, _, online) in &peers {
+                for (id, h, online) in &peers {
                     have[short(id)] = json!({"n": h.get(&key).copied().unwrap_or(0), "online": online});
                 }
                 series[s] = json!({"total": segs.len(), "verified": ok, "missing": ranges(&missing), "unchecked": ranges(&unchecked), "bad": ranges(&bad), "have": have});

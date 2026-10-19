@@ -211,23 +211,23 @@ function exportMenu(set, anchor) {
   ], anchor);
 }
 function recordingCard(r) {
-  if (!r.s) {
-    const g = r.g;
-    const get = el("button", { className: "sm", onclick: (e) => { e.stopPropagation(); restoreSet(g); } }, icon("download", "sm"), t("Download"));
-    return el("div", { className: "reccard gone" }, thumbBox(null, g.players.map((p) => p.owner), "sm", CARD_FACES, false), el("div", { className: "rtxt" }, el("b", { textContent: sessionName(g.id) }), el("div", { className: "meta" }, el("span", { textContent: g.end_us ? fmt((g.end_us - g.start_us) / 1e6) : "" }), el("span", { className: "faint", textContent: t("Not on this PC") }), el("span", { className: "sp" }), get)));
-  }
   const s = r.s;
-  const state = sessionState(s);
+  const here = onThisPc(s);
+  const state = here ? sessionState(s) : null;
   const meta = state && (state.kind === "bar" || state.kind === "line")
     ? el("div", { className: "meta" }, icon(state.icon, "sm"), el("span", { className: state.cls || "", textContent: state.text }), el("span", { className: "sp" }), el("span", { className: "muted", textContent: state.right || "" }))
     : el("div", { className: "meta" }, el("span", { textContent: setLength(s) }), detailText(s) ? el("span", { className: "faint", textContent: detailText(s) }) : null, ...marksOf(s));
-  const acts = el("span", { className: "acts" }, iconButton("upload", t("Export"), (e) => { e.stopPropagation(); exportMenu(s, e.currentTarget); }), iconButton("trash", t("Delete from this PC…"), (e) => { e.stopPropagation(); confirmDelete([s.id]); }));
+  const exportBtn = iconButton("upload", t("Export"), (e) => { e.stopPropagation(); exportMenu(s, e.currentTarget); });
+  const deleteBtn = iconButton("trash", t("Delete…"), (e) => { e.stopPropagation(); confirmDelete([s.id]); });
+  exportBtn.disabled = !here;
+  deleteBtn.disabled = !canDelete(s);
+  const acts = el("span", { className: "acts" }, exportBtn, deleteBtn);
   const thumb = thumbBox(s, s.players.map((p) => p.owner), "sm", CARD_FACES, false);
   thumb.append(acts);
   if (state && state.kind === "bar") thumb.append(el("div", { className: "bar" }, el("i", { style: `width:${Math.round(state.frac * 100)}%` })));
-  const card = el("div", { className: "reccard", role: "button", tabIndex: 0 }, thumb, el("div", { className: "rtxt" }, el("b", { textContent: sessionName(s.id) }), meta));
-  card.onclick = () => openSession(s.id);
-  card.onkeydown = (e) => { if (e.key === "Enter" && e.target === card) openSession(s.id); };
+  const card = el("div", { className: "reccard" + (here ? "" : " gone"), role: "button", tabIndex: 0 }, thumb, el("div", { className: "rtxt" }, el("b", { textContent: sessionName(s.id) }), meta, whereLine(s)));
+  card.onclick = () => { if (here) openSession(s.id); };
+  card.onkeydown = (e) => { if (e.key === "Enter" && e.target === card && here) openSession(s.id); };
   card.oncontextmenu = (e) => { e.preventDefault(); sessionMenu(s.id, e); };
   return card;
 }
@@ -236,7 +236,7 @@ const recBar = el("div", { className: "recbar" },
   el("button", { id: "recimport", onclick: () => openImport() }, icon("download", "sm"), el("span", { textContent: t("Import…") })));
 const recGrid = el("div", { className: "reccards" });
 function renderRecordings() {
-  const rows = recordingRows(true);
+  const rows = recordingRows();
   const words = recordingWords(recFilter);
   const shown = rows.filter((r) => recordingMatches(r, words));
   const sig = ["recordings", shown.map(rowSignature), recFilter, st.active_set, st.peers.map((p) => p.connected), lang, st.colors, st.names, dayOf(new Date())];
@@ -486,7 +486,7 @@ function renderStorage() {
   const totalBytes = d.total || 1;
   const other = Math.max(0, totalBytes - d.free - used);
   const sets = st.sets.filter((s) => !s.live);
-  const sig = [used, d, sets.map((s) => [s.id, s.progress.have, s.progress.total]), st.gone.map((g) => g.id), [...picked], st.warn_hours, lang];
+  const sig = [used, d, sets.map((s) => [s.id, s.progress.have, s.progress.total, s.shared]), [...picked], st.warn_hours, lang];
   if (!changed("storage", sig)) return;
   $("storedir").textContent = storageInfo ? storageInfo.dir : "";
   const seg = (cls, n) => { const i = el("i", { className: cls }); i.style.width = (n / totalBytes) * 100 + "%"; return i; };
@@ -499,37 +499,35 @@ function renderStorage() {
   for (const id of [...picked]) if (!sets.some((s) => s.id === id)) picked.delete(id);
   const biggest = Math.max(1, ...sets.map((s) => s.progress.have));
   const rows = sets.map((s) => {
-    const box = el("input", { type: "checkbox", checked: picked.has(s.id), disabled: !s.progress.have, ariaLabel: sessionName(s.id) });
+    const box = el("input", { type: "checkbox", checked: picked.has(s.id), disabled: !canDelete(s), ariaLabel: sessionName(s.id) });
     box.onchange = () => { if (box.checked) picked.add(s.id); else picked.delete(s.id); delete sigs.storage; renderStorage(); };
     const notes = noteCount(s);
-    const recv = s.progress.total && s.progress.have < s.progress.total ? t("Receiving {n}%", { n: Math.floor((s.progress.have / s.progress.total) * 100) }) : "";
-    return el("tr", { className: picked.has(s.id) ? "sel" : "" }, el("td", {}, box), el("td", {}, el("b", { textContent: sessionName(s.id) }), " ", el("span", { className: "muted small", textContent: voiceOnly(s) ? t("voice only") : t(notes === 1 ? "{n} note" : "{n} notes", { n: notes }) })), el("td", { textContent: setLength(s) }), el("td", { textContent: String(s.players.length) }), el("td", {}, el("span", { className: "sizebar" }, el("i", { style: `width:${(s.progress.have / biggest) * 100}%` })), bytes(s.progress.have)), el("td", { className: "muted small", textContent: recv }));
+    const recv = onThisPc(s) && s.progress.total && s.progress.have < s.progress.total ? t("Receiving {n}%", { n: Math.floor((s.progress.have / s.progress.total) * 100) }) : "";
+    return el("tr", { className: picked.has(s.id) ? "sel" : "" }, el("td", {}, box), el("td", {}, el("b", { textContent: sessionName(s.id) }), " ", el("span", { className: "muted small", textContent: voiceOnly(s) ? t("voice only") : t(notes === 1 ? "{n} note" : "{n} notes", { n: notes }) })), el("td", { textContent: setLength(s) }), el("td", { textContent: String(s.players.length) }), el("td", {}, onThisPc(s) ? [el("span", { className: "sizebar" }, el("i", { style: `width:${(s.progress.have / biggest) * 100}%` })), bytes(s.progress.have)] : el("span", { className: "muted", textContent: t("Not on this PC") })), el("td", { className: "muted small", textContent: recv }));
   });
-  const gone = st.gone.map((g) => el("tr", { className: "dim" }, el("td"), el("td", {}, el("b", { textContent: sessionName(g.id) })), el("td", { textContent: g.end_us ? fmt((g.end_us - g.start_us) / 1e6) : "" }), el("td", { textContent: String(g.players.length) }), el("td", { textContent: "—" }), el("td", { className: "small", textContent: t("Not on this PC") })));
   const head = el("tr", {}, ...["", "Recorded", "Length", "People", "On this PC", ""].map((h) => el("th", { textContent: h ? t(h) : "" })));
-  $("storetable").replaceChildren(el("table", { className: "table" }, el("thead", {}, head), el("tbody", {}, ...rows, ...gone)));
+  $("storetable").replaceChildren(el("table", { className: "table" }, el("thead", {}, head), el("tbody", {}, ...rows)));
   const size = sets.filter((s) => picked.has(s.id)).reduce((n, s) => n + s.progress.have, 0);
   $("selsum").textContent = picked.size ? t("{n} selected · {size}", { n: picked.size, size: bytes(size) }) : "";
   $("deletesel").disabled = !picked.size;
 }
 function confirmDelete(ids) {
-  const sets = ids.map(setById).filter((s) => s && !s.live);
+  const sets = ids.map(setById).filter((s) => s && canDelete(s));
   if (!sets.length) return;
-  const preview = deletePreview(sets, st.id);
+  const preview = deletePreview(sets);
   const size = preview.reduce((n, p) => n + p.bytes, 0);
-  $("deltitle").textContent = t(sets.length === 1 ? "Delete the videos of this recording?" : "Delete the videos of {n} recordings?", { n: sets.length });
-  $("delsub").textContent = t("Frees {size} on this PC", { size: bytes(size) });
-  $("dellist").replaceChildren(...preview.map((p) => {
-    const alone = p.players.filter((x) => x.alone).map((x) => nameOf(x.owner));
-    return el("div", { className: "delcard" }, el("div", { className: "row" }, el("b", { textContent: sessionName(p.id) }), el("span", { className: "sp" }), el("span", { textContent: bytes(p.bytes) })), el("div", { className: "mono muted small", textContent: `rooms\\${st.room.id}\\…` }), el("div", { className: "who" }, ...p.players.map((x) => el("span", {}, icon("film", "sm"), x.owner === st.id ? t("{name} (you)", { name: nameOf(x.owner) }) : nameOf(x.owner), el("span", { className: "muted", textContent: bytes(x.bytes) })))), alone.length ? el("div", { className: "warn small" }, icon("alert", "sm"), t("Nobody else has {names}'s part", { names: alone.join(", ") })) : "");
-  }));
-  $("delyes").replaceChildren(icon("trash", "sm"), t("Delete {size}", { size: bytes(size) }));
+  $("deltitle").textContent = t(sets.length === 1 ? "Delete this recording?" : "Delete {n} recordings?", { n: sets.length });
+  $("dellist").replaceChildren(...preview.map((p) => el("div", { className: "delcard" },
+    el("div", { className: "row" }, el("b", { textContent: sessionName(p.id) }), el("span", { className: "sp" }), el("span", { textContent: bytes(p.bytes) })),
+    el("div", { className: "who" }, ...p.players.map((x) => el("span", {}, icon("film", "sm"), x.owner === st.id ? t("{name} (you)", { name: nameOf(x.owner) }) : nameOf(x.owner), el("span", { className: "muted", textContent: bytes(x.bytes) })))),
+    el("div", { className: "small" + (p.form === "Others still have it" ? " muted" : " warn"), textContent: t(p.form) }))));
+  $("delyes").replaceChildren(icon("trash", "sm"), size ? t("Delete {size}", { size: bytes(size) }) : t("Delete"));
   $("delyes").onclick = async () => {
     $("deletedlg").close();
     for (const s of sets) await invoke("delete_set", { room: s.room, set: s.id }).catch(fail);
     for (const s of sets) picked.delete(s.id);
     if (sets.some((s) => s.id === selected)) selectSet(null);
-    flash(t("Deleted from this PC"));
+    flash(t("Deleted"));
     refresh().then(loadStorage);
   };
   $("deletedlg").showModal();

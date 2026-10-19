@@ -718,6 +718,17 @@ pub fn run_job_next(job: String) {
     *FIRST.lock().unwrap() = job;
 }
 
+pub fn cancel_set(room: &str, set: &str) {
+    let file = format!("{set}/");
+    if RUNNING.lock().unwrap().as_ref().is_some_and(|r| r.room == room && r.file.starts_with(&file)) {
+        CANCEL.store(true, Ordering::Relaxed);
+    }
+    let mut first = FIRST.lock().unwrap();
+    if first.contains(&format!("/{set}/")) {
+        first.clear();
+    }
+}
+
 #[tauri::command]
 pub fn cancel_job() {
     if RUNNING.lock().unwrap().is_some() {
@@ -746,6 +757,15 @@ mod tests {
 
     fn log(owner: &str, offset_us: i64, records: Vec<Value>) -> Log {
         Log { owner: owner.into(), offset_us, records: Arc::new(records) }
+    }
+
+    #[test]
+    fn deleting_a_recording_cancels_this_pcs_next_job_on_it_only() {
+        *FIRST.lock().unwrap() = "apex-matches@1/abc/2026-10-19 10-00-00/owner".into();
+        cancel_set("r", "2026-10-19 10-00-01");
+        assert!(!FIRST.lock().unwrap().is_empty());
+        cancel_set("r", "2026-10-19 10-00-00");
+        assert!(FIRST.lock().unwrap().is_empty());
     }
 
     fn config_record(t: i64, on: bool, model: &str) -> Value {
@@ -1017,7 +1037,7 @@ mod tests {
 
     #[test]
     fn a_capture_spans_its_segments_on_the_local_clock() {
-        let seg = |n, t_us| Seg { capture: "1".into(), series: "v".into(), n, t_us, d_us: 4, size: 1, sha256: String::new() };
+        let seg = |n, t_us| Seg { set: "s1".into(), capture: "1".into(), series: "v".into(), n, t_us, d_us: 4, size: 1, sha256: String::new() };
         let (a, b) = (seg(1, 100), seg(2, 104));
         assert_eq!(span(&[&a, &b], 10), Some((90, 98)));
         assert_eq!(span(&[], 0), None);

@@ -149,7 +149,6 @@ pub struct Peer {
     pub seen_us: Option<i64>,
     pub have: HashMap<String, u64>,
     pub logs: HashMap<String, u64>,
-    pub gone: HashSet<String>,
     pub asks: Vec<Value>,
 }
 
@@ -159,7 +158,7 @@ impl Peer {
     }
 
     pub fn new(id: EndpointId, name: String) -> Self {
-        Self { id, name, conn: None, offset_us: None, failures: 0, announce: true, codecs: default_codecs(), info: None, sharing: false, seen_us: None, have: HashMap::new(), logs: HashMap::new(), gone: HashSet::new(), asks: Vec::new() }
+        Self { id, name, conn: None, offset_us: None, failures: 0, announce: true, codecs: default_codecs(), info: None, sharing: false, seen_us: None, have: HashMap::new(), logs: HashMap::new(), asks: Vec::new() }
     }
 }
 
@@ -183,7 +182,7 @@ pub struct Core {
     pub notice: Mutex<String>,
     pub free_bytes: AtomicU64,
     pub total_bytes: AtomicU64,
-    pub deleted: Mutex<HashSet<String>>,
+    pub want: Mutex<HashMap<String, bool>>,
     pub pacer: Mutex<net::Pacer>,
     pub previous_version: String,
     pub ffmpeg_status: Mutex<String>,
@@ -282,7 +281,6 @@ impl Core {
             "audio_process": *self.audio_process.lock().unwrap(),
             "warn_hours": *self.warn_hours.lock().unwrap(),
             "channel": *self.channel.lock().unwrap(),
-            "deleted_sets": *self.deleted.lock().unwrap(),
             "mic": self.engine.mic.lock().unwrap().clone(),
             "mix": self.engine.mix.lock().unwrap().clone(),
             "quality": self.engine.quality.lock().unwrap().clone(),
@@ -307,10 +305,6 @@ impl Core {
 
     pub fn connections(&self) -> Vec<Connection> {
         self.peers.lock().unwrap().iter().filter_map(|p| p.conn.clone()).collect()
-    }
-
-    pub fn is_deleted(&self, room: &str, set: &str) -> bool {
-        self.deleted.lock().unwrap().contains(&format!("{room}/{set}"))
     }
 
     pub fn sharing_live(&self) -> bool {
@@ -476,9 +470,15 @@ async fn stop_recording(core: State<'_, Arc<Core>>) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn delete_set(core: State<'_, Arc<Core>>, room: String, set: String) -> Result<(), String> {
+async fn delete_set(core: State<'_, Arc<Core>>, room: String, set: String) -> Result<bool, String> {
     let core = core.inner().clone();
     tauri::async_runtime::spawn_blocking(move || room::delete_set(&core, &room, &set)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn discard_set(core: State<'_, Arc<Core>>, room: String, set: String) -> Result<bool, String> {
+    let core = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || room::discard_set(&core, &room, &set)).await.map_err(|e| e.to_string())?
 }
 
 fn update_allowed(core: &Core) -> Result<(), String> {
@@ -547,14 +547,16 @@ fn identity(core: State<Arc<Core>>, export: bool) {
 }
 
 #[tauri::command]
-fn restore_set(core: State<Arc<Core>>, room: String, set: String) {
-    room::restore_set(&core, &room, &set);
+fn download_set(core: State<Arc<Core>>, room: String, set: String) -> Result<(), String> {
+    room::download_set(&core, &room, &set)
 }
 
 #[tauri::command]
 fn open_set_folder(core: State<Arc<Core>>, room: String, set: String) {
     if room::valid_id(&room) && room::valid_id(&set) {
-        data::open_folder(&core.dir.join("rooms").join(&room).join(core.me()));
+        let dir = core.recording_dir(&room, &set);
+        let _ = std::fs::create_dir_all(&dir);
+        data::open_folder(&dir);
     }
 }
 
@@ -993,7 +995,7 @@ async fn init(app: AppHandle, dir: PathBuf, left_lock: bool) -> Result<Arc<Core>
         notice: Mutex::new(String::new()),
         free_bytes: AtomicU64::new(0),
         total_bytes: AtomicU64::new(0),
-        deleted: Mutex::new(strings(&settings["deleted_sets"])),
+        want: Mutex::new(HashMap::new()),
         pacer: Mutex::new(net::Pacer::new()),
         previous_version,
         ffmpeg_status: Mutex::new(String::new()),
@@ -1133,7 +1135,7 @@ fn main() {
             std::thread::spawn(move || thumbs::keeper(c));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug::debug_view, debug::debug_report, debug::set_report_sharing, save_report, start_recording, stop_recording, delete_set, restore_set, identity, open_set_folder, export_set, cancel_export, pick_import, import_plan, import_recording, cancel_import, export_folder, set_layout, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, remove_room, check_peer, set_limit, set_codecs, cancel_invites, list_sources, set_source, use_display, list_mics, set_mic, set_mix, set_audio_process, set_warn_hours, set_channel, event_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_event, answer_ask, focus_set, party_on, party_act, jobs::room_plugins, jobs::set_room_plugin, jobs::set_process_plugin, jobs::prepare_plugin, jobs::jobs, jobs::retry_job, jobs::cancel_job, install_update, check_update, save_text, jobs::run_job_next, set_quality, set_language, rename_room, draw, party_typing, mark, set_hotkey, retry_ffmpeg, set_api, set_api_lan, new_api_token, api_info, api_reference, open_llms])
+        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug::debug_view, debug::debug_report, debug::set_report_sharing, save_report, start_recording, stop_recording, delete_set, discard_set, download_set, identity, open_set_folder, export_set, cancel_export, pick_import, import_plan, import_recording, cancel_import, export_folder, set_layout, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, remove_room, check_peer, set_limit, set_codecs, cancel_invites, list_sources, set_source, use_display, list_mics, set_mic, set_mix, set_audio_process, set_warn_hours, set_channel, event_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_event, answer_ask, focus_set, party_on, party_act, jobs::room_plugins, jobs::set_room_plugin, jobs::set_process_plugin, jobs::prepare_plugin, jobs::jobs, jobs::retry_job, jobs::cancel_job, install_update, check_update, save_text, jobs::run_job_next, set_quality, set_language, rename_room, draw, party_typing, mark, set_hotkey, retry_ffmpeg, set_api, set_api_lan, new_api_token, api_info, api_reference, open_llms])
         .build(tauri::generate_context!())
         .expect("failed to start");
     app.run(|app, event| {

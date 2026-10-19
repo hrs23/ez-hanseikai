@@ -1581,7 +1581,12 @@ async function toggleRecording(kind) {
   const title = ending ? t("Stop recording for everyone?") : debrief ? t("Record the debrief for everyone?") : t("Start recording for everyone?");
   const action = ending ? t("Stop recording") : debrief ? t("Record debrief") : t("Start recording");
   const text = ending ? t("Recording stops for everyone.") : debrief ? t("Only the voice and the viewing flow are recorded.") : t("Everyone in the room starts recording.");
-  if (await ask(title, action, ending, text)) run(ending ? "stop_recording" : "start_recording", ending ? undefined : { debrief });
+  if (!(await ask(title, action, ending, text))) return;
+  if (!ending) return run("start_recording", { debrief });
+  const { id, start_us } = st.active_set;
+  const seconds = (nowUs() - start_us) / 1e6;
+  await run("stop_recording");
+  if (discardable(seconds) && (await ask(t("Discard this recording?"), t("Discard"), true))) run("discard_set", { room: st.room.id, set: id });
 }
 const current = () => (playSet() ? play : rec);
 

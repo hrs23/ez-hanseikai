@@ -43,7 +43,7 @@ const JA: [(&str, &str); 52] = [
     ("Export video…", "動画をエクスポート…"),
     ("Export to folder…", "フォルダにエクスポート…"),
     ("Import recording…", "録画をインポート…"),
-    ("Delete from this PC…", "このPCから削除…"),
+    ("Delete…", "削除…"),
     ("Live", "ライブ"),
     ("Game plan", "作戦ボード"),
     ("Sidebar", "サイドバー"),
@@ -322,7 +322,7 @@ fn build_menu(app: &AppHandle, lang: &str, toggle: &MenuItem<Wry>, mark: &MenuIt
         .separator()
         .item(&it("export-session", "Export video…", None)?)
         .item(&it("export-folder", "Export to folder…", None)?)
-        .item(&it("delete-session", "Delete from this PC…", None)?)
+        .item(&it("delete-session", "Delete…", None)?)
         .build()?;
     let view = SubmenuBuilder::new(app, tr(lang, "View"))
         .item(&it("page-room", "Room", Some("CmdOrCtrl+1"))?)
