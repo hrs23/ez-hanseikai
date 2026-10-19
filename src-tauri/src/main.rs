@@ -10,6 +10,7 @@ mod debug;
 mod download;
 mod export;
 mod ffmpeg;
+mod hw;
 mod import;
 mod jobs;
 mod log;
@@ -145,6 +146,7 @@ pub struct Peer {
     pub announce: bool,
     pub codecs: Vec<String>,
     pub info: Option<(String, u32)>,
+    pub hw: Value,
     pub sharing: bool,
     pub seen_us: Option<i64>,
     pub have: HashMap<String, u64>,
@@ -158,7 +160,7 @@ impl Peer {
     }
 
     pub fn new(id: EndpointId, name: String) -> Self {
-        Self { id, name, conn: None, offset_us: None, failures: 0, announce: true, codecs: default_codecs(), info: None, sharing: false, seen_us: None, have: HashMap::new(), logs: HashMap::new(), asks: Vec::new() }
+        Self { id, name, conn: None, offset_us: None, failures: 0, announce: true, codecs: default_codecs(), info: None, hw: Value::Null, sharing: false, seen_us: None, have: HashMap::new(), logs: HashMap::new(), asks: Vec::new() }
     }
 }
 
@@ -1120,6 +1122,7 @@ fn main() {
             } else {
                 api::apply(&core);
             }
+            hw::warm();
             let c = core.clone();
             std::thread::spawn(move || record::supervise(c));
             let c = core.clone();

@@ -66,6 +66,20 @@ struct Transfer {
     done: u64,
     total: u64,
     started: Instant,
+    hosts: Vec<String>,
+}
+
+pub fn host_of(url: &str) -> Option<String> {
+    let rest = url.split_once("://")?.1;
+    let host = rest.split(['/', '?', '#']).next()?.rsplit('@').next()?.split(':').next()?;
+    (!host.is_empty()).then(|| host.to_lowercase())
+}
+
+pub fn active() -> Vec<Value> {
+    let transfers = TRANSFERS.lock().unwrap();
+    let mut out: Vec<Value> = transfers.iter().flatten().map(|(key, t)| json!({"key": key, "hosts": t.hosts})).collect();
+    out.sort_by_key(|v| v["key"].as_str().map(String::from));
+    out
 }
 
 pub fn pace(done: u64, total: u64, seconds: f64) -> (u64, Option<u64>) {
@@ -97,7 +111,10 @@ pub fn fetch_group(key: &str, dir: &Path, downloads: &[Download]) -> Result<(), 
         if map.contains_key(key) {
             return Err("Already downloading.".into());
         }
-        map.insert(key.to_string(), Transfer { done: 0, total, started: Instant::now() });
+        let mut hosts: Vec<String> = downloads.iter().filter_map(|d| host_of(&d.url)).collect();
+        hosts.sort();
+        hosts.dedup();
+        map.insert(key.to_string(), Transfer { done: 0, total, started: Instant::now(), hosts });
     }
     let mut base = 0;
     let mut result = Ok(());
@@ -182,6 +199,14 @@ mod tests {
         assert_eq!(pace(50, 100, 10.0), (5, Some(10)));
         assert_eq!(pace(100, 100, 10.0), (10, Some(0)));
         assert_eq!(pace(120, 100, 10.0).1, Some(0));
+    }
+
+    #[test]
+    fn hosts_come_from_the_url_alone() {
+        assert_eq!(host_of("https://Example.COM/a/b.zip?x=1").as_deref(), Some("example.com"));
+        assert_eq!(host_of("https://user:pw@files.example.net:8443/x").as_deref(), Some("files.example.net"));
+        assert_eq!(host_of("not a url"), None);
+        assert_eq!(host_of("https:///x"), None);
     }
 
     #[test]

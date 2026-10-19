@@ -132,6 +132,8 @@ function summaryLines(s, failed) {
   lines.push({ key: "Storage", level: d.full ? "fail" : d.low ? "warn" : "ok", text: space });
   const other = on.filter((p) => p.version && p.version !== s.version);
   lines.push({ key: "Versions", level: other.length ? "warn" : "ok", text: other.length ? other.map((p) => t("{name} is on {version}", { name: who(p), version: p.version })).join(" · ") : s.version });
+  const clock = clockSummary(s);
+  lines.push({ key: "Clocks", level: clock.level, text: clock.text });
   lines.push({ key: "Plugins", level: failed ? "fail" : "ok", text: failed ? t(failed === 1 ? "{n} job failed" : "{n} jobs failed", { n: failed }) : t("No problems") });
   return lines;
 }

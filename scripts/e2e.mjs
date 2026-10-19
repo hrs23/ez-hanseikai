@@ -967,15 +967,15 @@ async function scenario(ctx) {
   await step("Diagnostics is one screen with a masked report and the old developer window is gone", async () => {
     check((await evaluate(a, `invoke("open_debug").then(() => "open", () => "gone")`)) === "gone", "the developer window can still be opened");
     await evaluate(a, `openDiagnostics("summary"); true`);
-    check(await evaluate(a, `[...$("diagdlg").querySelectorAll("[data-dtab]")].map((x) => x.dataset.dtab).join() === "summary,flow,traffic,log,jobs"`), "Diagnostics lacks its tabs");
-    for (const tab of ["flow", "traffic", "log", "jobs"]) {
+    check(await evaluate(a, `[...$("diagdlg").querySelectorAll("[data-dtab]")].map((x) => x.dataset.dtab).join() === "summary,flow,pcs,traffic,log,jobs"`), "Diagnostics lacks its tabs");
+    for (const tab of ["flow", "pcs", "traffic", "log", "jobs"]) {
       await evaluate(a, `openDiagnostics(${JSON.stringify(tab)}); true`);
       await waitFor(`Diagnostics shows ${tab}`, within(UI_REFRESH_S * 5), () => evaluate(a, `$("diagbody").textContent.length > 0 && !$("diagbody").textContent.includes(t("Loading…"))`));
     }
     await evaluate(a, `openDiagnostics("flow"); true`);
     await screenshot(a, "diagnostics");
     const report = await evaluate(a, `diagnosticsText()`);
-    check(report.includes("ez-hanseikai") && report.includes("jobs") && report.includes("recent log"), "the report lacks its parts");
+    check(report.includes("ez-hanseikai") && report.includes("jobs") && report.includes("recent log") && report.includes("\nhardware\n") && report.includes("\nclocks\n") && report.includes("\nwhere data goes\n"), "the report lacks its parts");
     for (const secret of [NAMES.a, NAMES.b, NAMES.c, a.id, b.id]) check(!report.includes(secret), `the report holds ${secret.slice(0, 4)}`);
     check(!/[A-Za-z]:\\/.test(report) && !/\b\d{1,3}(\.\d{1,3}){3}\b/.test(report), "the report holds a path or an address");
     await evaluate(a, `$("diagdlg").close(); true`);

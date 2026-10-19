@@ -19,7 +19,7 @@ use crate::ffmpeg::{self, FRAGMENTED};
 use crate::room::{part_of, seg_name, INIT, SERIES};
 use crate::sources::{self, Found, Item};
 use crate::proc::{self, Process, BELOW_NORMAL};
-use crate::{data, debug, hex, media, merge, now_us, read_json, write_whole, Core};
+use crate::{data, debug, hex, hw, media, merge, now_us, read_json, write_whole, Core};
 
 pub type Err = Box<dyn std::error::Error + Send + Sync>;
 
@@ -671,7 +671,9 @@ impl Sink {
         if self.closed.load(Ordering::Relaxed) {
             return;
         }
-        *self.frame.lock().unwrap() = Some(frame);
+        if self.frame.lock().unwrap().replace(frame).is_some() {
+            debug::frame(debug::DROPPED);
+        }
         self.ready.notify_one();
     }
 
@@ -1056,6 +1058,7 @@ pub fn supervise(core: Arc<Core>) {
             ensure_video(&core, found.as_ref().filter(|_| want(&core).is_some_and(|(_, voice)| !voice) && ffmpeg::encoders_ready()));
         }
         check_sink(&core);
+        hw::tick(&core);
         thread::sleep(SUPERVISE_EVERY);
     }
 }

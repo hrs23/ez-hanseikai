@@ -17,7 +17,7 @@ use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::EnvFilter;
 
 use crate::room::{self, SERIES};
-use crate::{check, data, ffmpeg, net, now_us, party, record, short, sources, Core, NO_WINDOW};
+use crate::{check, data, download, ffmpeg, hw, net, now_us, party, record, short, sources, Core, NO_WINDOW};
 
 const MAX_LOG: u64 = 10 << 20;
 pub const LOG_FILES: [&str; 3] = ["log.txt", "log.old.txt", "log.older.txt"];
@@ -32,12 +32,14 @@ const ERRORS_KEPT: usize = 50;
 const JOB_RECORDS_KEPT: usize = 200;
 const JOB_LINES: usize = 40;
 const NAME_MIN_CHARS: usize = 2;
+pub const UPDATE_HOST: &str = "github.com";
 
 pub const ARRIVED: usize = 0;
 pub const TAKEN: usize = 1;
 pub const ENCODED: usize = 2;
 pub const REPEATED: usize = 3;
-pub static FRAMES: [AtomicU64; 4] = [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+pub const DROPPED: usize = 4;
+pub static FRAMES: [AtomicU64; 5] = [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
 
 static SHARE_ADDRESSES: AtomicBool = AtomicBool::new(false);
 static TRANSFERS: Mutex<Ring> = Mutex::new(Ring::new(TRANSFERS_KEPT));
@@ -260,6 +262,17 @@ pub fn hash_fail(owner: &str, capture: &str, series: &str, n: u32, bytes: u64) {
     mark_bad(&mut TRANSFERS.lock().unwrap(), owner, capture, series, n, bytes);
 }
 
+pub fn queued_out(peer: &str) -> usize {
+    ACTIVE.lock().unwrap().iter().filter(|(_, row, ..)| row["dir"] == "out" && row["peer"] == peer).count()
+}
+
+pub fn slow_send(what: &What, took: std::time::Duration) {
+    let peer = what.row["peer"].as_str().unwrap_or_default();
+    if took >= hw::SLOW_SEND {
+        hw::slow_send(peer, took, queued_out(peer));
+    }
+}
+
 pub fn log_transfer(dir: &str, peer: impl std::fmt::Display, room: &str, of: &str, bytes: usize, started: Instant) {
     if bytes == 0 {
         return;
@@ -470,7 +483,7 @@ fn recording_json(core: &Core, since: u64) -> Value {
     let frames: Vec<u64> = FRAMES.iter().map(|f| f.load(Ordering::Relaxed)).collect();
     json!({
         "engine": record::debug_json(core),
-        "frames": {"arrived": frames[ARRIVED], "taken": frames[TAKEN], "encoded": frames[ENCODED], "repeated": frames[REPEATED]},
+        "frames": {"arrived": frames[ARRIVED], "taken": frames[TAKEN], "encoded": frames[ENCODED], "repeated": frames[REPEATED], "dropped": frames[DROPPED]},
         "fps": record::FPS,
         "fragments_per_segment": record::FRAGMENTS_PER_SEGMENT,
         "usable": usable,
@@ -481,6 +494,58 @@ fn recording_json(core: &Core, since: u64) -> Value {
         "stderr": FFMPEG.lock().unwrap().since(0),
         "recording": core.active_set_json(),
     })
+}
+
+fn flow_json(core: &Core) -> Value {
+    let home = format!("{:?}", core.ep.home_relay_status().get());
+    let members: Vec<Value> = core
+        .peers
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|p| {
+            let kind = p.alive().map(room::path_kind);
+            json!({"id": p.id.to_string(), "path": kind.as_ref().map(|k| k.0).filter(|k| *k != "none"), "relay": kind.and_then(|k| k.2)})
+        })
+        .collect();
+    json!({
+        "members": members,
+        "relay": if home.contains("Connected") { room::relay_host(&home) } else { None },
+        "downloads": download::active(),
+        "update": {"host": UPDATE_HOST, "channel": *core.channel.lock().unwrap()},
+        "api": {"on": *core.api_on.lock().unwrap(), "lan": *core.api_lan.lock().unwrap()},
+    })
+}
+
+pub fn flow_text(flow: &Value, addresses: bool) -> String {
+    let host = |h: &Value| match h.as_str() {
+        Some(h) if addresses => h.to_string(),
+        Some(_) => "<host>".to_string(),
+        None => "none".to_string(),
+    };
+    let mut out = String::from("where data goes\n");
+    for m in flow["members"].as_array().into_iter().flatten() {
+        let how = match m["path"].as_str() {
+            Some("direct") => "direct".to_string(),
+            Some(_) => format!("through the relay {}", host(&m["relay"])),
+            None => "offline".to_string(),
+        };
+        out.push_str(&format!("  member {}: {how}\n", short(m["id"].as_str().unwrap_or_default())));
+    }
+    out.push_str(&format!("  address lookup: relay {}\n", host(&flow["relay"])));
+    out.push_str(&format!("  update check: {}, {} channel\n", flow["update"]["host"].as_str().unwrap_or("?"), flow["update"]["channel"].as_str().unwrap_or("?")));
+    let downloads: Vec<String> = flow["downloads"].as_array().into_iter().flatten().map(|d| format!("{} from {}", d["key"].as_str().unwrap_or("?"), d["hosts"].as_array().into_iter().flatten().filter_map(|h| h.as_str()).collect::<Vec<_>>().join(", "))).collect();
+    out.push_str(&format!("  downloads: {}\n", if downloads.is_empty() { "none now".to_string() } else { downloads.join("; ") }));
+    let api = if flow["api"]["on"] != true { "off" } else if flow["api"]["lan"] == true { "on, open to the network" } else { "on, this PC only" };
+    out.push_str(&format!("  local API: {api}\n"));
+    out
+}
+
+fn hardware_text(core: &Core) -> String {
+    let peers: Vec<(String, Value, Option<i64>)> = core.peers.lock().unwrap().iter().map(|p| (short(p.id), p.hw.clone(), p.offset_us)).collect();
+    let others: Vec<(String, Value)> = peers.iter().map(|(who, hw, _)| (who.clone(), hw.clone())).collect();
+    let offsets: Vec<(String, Option<i64>)> = peers.iter().map(|(who, _, offset)| (who.clone(), *offset)).collect();
+    hw::report(&hw::share(core), &others, &offsets, &hw::time_json())
 }
 
 fn set_detail(core: &Core, room: &str, set: &room::Set) -> Value {
@@ -589,6 +654,7 @@ pub fn view(core: &Core, tab: &str, since: u64, set: Option<&str>, addresses: bo
         "recording" => recording_json(core, since),
         "data" => data_json(core, set),
         "jobs" => jobs_json(core),
+        "flow" => flow_json(core),
         "log" => log_json(core, since, addresses),
         _ => Value::Null,
     }
@@ -814,6 +880,7 @@ pub fn report_text(core: &Core, include_addresses: bool, peer_addresses: bool, c
     let infos: Vec<String> = core.peers.lock().unwrap().iter().map(|p| format!("{} {:?}", short(p.id), p.info)).collect();
     out.push_str(&format!("peers {}\n\nenvironment check\n{}\n\n", infos.join(", "), check.unwrap_or("not run")));
     out.push_str(&text(core, peer_addresses));
+    out.push_str(&format!("\n{}\n{}", hardware_text(core), flow_text(&flow_json(core), include_addresses)));
     out.push_str("\nrecent errors\n");
     out.push_str(&errors(&log).join("\n"));
     out.push_str("\n\njobs\n");
@@ -970,6 +1037,24 @@ mod tests {
         fs::write(&path, "new\n").unwrap();
         assert_eq!(tail(&path, 19, 1000), ("new\n".to_string(), 4, true));
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_flow_text_names_each_route_and_hides_hosts_unless_asked() {
+        let flow = json!({
+            "members": [{"id": "abcdefghijklmnop", "path": "direct", "relay": null}, {"id": "qrstuvwxyz012345", "path": "relay", "relay": "relay.example.net"}, {"id": "0123456789abcdef", "path": null, "relay": null}],
+            "relay": "relay.example.net",
+            "downloads": [{"key": "ffmpeg", "hosts": ["github.com"]}],
+            "update": {"host": "github.com", "channel": "beta"},
+            "api": {"on": true, "lan": false},
+        });
+        let hidden = flow_text(&flow, false);
+        assert!(!hidden.contains("relay.example.net"), "{hidden}");
+        assert!(hidden.contains("member abcdefghij: direct") && hidden.contains("member qrstuvwxyz: through the relay <host>") && hidden.contains("member 0123456789: offline"), "{hidden}");
+        assert!(hidden.contains("update check: github.com, beta channel") && hidden.contains("downloads: ffmpeg from github.com") && hidden.contains("local API: on, this PC only"), "{hidden}");
+        assert!(flow_text(&flow, true).contains("address lookup: relay relay.example.net"));
+        let quiet = flow_text(&json!({"members": [], "relay": null, "downloads": [], "update": {"host": "github.com", "channel": "stable"}, "api": {"on": false}}), true);
+        assert!(quiet.contains("address lookup: relay none") && quiet.contains("downloads: none now") && quiet.contains("local API: off"), "{quiet}");
     }
 
     #[test]

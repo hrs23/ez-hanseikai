@@ -547,7 +547,7 @@ const DIAG_LOG_LINES = 300;
 const TRANSFER_KINDS = { init: "Setup", "live picture": "Live picture", "live voice": "Live voice", "history picture": "Recorded picture", "history voice": "Recorded voice" };
 const TRANSFER_RESULTS = { ok: "Done", retry: "Retried", partial: "Partial", "hash fail": "Checksum failed" };
 function pullDiag() {
-  const tab = { traffic: "network", log: "log" }[diagTab];
+  const tab = { traffic: "network", log: "log", flow: "flow" }[diagTab];
   if (!tab || Date.now() - diagFeedAt < DIAG_FEED_MS) return;
   diagFeedAt = Date.now();
   invoke("debug_view", { tab, since: 0, set: null, addresses: false }).then((data) => { diagFeed = { tab: diagTab, data }; delete sigs.diag; renderDiagnostics(); }).catch(warn);
@@ -587,7 +587,7 @@ function renderDiagnostics() {
   const failed = jobInfo ? jobInfo.jobs.filter((j) => j.state === "failed").length : 0;
   const lines = summaryLines(st, failed);
   const fed = diagFeed && diagFeed.tab === diagTab ? diagFeed.data : null;
-  if (!changed("diag", [diagTab, lines, st.peers, fed, jobInfo && jobInfo.jobs, lang])) return;
+  if (!changed("diag", [diagTab, lines, st.peers, st.hw, st.time_sync, st.api, st.channel, fed, jobInfo && jobInfo.jobs, lang])) return;
   if (diagTab === "summary") {
     $("diagbody").replaceChildren(el("div", { className: "okbox" }, ...lines.map((l) => el("div", { className: "ok-line lv-" + l.level }, icon({ ok: "ok", warn: "alert", fail: "fail" }[l.level] || "info", "sm"), el("b", { textContent: t(l.key) }), el("span", { textContent: l.text }), l.key === "Plugins" && failed ? el("button", { className: "sm", textContent: t("Open jobs"), onclick: () => { $("diagdlg").close(); roomTab = "jobs"; go("room"); } }) : null))));
     return;
@@ -601,6 +601,10 @@ function renderDiagnostics() {
     $("diagbody").replaceChildren(...jobsView());
     return;
   }
+  if (diagTab === "pcs") {
+    $("diagbody").replaceChildren(...pcsView(st));
+    return;
+  }
   const peers = st.peers;
   const sendsLive = st.capture.sharing;
   const what = (p) => [sendsLive ? t("Live picture and voice") : null, t("Recorded files"), t("Log")].filter(Boolean).join(" · ");
@@ -609,8 +613,8 @@ function renderDiagnostics() {
   const diagram = el("div", { className: "flowmap" }, node(st.id, t("This PC")), el("div", { className: "links" }, ...(links.length ? links : [el("div", { className: "none", textContent: t("No other members") })])));
   const head = el("tr", {}, ...["Peer", "Path", "What is sent", "Sent", "Received"].map((h) => el("th", { textContent: t(h) })));
   const rows = peers.map((p) => el("tr", { className: p.connected ? "" : "dim" }, el("td", {}, el("b", { textContent: nameOf(p.id) })), el("td", { className: p.connected ? (p.path === "relay" ? "warn" : "ok") : "faint", textContent: p.connected ? (p.path === "relay" ? [t("Relay"), p.relay].filter(Boolean).join(" ") : t("Direct")) : t("Offline") }), el("td", { textContent: p.connected ? what(p) : "—" }), el("td", { textContent: p.sent != null ? bytes(p.sent) : "—" }), el("td", { textContent: p.received != null ? bytes(p.received) : "—" })));
-  const other = [["globe", "Address lookup", t("Publishes only the relay address")], ["refresh", "Update check", t("github.com · at start and every 4 h · {channel} channel", { channel: st.channel === "beta" ? t("Beta") : t("Stable") })], ["download", "Downloads", t("Video tools, plugin tools and models, only when needed")]];
-  $("diagbody").replaceChildren(diagram, el("div", { className: "tablebox" }, el("table", { className: "table" }, el("thead", {}, head), el("tbody", {}, ...rows))), el("div", { className: "okbox" }, el("div", { className: "h3", textContent: t("Other connections") }), ...other.map(([i, k, v]) => el("div", { className: "ok-line" }, icon(i, "sm"), el("b", { textContent: t(k) }), el("span", { textContent: v })))));
+  const sent = flowRows(st, fed, (k) => (k === "ffmpeg" ? t("Video tools") : pluginName(k)));
+  $("diagbody").replaceChildren(el("div", { className: "okbox" }, ...sent.map(okLine)), diagram, el("div", { className: "tablebox" }, el("table", { className: "table" }, el("thead", {}, head), el("tbody", {}, ...rows))));
 }
 async function diagnosticsText() {
   const failed = jobInfo ? jobInfo.jobs.filter((j) => j.state === "failed").length : 0;

@@ -12,7 +12,7 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::time::{sleep, timeout};
 
 use crate::room::{self, capture_id, part_of, seg_name, valid_id, INIT, SERIES};
-use crate::{data, debug, default_codecs, file_len, log, merge, now_us, party, short, strings, Core, ALPN, PROTOCOL, VERSION};
+use crate::{data, debug, default_codecs, file_len, hw, log, merge, now_us, party, short, strings, Core, ALPN, PROTOCOL, VERSION};
 
 const CHUNK: usize = 64 << 10;
 pub const LOG_SYNC: Duration = Duration::from_secs(2);
@@ -111,10 +111,12 @@ fn learn_hello(core: &Arc<Core>, id: &EndpointId, message: &Value) -> u32 {
         let _ = core.app.emit("joined", if name.is_empty() { short(id) } else { name.clone() });
     }
     let codecs = codec_list(&message["codecs"]);
+    let hw = hw::sanitize(&message["hw"]);
     core.update_peer(id, |p| {
         p.info = Some((version, proto));
         p.seen_us = Some(now_us());
         p.codecs = codecs;
+        p.hw = hw;
     });
     room::remember_name(core, &id.to_string(), &name, true);
     if proto != PROTOCOL {
@@ -209,7 +211,7 @@ fn learn_holdings(core: &Core, id: &EndpointId, message: &Value) {
 }
 
 fn hello_message(core: &Core) -> Value {
-    let mut message = json!({"app": VERSION, "proto": PROTOCOL, "name": *core.name.lock().unwrap(), "room": room_info(core), "set": core.active_set_json(), "codecs": *core.codecs.lock().unwrap(), "asks": pending_asks(core)});
+    let mut message = json!({"app": VERSION, "proto": PROTOCOL, "name": *core.name.lock().unwrap(), "room": room_info(core), "set": core.active_set_json(), "codecs": *core.codecs.lock().unwrap(), "asks": pending_asks(core), "hw": hw::share(core)});
     merge(&mut message, &holdings(core));
     message
 }
@@ -257,7 +259,9 @@ async fn send_file(core: &Core, send: &mut SendStream, n: u32, path: &Path, at: 
     loop {
         let k = file.read(&mut buf).await?;
         if k > 0 {
+            let wrote = Instant::now();
             write_frame(send, n, &buf[..k]).await?;
+            debug::slow_send(what, wrote.elapsed());
             row.add(k);
             sent += k as u64;
             pace(core, k, history).await;

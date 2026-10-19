@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 
 use tauri::Emitter;
 
-use crate::{clean_text, data, ffmpeg, hex, net, now_us, party, record, short, stream, Core, Peer, PROTOCOL, ROOM_NAME_MAX, VERSION};
+use crate::{clean_text, data, ffmpeg, hex, hw, net, now_us, party, record, short, stream, Core, Peer, PROTOCOL, ROOM_NAME_MAX, VERSION};
 
 pub const SOLO: &str = "solo";
 pub const SERIES: [&str; 2] = ["v", "m"];
@@ -1075,7 +1075,7 @@ pub fn sets_json(core: &Core, room: &str, logs: &[Log], events: &[Value]) -> Vec
     out
 }
 
-fn path_kind(conn: &Connection) -> (&'static str, u64, Option<String>) {
+pub fn path_kind(conn: &Connection) -> (&'static str, u64, Option<String>) {
     for path in conn.paths().iter() {
         if path.is_selected() {
             let relay = (!path.is_ip()).then(|| relay_host(&format!("{:?}", path.remote_addr()))).flatten();
@@ -1110,6 +1110,7 @@ fn peer_json(core: &Core, room: &str, p: &Peer) -> Value {
         "failures": p.failures,
         "seen_us": p.seen_us,
         "offset_us": p.offset_us,
+        "hw": p.hw,
         "version": p.info.as_ref().map(|(version, _)| version),
         "other_version": other_version,
         "sharing": sharing,
@@ -1170,6 +1171,8 @@ pub fn state_json(core: &Core) -> Value {
     drop(rooms);
     json!({
         "version": VERSION,
+        "hw": hw::share(core),
+        "time_sync": hw::time_json(),
         "ffmpeg": core.ffmpeg_status.lock().unwrap().clone(),
         "ffmpeg_progress": crate::download::progress(ffmpeg::DOWNLOAD_KEY),
         "id": my_id,
