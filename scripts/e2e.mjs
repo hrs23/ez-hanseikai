@@ -56,6 +56,7 @@ const API_PORT_BASE = Number(process.env.E2E_API_PORT_BASE || PORT_BASE + 100);
 const API_PORTS = { a: API_PORT_BASE, b: API_PORT_BASE + 1, c: API_PORT_BASE + 2 };
 const TOKEN_CHARS = 48;
 const OLD_ROOM = "0ld0r00m";
+const ROOM_NAME_CHARS = 40;
 const NAMES = { a: "Ann", b: "Ben", c: "Cal" };
 
 const within = (s) => s * RUNNER_SLOWDOWN;
@@ -588,6 +589,16 @@ async function scenario(ctx) {
     check(await evaluate(a, `$("startbtn").textContent.includes(t("Stop recording")) && !!$("startbtn").querySelector("#livetimer") && !!$("startbtn").querySelector(".recdot") && $("standby").hidden && !!$("sessions").querySelector(".liverow .thumb.live")`), "the start box or the running recording's row is wrong");
   });
 
+  await step("Live shows a tile for everyone who shares a screen, also while recording", async () => {
+    check(await evaluate(a, `page === "player" && navActive() === "live" && $("sidenav").querySelector("[aria-current=page]").dataset.nav === "live"`), "A did not open on Live after creating the room");
+    for (const app of [a, b, c]) {
+      await evaluate(app, `openLive(); true`);
+      await waitFor(`${app.key} shows three live tiles`, within(UI_REFRESH_S * 10), () => evaluate(app, `!$("livetiles").hidden && Object.keys(rec.tiles).length === 3 && $("ptitle").textContent === t("Live")`));
+    }
+    check(await evaluate(a, `$("miccap").classList.contains("off") && $("screencap").classList.contains("recording") && getComputedStyle($("miccap")).borderTopStyle === "dashed" && !!$("miclvl")`), "the bottom-left buttons are not in the shared off/recording states");
+    await screenshot(a, "live-recording");
+  });
+
   await step("a note with a tag, its edit and its deletion reach everyone", async () => {
     const id = await invoke(b, "add_event", { kind: "note", text: "Rotate early #rotate", target: { t_us: Date.now() * 1000 }, values: null });
     const key = `${b.id}/${id}`;
@@ -680,15 +691,16 @@ async function scenario(ctx) {
     check(size && size[0] > 0 && size[1] > 0, `the page could not load the thumbnail: ${brief(size)}`);
     const file = fs.readFileSync(path.join(roomDir(a, ctx.room), "thumbs", `${ctx.set}.jpg`));
     check(file[0] === 0xff && file[1] === 0xd8 && file.length > 500, "the thumbnail file is not a JPEG");
-    await evaluate(a, `roomTab = "recordings"; delete sigs.roomtab; go("room"); true`);
-    await waitFor("A lists the set as a card with a picture", within(UI_REFRESH_S * 5), () => evaluate(a, `[...$("roomtab").querySelectorAll(".reccard")].some((c) => c.querySelector("img") && c.querySelectorAll(".acts button").length === 2)`));
-    check(await evaluate(a, `!!$("sessions").querySelector(".srow:not(.liverow) .thumb img") && !!$("allrecs")`), "the sidebar row has no thumbnail");
+    await evaluate(a, `$("recsopen").click(); true`);
+    await waitFor("A lists the set as a card with a picture", within(UI_REFRESH_S * 5), () => evaluate(a, `[...$("roomtab").querySelectorAll(".reccard")].some((c) => c.querySelector("img") && c.querySelectorAll(".acts button").length === 2) && $("homename").textContent === t("Recordings")`));
+    check(await evaluate(a, `!!$("sessions").querySelector(".srow:not(.liverow) .thumb img") && !$("allrecs") && $("sessions").querySelectorAll(".srow:not(.liverow)").length === recordingRows().length && !!$("recfilter") && !!$("recimport")`), "the sidebar does not list every recording with a thumbnail, or the filter and Import are not in the main area");
     await evaluate(a, `$("recfilter").value = "zzzz"; $("recfilter").dispatchEvent(new Event("input")); true`);
     check(await evaluate(a, `$("roomtab").querySelectorAll(".reccard").length === 0`), "the filter did not hide the cards");
     await evaluate(a, `$("recfilter").value = ""; $("recfilter").dispatchEvent(new Event("input")); true`);
     await waitFor("the cards come back", within(UI_REFRESH_S * 3), () => evaluate(a, `$("roomtab").querySelectorAll(".reccard").length > 0`));
     await screenshot(a, "recordings-tab");
-    await evaluate(a, `roomTab = "members"; delete sigs.roomtab; go("room"); true`);
+    await evaluate(a, `$("sidenav").querySelector("[data-nav=members]").click(); true`);
+    await waitFor("A shows the members", within(UI_REFRESH_S * 3), () => evaluate(a, `$("homename").textContent === t("Members") && navActive() === "members"`));
     await screenshot(a, "room-members");
   });
 
@@ -756,6 +768,19 @@ async function scenario(ctx) {
     }
     const members = await evaluate(b, `${shown}.querySelectorAll(".wrow").length`);
     check(members === 3, `B lists ${members} members under Processing`);
+    const choices = await evaluate(b, `[...${shown}.querySelectorAll("select[aria-label='" + t("Who runs it") + "'] option")].map((o) => o.textContent).join()`);
+    check(choices.split(",").sort().join() === ["Auto", a.name, b.name, c.name].sort().join(), `the runner choices are ${choices}`);
+    await invoke(b, "dismiss_recovery");
+    await screenshot(b, "plugins");
+    await evaluate(b, `(() => { const s = ${shown}.querySelector("select[aria-label='" + t("Who runs it") + "']"); s.value = ${JSON.stringify(c.id)}; s.dispatchEvent(new Event("change")); return true; })()`);
+    await waitFor("B asks before changing who runs it", within(UI_REFRESH_S * 5), () => evaluate(b, `$("confirm").open`));
+    await evaluate(b, `$("confirmyes").click(); true`);
+    for (const app of [a, b, c]) await waitFor(`${app.key} sees C as the runner`, within(LOG_SYNC_S * 3), async () => (await invoke(app, "room_plugins")).find((x) => x.id === "transcribe").runner === c.id && (await invoke(app, "jobs")).jobs.filter((j) => j.plugin === "transcribe").every((j) => j.runner === c.id));
+    await evaluate(b, `roomTab = "jobs"; delete sigs.roomtab; go("room"); true`);
+    await waitFor("B names C's PC in the jobs list", within(UI_REFRESH_S * 5), () => evaluate(b, `[...$("roomtab").querySelectorAll("tbody tr:not(.err)")].filter((r) => r.children[0].textContent.includes(t("Transcription"))).length > 0 && [...$("roomtab").querySelectorAll("tbody tr:not(.err)")].filter((r) => r.children[0].textContent.includes(t("Transcription"))).every((r) => r.children[4].textContent === t("{name}'s PC", { name: ${JSON.stringify(c.name)} }))`));
+    await screenshot(b, "jobs");
+    await invoke(b, "set_plugin_runner", { id: "transcribe", runner: null });
+    for (const app of [a, b, c]) await waitFor(`${app.key} sees Auto again`, within(LOG_SYNC_S * 3), async () => (await invoke(app, "room_plugins")).find((x) => x.id === "transcribe").runner === null);
     const jobs = (await invoke(b, "jobs")).jobs.filter((j) => j.plugin === "transcribe" && j.set === ctx.set);
     const owners = jobs.map((j) => j.owner);
     check(owners.length > 0 && new Set(owners).size === owners.length, `transcription rows per person in the set: ${brief(owners)}`);
@@ -767,27 +792,85 @@ async function scenario(ctx) {
       await waitFor(`${app.key} sees C not processing`, within(LOG_SYNC_S * 3), async () => (await invoke(app, "room_plugins")).find((x) => x.id === "transcribe").workers.some((w) => w.id === c.id && w.on === false));
     }
     check((await invoke(c, "room_plugins")).find((x) => x.id === PLUGIN).process_here === true, "turning off one plugin turned off another");
+    await invoke(a, "set_process_plugin", { id: "transcribe", on: false });
+    for (const app of [a, b, c]) await waitFor(`${app.key} names B as the only one who runs the transcription`, within(LOG_SYNC_S * 3), async () => {
+      const jobs = (await invoke(app, "jobs")).jobs.filter((j) => j.plugin === "transcribe");
+      return jobs.length > 0 && jobs.every((j) => j.runner === b.id);
+    });
+    await invoke(a, "set_process_plugin", { id: "transcribe", on: true });
     await invoke(c, "set_process_plugin", { id: "transcribe", on: true });
+    for (const app of [a, b, c]) await waitFor(`${app.key} sees nobody named when two process`, within(LOG_SYNC_S * 3), async () => (await invoke(app, "jobs")).jobs.filter((j) => j.plugin === "transcribe").every((j) => j.runner === null));
     await invoke(b, "set_room_plugin", { id: "transcribe", on: false, settings: {} });
   });
 
-  await step("the game plan is a tab of the room page and a rename reaches everyone", async () => {
-    await evaluate(a, `showBoard(); true`);
-    await waitFor("A shows the game plan inside the room page", within(UI_REFRESH_S * 3), () => evaluate(a, `!$("boardpane").hidden && !$("roompage").hidden`));
-    check(await evaluate(a, `!$("navboard") && $("roomname").querySelector(".nm").textContent === t("Room")`), "the sidebar still has a game plan entry, or the room button shows a name");
+  await step("the room header menu lists the room commands and a rename in its settings reaches everyone", async () => {
+    await evaluate(a, `$("sidenav").querySelector("[data-nav=board]").click(); true`);
+    await waitFor("A shows the game plan in the main area", within(UI_REFRESH_S * 3), () => evaluate(a, `!$("boardpane").hidden && !$("roompage").hidden && navActive() === "board"`));
     for (const [by, name] of [[b, "Drill room"], [a, "Practice"]]) {
       await invoke(by, "rename_room", { name });
       for (const app of [a, b, c]) await waitFor(`${app.key} shows ${name}`, within(LOG_SYNC_S * 2), async () => (await state(app)).room.name === name);
     }
-    await evaluate(a, `roomTab = "settings"; delete sigs.roomtab; go("room"); true`);
-    await waitFor("A shows the room settings", within(UI_REFRESH_S * 3), () => evaluate(a, `!!$("roomnameinput") && $("roomnameinput").value === "Practice"`));
-    check(await evaluate(a, `[...document.querySelectorAll("#roompage .ptabs button")].map((x) => x.dataset.tab).join() === "members,plugins,jobs,board,recordings,settings" && !$("invitebtn") && !$("leavebtn")`), "the room page tabs or header are not as designed");
+    check(await evaluate(a, `$("roomname").firstElementChild.textContent === "Practice" && $("roomname").getAttribute("aria-haspopup") === "menu"`), "the sidebar header does not show the room name as a menu");
+    await evaluate(a, `$("roomname").click(); true`);
+    const labels = await evaluate(a, `[...$("menu").querySelectorAll("button")].map((b) => b.textContent)`);
+    check(labels.filter((l) => l !== "Cancel invite").join() === ["Room settings…", "Copy invite code", "Switch room", "Leave room…"].join(), `the room menu lists ${labels}`);
+    await evaluate(a, `[...$("menu").querySelectorAll("button")].find((b) => b.textContent === t("Room settings…")).click(); true`);
+    await waitFor("A shows the room settings", within(UI_REFRESH_S * 3), () => evaluate(a, `$("roomdlg").open && $("roomnameinput").value === "Practice" && $("roomsave").disabled`));
     await screenshot(a, "room-settings");
-    await evaluate(a, `(() => { const i = $("roomnameinput"); i.value = "Scrim room"; i.dispatchEvent(new Event("input")); i.parentElement.querySelector("button.primary").click(); return true; })()`);
+    await evaluate(a, `(() => { const i = $("roomnameinput"); i.value = "Scrim room"; i.dispatchEvent(new Event("input")); $("roomsave").click(); return true; })()`);
     for (const app of [a, b, c]) await waitFor(`${app.key} shows the name set in the room settings`, within(LOG_SYNC_S * 2), async () => (await state(app)).room.name === "Scrim room");
+    await waitFor("A's header shows the new name", within(UI_REFRESH_S * 3), () => evaluate(a, `$("roomname").firstElementChild.textContent === "Scrim room"`));
     await invoke(a, "rename_room", { name: "Practice" });
     for (const app of [a, b, c]) await waitFor(`${app.key} shows Practice again`, within(LOG_SYNC_S * 2), async () => (await state(app)).room.name === "Practice");
-    await evaluate(a, `roomTab = "members"; go("room"); true`);
+  });
+
+  await step("the game plan renders Markdown safely, ticks tasks, and keeps a personal plan on this PC", async () => {
+    const plan = ["# Plan", "**Goal**: win", "## Checklist", "- [ ] first", "- [x] second", "## Table", "| Who | Job |", "|---|---|", "| Ann | scout |", "## Code", "```", "let ring = 1;", "```", "## Moments", `[Opening](ezh://moment/${encodeURIComponent(ctx.set)}/5/all) [site](https://example.com/x) [bad](javascript:alert(1)) <img src=x onerror=alert(1)>`].join("\n");
+    await evaluate(a, `editBoard("room"); $("boardtext").value = ${JSON.stringify(plan)}; renderMini(); saveBoard(); true`);
+    for (const app of [b, c]) await waitFor(`${app.key} receives the game plan`, within(LOG_SYNC_S * 2), async () => (await state(app)).events.some((e) => e.kind === "board" && e.text === plan));
+    await waitFor("A shows the cards", within(UI_REFRESH_S * 5), () => evaluate(a, `!!$("canvas").querySelector(".bsec table") && !!$("canvas").querySelector(".bsec pre code")`));
+    const dom = await evaluate(a, `(() => { const c = $("canvas"); return { cards: c.querySelectorAll(".bsec").length, boxes: c.querySelectorAll("input[type=checkbox]").length, links: [...c.querySelectorAll("a")].map((x) => [x.getAttribute("href"), x.title]), moments: c.querySelectorAll("button.link").length, images: c.querySelectorAll("img").length, text: c.textContent }; })()`);
+    check(dom.cards === 4 && dom.boxes === 2 && dom.moments === 1 && dom.images === 0 && dom.links.length === 1 && dom.links[0][0] === null && dom.links[0][1] === "https://example.com/x", `the game plan shows ${brief(dom)}`);
+    check(dom.text.includes("javascript:alert(1)") && dom.text.includes("<img src=x onerror=alert(1)>"), "the unsafe link and tag are not shown as plain text");
+    await screenshot(a, "board-room");
+    await evaluate(a, `$("canvas").querySelector("input[type=checkbox]").click(); true`);
+    for (const app of [a, b, c]) await waitFor(`${app.key} sees the first task ticked`, within(LOG_SYNC_S * 2 + UI_REFRESH_S * 2), async () => (await state(app)).events.filter((e) => e.kind === "board").some((e) => e.text === plan.replace("- [ ] first", "- [x] first")));
+    const boards = async (app) => (await state(app)).events.filter((e) => e.kind === "board").length;
+    const before = { a: await boards(a), b: await boards(b), c: await boards(c) };
+    await evaluate(a, `setBoardScope("personal"); editBoard("personal"); $("boardtext").value = "# Mine\\n- [ ] only me"; renderMini(); saveBoard(); true`);
+    await waitFor("A shows the personal plan", within(UI_REFRESH_S * 5), () => evaluate(a, `boardScope === "personal" && $("canvas").textContent.includes("only me") && $("homesub").textContent === t("Only on this PC")`));
+    await screenshot(a, "board-personal");
+    await sleep(within(LOG_SYNC_S * 2) * 1000);
+    for (const app of [a, b, c]) {
+      check((await boards(app)) === before[app.key] && !JSON.stringify((await state(app)).events).includes("only me"), `${app.key} has the personal game plan as an event`);
+      check(!fs.readFileSync(logFile(app, ctx.room, app.id)).includes("only me"), `${app.key} wrote the personal plan to its log`);
+    }
+    await evaluate(a, `setBoardScope("room"); true`);
+    await waitFor("A shows the room plan again", within(UI_REFRESH_S * 5), () => evaluate(a, `boardScope === "room" && $("canvas").textContent.includes("Checklist")`));
+    await evaluate(a, `$("sidenav").querySelector("[data-nav=members]").click(); true`);
+  });
+
+  await step("the sidebar width is dragged, kept, and never scrolls sideways", async () => {
+    const over = (width) => evaluate(a, `(() => { setSideWidth(${width}); const side = $("side"); const box = side.getBoundingClientRect(); return { width: Math.round(box.width), scroll: [side, $("sessions"), $("sidenav"), document.querySelector(".dock")].filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.className || e.id), outside: [...side.querySelectorAll("*")].filter((e) => e.getBoundingClientRect().right > box.right + 1 && !e.hidden).map((e) => e.className || e.tagName).slice(0, 5) }; })()`);
+    const limits = await evaluate(a, `[clampSide(0), clampSide(9999)]`);
+    for (const width of [limits[0], 264, limits[1]]) {
+      const r = await over(width);
+      check(r.width === width && !r.scroll.length && !r.outside.length, `the sidebar at ${width}: ${brief(r)}`);
+    }
+    await invoke(a, "rename_room", { name: "W".repeat(ROOM_NAME_CHARS) });
+    await waitFor("A's header truncates the long name", within(LOG_SYNC_S * 2), () => evaluate(a, `(() => { const n = $("roomname").firstElementChild; return n.textContent.length === ${ROOM_NAME_CHARS} && n.scrollWidth > n.clientWidth && getComputedStyle(n).textOverflow === "ellipsis" && $("side").scrollWidth <= $("side").clientWidth + 1; })()`));
+    await screenshot(a, "sidebar-narrow");
+    await invoke(a, "rename_room", { name: "Practice" });
+    await evaluate(a, `setSideWidth(${264}); true`);
+    const bar = await evaluate(a, `(() => { const r = $("splitter").getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()`);
+    const mouse = (type, [x, y], buttons) => send(a, "Input.dispatchMouseEvent", { type, x, y, button: type === "mouseMoved" && !buttons ? "none" : "left", buttons, clickCount: 1 });
+    await mouse("mouseMoved", bar, 0);
+    await mouse("mousePressed", bar, 1);
+    for (let i = 1; i <= 4; i++) await mouse("mouseMoved", [bar[0] + 15 * i, bar[1]], 1);
+    await mouse("mouseReleased", [bar[0] + 60, bar[1]], 0);
+    await waitFor("dragging the splitter widens the sidebar and keeps the width", within(UI_REFRESH_S * 3), () => evaluate(a, `Math.round($("side").getBoundingClientRect().width) === 324 && localStorage.getItem("sideWidth") === "324"`));
+    await evaluate(a, `$("splitter").dispatchEvent(new MouseEvent("dblclick", { bubbles: true })); true`);
+    check(await evaluate(a, `Math.round($("side").getBoundingClientRect().width) === 264`), "a double click on the splitter does not reset the width");
   });
 
   await step("each member row says one short state", async () => {
@@ -796,6 +879,9 @@ async function scenario(ctx) {
     await evaluate(a, `openSettings("general"); true`);
     check(await evaluate(a, `(() => { $("name").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 300, clientY: 300 })); const labels = [...$("menu").querySelectorAll("button")].map((b) => b.textContent).join(); closeMenu(); $("settings").close(); return labels === [t("Cut"), t("Copy"), t("Paste"), t("Select all")].join(); })()`), "a text field has no edit menu");
     check(await evaluate(a, `!$("sessions").querySelector(".liverow") && !$("standby").hidden && $("standby").textContent.includes(t("Standby"))`), "the idle list holds a live entry or the start box lacks Standby");
+    await evaluate(a, `openLive(); true`);
+    await waitFor("A shows the live tiles while idle", within(UI_REFRESH_S * 10), () => evaluate(a, `!$("livetiles").hidden && Object.keys(rec.tiles).length === 3 && navActive() === "live"`));
+    await screenshot(a, "live-idle");
     check(rows.length === 3 && rows.every((x) => x === "Standby" || /^Receiving \d+%$/.test(x)), `member states ${brief(rows)}`);
   });
 
@@ -1115,6 +1201,8 @@ async function scenario(ctx) {
     check(await evaluate(b, `$("importtitle").value === "Walkthrough" && [...$("importviews").querySelectorAll("input")].map((i) => i.value).join() === "Coach,Old camera,Commentary"`), "the import dialog does not show the title and the view names");
     await screenshot(b, "import-dialog");
     await evaluate(b, `$("importdlg").close(); true`);
+    await invoke(a, "set_plugin_runner", { id: PLUGIN, runner: c.id });
+    for (const app of [a, b, c]) await waitFor(`${app.key} sees C as the Apex runner`, within(LOG_SYNC_S * 3), async () => (await invoke(app, "room_plugins")).find((x) => x.id === PLUGIN).runner === c.id);
     const made = await invokeLong(b, "import_recording", { spec: { folder: media } }, IMPORT_S, "the import of the hand-made folder");
     check(made.views === 3 && made.notes === 2, `import: ${brief(made)}`);
     await allSee(all, "the walkthrough", within(LOG_SYNC_S * 3), (st) => setOf(st, made.id)?.imported_by === b.name && setOf(st, made.id).title === "Walkthrough");
@@ -1144,6 +1232,11 @@ async function scenario(ctx) {
       check(!jobs.some((j) => j.state === "failed"), `the Apex job failed: ${brief(jobs)}`);
       return jobs.length === 1 && jobs[0].state === "done";
     });
+    const walk = (await invoke(a, "jobs")).jobs.filter((j) => j.plugin === PLUGIN && j.set === made.id)[0];
+    check(walk.by === c.id && walk.runner === c.id, `the chosen runner did not run the job: by ${walk.by}, runner ${walk.runner}`);
+    const claims = [a, b, c].flatMap((owner) => logOf(a, ctx.room, owner.id).filter((r) => r.k === "job" && r.job === walk.job && r.state === "claim").map(() => owner.key));
+    check(claims.length > 0 && claims.every((k) => k === c.key), `the job was claimed by ${claims}`);
+    await invoke(a, "set_plugin_runner", { id: PLUGIN, runner: null });
     await evaluate(c, `openSession(${JSON.stringify(ctx.set)}); true`);
     ctx.notes.push("hand-made folder with a copied, a transcoded and a sound-only file imported on B and played on C");
   });

@@ -24,16 +24,24 @@
 
 <div id="app" class="app" hidden>
   <aside id="side" class="side">
-    <button id="roomname" class="roombtn"><span data-icon="home"></span><span class="nm" data-t="Room">Room</span><span id="roomfaces" class="roomfaces"></span><span class="chev" data-icon="chevron-right" data-icon-class="sm"></span></button>
+    <div class="sidehead">
+      <button id="roomname" class="roombtn" aria-haspopup="menu"><span class="nm"></span><span class="chev" data-icon="chevron-down" data-icon-class="sm"></span></button>
+      <div class="facesrow"><span id="roomfaces" class="roomfaces"></span><button id="apibadge" class="apibadge" hidden></button></div>
+    </div>
+    <nav id="sidenav" class="sidenav" data-t-label="Room">
+      <button data-nav="live"><span data-icon="monitor" data-icon-class="sm"></span><span class="nm" data-t="Live">Live</span></button>
+      <button data-nav="board"><span data-icon="board" data-icon-class="sm"></span><span class="nm" data-t="Game plan">Game plan</span></button>
+      <button data-nav="members"><span data-icon="users" data-icon-class="sm"></span><span class="nm" data-t="Members">Members</span><span id="askcount" class="badge" hidden></span></button>
+      <button data-nav="plugins"><span data-icon="puzzle" data-icon-class="sm"></span><span class="nm" data-t="Plugins">Plugins</span><span id="jobcount" class="count" hidden></span></button>
+    </nav>
     <div class="startbox"><div class="startgroup"><button id="startbtn" class="startbtn go"></button><button id="startmore" class="startmore go" data-icon="chevron-down" data-t-label="Recording options" data-t-title="Recording options" aria-haspopup="menu"></button></div><button id="standby" class="standby"></button></div>
-    <div class="sechead"><span data-t="Recordings">Recordings</span></div>
+    <button id="recsopen" class="sechead"><span data-t="Recordings">Recordings</span><span data-icon="chevron-right" data-icon-class="sm"></span></button>
     <div id="sessions" class="sessions" role="listbox" data-t-label="Recordings"></div>
-    <button id="allrecs" class="allrecs"><span data-t="All recordings">All recordings</span><span data-icon="chevron-right" data-icon-class="sm"></span></button>
     <div id="diskbanner" class="sidebanner" role="button" tabindex="0" hidden></div>
     <div class="dock">
       <div class="caps">
         <div id="screencap" class="cap"><button id="screenbtn" class="capmain"><span id="screenicon"></span><span class="t"><b id="screentitle"></b><small id="screensub"></small></span></button><button id="screenmore" class="car" data-icon="chevron-up" data-icon-class="sm" data-t-label="Screen and app sound" data-t-title="Screen and app sound"></button></div>
-        <div id="miccap" class="cap mic"><button id="micbtn" class="capmain" data-t-label="Microphone"></button><button id="micmore" class="car" data-icon="chevron-up" data-icon-class="sm" data-t-label="Microphone" data-t-title="Microphone"></button></div>
+        <div id="miccap" class="cap mic"><button id="micbtn" class="capmain" data-t-label="Microphone"><span class="micicon"></span><span id="miclvl" class="lvl"><i></i></span></button><button id="micmore" class="car" data-icon="chevron-up" data-icon-class="sm" data-t-label="Microphone" data-t-title="Microphone"></button></div>
       </div>
       <div class="me">
         <span id="meav"></span>
@@ -42,6 +50,7 @@
         <button id="gear" class="icon sm" data-icon="gear" data-t-label="Settings" data-t-title="Settings (Ctrl+,)"></button>
       </div>
     </div>
+    <div id="splitter" class="splitter" role="separator" aria-orientation="vertical" tabindex="0" data-t-label="Sidebar width"></div>
   </aside>
 
   <section class="main">
@@ -52,21 +61,12 @@
         <h1 id="homename"></h1>
         <span id="homesub" class="sub"></span>
         <span class="sp"></span>
-        <button id="apibadge" class="apibadge" hidden></button>
         <button id="aibtn" class="ghost" aria-haspopup="menu"><span data-icon="sparkles" data-icon-class="sm"></span><span data-t="AI">AI</span></button>
-      </div>
-      <div class="ptabs" role="tablist">
-        <button data-tab="members" role="tab"><span data-icon="users" data-icon-class="sm"></span><span data-t="Members">Members</span></button>
-        <button data-tab="plugins" role="tab"><span data-icon="puzzle" data-icon-class="sm"></span><span data-t="Plugins">Plugins</span></button>
-        <button data-tab="jobs" role="tab"><span data-icon="cpu" data-icon-class="sm"></span><span data-t="Jobs">Jobs</span><span id="jobcount" class="count" hidden></span></button>
-        <button data-tab="board" role="tab"><span data-icon="board" data-icon-class="sm"></span><span data-t="Game plan">Game plan</span></button>
-        <button data-tab="recordings" role="tab"><span data-icon="film" data-icon-class="sm"></span><span data-t="Recordings">Recordings</span></button>
-        <button data-tab="settings" role="tab"><span data-icon="gear" data-icon-class="sm"></span><span data-t="Settings">Settings</span></button>
       </div>
       <div id="boardpane" class="boardpane" hidden>
         <div class="bbar">
+          <span id="boardscope" class="seg" role="group" data-t-label="Game plan"><button data-scope="room" data-t="Room">Room</button><button data-scope="personal" data-t="Personal">Personal</button></span>
           <span id="boardbadge" class="pill accent" data-t="Editing" hidden>Editing</span>
-          <span id="boardsub" class="sub"></span>
           <span class="sp"></span>
           <span id="boardview" class="row">
             <span class="zoom"><button id="zoomout" data-icon="minus" data-t-label="Zoom out" data-t-title="Zoom out"></button><button id="zoomfit" class="zv"></button><button id="zoomin" data-icon="plus" data-t-label="Zoom in" data-t-title="Zoom in"></button></span>
@@ -160,6 +160,11 @@
   </section>
 </div>
 
+<dialog id="roomdlg">
+  <div class="dlghead"><h2 data-t="Room settings">Room settings</h2><button class="icon close" data-icon="x" data-t-label="Close"></button></div>
+  <label class="field"><span data-t="Room name">Room name</span><input id="roomnameinput" class="lg" autocomplete="off"></label>
+  <div class="row end"><button id="roomno" data-t="Cancel">Cancel</button><button id="roomsave" class="primary" data-t="Save">Save</button></div>
+</dialog>
 <dialog id="settings" class="settings">
   <nav id="setnav" class="snav">
     <div class="stitle"><b data-t="Settings">Settings</b><span data-t="This PC">This PC</span></div>
@@ -282,6 +287,7 @@
 <script src="i18n.js"></script>
 <script src="layout.js"></script>
 <script src="events.js"></script>
+<script src="markdown.js"></script>
 <script src="review.js"></script>
 <script src="members.js"></script>
 <script src="recordings.js"></script>

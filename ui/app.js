@@ -38,7 +38,7 @@ let st = null;
 let idx = null;
 let ready = false;
 let lang = "";
-let page = "room";
+let page = "player";
 let nowView = false;
 let nowSet = null;
 let selected = null;
@@ -506,7 +506,7 @@ function fitSub() {
 }
 new ResizeObserver(fitSub).observe($("playerpage"));
 function renderHeader(set) {
-  const title = review ? sessionName(review.id) : !set ? t("Standby") : set.live ? t("Recording") : sessionName(set.id);
+  const title = review ? sessionName(review.id) : !set ? t("Live") : set.live ? t("Recording") : sessionName(set.id);
   $("ptitle").textContent = title;
   const chips = headerChips(set);
   const csig = chips.map((c) => c && c.outerHTML);
@@ -961,7 +961,7 @@ function renderReviewTab() {
     out.push(el("div", { className: "h3", textContent: t("Debriefs of this recording") }));
     out.push(...debriefs.map((d) => el("button", { className: "debrief", onclick: () => openSession(d.id) }, icon("mic", "sm"), el("span", { textContent: sessionName(d.id) }), pill("accent", null, t("Debrief")), el("span", { className: "sp" }), el("span", { className: "muted", textContent: setLength(d) }), icon("play", "sm"))));
   }
-  out.push(el("button", { className: "ghost tolink", onclick: () => editBoard() }, icon("board", "sm"), t("Write to the game plan")));
+  out.push(el("button", { className: "ghost tolink", onclick: () => editBoard("room") }, icon("board", "sm"), t("Write to the game plan")));
   $("reviewlist").replaceChildren(...out);
 }
 function stepText(step) {
@@ -1486,10 +1486,12 @@ function go(p) {
   if (st) { delete sigs.sessions; renderShell(); renderSide(); place(rec); place(play); }
   refresh();
 }
-function goPage(name) {
-  if (name === "room") go("room");
-  else if (name === "now") openNow();
-  else showBoard();
+function openLive() {
+  endReview();
+  nowView = false;
+  if (selected) selectSet(null);
+  share();
+  go("player");
 }
 function showPanel(on) {
   if (innerWidth > WIDE_PANEL) { panel = on; store("panel", panel); } else panelOpen = on;
@@ -1716,7 +1718,7 @@ document.addEventListener("keydown", (e) => {
   if (ctrl && e.key === ",") { e.preventDefault(); openSettings(); return; }
   if (document.querySelector("dialog[open]")) return;
   if (!inRoom()) return;
-  if (ctrl && ["1", "2", "3", "b", "r"].includes(e.key.toLowerCase())) { e.preventDefault(); return; }
+  if (ctrl && ["1", "2", "3", "4", "b", "r"].includes(e.key.toLowerCase())) { e.preventDefault(); return; }
   if (ctrl && e.key === "Enter" && onBoard() && boardEditing) { e.preventDefault(); saveBoard(); return; }
   if (ctrl && e.key.toLowerCase() === "z" && !typing()) { e.preventDefault(); runUndo(); return; }
   if (e.key === "Escape") { escapeKey(); return; }

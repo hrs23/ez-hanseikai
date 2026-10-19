@@ -7,9 +7,9 @@ import { fileURLToPath } from "node:url";
 
 const ui = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "ui");
 const read = (f) => fs.readFileSync(path.join(ui, f), "utf8");
-const source = ["util.js", "i18n.js", "layout.js", "events.js", "review.js", "members.js", "recordings.js", "plugins.js", "ai.js", "diag.js"].map(read).join("\n");
+const source = ["util.js", "i18n.js", "layout.js", "events.js", "markdown.js", "review.js", "members.js", "recordings.js", "plugins.js", "ai.js", "diag.js"].map(read).join("\n");
 const context = vm.createContext({ window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, nameOf: (id) => id });
-const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, flowAt, flowBands, flowSteps, isReview, voiceOnly, BOARD_TEMPLATE, memberStatus, receivingPercent, recordingRows, recentRows, recordingMatches, recordingWords, RECENT_SHOWN, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, discardable, DISCARD_MAX_S, soundKey, pluginProgress, isBusy, workerState, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, aiPreview, apiUrl, apiBadge, apiReferenceBlocks, rateOf, liveEdge, netState, summaryLines, leftText, pcCards, clockPairs, clockSummary, flowRows, timeRow, skewText, agoText, JA, t, sessionName, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, flowAt, flowBands, flowSteps, isReview, voiceOnly, BOARD_TEMPLATE, memberStatus, receivingPercent, recordingRows, recordingMatches, recordingWords, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, discardable, DISCARD_MAX_S, soundKey, pluginProgress, isBusy, workerState, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, aiPreview, apiUrl, apiBadge, apiReferenceBlocks, rateOf, liveEdge, netState, summaryLines, leftText, pcCards, clockPairs, clockSummary, flowRows, timeRow, skewText, agoText, JA, t, sessionName, mdParse, mdInline, toggleTask, boardParts, boardDom, markdownDom, mdHooks, runBy, PERSONAL_TEMPLATE, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 const plain = (v) => JSON.parse(JSON.stringify(v));
 
 const moment = (m, extra = {}) => ({ role: "moment", m, plugin: { id: "apex-matches" }, tags: ["match"], ...extra });
@@ -251,7 +251,7 @@ test("the new Diagnostics texts have Japanese translations", () => {
 
 test("every fixed text has a Japanese translation", () => {
   const used = new Set();
-  for (const f of ["app.js", "side.js", "pages.js", "review.js", "events.js", "util.js", "draw.js", "ai.js", "members.js", "recordings.js", "plugins.js", "diag.js"]) {
+  for (const f of ["app.js", "side.js", "pages.js", "review.js", "events.js", "util.js", "draw.js", "ai.js", "members.js", "recordings.js", "plugins.js", "diag.js", "markdown.js"]) {
     const s = read(f);
     for (const m of s.matchAll(/\bt\(\s*"((?:[^"\\]|\\.)*)"/g)) used.add(JSON.parse(`"${m[1]}"`));
     for (const m of s.matchAll(/\bt\([^)]*\?\s*"((?:[^"\\]|\\.)*)"\s*:\s*"((?:[^"\\]|\\.)*)"/g)) { used.add(JSON.parse(`"${m[1]}"`)); used.add(JSON.parse(`"${m[2]}"`)); }
@@ -301,19 +301,11 @@ test("everyone is told who started or stopped recording", () => {
 test("the pages call a recording a recording, never a session", () => {
   const texts = [...Object.keys(ui$.JA), ...Object.values(ui$.JA)];
   assert.deepEqual(texts.filter((x) => /session|セッション/i.test(x)), []);
-  for (const f of ["app.js", "side.js", "pages.js", "review.js", "events.js", "util.js", "plugins.js", "ai.js", "index.html"]) {
+  for (const f of ["app.js", "side.js", "pages.js", "review.js", "events.js", "util.js", "plugins.js", "ai.js", "markdown.js", "index.html"]) {
     const shown = [...read(f).matchAll(/\bt\(\s*"((?:[^"\\]|\\.)*)"|data-t(?:-title|-placeholder|-label)?="([^"]*)"/g)].map((m) => m[1] || m[2]);
     assert.deepEqual(shown.filter((x) => /session/i.test(x)), [], f);
   }
   for (const [en, ja] of [["Start recording", "録画開始"], ["Stop recording", "録画終了"], ["Recordings", "録画一覧"], ["Recording", "録画中"], ["Standby", "待機中"], ["Jump to latest", "最新に戻る"]]) assert.equal(ui$.JA[en], ja);
-});
-
-test("the sidebar has a Room button and no Game plan entry", () => {
-  const html = read("index.html");
-  assert.match(html, /<button id="roomname"[^>]*>[^]*?data-t="Room"/);
-  assert.doesNotMatch(html, /navboard|id="roomtitle"|id="boardpage"/);
-  assert.match(html, /data-tab="board"/);
-  assert.equal(ui$.JA["Room"], "ルーム");
 });
 
 test("every English phrase in the pages has a Japanese one", () => {
@@ -378,10 +370,10 @@ test("Settings has one switch for the local API with its address and token butto
   for (const word of ["API", "Local API", "Copy token", "New token", "AI", "The port is in use"]) assert.ok(word in ui$.JA, word);
 });
 
-test("Settings > API has the access choice with its warning, the endpoint reference and llms.txt, and the room header has a badge that opens it", () => {
+test("Settings > API has the access choice with its warning, the endpoint reference and llms.txt, and the sidebar has a badge that opens it", () => {
   const html = read("index.html");
   assert.match(html, /<section data-pane="api">[^]*?id="apiaccess"[^]*?data-lan="0"[^]*?data-lan="1"[^]*?id="apilanbox"[^]*?data-t="Other devices on your network can control the app"[^]*?id="apidoc"[^]*?id="apiref"[^]*?<\/section>/);
-  assert.match(html, /<button id="apibadge" class="apibadge" hidden><\/button>\s*<button id="aibtn"/);
+  assert.match(html, /<div class="facesrow"><span id="roomfaces" class="roomfaces"><\/span><button id="apibadge" class="apibadge" hidden><\/button><\/div>/);
   const pages = read("pages.js");
   assert.match(pages, /\$\("apibadge"\)\.onclick = \(\) => openSettings\("api"\)/);
   assert.match(pages, /run\("set_api_lan"/);
@@ -499,7 +491,7 @@ test("receiving counts only recent recordings a member still lacks", () => {
   assert.equal(ui$.receivingPercent([finished("s1", { live: true, lacking })], "b", NOW, "a"), null);
 });
 
-test("the recordings list is one newest-first list, the sidebar keeps the recent few, and search reads names and marks", () => {
+test("the recordings list is one newest-first list of every recording, and search reads names and marks", () => {
   const sets = Array.from({ length: 9 }, (_, i) => ({ id: `2026-10-0${i + 1} 10-00-00`, live: false, players: [{ owner: "a" }], party: [], imported_by: i === 2 ? "Ann" : null }));
   sets.push({ id: "live", live: true, players: [] });
   ui$.setStorage({ sets });
@@ -507,26 +499,249 @@ test("the recordings list is one newest-first list, the sidebar keeps the recent
   assert.equal(rows.length, 9);
   assert.equal(rows[0].id, "2026-10-09 10-00-00");
   assert.ok(rows.every((r, i) => !i || rows[i - 1].id > r.id));
-  const recent = ui$.recentRows(rows, "2026-10-01 10-00-00");
-  assert.equal(recent.length, ui$.RECENT_SHOWN + 1);
-  assert.equal(ui$.recentRows(rows, null).length, ui$.RECENT_SHOWN);
   assert.ok(ui$.recordingMatches(rows.find((r) => r.id.startsWith("2026-10-03")), ui$.recordingWords("imported")));
   assert.ok(!ui$.recordingMatches(rows.find((r) => r.id.startsWith("2026-10-04")), ui$.recordingWords("imported")));
 });
 
-test("the sidebar offers a Room button with a chevron and a split record button, and downloads always show their progress", () => {
+test("the sidebar is a room header with a menu, four items, the record box and then every recording", () => {
   const html = read("index.html");
-  assert.match(html, /<button id="roomname" class="roombtn">[^]*?id="roomfaces"[^]*?data-icon="chevron-right"/);
-  assert.match(html, /<div class="startgroup"><button id="startbtn"[^]*?<button id="startmore"[^>]*aria-haspopup="menu"/);
-  assert.doesNotMatch(html, /id="faces"/);
-  assert.match(html, /<div class="startbox">[^]*?id="startbtn"[^]*?id="standby"/);
+  const side = html.slice(html.indexOf('<aside id="side"'), html.indexOf("</aside>"));
+  const order = ['id="roomname"', 'id="roomfaces"', 'id="sidenav"', 'id="startbtn"', 'id="standby"', 'id="recsopen"', 'id="sessions"', 'class="dock"'].map((x) => side.indexOf(x));
+  assert.ok(order.every((x, i) => x >= 0 && (!i || order[i - 1] < x)), order.join());
+  assert.deepEqual([...side.matchAll(/data-nav="(\w+)"/g)].map((m) => m[1]), ["live", "board", "members", "plugins"]);
+  assert.match(side, /<button id="roomname"[^>]*aria-haspopup="menu"[^>]*>[^]*?data-icon="chevron-down"/);
+  assert.match(side, /<div class="startgroup"><button id="startbtn"[^]*?<button id="startmore"[^>]*aria-haspopup="menu"/);
+  assert.doesNotMatch(html, /id="allrecs"|data-tab=|id="boardsub"/);
+  const sidejs = read("side.js");
+  const menu = sidejs.slice(sidejs.indexOf("function roomMenu"), sidejs.indexOf("function navigate"));
+  const labels = [...menu.matchAll(/label: t\("([^"]+)"\)/g)].map((m) => m[1]);
+  assert.deepEqual(labels, ["Room settings…", "Copy invite code", "Cancel invite", "Switch room", "Leave room…"]);
+  assert.match(sidejs, /\$\("roomname"\)\.onclick = \(e\) => roomMenu\(e\.currentTarget\)/);
+  assert.match(sidejs, /t\("Standby"\)\} · \$\{t\("\{n\} online"/);
+  assert.match(sidejs, /id: "livetimer"/);
+  assert.match(sidejs, /const rows = recordingRows\(\);/);
+  assert.match(sidejs, /rows\.map\(\(r\) => sessionRow\(r\.s\)\)/);
+  assert.match(sidejs, /t\("Record debrief"\)/);
+  for (const word of ["Live", "Game plan", "Members", "Plugins", "Room settings…", "Switch room", "Leave room…", "Leave {room}?", "Sidebar width"]) assert.ok(word in ui$.JA, word);
+  const pages = read("pages.js");
+  assert.match(pages, /"page-live": openLive/);
+  assert.match(pages, /"switch-room": switchRoom/);
+  assert.match(pages, /run\("remove_room", \{ id: st\.room\.id \}/);
+  assert.match(pages, /run\("leave_room", \{ id: st\.room\.id \}/);
+});
+
+test("the room page has no tabs: the sidebar items and the recordings header choose what the main area shows", () => {
+  const html = read("index.html");
+  const room = html.slice(html.indexOf('<div id="roompage"'), html.indexOf('<div id="playerpage"'));
+  assert.doesNotMatch(room, /ptabs|role="tab"/);
+  assert.match(html, /<dialog id="roomdlg">[^]*?id="roomnameinput"[^]*?id="roomsave"/);
   const side = read("side.js");
-  assert.match(side, /st\.active_set \? \[liveRow\(\)\] : \[\]/);
-  assert.match(side, /t\("Standby"\)\} · \$\{t\("\{n\} online"/);
-  assert.match(side, /id: "livetimer"/);
+  assert.match(side, /\$\("recsopen"\)\.onclick = \(\) => showRoomTab\("recordings"\)/);
+  const open = read("pages.js");
+  assert.match(open, /const ROOM_TITLES = \{[^}]*members[^}]*plugins[^}]*jobs[^}]*board[^}]*recordings/);
+  assert.match(read("pages.js"), /recBar = el\("div", \{ className: "recbar" \},[^]*?id: "recfilter"[^]*?id: "recimport"/);
+});
+
+test("the sidebar opens on Live, which shows everyone who shares a screen before any recording", () => {
   const app = read("app.js");
-  assert.match(app, /downloadLine\(t\("Downloading video tools…"\), st\.ffmpeg_progress\)/);
-  assert.match(app, /plugins\.filter\(\(x\) => x\.download\)/);
-  assert.match(read("side.js"), /t\("Record debrief"\)/);
-  for (const tab of ["members", "plugins", "jobs", "board", "recordings", "settings"]) assert.match(html, new RegExp(`data-tab="${tab}"`));
+  assert.match(app, /^let page = "player";$/m);
+  assert.match(app, /function openLive\(\) \{\s*endReview\(\);\s*nowView = false;\s*if \(selected\) selectSet\(null\);/);
+  assert.match(app, /const idle = page === "player" && showingNow\(\) && !playSet\(\);\s*\$\("livetiles"\)\.hidden = !idle;/);
+  assert.match(app, /const title = review \? sessionName\(review\.id\) : !set \? t\("Live"\)/);
+  const side = read("side.js");
+  assert.match(side, /return !playSet\(\) && !review \? "live" : "";/);
+  assert.match(side, /\$\("standby"\)\.onclick = openLive/);
+  const pages = read("pages.js");
+  assert.match(pages, /switch_room", \{ id: r\.id \}, openLive/);
+  assert.match(pages, /create_room", \{ name: "" \}\)\.then\(\(\) => \{ openLive\(\)/);
+});
+
+test("the sidebar width is dragged, kept between limits and never scrolls sideways", () => {
+  assert.equal(ui$.clampSide(100), ui$.SIDE_MIN);
+  assert.equal(ui$.clampSide(900), ui$.SIDE_MAX);
+  assert.equal(ui$.clampSide(300.4), 300);
+  assert.equal(ui$.clampSide("junk"), ui$.SIDE_DEFAULT);
+  assert.equal(ui$.clampSide(null), ui$.SIDE_MIN);
+  assert.ok(ui$.SIDE_MIN < ui$.SIDE_DEFAULT && ui$.SIDE_DEFAULT < ui$.SIDE_MAX);
+  const html = read("index.html");
+  assert.match(html, /<div id="splitter" class="splitter" role="separator" aria-orientation="vertical" tabindex="0"/);
+  const side = read("side.js");
+  assert.match(side, /store\("sideWidth", sideWidth\)/);
+  assert.match(side, /stored\("sideWidth", SIDE_DEFAULT\)/);
+  assert.match(side, /\$\("splitter"\)\.onpointerdown = dragSide/);
+  assert.match(side, /ArrowLeft: -SIDE_KEY_STEP, ArrowRight: SIDE_KEY_STEP/);
+  const css = read("style.css");
+  assert.match(css, /\.side \{[^}]*width: var\(--side\)[^}]*overflow: hidden/);
+  assert.match(css, /\.sessions \{[^}]*overflow-y: auto; overflow-x: hidden/);
+  assert.match(css, /\.roombtn \.nm \{[^}]*text-overflow: ellipsis/);
+});
+
+const blocks = (text) => plain(ui$.mdParse(text));
+const kinds = (text) => blocks(text).map((b) => b.type);
+
+test("markdown reads headings, lists, task lists, tables, code, quotes and rules", () => {
+  assert.deepEqual(kinds("# A\ntext\n\n- a\n- b\n\n1. x\n2. y\n\n> q\n\n---\n\n```js\ncode\n```"), ["heading", "paragraph", "list", "list", "quote", "rule", "code"]);
+  const list = blocks("- [ ] one\n- [x] two\n  - nested\n- plain")[0];
+  assert.deepEqual(list.items.map((i) => i.task), [false, true, null]);
+  assert.equal(list.items[1].blocks[0].type, "list");
+  assert.deepEqual(list.items.map((i) => i.n), [0, 1, 3]);
+  assert.equal(blocks("1. a\n2. b")[0].ordered, true);
+  const table = blocks("| Name | Score |\n|:--|--:|\n| Aki | 3 |\n| Ren | 5 \\| 6 |")[0];
+  assert.equal(table.type, "table");
+  assert.deepEqual(table.align, ["", "right"]);
+  assert.equal(table.rows.length, 2);
+  assert.equal(table.rows[1][1][0].text, "5 | 6");
+  assert.deepEqual(kinds("a | b\nnot a table"), ["paragraph"]);
+  assert.equal(blocks("```\n## not a heading\n```")[0].text, "## not a heading");
+  assert.deepEqual(kinds("- a\n1. b"), ["list", "list"]);
+});
+
+test("markdown inline reads emphasis, code, links and tags, and only safe links become links", () => {
+  const node = (text) => plain(ui$.mdInline(text));
+  assert.deepEqual(node("**b** *i* ~~s~~ ==m== `c`").filter((n) => !n.text).map((n) => Object.keys(n)[0]), ["strong", "em", "strike", "mark", "code"]);
+  assert.deepEqual(node("snake_case_name 2 * 3 * 4"), [{ text: "snake_case_name 2 * 3 * 4" }]);
+  assert.equal(node("[site](https://example.com/a)")[0].link.url, "https://example.com/a");
+  assert.equal(node("see https://example.com/a_b_c.")[1].link.url, "https://example.com/a_b_c");
+  assert.equal(node("[x](ezh://moment/s1/12.5/all)")[0].link.link.m, 12.5);
+  for (const bad of ["[x](javascript:alert(1))", "[x](file:///C:/Windows/notepad.exe)", "[x](data:text/html;base64,AAAA)", "![img](https://example.com/a.png)", "[x](ezh://moment/s1/-3/all)", "[x](//evil.example/a)"]) assert.ok(node(bad).every((n) => !n.link), bad);
+  assert.equal(node("#plan and C#")[0].tag, "plan");
+  assert.equal(node("\\#plan")[0].text, "#");
+  assert.deepEqual(node("a <b>x</b> & <script>"), [{ text: "a <b>x</b> & <script>" }]);
+});
+
+test("a task is ticked by changing only its line", () => {
+  const text = "# Plan\n- [ ] a\n- [x] b\n  - [ ] c\nplain [ ] d";
+  assert.equal(ui$.toggleTask(text, 1), "# Plan\n- [x] a\n- [x] b\n  - [ ] c\nplain [ ] d");
+  assert.equal(ui$.toggleTask(text, 2), "# Plan\n- [ ] a\n- [ ] b\n  - [ ] c\nplain [ ] d");
+  assert.equal(ui$.toggleTask(text, 3), "# Plan\n- [ ] a\n- [x] b\n  - [x] c\nplain [ ] d");
+  assert.equal(ui$.toggleTask(text, 4), text);
+  assert.equal(ui$.toggleTask(text, 99), text);
+  assert.equal(blocks(text)[1].items[0].n, 1);
+});
+
+test("a board is a title, a goal line and cards, and a heading inside code does not start one", () => {
+  const parts = plain(ui$.boardParts("# Title\n**Goal**\n## One\n- a\n```\n## nope\n```\n## Two\ntext"));
+  assert.equal(parts.title, "Title");
+  assert.equal(parts.lead.text.trim(), "**Goal**");
+  assert.deepEqual(parts.sections.map((s) => s.title), ["One", "Two"]);
+  assert.match(parts.sections[0].text, /## nope/);
+  assert.equal(parts.sections[1].line, 8);
+  assert.equal(plain(ui$.boardParts("no title\n## A\nb")).sections.length, 1);
+  for (const lang of ["en", "ja"]) {
+    const lines = ui$.PERSONAL_TEMPLATE[lang].split("\n");
+    assert.ok(lines.length <= 12);
+    assert.match(lines[0], /^# /);
+    assert.ok(lines.some((l) => l.startsWith("- [ ] ")));
+  }
+});
+
+class Text {
+  constructor(text) { this.text = text; }
+  get textContent() { return this.text; }
+}
+class Fake {
+  constructor(tag) { this.tag = tag; this.children = []; this.dataset = {}; this.style = {}; this.attributes = {}; this.classList = { toggle() {}, add() {}, remove() {}, contains: () => false }; }
+  append(...items) { for (const x of items) this.children.push(typeof x === "object" && x !== null ? x : new Text(String(x))); }
+  replaceChildren(...items) { this.children = []; this.append(...items); }
+  setAttribute(k, v) { this.attributes[k] = v; }
+  set textContent(v) { this.children = [new Text(String(v))]; }
+  get textContent() { return this.children.map((c) => c.textContent).join(""); }
+  find(tag) { return this.children.flatMap((c) => (c.tag === tag ? [c] : []).concat(c.find ? c.find(tag) : [])); }
+}
+function page(files, globals = {}) {
+  const boxes = {};
+  const document = { createElement: (tag) => new Fake(tag), createElementNS: (ns, tag) => new Fake(tag), getElementById: (id) => (boxes[id] ||= new Fake("div")), querySelectorAll: () => [], documentElement: {} };
+  const ctx = vm.createContext({ window: { __TAURI__: { core: {} } }, document, console, Intl, Date, ...globals });
+  vm.runInContext(files.map(read).join("\n"), ctx);
+  return { ctx, boxes };
+}
+
+test("a plugins page never prints the word null, whatever is on or off", () => {
+  const plugin = (id, on) => ({ id, name: id, summary: "x", sample: "chapters", on, settings: {}, options: [], workers: [{ id: "me", on: true, ready: true }], runner: null, ready: true, download: null, download_bytes: 0, process_here: true });
+  const { ctx, boxes } = page(["util.js", "icons.js", "i18n.js", "layout.js", "events.js", "markdown.js", "members.js", "plugins.js"], { st: { id: "me", name: "Aki", names: {}, colors: {}, palette: [] }, nameOf: () => "Aki", avatar: () => new Fake("span"), pill: (cls, name, text) => { const p = new Fake("span"); p.append(text); return p; }, pollPlugins() {}, fail() {}, ask: () => Promise.resolve(false), renderRoom() {}, showRoomTab() {}, jobInfo: null, roomTab: "plugins", lang: "en" });
+  for (const [on, off] of [[["a", "b"], []], [[], ["a", "b"]], [["a"], ["b"]]]) {
+    vm.runInContext(`plugins = ${JSON.stringify([...on.map((id) => plugin(id, true)), ...off.map((id) => plugin(id, false))])}; sigs.roomtab = undefined; delete sigs.roomtab; openPlugin = ${JSON.stringify(on[0] || null)}; renderPlugins();`, ctx);
+    assert.doesNotMatch(boxes.roomtab.textContent, /null|undefined/, `${on} on, ${off} off`);
+  }
+});
+
+test("a game plan shows tables, code and tasks, and nothing a note can write runs or navigates", () => {
+  const { ctx } = page(["util.js", "icons.js", "i18n.js", "layout.js", "events.js", "markdown.js"], { st: { palette: [] }, jobInfo: null, filterTag() {}, openLink() {} });
+  const text = ["# Plan", "**Goal**", "## Cards", "- [ ] a task", "- [x] done", "| A | B |", "|---|---|", "| 1 | 2 |", "```", "let x = 1;", "```", "[bad](javascript:alert(1)) <img src=x onerror=alert(1)> [ok](https://example.com/p) [m](ezh://moment/s1/5/all)"].join("\n");
+  const card = vm.runInContext(`boardDom(${JSON.stringify(text)}, mdHooks({ onTask: () => {}, onOpen: () => {} }))`, ctx);
+  assert.equal(card.find("table").length, 1);
+  assert.equal(card.find("pre").length, 1);
+  assert.equal(card.find("input").length, 2);
+  assert.deepEqual(card.find("input").map((i) => i.checked), [false, true]);
+  assert.deepEqual(card.find("a").map((a) => a.title), ["https://example.com/p"]);
+  assert.ok(card.find("a").every((a) => a.href === undefined));
+  assert.equal(card.find("img").length, 0);
+  assert.equal(card.find("script").length, 0);
+  assert.match(card.textContent, /javascript:alert\(1\)/);
+  assert.match(card.textContent, /<img src=x onerror=alert\(1\)>/);
+  assert.equal(card.find("button").filter((b) => b.className === "link").length, 1);
+  const preview = vm.runInContext(`boardDom(${JSON.stringify("- [ ] a")}, mdHooks({ onTask: null }))`, ctx);
+  assert.equal(preview.find("input")[0].disabled, true);
+});
+
+test("the personal game plan stays on this PC and the room's goes to the log", () => {
+  const html = read("index.html");
+  assert.match(html, /<span id="boardscope" class="seg"[^>]*><button data-scope="room"[^>]*>Room<\/button><button data-scope="personal"[^>]*>Personal<\/button>/);
+  const pages = read("pages.js");
+  const write = pages.slice(pages.indexOf("function writeBoard"), pages.indexOf("const boardHooks"));
+  const personal = write.slice(write.indexOf("if (personal())"), write.indexOf("return invoke"));
+  assert.match(personal, /store\(personalKey\(\)/);
+  assert.doesNotMatch(personal, /invoke|add_event/);
+  assert.match(write, /invoke\("add_event", \{ kind: "board", text, target: \{\}, values: \{ card: "team" \} \}\)/);
+  assert.match(pages, /const personalKey = \(\) => `board\/\$\{st\.room \? st\.room\.id : ""\}`/);
+  assert.match(pages, /editBoard\(scope\)/);
+  assert.match(read("app.js"), /editBoard\("room"\)/);
+  for (const word of ["Personal", "Only on this PC"]) assert.ok(word in ui$.JA, word);
+});
+
+test("web links open in the browser through the app, and the plugin runner is named in the jobs list", () => {
+  assert.match(read("markdown.js"), /invoke\("open_link", \{ url \}\)/);
+  ui$.setLanguage("en");
+  assert.equal(ui$.runBy({ by: "b", runner: "a" }), "b's PC");
+  assert.equal(ui$.runBy({ by: null, runner: "a" }), "a's PC");
+  assert.equal(ui$.runBy({ by: null, runner: null }), "Auto");
+  ui$.setLanguage("ja");
+  assert.equal(ui$.runBy({ by: null, runner: null }), "自動");
+  ui$.setLanguage("en");
+  const plugins = read("plugins.js");
+  assert.match(plugins, /invoke\("set_plugin_runner", \{ id: p\.id, runner: e\.target\.value \|\| null \}\)/);
+  assert.match(plugins, /el\("option", \{ value: "", textContent: t\("Auto"\)/);
+  assert.match(plugins, /t\("Who runs it"\)/);
+});
+
+test("the screen and microphone buttons share one state system: on is green, off is neutral, red only while recording", () => {
+  const cap = (source, muted, extra = {}) => ({ source, mix: { mic: { muted } }, working: true, ...extra });
+  assert.deepEqual(plain(ui$.captureStates(cap(null, true), false, "")), { screen: "off", mic: "off" });
+  assert.deepEqual(plain(ui$.captureStates(cap({ kind: "display" }, false), false, "")), { screen: "on", mic: "on" });
+  assert.deepEqual(plain(ui$.captureStates(cap({ kind: "display" }, false), true, "")), { screen: "recording", mic: "recording" });
+  assert.deepEqual(plain(ui$.captureStates(cap({ kind: "display" }, true), true, "")), { screen: "recording", mic: "off" });
+  assert.equal(ui$.captureStates(cap({ kind: "display" }, false), false, "Capture stopped").screen, "warn");
+  assert.equal(ui$.captureStates(cap(null, false), true, "").screen, "off");
+  const css = read("style.css");
+  assert.doesNotMatch(css, /\.cap\.mic\.muted/);
+  for (const state of ["off", "on", "recording", "warn"]) assert.match(css, new RegExp(`\\.cap\\.${state} `));
+  assert.match(css, /\.cap\.on \.capmain[^{]*\{ color: var\(--ok\)/);
+  assert.match(css, /\.cap\.recording \.capmain[^{]*\{ color: var\(--rec-text\)/);
+  const side = read("side.js");
+  assert.match(side, /\$\("miccap"\)\.className = "cap mic " \+ micState/);
+  assert.match(side, /\$\("screencap"\)\.className = "cap " \+ state/);
+  assert.match(side, /icon\(mute \? "mic-off" : "mic"\)/);
+  assert.match(side, /icon\(!c\.source \? "monitor-off"/);
+});
+
+test("the microphone button shows a live level that sits flat while muted", () => {
+  assert.equal(ui$.micLevel(0, false), 0);
+  assert.equal(ui$.micLevel(1, false), 1);
+  assert.equal(ui$.micLevel(0.5, true), 0);
+  const quiet = ui$.micLevel(0.01, false);
+  const loud = ui$.micLevel(0.3, false);
+  assert.ok(quiet > 0 && quiet < loud && loud < 1);
+  assert.equal(ui$.meterPos(-60), 0);
+  assert.match(read("index.html"), /id="micbtn"[^>]*>[^]*?id="miclvl" class="lvl"/);
+  assert.match(read("side.js"), /\$\("miclvl"\)\.style\.setProperty\("--lvl", String\(micLevel\(/);
 });

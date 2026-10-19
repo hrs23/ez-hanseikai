@@ -1,4 +1,3 @@
-const RECENT_SHOWN = 6;
 const THUMB_FACES = 3;
 const CARD_FACES = 4;
 
@@ -6,12 +5,6 @@ const thumbSrc = (set) => convertFileSrc(`thumb/${set.room}/${set.id}`, "ezh");
 
 function recordingRows() {
   return st.sets.filter((s) => !s.live).map((s) => ({ id: s.id, s })).sort((a, b) => (a.id < b.id ? 1 : -1));
-}
-
-function recentRows(rows, keep) {
-  const head = rows.slice(0, RECENT_SHOWN);
-  const extra = rows.find((r) => r.id === keep && !head.includes(r));
-  return extra ? [...head, extra] : head;
 }
 
 function recordingWords(text) {

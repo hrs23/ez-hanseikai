@@ -1,21 +1,97 @@
-const METER_MIN_DB = -60;
 const METER_TICKS = [-60, -40, -20, -10, 0];
-const METER_YELLOW_DB = -20;
-const METER_RED_DB = -9;
 const PEAK_HOLD_MS = 1500;
 const CLIP_HOLD_MS = 3000;
 
 const meters = { app: { v: 0, peak: 0, at: 0, clip: 0 }, mic: { v: 0, peak: 0, at: 0, clip: 0 } };
 const rates = {};
 
+let sideWidth = clampSide(stored("sideWidth", SIDE_DEFAULT));
+
 function renderSide() {
   if (!inRoom()) return;
-  $("roomname").classList.toggle("on", page === "room");
+  renderRoomHead();
   renderFaces();
+  renderNav();
   renderStartButton();
   renderSessions();
   renderBanner();
   renderDock();
+}
+function renderRoomHead() {
+  const name = st.room.name;
+  if (!changed("roomhead", [name])) return;
+  $("roomname").firstElementChild.textContent = name;
+  $("roomname").title = name;
+  $("roomname").setAttribute("aria-label", name);
+}
+function navActive() {
+  if (page === "player") return !playSet() && !review ? "live" : "";
+  return { board: "board", members: "members", plugins: "plugins", jobs: "plugins" }[roomTab] || "";
+}
+function renderNav() {
+  const active = navActive();
+  for (const b of $("sidenav").querySelectorAll("button")) {
+    const on = b.dataset.nav === active;
+    b.classList.toggle("on", on);
+    if (on) b.setAttribute("aria-current", "page");
+    else b.removeAttribute("aria-current");
+  }
+  const failed = jobInfo ? jobInfo.jobs.filter((j) => j.state === "failed").length : 0;
+  $("askcount").hidden = !st.asks.length;
+  $("askcount").textContent = String(st.asks.length);
+  $("jobcount").hidden = !failed;
+  $("jobcount").textContent = String(failed);
+  $("recsopen").classList.toggle("on", page === "room" && roomTab === "recordings");
+  const badge = apiBadge(st.api);
+  $("apibadge").hidden = !badge;
+  if (badge) {
+    $("apibadge").className = "apibadge" + (badge.lan ? " lan" : "");
+    $("apibadge").replaceChildren(icon(badge.lan ? "alert" : "terminal", "sm"), "API");
+    $("apibadge").title = badge.title;
+    $("apibadge").setAttribute("aria-label", badge.title);
+  }
+}
+function setSideWidth(px, keep = true) {
+  sideWidth = clampSide(px);
+  document.documentElement.style.setProperty("--side", sideWidth + "px");
+  $("splitter").setAttribute("aria-valuenow", String(sideWidth));
+  if (keep) store("sideWidth", sideWidth);
+  if (st) { place(rec); place(play); }
+}
+function dragSide(down) {
+  down.preventDefault();
+  const start = { x: down.clientX, width: sideWidth };
+  const bar = $("splitter");
+  bar.setPointerCapture(down.pointerId);
+  bar.classList.add("drag");
+  document.body.classList.add("dragging-side");
+  const move = (e) => setSideWidth(start.width + e.clientX - start.x, false);
+  const end = () => {
+    bar.removeEventListener("pointermove", move);
+    bar.removeEventListener("pointerup", end);
+    bar.removeEventListener("pointercancel", end);
+    bar.classList.remove("drag");
+    document.body.classList.remove("dragging-side");
+    setSideWidth(sideWidth);
+  };
+  bar.addEventListener("pointermove", move);
+  bar.addEventListener("pointerup", end);
+  bar.addEventListener("pointercancel", end);
+}
+function roomMenu(anchor) {
+  openMenu([
+    { label: t("Room settings…"), icon: "gear", run: openRoomSettings },
+    { label: t("Copy invite code"), icon: "user-plus", run: copyInvite },
+    ...(st.invites ? [{ label: t("Cancel invite"), icon: "x", run: cancelInvite }] : []),
+    { separator: true },
+    { label: t("Switch room"), icon: "home", run: switchRoom },
+    { label: t("Leave room…"), icon: "logout", danger: true, run: leaveRoom },
+  ], anchor);
+}
+function navigate(name) {
+  if (name === "live") openLive();
+  else if (name === "board") showBoard();
+  else showRoomTab(name);
 }
 function tickSide() {
   const a = st.active_set;
@@ -36,7 +112,7 @@ function memberDot(id) {
 }
 function renderFaces() {
   const ids = people();
-  const sig = [ids, ids.map(memberDot), st.asks.length, st.names, st.colors];
+  const sig = [ids, ids.map(memberDot), st.names, st.colors];
   if (!changed("faces", sig)) return;
   const faces = ids.slice(0, AVATARS_SHOWN).map((id) => {
     const dot = memberDot(id);
@@ -44,8 +120,7 @@ function renderFaces() {
     if (!dot) a.classList.add("dim");
     return a;
   });
-  $("roomfaces").replaceChildren(el("span", { className: "avs" }, ...faces), st.asks.length ? el("span", { className: "badge", textContent: String(st.asks.length) }) : "");
-  $("roomname").title = t("Room");
+  $("roomfaces").replaceChildren(el("span", { className: "avs" }, ...faces), ids.length > AVATARS_SHOWN ? el("span", { className: "more", textContent: `+${ids.length - AVATARS_SHOWN}` }) : "");
 }
 
 function startState() {
@@ -138,8 +213,7 @@ function sessionRow(s) {
 }
 function renderSessions() {
   if (!inRoom()) return;
-  const keep = review ? review.id : selected;
-  const rows = recentRows(recordingRows(), keep);
+  const rows = recordingRows();
   const sig = [rows.map(rowSignature), page, nowView, selected, review && review.id, st.active_set, st.peers.map((p) => p.connected), lang, st.colors, st.names, dayOf(new Date())];
   if (!changed("sessions", sig)) return;
   $("sessions").replaceChildren(...(st.active_set ? [liveRow()] : []), ...rows.map((r) => sessionRow(r.s)), rows.length || st.active_set ? "" : el("div", { className: "none", textContent: t("No recordings yet") }));
@@ -175,7 +249,7 @@ function sourceLabel(c) {
 function renderDock() {
   const c = st.capture;
   const problem = captureProblem(c);
-  const state = !c.source ? "off" : problem ? "warn" : st.recording && c.working ? "recording" : "on";
+  const state = captureStates(c, st.recording, problem).screen;
   const sub = { off: t("Click to choose"), warn: problem, recording: t("Recording · live"), on: c.sharing && c.live ? t("Sending live") : t("Starting…") }[state];
   if (changed("screencap", [state, sourceLabel(c), sub, lang])) {
     $("screencap").className = "cap " + state;
@@ -185,11 +259,13 @@ function renderDock() {
     $("screenbtn").title = c.source ? t("Stop sending your screen") : t("Choose what to send");
   }
   const mute = c.mix.mic.muted;
-  if (changed("miccap", [mute, lang])) {
-    $("miccap").className = "cap mic " + (mute ? "muted" : "on");
-    $("micbtn").replaceChildren(icon(mute ? "mic-off" : "mic"));
+  const micState = captureStates(c, st.recording, problem).mic;
+  if (changed("miccap", [mute, micState, lang])) {
+    $("miccap").className = "cap mic " + micState;
+    $("micbtn").firstElementChild.replaceChildren(icon(mute ? "mic-off" : "mic"));
     $("micbtn").title = mute ? t("Unmute microphone") : t("Mute microphone");
     $("micbtn").setAttribute("aria-pressed", String(!mute));
+    if (mute) $("miclvl").style.setProperty("--lvl", "0");
   }
   if (changed("me", [st.name, st.id, st.colors, lang])) {
     $("meav").replaceChildren(avatar(st.id, "lg", "on"));
@@ -266,10 +342,6 @@ function meterBox(kind) {
   const scale = el("div", { className: "mscale" }, ...METER_TICKS.map((db) => el("span", { textContent: String(db).replace("-", "−"), style: `left:${meterPos(db) * 100}%` })));
   return el("div", { className: "meter" }, el("div", { className: "mrow" }, bar, el("span", { className: "db", id: kind + "db" })), scale, el("div", { className: "mvol" }, mute, range));
 }
-function meterPos(db) {
-  return Math.max(0, Math.min(1, (db - METER_MIN_DB) / -METER_MIN_DB));
-}
-const toDb = (v) => (v > 0 ? 20 * Math.log10(v) : -Infinity);
 function drawMeter(kind, v) {
   const now = performance.now();
   const m = meters[kind];
@@ -285,13 +357,26 @@ function drawMeter(kind, v) {
   const db = toDb(m.peak);
   $(kind + "db").textContent = db > METER_MIN_DB ? `${String(Math.round(db)).replace("-", "−")} dB` : "";
 }
-window.__TAURI__.event.listen("levels", (e) => { for (const kind of ["app", "mic"]) drawMeter(kind, Math.max(0, e.payload[kind] || 0)); });
+window.__TAURI__.event.listen("levels", (e) => {
+  for (const kind of ["app", "mic"]) drawMeter(kind, Math.max(0, e.payload[kind] || 0));
+  if (st) $("miclvl").style.setProperty("--lvl", String(micLevel(Math.max(0, e.payload.mic || 0), st.capture.mix.mic.muted)));
+});
 
-$("roomname").onclick = () => { if (st.asks.length) roomTab = "members"; go("room"); };
+$("roomname").onclick = (e) => roomMenu(e.currentTarget);
+for (const b of $("sidenav").querySelectorAll("button")) b.onclick = () => navigate(b.dataset.nav);
+$("recsopen").onclick = () => showRoomTab("recordings");
 $("startbtn").onclick = () => toggleRecording();
 $("startmore").onclick = () => startMenu($("startbtn").parentElement);
-$("standby").onclick = openNow;
-$("allrecs").onclick = () => { roomTab = "recordings"; delete sigs.roomtab; go("room"); };
+$("standby").onclick = openLive;
+$("splitter").onpointerdown = dragSide;
+$("splitter").ondblclick = () => setSideWidth(SIDE_DEFAULT);
+$("splitter").onkeydown = (e) => {
+  const step = { ArrowLeft: -SIDE_KEY_STEP, ArrowRight: SIDE_KEY_STEP }[e.key];
+  if (step) { e.preventDefault(); setSideWidth(sideWidth + step); }
+};
+$("splitter").setAttribute("aria-valuemin", String(SIDE_MIN));
+$("splitter").setAttribute("aria-valuemax", String(SIDE_MAX));
+setSideWidth(sideWidth, false);
 $("diskbanner").onclick = () => openSettings("storage");
 $("diskbanner").onkeydown = (e) => { if (e.key === "Enter") openSettings("storage"); };
 $("screenbtn").onclick = (e) => { if (st.capture.source) stopScreen(); else openSource($("screenmore")); };

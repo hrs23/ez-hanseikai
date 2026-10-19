@@ -36,55 +36,12 @@ function parseLink(text) {
 }
 
 function inline(text, onTag = filterTag, onLink = openLink) {
-  const out = [];
-  const pattern = /(\*\*[^*]+\*\*|==[^=]+==|\[[^\]]+\]\(ezh:\/\/moment\/[^)\s]+\)|ezh:\/\/moment\/[^\s)]+|#[\p{L}\p{N}_-]+)/gu;
-  let last = 0;
-  for (const m of text.matchAll(pattern)) {
-    if (m.index > last) out.push(text.slice(last, m.index));
-    const s = m[0];
-    if (s.startsWith("**")) out.push(el("b", {}, ...inline(s.slice(2, -2), onTag, onLink)));
-    else if (s.startsWith("==")) out.push(el("mark", {}, ...inline(s.slice(2, -2), onTag, onLink)));
-    else if (s.startsWith("[")) {
-      const label = s.slice(1, s.indexOf("]("));
-      const url = s.slice(s.indexOf("](") + 2, -1);
-      out.push(linkButton(label, url, onLink));
-    } else if (s.startsWith("ezh://")) out.push(linkButton(t("Moment"), s, onLink));
-    else {
-      const tag = s.slice(1);
-      out.push(el("button", { className: "tag", textContent: tagName(tag), onclick: (e) => { e.stopPropagation(); onTag(tag); } }));
-    }
-    last = m.index + s.length;
-  }
-  if (last < text.length) out.push(text.slice(last));
-  return out;
-}
-
-function linkButton(label, url, onLink) {
-  const link = parseLink(url);
-  return el("button", { className: "link", onclick: (e) => { e.stopPropagation(); if (link) onLink(link); } }, icon("play", "sm"), link ? `${label} ${fmt(link.m)}` : label);
+  return mdSpans(mdInline(text), mdHooks({ onTag, onLink }));
 }
 
 function tagName(tag) {
   const names = (jobInfo && jobInfo.tags) || {};
   return "#" + (names[tag] || tag);
-}
-
-function markdown(text, onTag = filterTag, onLink = openLink) {
-  const blocks = [];
-  let list = null;
-  for (const line of text.split("\n")) {
-    const bullet = line.match(/^\s*[-*]\s+(.*)$/);
-    if (bullet) {
-      if (!list) blocks.push((list = el("ul")));
-      list.append(el("li", {}, ...inline(bullet[1], onTag, onLink)));
-      continue;
-    }
-    list = null;
-    const head = line.match(/^(#{1,3})\s+(.*)$/);
-    if (head) blocks.push(el(`h${head[1].length + 3}`, {}, ...inline(head[2], onTag, onLink)));
-    else if (line.trim()) blocks.push(el("p", {}, ...inline(line, onTag, onLink)));
-  }
-  return blocks;
 }
 
 function chaptersOf(list) {
@@ -127,6 +84,11 @@ function groupDrawings(list) {
   }
   return out;
 }
+
+const PERSONAL_TEMPLATE = {
+  en: "# My focus\n**The one thing to fix first**\n\n## Next match\n- [ ] Check the corners before peeking\n- [ ] Call the rotation early\n\n## Notes\n- Right-click a video to copy a moment link, then paste it here",
+  ja: "# 自分の課題\n**まず直す1つのこと**\n\n## 次の試合\n- [ ] 角を覗く前に確認する\n- [ ] ローテーションを早めに伝える\n\n## メモ\n- 動画を右クリックして場面のリンクをコピーし、ここに貼る",
+};
 
 const BOARD_TEMPLATE = {
   en: "# Goals for this week\n- Win the first fight of each match\n\n## Rules we agreed\n- Drop spots, rotations, comms\n\n## Review checklist\n- Positioning before each fight\n- Who called what\n\n## Notes\n- Right-click a video to copy a moment link, then paste it here",

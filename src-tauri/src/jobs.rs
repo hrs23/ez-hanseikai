@@ -26,6 +26,7 @@ pub struct Config {
     pub on: bool,
     pub version: String,
     pub settings: Value,
+    pub runner: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -99,7 +100,8 @@ fn newest(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> BTreeMap<String,
             let (Some(id), Some(t)) = (r["plugin"].as_str(), r["t_us"].as_i64()) else { continue };
             let at = (t - log.offset_us, log.owner.clone());
             if latest.get(id).is_none_or(|(old, _)| at > *old) {
-                let config = Config { on: r["on"] == true, version: r["version"].as_str().unwrap_or_default().to_string(), settings: r["settings"].clone() };
+                let runner = r["runner"].as_str().filter(|m| !m.is_empty()).map(str::to_string);
+                let config = Config { on: r["on"] == true, version: r["version"].as_str().unwrap_or_default().to_string(), settings: r["settings"].clone(), runner };
                 latest.insert(id.to_string(), (at, config));
             }
         }
@@ -237,7 +239,7 @@ pub fn next(
     let mut picks = Vec::new();
     for (order, (id, config)) in configs.iter().enumerate() {
         let usable = bundled.iter().any(|(b, version, live)| *b == id.as_str() && *version == config.version && (!recording || *live));
-        if !config.on || !usable || !ready(id, &config.settings) {
+        if !config.on || !usable || config.runner.as_deref().is_some_and(|runner| runner != me) || !ready(id, &config.settings) {
             continue;
         }
         let prefix = prefix(id, config);
@@ -412,6 +414,15 @@ pub fn workers(logs: &[Log]) -> HashMap<(String, String), Worker> {
         }
     }
     out
+}
+
+pub fn assigned(runner: Option<&str>, members: &[String], plugin: &str, known: &HashMap<(String, String), Worker>) -> Option<String> {
+    if let Some(runner) = runner {
+        return Some(runner.to_string());
+    }
+    let mut eligible = members.iter().filter(|m| known.get(&(plugin.to_string(), (*m).clone())).is_none_or(|w| w.on));
+    let first = eligible.next()?;
+    eligible.next().is_none().then(|| first.clone())
 }
 
 fn publish(core: &Core, room: &str, logs: &[Log], configs: &BTreeMap<String, Config>) {
@@ -636,6 +647,7 @@ pub fn plugins_json(core: &Core, room: &str) -> Vec<Value> {
             v["ready"] = json!(missing.is_empty());
             v["download"] = crate::download::progress(p.id);
             v["process_here"] = json!(!skipped(core, p.id));
+            v["runner"] = json!(config.and_then(|c| c.runner.clone()));
             let others = members.iter().filter(|m| **m != me);
             v["workers"] = std::iter::once(&me).chain(others).map(|m| {
                 let w = known.get(&(p.id.to_string(), m.clone()));
@@ -656,8 +668,33 @@ pub async fn room_plugins(core: State<'_, Arc<Core>>) -> Result<Vec<Value>, Stri
 pub fn set_room_plugin(core: State<Arc<Core>>, id: String, on: bool, settings: Value) -> Result<(), String> {
     let plugin = plugins::find(&id).ok_or("Unknown plugin.")?;
     let room = core.active_room_id();
-    let record = json!({"k": "plugin", "plugin": plugin.id, "on": on, "version": plugin.version, "settings": plugins::normalize(plugin, &settings), "t_us": change_time(now_us(), &room::logs(&core, &room), plugin.id)});
-    core.append_log(&room, &record);
+    let logs = room::logs(&core, &room);
+    let runner = configs(&logs, None).get(plugin.id).and_then(|c| c.runner.clone());
+    core.append_log(&room, &plugin_record(plugin, on, &settings, runner, &logs));
+    Ok(())
+}
+
+fn plugin_record(plugin: &Plugin, on: bool, settings: &Value, runner: Option<String>, logs: &[Log]) -> Value {
+    let mut record = json!({"k": "plugin", "plugin": plugin.id, "on": on, "version": plugin.version, "settings": plugins::normalize(plugin, settings), "t_us": change_time(now_us(), logs, plugin.id)});
+    if let Some(runner) = runner {
+        record["runner"] = json!(runner);
+    }
+    record
+}
+
+#[tauri::command]
+pub fn set_plugin_runner(core: State<Arc<Core>>, id: String, runner: Option<String>) -> Result<(), String> {
+    let plugin = plugins::find(&id).ok_or("Unknown plugin.")?;
+    let room = core.active_room_id();
+    let logs = room::logs(&core, &room);
+    let members: Vec<String> = core.rooms.lock().unwrap().list.iter().find(|r| r.id == room).map(|r| r.members.iter().map(|m| m.to_string()).collect()).unwrap_or_default();
+    let runner = runner.filter(|m| !m.is_empty());
+    if runner.as_ref().is_some_and(|m| *m != core.me() && !members.contains(m)) {
+        return Err("Unknown member.".into());
+    }
+    let config = configs(&logs, None).get(plugin.id).cloned();
+    let settings = config.as_ref().map_or_else(|| plugins::normalize(plugin, &Value::Null), |c| c.settings.clone());
+    core.append_log(&room, &plugin_record(plugin, config.is_some_and(|c| c.on), &settings, runner, &logs));
     Ok(())
 }
 
@@ -690,13 +727,19 @@ pub fn jobs_json(core: &Core, room: &str) -> Value {
     let prefixes: Vec<String> = on.iter().map(|(_, _, p)| p.clone()).collect();
     let inputs = if on.is_empty() { Vec::new() } else { inputs(core, room, &logs, |file| open(file, &me, &prefixes, &tracks)) };
     let chosen = chosen(&logs, None);
+    let known = workers(&logs);
+    let mut members: Vec<String> = core.rooms.lock().unwrap().list.iter().find(|r| r.id == room).map(|r| r.members.iter().map(|m| m.to_string()).collect()).unwrap_or_default();
+    if !members.contains(&me) {
+        members.push(me.clone());
+    }
     let mut list = Vec::new();
     for (id, config, prefix) in &on {
+        let runner = assigned(config.runner.as_deref(), &members, id, &known);
         for input in inputs.iter().filter(|i| counts(id, &i.file, &chosen)) {
             let key = format!("{prefix}{}", input.file);
             let (state, by, error) = state(tracks.get(&key), &me, &online);
             let next = *FIRST.lock().unwrap() == key;
-            list.push(json!({"job": key, "plugin": id, "version": config.version, "settings": config.settings, "set": input.set, "owner": input.owner, "whole": plugins::find(id).is_some_and(|p| p.per_set), "here": input.here, "state": state, "by": by, "error": error, "next": next}));
+            list.push(json!({"job": key, "plugin": id, "version": config.version, "settings": config.settings, "set": input.set, "owner": input.owner, "whole": plugins::find(id).is_some_and(|p| p.per_set), "here": input.here, "state": state, "by": by, "error": error, "next": next, "runner": runner}));
         }
     }
     json!({"jobs": list, "running": running_json(), "tags": tag_names(&logs, core.party.lock().unwrap().caps().as_ref())})
@@ -777,7 +820,7 @@ mod tests {
     }
 
     fn on() -> BTreeMap<String, Config> {
-        BTreeMap::from([("transcribe".to_string(), Config { on: true, version: "1.0.0".into(), settings: json!({"model": "small"}) })])
+        BTreeMap::from([("transcribe".to_string(), Config { on: true, version: "1.0.0".into(), settings: json!({"model": "small"}), runner: None })])
     }
 
     fn key(file: &str) -> String {
@@ -804,6 +847,33 @@ mod tests {
         assert!(c["transcribe"].on);
         let logs = vec![log("a", 0, vec![config_record(100, true, "small")]), log("b", -50, vec![config_record(120, false, "base")])];
         assert!(!configs(&logs, None)["transcribe"].on);
+    }
+
+    #[test]
+    fn a_chosen_runner_takes_every_job_and_the_others_leave_them() {
+        let with_runner = |runner: &str| json!({"k": "plugin", "plugin": "transcribe", "on": true, "version": "1.0.0", "settings": {"model": "small"}, "runner": runner, "t_us": 2});
+        let logs = base_logs(vec![with_runner("b")], vec![]);
+        assert_eq!(configs(&logs, None)["transcribe"].runner.as_deref(), Some("b"));
+        let inputs = [input("s1", "a", 10, true)];
+        assert_eq!(pick("a", &["b"], false, &logs, &inputs), None);
+        assert_eq!(pick("b", &["a"], false, &logs, &inputs), Some("s1/a".to_string()));
+        let auto = base_logs(vec![], vec![]);
+        assert_eq!(configs(&auto, None)["transcribe"].runner, None);
+        assert_eq!(pick("a", &["b"], false, &auto, &inputs), Some("s1/a".to_string()));
+        let cleared = base_logs(vec![with_runner("b"), json!({"k": "plugin", "plugin": "transcribe", "on": true, "version": "1.0.0", "settings": {"model": "small"}, "runner": "", "t_us": 3})], vec![]);
+        assert_eq!(configs(&cleared, None)["transcribe"].runner, None);
+    }
+
+    #[test]
+    fn auto_names_the_only_member_who_processes_and_otherwise_nobody() {
+        let members: Vec<String> = ["a", "b", "c"].iter().map(|s| s.to_string()).collect();
+        let off = |m: &str| ((("transcribe").to_string(), m.to_string()), Worker { on: false, ready: true });
+        let known: HashMap<(String, String), Worker> = [off("a"), off("c")].into_iter().collect();
+        assert_eq!(assigned(None, &members, "transcribe", &known), Some("b".to_string()));
+        assert_eq!(assigned(None, &members, "transcribe", &HashMap::new()), None);
+        assert_eq!(assigned(Some("c"), &members, "transcribe", &known), Some("c".to_string()));
+        let none: HashMap<(String, String), Worker> = ["a", "b", "c"].iter().map(|m| off(m)).collect();
+        assert_eq!(assigned(None, &members, "transcribe", &none), None);
     }
 
     #[test]
@@ -853,7 +923,7 @@ mod tests {
 
     #[test]
     fn keys_change_with_version_and_settings() {
-        let a = Config { on: true, version: "1.0.0".into(), settings: json!({"model": "small"}) };
+        let a = Config { on: true, version: "1.0.0".into(), settings: json!({"model": "small"}), runner: None };
         let b = Config { settings: json!({"model": "base"}), ..a.clone() };
         let c = Config { version: "1.1.0".into(), ..a.clone() };
         assert_ne!(prefix("transcribe", &a), prefix("transcribe", &b));

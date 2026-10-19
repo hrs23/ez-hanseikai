@@ -17,7 +17,7 @@ use crate::{room, Core, NO_WINDOW, VERSION};
 pub const DEFAULT_HOTKEY: &str = "Ctrl+Alt+M";
 const REPO: &str = "https://github.com/hrs23/ez-hanseikai";
 const STATUS_POLL: Duration = Duration::from_secs(1);
-const JA: [(&str, &str); 52] = [
+const JA: [(&str, &str); 55] = [
     ("EZ Hanseikai is already running with this data folder.", "EZ Hanseikai はこのデータフォルダですでに動いています。"),
     ("File", "ファイル"),
     ("Room", "ルーム"),
@@ -31,8 +31,11 @@ const JA: [(&str, &str); 52] = [
     ("Exit", "終了"),
     ("Copy invite code", "招待コードをコピー"),
     ("Cancel invite", "招待を取り消す"),
-    ("Rename room…", "ルーム名を変更…"),
-    ("Leave room", "ルームを離れる"),
+    ("Room settings…", "ルームの設定…"),
+    ("Switch room", "ルームを切り替える"),
+    ("Leave room…", "ルームを離れる…"),
+    ("Members", "メンバー"),
+    ("Plugins", "プラグイン"),
     ("Start recording", "セッション開始"),
     ("Stop recording", "セッション終了"),
     ("Record review", "反省を録音"),
@@ -137,6 +140,18 @@ fn open_file(app: &AppHandle, kind: &str, ext: &str) -> Option<PathBuf> {
 
 pub fn notify(app: &AppHandle, title: &str, body: &str) {
     let _ = app.notification().builder().title(title).body(body).show();
+}
+
+const LINK_MAX: usize = 2048;
+
+pub fn link_ok(url: &str) -> bool {
+    (url.starts_with("https://") || url.starts_with("http://")) && url.len() <= LINK_MAX && url.chars().all(|c| c.is_ascii_graphic() && c != '"')
+}
+
+pub fn open_link(url: &str) {
+    if link_ok(url) {
+        let _ = Command::new("explorer").arg(url).creation_flags(NO_WINDOW).spawn();
+    }
 }
 
 fn open_url(url: &str) {
@@ -308,9 +323,10 @@ fn build_menu(app: &AppHandle, lang: &str, toggle: &MenuItem<Wry>, mark: &MenuIt
     let room = SubmenuBuilder::new(app, tr(lang, "Room"))
         .item(&it("copy-invite", "Copy invite code", None)?)
         .item(&it("cancel-invite", "Cancel invite", None)?)
-        .item(&it("rename-room", "Rename room…", None)?)
+        .item(&it("rename-room", "Room settings…", None)?)
         .separator()
-        .item(&it("leave-room", "Leave room", None)?)
+        .item(&it("switch-room", "Switch room", None)?)
+        .item(&it("leave-room", "Leave room…", None)?)
         .build()?;
     let session = SubmenuBuilder::new(app, tr(lang, "Recording"))
         .item(toggle)
@@ -325,9 +341,10 @@ fn build_menu(app: &AppHandle, lang: &str, toggle: &MenuItem<Wry>, mark: &MenuIt
         .item(&it("delete-session", "Delete…", None)?)
         .build()?;
     let view = SubmenuBuilder::new(app, tr(lang, "View"))
-        .item(&it("page-room", "Room", Some("CmdOrCtrl+1"))?)
-        .item(&it("page-now", "Live", Some("CmdOrCtrl+2"))?)
-        .item(&it("page-board", "Game plan", Some("CmdOrCtrl+3"))?)
+        .item(&it("page-live", "Live", Some("CmdOrCtrl+1"))?)
+        .item(&it("page-board", "Game plan", Some("CmdOrCtrl+2"))?)
+        .item(&it("page-members", "Members", Some("CmdOrCtrl+3"))?)
+        .item(&it("page-plugins", "Plugins", Some("CmdOrCtrl+4"))?)
         .separator()
         .item(&it("sidebar", "Sidebar", Some("CmdOrCtrl+B"))?)
         .item(&it("events-panel", "Side panel", None)?)
@@ -489,6 +506,18 @@ mod tests {
         assert_eq!(toggle_text(false, false), "Start recording");
         assert_eq!(toggle_text(false, true), "Record review");
         assert_eq!(toggle_text(true, true), "Stop recording");
+    }
+
+    #[test]
+    fn only_plain_web_links_open() {
+        assert!(link_ok("https://example.com/a?b=1&c=2"));
+        assert!(link_ok("http://example.com"));
+        assert!(!link_ok("file:///C:/Windows/notepad.exe"));
+        assert!(!link_ok("javascript:alert(1)"));
+        assert!(!link_ok("ezh://moment/x/1/all"));
+        assert!(!link_ok("https://example.com/a b"));
+        assert!(!link_ok("https://example.com/\"x"));
+        assert!(!link_ok(&format!("https://example.com/{}", "a".repeat(LINK_MAX))));
     }
 
     #[test]

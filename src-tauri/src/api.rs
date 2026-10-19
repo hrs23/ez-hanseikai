@@ -1008,7 +1008,7 @@ mod tests {
 
     fn plugin_records(id: &str, owner: &str) -> Vec<Value> {
         let p = crate::plugins::find(id).unwrap();
-        let config = crate::jobs::Config { on: true, version: p.version.to_string(), settings: crate::plugins::normalize(p, &Value::Null) };
+        let config = crate::jobs::Config { on: true, version: p.version.to_string(), settings: crate::plugins::normalize(p, &Value::Null), runner: None };
         let key = format!("{}s1/{owner}", crate::jobs::prefix(id, &config));
         vec![
             json!({"k": "plugin", "plugin": id, "on": true, "version": p.version, "settings": config.settings, "t_us": 1}),

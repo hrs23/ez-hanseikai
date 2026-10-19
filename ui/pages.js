@@ -1,9 +1,12 @@
 const BOARD_WIDTH = 1080;
+const BOARD_PAD = 28;
+const PREVIEW_PAD = 16;
+const PREVIEW_MIN = 0.2;
 const ZOOM_STEP = 0.1;
 const ZOOM_MIN = 0.5;
 const ZOOM_MAX = 2;
 const SHORTCUTS = [
-  ["Room / Live / Game plan", ["Ctrl+1", "Ctrl+2", "Ctrl+3"]],
+  ["Live / Game plan / Members / Plugins", ["Ctrl+1", "Ctrl+2", "Ctrl+3", "Ctrl+4"]],
   ["Sidebar", ["Ctrl+B"]],
   ["Settings", ["Ctrl+,"]],
   ["Play / pause", ["Space", "K"]],
@@ -31,6 +34,7 @@ let checks = {};
 let checking = {};
 let jobFilter = "all";
 let boardEditing = false;
+let boardScope = stored("boardScope", "room") === "personal" ? "personal" : "room";
 let boardFull = false;
 let zoom = stored("boardZoom", 0);
 let settingsPane = "general";
@@ -61,7 +65,7 @@ function renderStart() {
   if (!changed("rooms", [others, lang])) return;
   $("roomlist").replaceChildren(...others.map((r, i) => {
     const face = (id) => { const a = el("span", { className: "av sm", textContent: initial(id === st.id ? st.name : r.names[id]) }); a.style.background = colorOf(r.colors[id]); return a; };
-    const enter = () => run("switch_room", { id: r.id }, () => { go("room"); });
+    const enter = () => run("switch_room", { id: r.id }, openLive);
     const more = iconButton("more", t("More"), (e) => { e.stopPropagation(); openMenu([{ label: t("Remove from this PC…"), icon: "trash", danger: true, run: () => removeRoom(r) }], e.currentTarget); }, "icon sm more");
     const row = el("div", { className: "rrow", tabIndex: 0, role: "button" }, el("b", { textContent: r.name }), el("span", { className: "avs" }, ...r.members.slice(0, AVATARS_SHOWN).map(face)), el("span", { className: "sp" }), r.used_us ? el("span", { className: "muted small", textContent: dayLabel(dayOf(new Date(r.used_us / 1000)), new Date(), lang) }) : null, el("button", { className: "sm" + (i ? "" : " primary"), textContent: t("Enter"), onclick: (e) => { e.stopPropagation(); enter(); } }), more);
     row.onclick = enter;
@@ -79,48 +83,49 @@ function joinWith(input) {
 }
 const copyInvite = () => invoke("create_invite", { reuse: true }).then((code) => navigator.clipboard.writeText(code)).then(() => { flash(t("Invite code copied")); refresh(); }).catch(fail);
 const cancelInvite = () => run("cancel_invites", null, () => { flash(t("Invite cancelled")); refresh(); });
-const createRoom = () => invoke("create_room", { name: "" }).then(() => { go("room"); return refresh().then(copyInvite); }).catch(fail);
+const createRoom = () => invoke("create_room", { name: "" }).then(() => { openLive(); return refresh().then(copyInvite); }).catch(fail);
+async function switchRoom() {
+  if (!st.room) return;
+  if (st.recording && !(await ask(t("Stop recording and leave {room}?", { room: st.room.name }), t("Switch room"), true))) return;
+  run("leave_room", { id: st.room.id }, () => { endReview(); selectSet(null); openLive(); });
+}
 async function leaveRoom() {
   if (!st.room) return;
-  if (st.recording && !(await ask(t("Stop recording and leave {room}?", { room: st.room.name }), t("Leave room"), true))) return;
-  run("leave_room", { id: st.room.id }, () => { endReview(); selectSet(null); go("room"); });
+  if (!(await ask(t("Leave {room}?", { room: st.room.name }), t("Leave room"), true, t("Its recordings and notes on this PC are deleted. Other members keep theirs.")))) return;
+  run("remove_room", { id: st.room.id }, () => { endReview(); selectSet(null); openLive(); });
 }
 async function removeMember(id) {
   if (await ask(t("Remove {name} from the room?", { name: nameOf(id) }), t("Remove from room"), true, t("Everyone stops sending to them. What they already have stays with them."))) { drawerFor = null; run("remove_peer", { id }); }
 }
 function openRoomSettings() {
   if (!st.room) return;
-  roomTab = "settings";
+  $("roomnameinput").value = st.room.name;
+  $("roomnameinput").maxLength = ROOM_NAME_MAX;
+  $("roomsave").disabled = true;
+  $("roomdlg").showModal();
+  $("roomnameinput").select();
+}
+function showRoomTab(tab) {
+  roomTab = tab;
+  drawerFor = null;
   delete sigs.roomtab;
   go("room");
-  setTimeout(() => { const input = $("roomnameinput"); if (input) { input.focus(); input.select(); } }, 0);
+  renderRoom();
 }
+
+const ROOM_TITLES = { members: "Members", plugins: "Plugins", jobs: "Plugins", board: "Game plan", recordings: "Recordings" };
 
 function renderRoom() {
   if (page !== "room" || !inRoom()) return;
-  const all = people();
   const online = 1 + st.peers.filter((p) => p.connected).length;
-  $("homename").textContent = st.room.name;
-  $("homesub").textContent = t("{n} members · {online} online", { n: all.length, online });
-  const badge = apiBadge(st.api);
-  $("apibadge").hidden = !badge;
-  if (badge) {
-    $("apibadge").className = "apibadge" + (badge.lan ? " lan" : "");
-    $("apibadge").replaceChildren(icon(badge.lan ? "alert" : "terminal", "sm"), "API", ...(badge.lan ? [el("small", { textContent: t("Other devices") })] : []));
-    $("apibadge").title = badge.title;
-    $("apibadge").setAttribute("aria-label", badge.title);
-  }
-  for (const b of document.querySelectorAll("#roompage .ptabs button")) { const on = b.dataset.tab === roomTab; b.classList.toggle("on", on); b.setAttribute("aria-selected", on); }
-  const failed = jobInfo ? jobInfo.jobs.filter((j) => j.state !== "done").length : 0;
-  $("jobcount").hidden = !failed;
-  $("jobcount").textContent = String(failed);
+  $("homename").textContent = t(ROOM_TITLES[roomTab]);
+  if (roomTab !== "board") $("homesub").textContent = roomTab === "members" ? t("{n} members · {online} online", { n: people().length, online }) : "";
   $("boardpane").hidden = roomTab !== "board";
   $("roomtab").parentElement.hidden = roomTab === "board";
   if (roomTab === "board") renderBoard();
   else if (roomTab === "members") renderMembers();
   else if (roomTab === "plugins") renderPlugins();
   else if (roomTab === "recordings") renderRecordings();
-  else if (roomTab === "settings") renderRoomSettings();
   else renderJobs();
   renderDrawer();
 }
@@ -251,21 +256,6 @@ function renderRecordings() {
   recGrid.replaceChildren(...live, ...cards);
   if (!live.length && !cards.length) recGrid.replaceChildren(el("div", { className: "empty", textContent: rows.length ? t("Nothing here") : t("No recordings yet") }));
 }
-function renderRoomSettings() {
-  if (!st.room) return;
-  const sig = ["settings", st.room.id, st.room.name, !!st.invites, lang];
-  if (!changed("roomtab", sig)) return;
-  const input = el("input", { id: "roomnameinput", className: "w240", maxLength: ROOM_NAME_MAX, autocomplete: "off", value: st.room.name, ariaLabel: t("Room name") });
-  const save = el("button", { className: "primary", textContent: t("Save"), disabled: true, onclick: () => run("rename_room", { name: input.value }, () => { flash(t("Saved")); refresh(); }) });
-  input.oninput = () => { save.disabled = !input.value.trim() || input.value.trim() === st.room.name; };
-  input.onkeydown = (e) => { if (e.key === "Enter" && !composing(e) && !save.disabled) save.click(); };
-  const invite = [el("button", { onclick: copyInvite }, icon("user-plus", "sm"), t("Copy invite code"))];
-  if (st.invites) invite.push(el("button", { className: "ghost", onclick: cancelInvite, textContent: t("Cancel invite") }));
-  $("roomtab").replaceChildren(el("div", { className: "rsettings" },
-    el("div", { className: "srow2" }, el("span", { className: "lab", textContent: t("Room name") }), input, save),
-    el("div", { className: "srow2" }, el("span", { className: "lab", textContent: t("Invite") }), ...invite),
-    el("div", { className: "srow2" }, el("span", { className: "lab" }), el("button", { className: "danger", onclick: leaveRoom }, icon("logout", "sm"), t("Leave room…")))));
-}
 function jobTarget(j) {
   if (j.whole) return t("Whole recording");
   const set = setById(j.set);
@@ -300,18 +290,17 @@ function renderJobs() {
     if (j.state === "claimed") return el("span", { className: "pill accent", textContent: t("Running") });
     return el("span", { className: "pill gray", textContent: j.next ? t("Next") : j.here ? t("Waiting") : t("Waiting for the file") });
   };
-  const by = (j) => (j.by ? t("{name}'s PC", { name: nameOf(j.by) }) : "—");
   const rows = shown.map((j) => {
     const model = j.settings && j.settings.model;
     const more = iconButton("more", t("More"), (e) => { e.stopPropagation(); jobMenu(j, e.currentTarget); });
-    const tr = el("tr", {}, el("td", {}, el("b", { textContent: pluginName(j.plugin) }), model ? el("span", { className: "mono muted", textContent: " " + model }) : null), el("td", { textContent: sessionName(j.set) }), el("td", { textContent: jobTarget(j) }), el("td", {}, state(j)), el("td", { textContent: by(j) }), el("td", { className: "chev" }, more));
+    const tr = el("tr", {}, el("td", {}, el("b", { textContent: pluginName(j.plugin) }), model ? el("span", { className: "mono muted", textContent: " " + model }) : null), el("td", { textContent: sessionName(j.set) }), el("td", { textContent: jobTarget(j) }), el("td", {}, state(j)), el("td", { className: j.by ? "" : "muted", textContent: runBy(j) }), el("td", { className: "chev" }, more));
     tr.oncontextmenu = (e) => { e.preventDefault(); jobMenu(j, e); };
     const err = j.state === "failed" && j.error ? el("tr", { className: "err" }, el("td", { colSpan: 6 }, icon("info", "sm"), t("Failed: {error}", { error: j.error }))) : null;
     return [tr, err];
   }).flat().filter(Boolean);
   const head = el("tr", {}, ...["Plugin", "Recorded", "Target", "State", "Run by", ""].map((h) => el("th", { textContent: h ? t(h) : "" })));
   const table = shown.length ? el("div", { className: "tablebox" }, el("table", { className: "table" }, el("thead", {}, head), el("tbody", {}, ...rows))) : el("div", { className: "empty", textContent: jobs.length ? t("Nothing here") : t("Turn on a plugin to analyse recordings") });
-  $("roomtab").replaceChildren(el("div", { className: "row" }, seg), table);
+  $("roomtab").replaceChildren(el("div", { className: "row" }, pluginTabs(), el("span", { className: "sp" }), seg), table);
 }
 function pollPlugins() {
   if (!st || !inRoom() || document.hidden) return;
@@ -323,6 +312,7 @@ function pollPlugins() {
     if (changed("tags", info.tags)) for (const k of ["events", "board", "reviewtab"]) delete sigs[k];
     jobInfo = info;
     renderRoom();
+    renderNav();
     renderSessions();
   }).catch(warn);
 }
@@ -339,40 +329,43 @@ function boardEvent() {
   return out;
 }
 const onBoard = () => page === "room" && roomTab === "board";
+const personal = () => boardScope === "personal";
+const personalKey = () => `board/${st.room ? st.room.id : ""}`;
+const starterOf = (templates) => templates[lang === "ja" ? "ja" : "en"];
 function showBoard() {
   roomTab = "board";
   go("room");
+  renderRoom();
 }
-const boardText = () => { const e = boardEvent(); return e ? e.text : BOARD_TEMPLATE[lang === "ja" ? "ja" : "en"]; };
-function boardSections(text) {
-  const out = { title: "", lead: [], sections: [] };
-  let cur = null;
-  for (const line of text.split("\n")) {
-    const h1 = line.match(/^#\s+(.*)$/);
-    const h2 = line.match(/^##\s+(.*)$/);
-    if (h1 && !out.title && !out.sections.length) { out.title = h1[1]; continue; }
-    if (h2) { cur = { title: h2[1], lines: [] }; out.sections.push(cur); continue; }
-    if (!line.trim()) continue;
-    (cur ? cur.lines : out.lead).push(line);
+function boardText() {
+  if (personal()) return stored(personalKey(), "") || starterOf(PERSONAL_TEMPLATE);
+  const e = boardEvent();
+  return e ? e.text : starterOf(BOARD_TEMPLATE);
+}
+function setBoardScope(scope) {
+  if (boardEditing || scope === boardScope) return;
+  boardScope = scope;
+  store("boardScope", scope);
+  delete sigs.board;
+  renderBoard();
+}
+function writeBoard(text) {
+  delete sigs.board;
+  if (personal()) {
+    store(personalKey(), text.trim() ? text : "");
+    renderBoard();
+    return Promise.resolve();
   }
-  return out;
+  return invoke("add_event", { kind: "board", text, target: {}, values: { card: "team" } }).then(() => refresh()).catch(fail);
 }
-function boardDom(text) {
-  const b = boardSections(text);
-  const card = el("div", { className: "bcard" });
-  if (b.title) card.append(el("h2", { className: "title" }, ...inline(b.title)));
-  if (b.lead.length) card.append(el("div", { className: "lead" }, ...markdown(b.lead.join("\n"))));
-  if (b.sections.length) card.append(el("div", { className: "bgrid" }, ...b.sections.map((s) => el("section", { className: "bsec" + (s.lines.some((l) => l.includes("ezh://")) ? " wide" : "") }, el("h3", {}, ...inline(s.title)), ...markdown(s.lines.join("\n"))))));
-  return card;
-}
+const boardHooks = () => mdHooks({ onTask: (n) => writeBoard(toggleTask(boardText(), n)) });
 function fitZoom() {
-  const w = $("boardwrap").clientWidth - 2 * 28;
+  const w = $("boardwrap").clientWidth - 2 * BOARD_PAD;
   return Math.max(ZOOM_MIN, Math.min(1, w / BOARD_WIDTH));
 }
 function placeBoard() {
   const z = zoom || fitZoom();
-  $("canvas").style.transform = `scale(${z})`;
-  $("canvas").style.marginBottom = `${($("canvas").offsetHeight * (z - 1))}px`;
+  $("canvas").style.zoom = String(z);
   $("zoomfit").textContent = `${Math.round(z * 100)}%`;
   $("zoomfit").title = t("Fit to the window");
 }
@@ -383,14 +376,17 @@ function renderBoard() {
   $("boardview").hidden = boardEditing;
   $("boardedits").hidden = !boardEditing;
   $("boardbadge").hidden = !boardEditing;
+  $("boardscope").hidden = boardEditing;
+  for (const b of $("boardscope").children) press(b, b.dataset.scope === boardScope);
   const e = boardEvent();
-  const sub = e ? t("Updated by {name} · {time}", { name: nameOf(e.author), time: new Date((e.local_us || e.id) / 1000).toLocaleString(lang === "ja" ? "ja-JP" : "en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) }) : "";
-  $("boardsub").textContent = boardEditing ? "" : sub;
+  const sub = personal() ? t("Only on this PC") : e ? t("Updated by {name} · {time}", { name: nameOf(e.author), time: new Date((e.local_us || e.id) / 1000).toLocaleString(lang === "ja" ? "ja-JP" : "en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) }) : "";
+  $("homesub").textContent = boardEditing ? "" : sub;
   if (boardEditing) return;
-  if (changed("board", [boardText(), lang, st.names, jobInfo && jobInfo.tags])) $("canvas").replaceChildren(boardDom(boardText()));
+  if (changed("board", [boardText(), boardScope, st.room.id, lang, st.names, jobInfo && jobInfo.tags])) $("canvas").replaceChildren(boardDom(boardText(), boardHooks()));
   placeBoard();
 }
-function editBoard() {
+function editBoard(scope) {
+  if (scope) { boardScope = scope; store("boardScope", scope); }
   showBoard();
   boardEditing = true;
   $("boardtext").value = boardText();
@@ -399,15 +395,14 @@ function editBoard() {
   $("boardtext").focus();
 }
 function renderMini() {
-  $("minicanvas").replaceChildren(boardDom($("boardtext").value));
-  const w = $("editor").querySelector(".preview").clientWidth - 32;
-  $("minicanvas").style.transform = `scale(${Math.max(0.2, w / BOARD_WIDTH)})`;
+  $("minicanvas").replaceChildren(boardDom($("boardtext").value, mdHooks({ onTask: null })));
+  const w = $("editor").querySelector(".preview").clientWidth - 2 * PREVIEW_PAD;
+  $("minicanvas").style.transform = `scale(${Math.max(PREVIEW_MIN, w / BOARD_WIDTH)})`;
 }
 function saveBoard() {
   const text = $("boardtext").value;
   boardEditing = false;
-  delete sigs.board;
-  run("add_event", { kind: "board", text, target: {}, values: { card: "team" } }, () => refresh());
+  writeBoard(text).then(() => renderBoard());
 }
 function cancelBoard() {
   boardEditing = false;
@@ -578,7 +573,7 @@ function logView(data) {
 function jobsView() {
   const jobs = jobInfo ? jobInfo.jobs : [];
   const state = (j) => ({ failed: t("Failed"), done: t("Done"), claimed: t("Running") }[j.state] || t("Waiting"));
-  return [diagTable([t("Plugin"), t("Recorded"), t("Target"), t("State"), t("Run by")], jobs.map((j) => [pluginName(j.plugin), sessionName(j.set), jobTarget(j), state(j), j.by ? t("{name}'s PC", { name: nameOf(j.by) }) : "—"]), t("Turn on a plugin to analyse recordings"))];
+  return [diagTable([t("Plugin"), t("Recorded"), t("Target"), t("State"), t("Run by")], jobs.map((j) => [pluginName(j.plugin), sessionName(j.set), jobTarget(j), state(j), runBy(j)]), t("Turn on a plugin to analyse recordings"))];
 }
 function renderDiagnostics() {
   if (!$("diagdlg").open) return;
@@ -589,7 +584,7 @@ function renderDiagnostics() {
   const fed = diagFeed && diagFeed.tab === diagTab ? diagFeed.data : null;
   if (!changed("diag", [diagTab, lines, st.peers, st.hw, st.time_sync, st.api, st.channel, fed, jobInfo && jobInfo.jobs, lang])) return;
   if (diagTab === "summary") {
-    $("diagbody").replaceChildren(el("div", { className: "okbox" }, ...lines.map((l) => el("div", { className: "ok-line lv-" + l.level }, icon({ ok: "ok", warn: "alert", fail: "fail" }[l.level] || "info", "sm"), el("b", { textContent: t(l.key) }), el("span", { textContent: l.text }), l.key === "Plugins" && failed ? el("button", { className: "sm", textContent: t("Open jobs"), onclick: () => { $("diagdlg").close(); roomTab = "jobs"; go("room"); } }) : null))));
+    $("diagbody").replaceChildren(el("div", { className: "okbox" }, ...lines.map((l) => el("div", { className: "ok-line lv-" + l.level }, icon({ ok: "ok", warn: "alert", fail: "fail" }[l.level] || "info", "sm"), el("b", { textContent: t(l.key) }), el("span", { textContent: l.text }), l.key === "Plugins" && failed ? el("button", { className: "sm", textContent: t("Open jobs"), onclick: () => { $("diagdlg").close(); showRoomTab("jobs"); } }) : null))));
     return;
   }
   if (diagTab === "traffic" || diagTab === "log") {
@@ -639,7 +634,11 @@ $("joincode").oninput = () => renderStart();
 $("join").onclick = () => run("set_name", { name: $("startname").value || st.name }, () => joinWith($("joincode")));
 $("joincode").onkeydown = (e) => { if (e.key === "Enter" && !composing(e) && !$("join").disabled) $("join").click(); };
 $("pendingcancel").onclick = () => st.room && run("remove_room", { id: st.room.id });
-for (const b of document.querySelectorAll("#roompage .ptabs button")) b.onclick = () => { roomTab = b.dataset.tab; delete sigs.roomtab; renderRoom(); if (roomTab !== "members") $("drawer").hidden = true; };
+for (const b of $("boardscope").children) b.onclick = () => setBoardScope(b.dataset.scope);
+$("roomnameinput").oninput = () => { const v = $("roomnameinput").value.trim(); $("roomsave").disabled = !v || v === st.room.name; };
+$("roomnameinput").onkeydown = (e) => { if (e.key === "Enter" && !composing(e) && !$("roomsave").disabled) $("roomsave").click(); };
+$("roomsave").onclick = () => { $("roomdlg").close(); run("rename_room", { name: $("roomnameinput").value }, () => { flash(t("Saved")); refresh(); }); };
+$("roomno").onclick = () => $("roomdlg").close();
 $("zoomin").onclick = () => setZoom((zoom || fitZoom()) + ZOOM_STEP);
 $("zoomout").onclick = () => setZoom((zoom || fitZoom()) - ZOOM_STEP);
 $("zoomfit").onclick = () => setZoom(0);
@@ -734,15 +733,17 @@ const menuActions = {
   "copy-invite": copyInvite,
   "cancel-invite": cancelInvite,
   "rename-room": openRoomSettings,
+  "switch-room": switchRoom,
   "leave-room": leaveRoom,
   "add-note": openQuick,
   "prev-session": () => stepSet(-1),
   "next-session": () => stepSet(1),
   "export-session": () => exportSet(playSet()),
   "delete-session": () => deleteSession(playSet()),
-  "page-room": () => goPage("room"),
-  "page-now": () => goPage("now"),
-  "page-board": () => goPage("board"),
+  "page-live": openLive,
+  "page-board": showBoard,
+  "page-members": () => showRoomTab("members"),
+  "page-plugins": () => showRoomTab("plugins"),
   "sidebar": toggleSidebar,
   "events-panel": togglePanel,
   "fullscreen": toggleFull,

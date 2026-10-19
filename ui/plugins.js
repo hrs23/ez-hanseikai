@@ -44,6 +44,21 @@ function pluginSettings(p) {
   const fields = p.options.map((o) => el("div", { className: "field" }, el("label", { textContent: t(capital(o.key)) }), el("select", { ariaLabel: t(capital(o.key)), onchange: (e) => { settings[o.key] = e.target.value; askRoom(t("Change {name} for the room?", { name: t(p.name) }), t("Change"), () => savePlugin(p, true, settings)); } }, ...o.choices.map((c) => el("option", { value: c, textContent: choiceText(o.key, c), selected: settings[o.key] === c })))));
   return fields.length ? el("div", { className: "psec" }, el("div", { className: "h3" }, t("Settings"), pill("accent", "users", t("Everyone"))), ...fields) : null;
 }
+function runBy(j) {
+  const id = j.by || j.runner;
+  return id ? t("{name}'s PC", { name: nameOf(id) }) : t("Auto");
+}
+function pluginTabs() {
+  const active = jobInfo ? jobInfo.jobs.filter((j) => j.state === "claimed" || j.state === "waiting").length : 0;
+  const tab = (key, label, n) => el("button", { className: roomTab === key ? "on" : "", ariaPressed: roomTab === key, onclick: () => showRoomTab(key) }, label, n ? el("em", { textContent: String(n) }) : null);
+  return el("div", { className: "seg" }, tab("plugins", t("Plugins")), tab("jobs", t("Jobs"), active));
+}
+function pluginRunner(p) {
+  const ids = [...new Set([...p.workers.map((w) => w.id), ...(p.runner ? [p.runner] : [])])];
+  const change = (e) => askRoom(t("Change who runs {name}?", { name: t(p.name) }), t("Change"), () => invoke("set_plugin_runner", { id: p.id, runner: e.target.value || null }).then(pollPlugins).catch(fail));
+  const select = el("select", { ariaLabel: t("Who runs it"), onchange: change }, el("option", { value: "", textContent: t("Auto"), selected: !p.runner }), ...ids.map((id) => el("option", { value: id, textContent: nameOf(id), selected: p.runner === id })));
+  return el("div", { className: "field" }, el("label", { textContent: t("Who runs it") }), select, pill("accent", "users", t("Everyone")));
+}
 function pluginWorkers(p) {
   const jobs = jobInfo ? jobInfo.jobs : [];
   const label = { off: t("Off"), missing: t("Needs download"), busy: t("Processing"), ready: t("Ready") };
@@ -53,7 +68,7 @@ function pluginWorkers(p) {
     const tail = mine ? el("input", { type: "checkbox", className: "switch", role: "switch", checked: w.on, ariaLabel: t("Process on this PC"), onchange: (e) => invoke("set_process_plugin", { id: p.id, on: e.target.checked }).then(pollPlugins).catch(fail) }) : null;
     return el("div", { className: "wrow" }, avatar(w.id, "sm"), el("b", { textContent: mine ? t("{name} (you)", { name: nameOf(w.id) }) : nameOf(w.id) }), mine ? el("span", { className: "muted", textContent: t("Process on this PC") }) : null, el("span", { className: "sp" }), el("span", { className: "pill " + { off: "gray", missing: "warn", busy: "accent", ready: "ok" }[state], textContent: label[state] }), tail);
   });
-  return el("div", { className: "psec" }, el("div", { className: "h3", textContent: t("Processing") }), ...rows);
+  return el("div", { className: "psec" }, el("div", { className: "h3", textContent: t("Processing") }), pluginRunner(p), ...rows);
 }
 function pluginProgressBox(p) {
   const { done, total } = pluginProgress(jobInfo ? jobInfo.jobs : [], p.id);
@@ -79,17 +94,19 @@ function enabledCard(p) {
 function availableCard(p) {
   return el("div", { className: "plug" }, pluginHead(p, [el("button", { className: "sm", textContent: t("Turn on"), onclick: () => askRoom(t("Turn on {name} for the room?", { name: t(p.name) }), t("Turn on"), () => savePlugin(p, true, p.settings)) })], null));
 }
+function pluginsPage(enabled, available) {
+  return [
+    el("div", { className: "row" }, pluginTabs()),
+    el("div", { className: "h3" }, t("Enabled in this room")),
+    el("div", { className: "plugins" }, ...(enabled.length ? enabled.map(enabledCard) : [el("div", { className: "empty", textContent: t("No plugins are on") })])),
+    available.length ? el("div", { className: "h3" }, t("Available plugins")) : null,
+    available.length ? el("div", { className: "plugins" }, ...available.map(availableCard)) : null,
+  ].filter(Boolean);
+}
 function renderPlugins() {
   if (openPlugin === undefined) { const first = plugins.find((p) => p.on); if (first) openPlugin = first.id; }
   if (!changed("roomtab", ["plugins", plugins, openPlugin, jobInfo && jobInfo.jobs.map((j) => [j.plugin, j.state, j.by]), st.names, lang])) return;
-  const enabled = plugins.filter((p) => p.on);
-  const available = plugins.filter((p) => !p.on);
-  $("roomtab").replaceChildren(
-    el("div", { className: "h3 first", textContent: t("Enabled in this room") }),
-    el("div", { className: "plugins" }, ...(enabled.length ? enabled.map(enabledCard) : [el("div", { className: "empty", textContent: t("No plugins are on") })])),
-    available.length ? el("div", { className: "h3", textContent: t("Available plugins") }) : null,
-    available.length ? el("div", { className: "plugins" }, ...available.map(availableCard)) : null,
-  );
+  $("roomtab").replaceChildren(...pluginsPage(plugins.filter((p) => p.on), plugins.filter((p) => !p.on)));
 }
 function watchDownloads() {
   clearTimeout(downloadTimer);
