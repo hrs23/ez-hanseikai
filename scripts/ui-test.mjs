@@ -7,9 +7,9 @@ import { fileURLToPath } from "node:url";
 
 const ui = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "ui");
 const read = (f) => fs.readFileSync(path.join(ui, f), "utf8");
-const source = ["util.js", "i18n.js", "layout.js", "events.js", "review.js"].map(read).join("\n");
+const source = ["util.js", "i18n.js", "layout.js", "events.js", "review.js", "plugins.js"].map(read).join("\n");
 const context = vm.createContext({ window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date });
-const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, flowAt, flowBands, flowSteps, isReview, voiceOnly, deletePreview, oldSessions, rateOf, liveEdge, netState, summaryLines, leftText, JA, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, flowAt, flowBands, flowSteps, isReview, voiceOnly, deletePreview, oldSessions, soundKey, pluginProgress, isBusy, workerState, downloadStats, sessionNotice, rateOf, liveEdge, netState, summaryLines, leftText, JA, setLanguage: (l) => { language = l; } })`, context);
 const plain = (v) => JSON.parse(JSON.stringify(v));
 
 const moment = (m, extra = {}) => ({ role: "moment", m, plugin: { id: "apex-matches" }, tags: ["match"], ...extra });
@@ -137,6 +137,51 @@ test("every fixed text has a Japanese translation", () => {
     for (const m of s.matchAll(/\bt\([^)]*\?\s*"((?:[^"\\]|\\.)*)"\s*:\s*"((?:[^"\\]|\\.)*)"/g)) { used.add(JSON.parse(`"${m[1]}"`)); used.add(JSON.parse(`"${m[2]}"`)); }
   }
   for (const m of read("index.html").matchAll(/data-t(?:-title|-placeholder|-label)?="([^"]*)"/g)) used.add(m[1]);
+  const missing = [...used].filter((k) => !(k in ui$.JA));
+  assert.deepEqual(missing, []);
+});
+
+test("the all-players view plays the viewer's own sound and a focused player plays its own", () => {
+  assert.equal(ui$.soundKey(0, ["a", "b", "c"], "b"), "b");
+  assert.equal(ui$.soundKey(0, ["a", "b"], "z"), "a");
+  assert.equal(ui$.soundKey(0, ["a"], "z"), "a");
+  assert.equal(ui$.soundKey(3, ["a", "b", "c"], "a"), "c");
+  assert.equal(ui$.soundKey(0, [], "a"), null);
+});
+
+test("a plugin's progress counts its finished sessions and its busy members", () => {
+  const jobs = [{ plugin: "t", state: "done" }, { plugin: "t", state: "claimed", by: "b" }, { plugin: "t", state: "waiting" }, { plugin: "x", state: "done" }];
+  assert.deepEqual(plain(ui$.pluginProgress(jobs, "t")), { done: 1, total: 3 });
+  assert.deepEqual(plain(ui$.pluginProgress(jobs, "none")), { done: 0, total: 0 });
+  assert.equal(ui$.isBusy(jobs, "t", "b"), true);
+  assert.equal(ui$.isBusy(jobs, "t", "a"), false);
+  assert.equal(ui$.workerState({ on: false, ready: true }, true), "off");
+  assert.equal(ui$.workerState({ on: true, ready: false }, false), "missing");
+  assert.equal(ui$.workerState({ on: true, ready: true }, true), "busy");
+  assert.equal(ui$.workerState({ on: true, ready: null }, false), "ready");
+});
+
+test("a download shows its percent, speed and time left", () => {
+  assert.equal(ui$.downloadStats({ done: 500, total: 1000, speed: 250, left_s: 2 }).text, "50% · 250 B/s · 2 s left");
+  assert.equal(ui$.downloadStats({ done: 0, total: 0, speed: 0, left_s: null }).text, "0%");
+  assert.equal(ui$.downloadStats({ done: 2000, total: 1000, speed: 0, left_s: 0 }).n, 100);
+});
+
+test("everyone is told who started or ended a session", () => {
+  ui$.setLanguage("en");
+  assert.equal(ui$.sessionNotice("start", "Aki"), "Aki started a session");
+  assert.equal(ui$.sessionNotice("end", "Ren"), "Ren ended the session");
+  assert.equal(ui$.sessionNotice("end", ""), "The session ended");
+  ui$.setLanguage("ja");
+  assert.equal(ui$.sessionNotice("start", "Aki"), "Aki がセッションを開始しました");
+  ui$.setLanguage("en");
+});
+
+test("every English phrase in the pages has a Japanese one", () => {
+  const files = fs.readdirSync(ui).filter((f) => f.endsWith(".js") && f !== "i18n.js" && f !== "debug.js");
+  const used = new Set();
+  for (const f of files) for (const m of read(f).matchAll(/\bt\("((?:[^"\\]|\\.)*)"/g)) used.add(JSON.parse(`"${m[1]}"`));
+  for (const m of read("index.html").matchAll(/data-t(?:-title|-placeholder|-label)?="([^"]*)"/g)) used.add(m[1].replaceAll("&amp;", "&"));
   const missing = [...used].filter((k) => !(k in ui$.JA));
   assert.deepEqual(missing, []);
 });

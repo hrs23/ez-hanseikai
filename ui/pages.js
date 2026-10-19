@@ -9,7 +9,6 @@ const BOARD_TEMPLATE = {
 const SHORTCUTS = [
   ["Room / Live / Game plan", ["Ctrl+1", "Ctrl+2", "Ctrl+3"]],
   ["Sidebar", ["Ctrl+B"]],
-  ["Start or end session", ["Ctrl+R"]],
   ["Settings", ["Ctrl+,"]],
   ["Play / pause", ["Space", "K"]],
   ["Back / forward 5 s (Shift 1 s)", ["←", "→"]],
@@ -31,7 +30,6 @@ const SHORTCUTS = [
 
 let askName = false;
 let joining = false;
-let downloading = {};
 let roomTab = "members";
 let drawerFor = null;
 let checks = {};
@@ -176,7 +174,7 @@ function renderDrawer() {
   } else if (!me) path = el("div", { className: "pathbox off" }, el("b", { textContent: memberState(p).text }));
   add(t("Version"), (me ? st.version : p && p.version) || "—");
   const lines = checks[id];
-  const checkBox = [el("div", { className: "h3", textContent: t("Checks") }), ...(lines ? lines.filter((l) => l.level !== "info").map((l) => el("div", { className: "line lv-" + l.level }, icon({ ok: "ok", warn: "alert", fail: "fail" }[l.level] || "info", "sm"), el("span", { textContent: l.text }))) : checking[id] ? [el("div", { className: "line" }, icon("spinner", "sm spin"), t("Checking…"))] : []), el("button", { className: "ghost sm", disabled: !!checking[id] || (!me && !(p && p.connected)), onclick: () => checkMember(id) }, icon("refresh", "sm"), t("Check again"))];
+  const checkBox = [el("div", { className: "h3", textContent: t("Checks") }), ...(lines ? lines.filter((l) => l.level !== "info").map((l) => el("div", { className: "line lv-" + l.level }, icon({ ok: "ok", warn: "alert", fail: "fail" }[l.level] || "info", "sm"), el("span", { textContent: t(l.text, l.args) }))) : checking[id] ? [el("div", { className: "line" }, icon("spinner", "sm spin"), t("Checking…"))] : []), el("button", { className: "ghost sm", disabled: !!checking[id] || (!me && !(p && p.connected)), onclick: () => checkMember(id) }, icon("refresh", "sm"), t("Check again"))];
   box.replaceChildren(
     el("div", { className: "dhead" }, avatar(id, "xl"), el("div", { className: "t" }, el("b", { textContent: nameOf(id) }), el("small", { className: "mono", textContent: `${id.slice(0, 4)}·${id.slice(4, 8)}·${id.slice(8, 12)}` })), iconButton("x", t("Close"), () => { drawerFor = null; delete sigs.roomtab; renderRoom(); })),
     path || "",
@@ -188,31 +186,6 @@ function renderDrawer() {
     me ? "" : el("button", { className: "danger", onclick: () => removeMember(id), textContent: t("Remove from room…") }),
   );
 }
-const capital = (c) => c.charAt(0).toUpperCase() + c.slice(1);
-function choiceText(key, c) {
-  if (key === "language" && c !== "auto") return capital(new Intl.DisplayNames([language], { type: "language" }).of(c) || c);
-  return key === "model" ? c : t(capital(c));
-}
-function renderPlugins() {
-  if (!changed("roomtab", ["plugins", plugins, downloading, st.process_jobs, lang])) return;
-  const cards = plugins.map((p) => {
-    const settings = { ...p.settings };
-    const save = (on) => invoke("set_room_plugin", { id: p.id, on, settings }).then(pollPlugins).catch(fail);
-    const on = el("input", { type: "checkbox", className: "switch", role: "switch", checked: p.on, ariaLabel: t(p.name), onchange: (e) => save(e.target.checked) });
-    const options = p.options.map((o) => el("div", { className: "field" }, el("label", { textContent: t(capital(o.key)) }), el("select", { ariaLabel: t(capital(o.key)), onchange: (e) => { settings[o.key] = e.target.value; save(p.on); } }, ...o.choices.map((c) => el("option", { value: c, textContent: choiceText(o.key, c), selected: settings[o.key] === c })))));
-    const get = () => {
-      downloading[p.id] = true;
-      renderPlugins();
-      invoke("prepare_plugin", { id: p.id }).catch(fail).finally(() => { delete downloading[p.id]; pollPlugins(); });
-    };
-    const here = downloading[p.id] ? [icon("spinner", "sm spin"), el("span", { textContent: t("Downloading to this PC…") })]
-      : p.ready ? [icon("ok", "sm ok"), el("span", { className: "ok", textContent: t("Ready on this PC") })]
-      : [icon("download", "sm"), el("span", { textContent: t("Not on this PC") }), el("span", { className: "sp" }), el("button", { className: "sm", textContent: t("Download {size}", { size: bytes(p.download_bytes) }), onclick: get })];
-    return el("div", { className: "plug" }, el("div", { className: "row" }, el("b", { textContent: t(p.name) }), el("span", { className: "pill accent", textContent: p.per_set ? t("Per session") : t("Per person") }), el("span", { className: "sp" }), on), ...options, el("div", { className: "here" }, ...here));
-  });
-  const here = el("div", { className: "hererow" }, icon("cpu", "sm"), el("span", { textContent: t("This PC runs analysis jobs") }), el("span", { className: "pill " + (st.process_jobs ? "ok" : "gray"), textContent: st.process_jobs ? t("On") : t("Off") }), el("span", { className: "sp" }), el("button", { className: "sm", textContent: t("Change in Settings"), onclick: () => openSettings("analysis") }));
-  $("roomtab").replaceChildren(el("div", { className: "plugins" }, ...cards), here);
-}
 function jobTarget(j) {
   if (j.whole) return t("Whole session");
   const set = setById(j.set);
@@ -223,7 +196,7 @@ function jobMenu(j, anchor) {
   const model = plugin && plugin.options.find((o) => o.key === "model");
   const running = jobInfo.running && jobInfo.running.job === j.job;
   openMenu([
-    { label: t("Run next on this PC"), icon: "play", disabled: j.state !== "waiting" || !j.here || !st.process_jobs, run: () => invoke("run_job_next", { job: j.job }).then(pollPlugins) },
+    { label: t("Run next on this PC"), icon: "play", disabled: j.state !== "waiting" || !j.here || !(plugin && plugin.process_here), run: () => invoke("run_job_next", { job: j.job }).then(pollPlugins) },
     { label: t("Retry"), icon: "refresh", disabled: j.state !== "failed", run: () => invoke("retry_job", { job: j.job }).then(pollPlugins).catch(fail) },
     { label: t("Stop"), icon: "stop", disabled: !running, run: () => invoke("cancel_job").then(pollPlugins) },
     ...(model ? [{ separator: true }, { label: t("Rerun with another model"), icon: "cpu", more: true, run: (b) => openMenu(model.choices.map((c) => ({ label: c, check: plugin.settings.model === c, run: () => rerunWith(plugin, c) })), b, true) }] : []),
@@ -266,6 +239,7 @@ function pollPlugins() {
   Promise.all([invoke("room_plugins"), invoke("jobs")]).then(([list, info]) => {
     if (gen !== pluginsGen) return;
     plugins = list;
+    watchDownloads();
     if (changed("tags", info.tags)) for (const k of ["events", "board", "reviewtab"]) delete sigs[k];
     jobInfo = info;
     renderRoom();
@@ -373,7 +347,7 @@ function openSettings(pane) {
   if (pane) settingsPane = pane;
   $("name").value = st.name;
   $("language").value = st.language;
-  $("jobshere").checked = st.process_jobs;
+  $("sessionsound").checked = sessionSound;
   $("hotkey").textContent = st.hotkey;
   $("hotkeyerr").hidden = true;
   $("myid").textContent = st.id.match(/.{4}/g).slice(0, 4).join("·");
@@ -536,7 +510,7 @@ $("boardtext").onkeydown = (e) => {
 for (const b of $("setnav").querySelectorAll("button")) b.onclick = () => { settingsPane = b.dataset.pane; showPane(); };
 $("name").onchange = () => run("set_name", { name: $("name").value });
 $("language").onchange = () => run("set_language", { language: $("language").value });
-$("jobshere").onchange = () => run("set_process_jobs", { on: $("jobshere").checked });
+$("sessionsound").onchange = () => { sessionSound = $("sessionsound").checked; store("sessionSound", sessionSound); };
 $("copyid").onclick = () => navigator.clipboard.writeText(st.id).then(() => flash(t("ID copied")));
 $("exportid").onclick = () => quiet("identity", { export: true });
 $("importid").onclick = () => quiet("identity", { export: false });
@@ -609,9 +583,11 @@ const menuActions = {
   "update": () => checkUpdate(true),
   "diagnostics": () => openDiagnostics(),
   "reset": openReset,
+  "toggle-recording": toggleRecording,
 };
 window.__TAURI__.event.listen("menu", (e) => { if (menuActions[e.payload]) menuActions[e.payload](); });
 window.__TAURI__.event.listen("joined", (e) => flash(t("{name} joined", { name: e.payload })));
+window.__TAURI__.event.listen("session", (e) => { flash(sessionNotice(e.payload.action, e.payload.by)); chime(e.payload.action); });
 window.__TAURI__.event.listen("flash", (e) => flash(e.payload));
 
 fillIcons();

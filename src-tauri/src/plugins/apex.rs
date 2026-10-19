@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use super::{keyframes, planes, Download, Found, Job, Output, Plane, Plugin};
 
-pub const PLUGIN: Plugin = Plugin { id: "apex-matches", name: "Apex matches", version: "1.1.0", live: false, per_set: true, options: &[], needs, run };
+pub const PLUGIN: Plugin = Plugin { id: "apex-matches", name: "Apex matches", summary: "Marks where each match ends as chapters on the seek bar.", sample: "chapters", version: "1.1.0", live: false, per_set: true, options: &[], needs, run };
 
 const W: usize = 64;
 const H: usize = 36;

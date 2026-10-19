@@ -6,8 +6,17 @@ use wasapi::{initialize_mta, AudioClient, DeviceEnumerator, Direction};
 
 use crate::{audio, capture, debug, ffmpeg, Core};
 
-fn line(level: &str, text: impl Into<String>) -> Value {
-    json!({"level": level, "text": text.into()})
+fn line(level: &str, text: &str, args: Value) -> Value {
+    json!({"level": level, "text": text, "args": args})
+}
+
+pub fn fill(text: &str, args: &Value) -> String {
+    let mut out = text.to_string();
+    for (key, value) in args.as_object().into_iter().flatten() {
+        let value = value.as_str().map_or_else(|| value.to_string(), String::from);
+        out = out.replace(&format!("{{{key}}}"), &value);
+    }
+    out
 }
 
 fn windows_build() -> Option<u32> {
@@ -20,26 +29,25 @@ fn audio_lines(pid: Option<u32>) -> Vec<Value> {
     let mut lines = Vec::new();
     let _ = initialize_mta();
     match DeviceEnumerator::new().and_then(|e| e.get_device_collection(&Direction::Render)) {
-        Err(e) => lines.push(line("fail", format!("could not list playback devices: {e}"))),
+        Err(e) => lines.push(line("fail", "Could not list playback devices: {error}", json!({"error": e.to_string()}))),
         Ok(devices) => {
             let count = devices.get_nbr_devices().unwrap_or(0);
             if count == 0 {
-                lines.push(line("warn", "no playback device: there is no app sound to capture on this PC"));
+                lines.push(line("warn", "No playback device: there is no app sound to capture on this PC", json!({})));
             } else {
-                let names: Vec<String> = (0..count).filter_map(|i| devices.get_device_at_index(i).ok()?.get_friendlyname().ok()).collect();
-                lines.push(line("ok", format!("{count} playback device(s): {}", names.join(", "))));
+                lines.push(line("ok", "{count} playback device(s)", json!({"count": count})));
             }
         }
     }
     match pid {
-        None => lines.push(line("info", "no app selected for app sound, so it is not checked")),
+        None => lines.push(line("info", "No app selected for app sound, so it is not checked", json!({}))),
         Some(pid) => {
             let (format, mode) = audio::capture_format();
             let result = AudioClient::new_application_loopback_client(pid, true)
                 .and_then(|mut client| client.initialize_client(&format, &Direction::Capture, &mode));
             match result {
-                Ok(()) => lines.push(line("ok", "the selected process's sound can be captured")),
-                Err(e) => lines.push(line("fail", format!("the selected process's sound cannot be captured: {e}"))),
+                Ok(()) => lines.push(line("ok", "The selected app's sound can be captured", json!({}))),
+                Err(e) => lines.push(line("fail", "The selected app's sound cannot be captured: {error}", json!({"error": e.to_string()}))),
             }
         }
     }
@@ -49,59 +57,82 @@ fn audio_lines(pid: Option<u32>) -> Vec<Value> {
 pub fn run(core: &Arc<Core>, audio_pid: Option<u32>) -> Vec<Value> {
     let mut lines = Vec::new();
     match windows_build() {
-        None => lines.push(line("warn", "could not read the Windows build")),
+        None => lines.push(line("warn", "Could not read the Windows build", json!({}))),
         Some(build) => {
-            lines.push(line("info", format!("Windows build {build}")));
+            lines.push(line("info", "Windows build {build}", json!({"build": build})));
             if build < 19041 {
-                lines.push(line("fail", "per-process app sound capture needs Windows build 19041 or newer; recording will have no app sound"));
+                lines.push(line("fail", "Per-process app sound capture needs Windows build 19041 or newer; recording will have no app sound", json!({})));
             } else {
-                lines.push(line("ok", "per-process sound capture is supported"));
+                lines.push(line("ok", "Per-process sound capture is supported", json!({})));
             }
             if build < 22000 {
-                lines.push(line("warn", "screen capture may show a yellow border before Windows 11"));
+                lines.push(line("warn", "Screen capture may show a yellow border before Windows 11", json!({})));
             }
         }
     }
     match tauri::webview_version() {
-        Ok(version) => lines.push(line("ok", format!("WebView2 runtime {version}"))),
-        Err(e) => lines.push(line("fail", format!("WebView2 runtime missing: {e}"))),
+        Ok(version) => lines.push(line("ok", "WebView2 runtime {version}", json!({"version": version}))),
+        Err(e) => lines.push(line("fail", "WebView2 runtime missing: {error}", json!({"error": e.to_string()}))),
     }
-    for (level, text) in capture::check_capture() {
-        lines.push(line(level, text));
+    for (level, text, args) in capture::check_capture() {
+        lines.push(line(level, text, args));
     }
     lines.extend(audio_lines(audio_pid));
     if !ffmpeg::present() {
-        lines.push(line("fail", "ffmpeg is not installed yet; it is downloaded on first run"));
+        lines.push(line("fail", "ffmpeg is not installed yet; it is downloaded on first run", json!({})));
     }
     for (name, ok) in ffmpeg::encoder_results() {
-        lines.push(line(if ok { "ok" } else { "info" }, format!("encoder {name}: {}", if ok { "works" } else { "not available" })));
+        lines.push(line(if ok { "ok" } else { "info" }, if ok { "Encoder {name} works" } else { "Encoder {name} is not available" }, json!({"name": name})));
     }
     let usable = core.codecs.lock().unwrap().clone();
     let (encoder, codec, _) = ffmpeg::pick(&usable);
-    lines.push(line("info", format!("recording with {encoder} ({codec})")));
-    let relay = format!("{:?}", core.ep.home_relay_status().get());
-    if relay.contains("Connected") {
-        lines.push(line("ok", "a relay server is reachable"));
+    lines.push(line("info", "Recording with {encoder} ({codec})", json!({"encoder": encoder, "codec": codec})));
+    if format!("{:?}", core.ep.home_relay_status().get()).contains("Connected") {
+        lines.push(line("ok", "A relay server is reachable", json!({})));
     } else {
-        lines.push(line("warn", format!("no relay connection yet: {relay}")));
+        lines.push(line("warn", "No relay connection yet", json!({})));
     }
     let report = format!("{:?}", core.ep.net_report().get());
     if report.contains("udp_v4: true") {
-        lines.push(line("ok", "UDP works"));
+        lines.push(line("ok", "UDP works", json!({})));
     } else {
-        lines.push(line("warn", "UDP may be blocked; connections will use the relay and may be slower"));
+        lines.push(line("warn", "UDP may be blocked; connections will use the relay and may be slower", json!({})));
     }
     if report.contains("mapping_varies_by_dest_ipv4: Some(true)") {
-        lines.push(line("warn", "this network changes the address per destination, so a direct connection may fail and the relay will be used"));
+        lines.push(line("warn", "This network changes the address per destination, so a direct connection may fail and the relay will be used", json!({})));
     }
-    lines.push(line("info", "Windows may ask once to allow the app through the firewall; click Allow. If it is declined, connections can still work through the relay"));
+    lines.push(line("info", "Windows may ask once to allow the app through the firewall; click Allow. If it is declined, connections can still work through the relay", json!({})));
     lines
+}
+
+pub fn with_text(lines: Vec<Value>) -> Vec<Value> {
+    lines
+        .into_iter()
+        .map(|mut l| {
+            l["text"] = json!(fill(l["text"].as_str().unwrap_or_default(), &l["args"]));
+            l
+        })
+        .collect()
 }
 
 pub fn text(lines: &[Value]) -> String {
     lines
         .iter()
-        .map(|l| format!("[{}] {}", l["level"].as_str().unwrap_or(""), l["text"].as_str().unwrap_or("")))
+        .map(|l| format!("[{}] {}", l["level"].as_str().unwrap_or(""), fill(l["text"].as_str().unwrap_or(""), &l["args"])))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lines_are_filled_from_their_arguments_and_carry_no_device_names() {
+        let l = line("ok", "{count} playback device(s)", json!({"count": 2}));
+        assert_eq!(text(&[l.clone()]), "[ok] 2 playback device(s)");
+        assert_eq!(with_text(vec![l])[0]["text"], "2 playback device(s)");
+        assert_eq!(fill("Windows build {build}", &json!({"build": 22631})), "Windows build 22631");
+        assert_eq!(fill("no arguments", &Value::Null), "no arguments");
+    }
 }

@@ -17,6 +17,10 @@ const JUMP_MIN = 1;
 const OFFLINE_FAILURES = 2;
 const NOTE_STEP_GAP = 0.5;
 const JOBS_MS = 5000;
+const DOWNLOAD_POLL_MS = 1000;
+const CHIME = { start: [660, 880], end: [880, 660] };
+const CHIME_NOTE_S = 0.14;
+const CHIME_GAIN = 0.15;
 const TAG_HINTS = 5;
 const AVATARS_SHOWN = 5;
 const CODEC_PROBE = { width: 1280, height: 720, bitrate: 6000000, framerate: 30 };
@@ -39,6 +43,8 @@ let selected = null;
 let review = null;
 let rate = 1;
 let volume = stored("volume", 1);
+let sessionSound = stored("sessionSound", true);
+let chimeAudio = null;
 let muted = false;
 let live = false;
 let watchParty = stored("watchParty", true);
@@ -329,12 +335,11 @@ const shownTotal = () => (review ? reviewTotal() : total());
 
 const recv = (key) => ({ app: { volume: 1, muted: false }, voice: { volume: 1, muted: false }, ...(receive[key] || {}) });
 function applyAudio() {
-  const n = play.keys.length;
   const away = page !== "player";
   play.keys.forEach((key, i) => {
     const tl = play.tiles[key];
     if (!tl) return;
-    const heard = play.view === i + 1 || (play.view === 0 && n === 1);
+    const heard = key === soundKey(play.view, play.keys, st.id);
     const mine = recv(key);
     for (const [s, on, mix] of [[tl.media, heard, mine.app], [tl.mic, true, mine.voice]]) if (s) for (const v of [s.video, s.pending && s.pending.video]) if (v) {
       v.muted = away || muted || !on || mix.muted;
@@ -459,6 +464,12 @@ function headerSub(set) {
   if (set.live) return [t("This session"), matchNow(nowM())].filter(Boolean).join(" · ");
   return [setLength(set), matches ? t(matches === 1 ? "{n} match" : "{n} matches", { n: matches }) : null].filter(Boolean).join(" · ");
 }
+function fitSub() {
+  const s = $("psub");
+  s.style.visibility = "";
+  if (s.scrollWidth > s.clientWidth) s.style.visibility = "hidden";
+}
+new ResizeObserver(fitSub).observe($("playerpage"));
 function renderHeader(set) {
   const title = review ? sessionName(review.id) : !set || set.live ? t("Live") : sessionName(set.id);
   $("ptitle").textContent = title;
@@ -467,9 +478,10 @@ function renderHeader(set) {
   if (changed("pchips", csig)) $("pchips").replaceChildren(...chips.filter(Boolean));
   const sub = headerSub(set);
   if ($("psub").textContent !== sub) $("psub").textContent = sub;
+  fitSub();
   const a = st.active_set;
   $("reviewrec").hidden = !(a && a.voice);
-  if (a && a.voice) $("reviewrec").replaceChildren(el("i", { className: "recdot" }), t("Recording review · voice only {time}", { time: fmt((nowUs() - a.start_us) / 1e6) }));
+  if (a && a.voice) $("reviewrec").replaceChildren(el("i", { className: "recdot" }), t("Debrief {time}", { time: fmt((nowUs() - a.start_us) / 1e6) }));
   renderParty(set);
   $("panelbtn").hidden = !set && !review;
   $("panelbtn").classList.toggle("on", panelShown());
@@ -1418,6 +1430,25 @@ function ask(title, action, danger, text) {
     d.onclose = () => done(false);
   });
 }
+function chime(action) {
+  if (!sessionSound) return;
+  try {
+    chimeAudio = chimeAudio || new AudioContext();
+    CHIME[action].forEach((hz, i) => {
+      const osc = chimeAudio.createOscillator();
+      const gain = chimeAudio.createGain();
+      const at = chimeAudio.currentTime + i * CHIME_NOTE_S;
+      osc.frequency.value = hz;
+      gain.gain.setValueAtTime(CHIME_GAIN, at);
+      gain.gain.exponentialRampToValueAtTime(0.0001, at + CHIME_NOTE_S);
+      osc.connect(gain).connect(chimeAudio.destination);
+      osc.start(at);
+      osc.stop(at + CHIME_NOTE_S);
+    });
+  } catch (e) {
+    warn(e);
+  }
+}
 function setRate(r) {
   clock.m = nowM();
   clock.at = performance.now();
@@ -1437,7 +1468,15 @@ function cycle(s, delta) {
   const n = s.keys.length;
   if (n) setView(s, s.view === 0 ? (delta > 0 ? 1 : n) : ((s.view - 1 + delta + n) % n) + 1);
 }
-const toggleRecording = () => run(st && st.recording ? "stop_recording" : "start_recording");
+async function toggleRecording() {
+  if (!st) return;
+  const ending = !!st.active_set;
+  const review = !ending && reviewing();
+  const title = ending ? t("End the session for everyone?") : review ? t("Start recording the debrief for everyone?") : t("Start a session for everyone?");
+  const action = ending ? t("End session") : review ? t("Record review") : t("Start session");
+  const text = ending ? t("Recording stops for everyone.") : t("Everyone in the room starts recording.");
+  if (await ask(title, action, ending, text)) run(ending ? "stop_recording" : "start_recording");
+}
 const current = () => (playSet() ? play : rec);
 
 $("play").onclick = togglePlay;

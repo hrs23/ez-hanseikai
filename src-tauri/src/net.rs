@@ -379,9 +379,14 @@ async fn handle(core: Arc<Core>, from: EndpointId, mut send: SendStream, mut rec
             send.write_all(&serde_json::to_vec(&hello_message(&core))?).await?;
         }
         Some("rec") => {
+            let by = req["by"].as_str().unwrap_or_default();
             if req["action"] == "start" {
+                if req["room"].as_str() == Some(core.active_room_id().as_str()) {
+                    room::announce(&core, "start", by);
+                }
                 react_to_set(&core, &json!({"id": req["set"], "room": req["room"], "by": req["by"], "start_us": req["start_us"], "voice": req["voice"]}));
             } else if req["action"] == "stop" && core.is_recording(req["room"].as_str().unwrap_or_default(), req["set"].as_str().unwrap_or_default()) {
+                room::announce(&core, "end", by);
                 let (core, set) = (core.clone(), req["set"].as_str().unwrap_or_default().to_string());
                 tokio::task::spawn_blocking(move || room::end_set(&core, true, Some(&set)));
             }
@@ -774,11 +779,15 @@ async fn pull_live(core: &Arc<Core>, id: &EndpointId, conn: &Connection, room: &
     }
 }
 
+pub fn ping_time(reply: &[u8]) -> Option<i64> {
+    Some(i64::from_le_bytes(reply.try_into().ok()?))
+}
+
 async fn measure(core: &Core, id: &EndpointId, conn: &Connection, samples: &mut Vec<(i64, i64)>) -> Result<()> {
     let t0 = now_us();
     let reply = request(conn, &json!({"t": "ping"})).await?;
     let t3 = now_us();
-    let t1 = i64::from_le_bytes(reply.as_slice().try_into()?);
+    let t1 = ping_time(&reply).ok_or_else(|| anyhow::anyhow!("the other app closed the connection without answering a ping"))?;
     samples.push((t3 - t0, t1 - (t0 + t3) / 2));
     if samples.len() > OFFSET_SAMPLES {
         samples.remove(0);
@@ -967,6 +976,13 @@ pub async fn peer_loop(core: Arc<Core>, id: EndpointId) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_ping_reply_is_eight_bytes_and_an_empty_one_is_no_answer() {
+        assert_eq!(ping_time(&42i64.to_le_bytes()), Some(42));
+        assert_eq!(ping_time(&[]), None);
+        assert_eq!(ping_time(&[1, 2, 3]), None);
+    }
 
     #[test]
     fn a_pull_holds_at_least_one_whole_record() {

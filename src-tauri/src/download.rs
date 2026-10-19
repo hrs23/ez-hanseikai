@@ -1,12 +1,17 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use serde_json::{json, Value};
 
 use crate::proc;
 
 const TIMEOUT_MS: &str = "60000";
 const WAIT: Duration = Duration::from_secs(6 * 3600);
+const WATCH_EVERY: Duration = Duration::from_millis(500);
 const SCRIPT: &str = r#"
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 $ErrorActionPreference = 'Stop'
@@ -55,6 +60,72 @@ pub struct Download {
 }
 
 static BUSY: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+static TRANSFERS: Mutex<Option<HashMap<String, Transfer>>> = Mutex::new(None);
+
+struct Transfer {
+    done: u64,
+    total: u64,
+    started: Instant,
+}
+
+pub fn pace(done: u64, total: u64, seconds: f64) -> (u64, Option<u64>) {
+    if done == 0 || seconds <= 0.0 {
+        return (0, None);
+    }
+    let speed = done as f64 / seconds;
+    (speed as u64, Some((total.saturating_sub(done) as f64 / speed).ceil() as u64))
+}
+
+pub fn progress(key: &str) -> Value {
+    let transfers = TRANSFERS.lock().unwrap();
+    let Some(t) = transfers.as_ref().and_then(|m| m.get(key)) else { return Value::Null };
+    let (speed, left) = pace(t.done, t.total, t.started.elapsed().as_secs_f64());
+    json!({"done": t.done, "total": t.total, "speed": speed, "left_s": left})
+}
+
+fn set_done(key: &str, done: u64) {
+    if let Some(t) = TRANSFERS.lock().unwrap().as_mut().and_then(|m| m.get_mut(key)) {
+        t.done = done;
+    }
+}
+
+pub fn fetch_group(key: &str, dir: &Path, downloads: &[Download]) -> Result<(), String> {
+    let total = downloads.iter().map(|d| d.size).sum();
+    {
+        let mut transfers = TRANSFERS.lock().unwrap();
+        let map = transfers.get_or_insert_with(HashMap::new);
+        if map.contains_key(key) {
+            return Err("Already downloading.".into());
+        }
+        map.insert(key.to_string(), Transfer { done: 0, total, started: Instant::now() });
+    }
+    let mut base = 0;
+    let mut result = Ok(());
+    for d in downloads {
+        let stop = Arc::new(AtomicBool::new(false));
+        let watcher = {
+            let (stop, key, part) = (stop.clone(), key.to_string(), dir.join(part_name(&d.url)));
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    set_done(&key, base + std::fs::metadata(&part).map_or(0, |m| m.len()));
+                    std::thread::sleep(WATCH_EVERY);
+                }
+            })
+        };
+        result = fetch(dir, d);
+        stop.store(true, Ordering::Relaxed);
+        let _ = watcher.join();
+        if result.is_err() {
+            break;
+        }
+        base += d.size;
+        set_done(key, base);
+    }
+    if let Some(m) = TRANSFERS.lock().unwrap().as_mut() {
+        m.remove(key);
+    }
+    result
+}
 
 pub fn present(dir: &Path, d: &Download) -> bool {
     match d.pick.first() {
@@ -104,6 +175,14 @@ pub fn fetch(dir: &Path, d: &Download) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pace_gives_speed_and_time_left() {
+        assert_eq!(pace(0, 100, 5.0), (0, None));
+        assert_eq!(pace(50, 100, 10.0), (5, Some(10)));
+        assert_eq!(pace(100, 100, 10.0), (10, Some(0)));
+        assert_eq!(pace(120, 100, 10.0).1, Some(0));
+    }
 
     #[test]
     fn part_names_are_plain_and_follow_the_url() {

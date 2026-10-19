@@ -37,7 +37,7 @@ const JA: [(&str, &str); 51] = [
     ("Start session", "セッション開始"),
     ("End session", "セッション終了"),
     ("Record review", "反省を録音"),
-    ("Mark this moment", "この場面に印をつける"),
+    ("Mark this moment", "この瞬間をマーク"),
     ("Add note", "メモを追加"),
     ("Previous session", "前のセッション"),
     ("Next session", "次のセッション"),
@@ -69,7 +69,7 @@ const JA: [(&str, &str); 51] = [
     ("Importing replaces your identity, so your ID changes. Your current key is kept as key.bin.old.", "インポートするとIDが置き換わり、IDが変わります。今の鍵は key.bin.old として残ります。"),
     ("Import", "インポート"),
     ("Version", "バージョン"),
-    ("Moment marked", "印をつけました"),
+    ("Moment marked", "マークしました"),
 ];
 const JA_WANTS: (&str, &str) = ("{name} wants to join", "{name} が参加を希望しています");
 
@@ -229,14 +229,6 @@ pub fn import_identity(app: &AppHandle, core: &Arc<Core>) {
     }
 }
 
-pub fn toggle_recording(core: &Arc<Core>) {
-    if core.active_set.lock().unwrap().is_some() {
-        room::stop_set(core);
-    } else if let Err(e) = room::start_set(core) {
-        let _ = core.app.emit("flash", e);
-    }
-}
-
 pub fn hotkey(text: &str) -> Option<Shortcut> {
     let shortcut = Shortcut::from_str(text).ok()?;
     shortcut.mods.intersects(Modifiers::CONTROL | Modifiers::ALT | Modifiers::SUPER).then_some(shortcut)
@@ -351,7 +343,7 @@ fn install_menus(app: &AppHandle, core: &Core) -> tauri::Result<()> {
     let recording = core.active_set.lock().unwrap().is_some();
     let text = toggle_text(recording, core.party.lock().unwrap().reviewing());
     let keys = core.hotkey.lock().unwrap().clone();
-    let toggle = item(app, &lang, "toggle-recording", text, Some("CmdOrCtrl+R"))?;
+    let toggle = item(app, &lang, "toggle-recording", text, None)?;
     let mark = item(app, &lang, "mark", "Mark this moment", hotkey(&keys).map(|_| keys.as_str()))?;
     mark.set_enabled(recording)?;
     app.set_menu(build_menu(app, &lang, &toggle, &mark)?)?;
@@ -408,7 +400,6 @@ pub fn setup(app: &tauri::App, core: Arc<Core>) -> tauri::Result<()> {
             "export-identity" => dialog(export_identity),
             "import-identity" => dialog(import_identity),
             "exit" => dialog(exit_app),
-            "toggle-recording" => dialog(|_, core| toggle_recording(core)),
             "mark" => marked(core),
             "debug" => open_debug(app),
             "github" => open_url(REPO),

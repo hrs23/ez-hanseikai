@@ -23,7 +23,7 @@ mod stream;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -45,7 +45,7 @@ const NAME_MAX: usize = 24;
 pub const ROOM_NAME_MAX: usize = 40;
 pub const CHANNELS: [&str; 2] = ["stable", "beta"];
 const DISK_EVERY: Duration = Duration::from_secs(20);
-const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection";
+const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required";
 static TEST_PORT: LazyLock<Option<String>> = LazyLock::new(|| std::env::var("EZH_TEST").ok());
 
 pub fn test_mode() -> bool {
@@ -190,7 +190,7 @@ pub struct Core {
     pub party: Mutex<party::Party>,
     pub language: Mutex<String>,
     pub hotkey: Mutex<String>,
-    pub process_jobs: AtomicBool,
+    pub skip_plugins: Mutex<HashSet<String>>,
     logs: Mutex<HashMap<PathBuf, (Arc<Vec<Value>>, u64)>>,
     pub jsons: Mutex<HashMap<PathBuf, Value>>,
     pub writing: Mutex<HashSet<PathBuf>>,
@@ -276,7 +276,7 @@ impl Core {
             "language": *self.language.lock().unwrap(),
             "layout": *self.layout.lock().unwrap(),
             "hotkey": *self.hotkey.lock().unwrap(),
-            "process_jobs": self.process_jobs.load(Ordering::Relaxed),
+            "skip_plugins": *self.skip_plugins.lock().unwrap(),
         });
         let _ = write_whole(&self.dir.join("settings.json"), value.to_string().as_bytes());
     }
@@ -436,7 +436,7 @@ pub async fn warm(core: &Core) {
 async fn check(core: State<'_, Arc<Core>>, audio_process: String) -> Result<Vec<Value>, String> {
     let core = core.inner().clone();
     warm(&core).await;
-    tauri::async_runtime::spawn_blocking(move || check::run(&core, sources::pid_of(&audio_process)))
+    tauri::async_runtime::spawn_blocking(move || check::with_text(check::run(&core, sources::pid_of(&audio_process))))
         .await
         .map_err(|e| e.to_string())
 }
@@ -684,12 +684,6 @@ async fn check_peer(core: State<'_, Arc<Core>>, id: String) -> Result<Value, Str
 }
 
 #[tauri::command]
-fn set_process_jobs(core: State<Arc<Core>>, on: bool) {
-    core.process_jobs.store(on, Ordering::Relaxed);
-    core.save_settings();
-}
-
-#[tauri::command]
 fn set_limit(core: State<Arc<Core>>, mbps: Option<f64>) {
     *core.limit_mbps.lock().unwrap() = mbps.filter(|v| *v > 0.0);
     core.save_settings();
@@ -911,7 +905,7 @@ async fn init(app: AppHandle, dir: PathBuf, left_lock: bool) -> Result<Arc<Core>
         party: Mutex::new(party::Party::default()),
         language: Mutex::new(settings["language"].as_str().unwrap_or_default().to_string()),
         hotkey: Mutex::new(settings["hotkey"].as_str().filter(|h| shell::hotkey(h).is_some()).unwrap_or(shell::DEFAULT_HOTKEY).to_string()),
-        process_jobs: AtomicBool::new(settings["process_jobs"].as_bool().unwrap_or(true)),
+        skip_plugins: Mutex::new(strings(&settings["skip_plugins"])),
         logs: Mutex::new(HashMap::new()),
         jsons: Mutex::new(HashMap::new()),
         writing: Mutex::new(HashSet::new()),
@@ -1024,7 +1018,7 @@ fn main() {
             std::thread::spawn(move || jobs::worker(c));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug::debug_view, debug::debug_report, debug::set_report_sharing, save_report, start_recording, stop_recording, delete_set, restore_set, identity, open_set_folder, export_set, cancel_export, set_layout, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, remove_room, check_peer, set_limit, set_process_jobs, set_codecs, cancel_invites, list_sources, set_source, use_display, list_mics, set_mic, set_mix, set_audio_process, set_warn_hours, set_channel, event_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_event, answer_ask, focus_set, party_on, party_act, jobs::room_plugins, jobs::set_room_plugin, jobs::prepare_plugin, jobs::jobs, jobs::retry_job, jobs::cancel_job, install_update, check_update, save_text, jobs::run_job_next, set_quality, set_language, rename_room, draw, party_typing, open_debug, mark, set_hotkey, retry_ffmpeg])
+        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug::debug_view, debug::debug_report, debug::set_report_sharing, save_report, start_recording, stop_recording, delete_set, restore_set, identity, open_set_folder, export_set, cancel_export, set_layout, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, remove_room, check_peer, set_limit, set_codecs, cancel_invites, list_sources, set_source, use_display, list_mics, set_mic, set_mix, set_audio_process, set_warn_hours, set_channel, event_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_event, answer_ask, focus_set, party_on, party_act, jobs::room_plugins, jobs::set_room_plugin, jobs::set_process_plugin, jobs::prepare_plugin, jobs::jobs, jobs::retry_job, jobs::cancel_job, install_update, check_update, save_text, jobs::run_job_next, set_quality, set_language, rename_room, draw, party_typing, open_debug, mark, set_hotkey, retry_ffmpeg])
         .build(tauri::generate_context!())
         .expect("failed to start");
     app.run(|app, event| {

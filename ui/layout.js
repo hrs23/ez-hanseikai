@@ -37,3 +37,8 @@ function rects(n, id, width, height, gap, slots = n) {
   const all = [...c.tiles, ...c.free].map(px);
   return { tiles: all.slice(0, n), free: all.slice(n) };
 }
+
+function soundKey(view, keys, me) {
+  if (view > 0) return keys[view - 1] || null;
+  return keys.includes(me) ? me : keys[0] || null;
+}

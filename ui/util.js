@@ -75,3 +75,8 @@ function keysOf(e) {
   if (!key || (!e.ctrlKey && !e.altKey)) return null;
   return [e.ctrlKey && "Ctrl", e.altKey && "Alt", e.shiftKey && "Shift", key].filter(Boolean).join("+");
 }
+
+function sessionNotice(action, by) {
+  if (action === "start") return by ? t("{by} started a session", { by }) : t("A session started");
+  return by ? t("{by} ended the session", { by }) : t("The session ended");
+}

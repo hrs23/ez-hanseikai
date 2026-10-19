@@ -11,6 +11,8 @@ use crate::proc::{IDLE, NO_WINDOW};
 pub const PLUGIN: Plugin = Plugin {
     id: "transcribe",
     name: "Transcription",
+    summary: "Subtitles on the video and a conversation list you can click.",
+    sample: "subtitles",
     version: "1.1.0",
     live: false, per_set: false,
     options: &[("model", &["small", "base", "medium", "large-v3-turbo"]), ("language", &["auto", "en", "ja", "ko", "zh", "es", "fr", "de", "pt", "ru"])],

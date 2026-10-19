@@ -8,7 +8,7 @@ use std::sync::mpsc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-pub use crate::download::{fetch, present, Download};
+pub use crate::download::{fetch_group, present, Download};
 use crate::proc::{self, Process, IDLE, NO_WINDOW};
 
 mod apex;
@@ -20,6 +20,8 @@ pub const LINE_MAX: usize = 16 << 20;
 pub struct Plugin {
     pub id: &'static str,
     pub name: &'static str,
+    pub summary: &'static str,
+    pub sample: &'static str,
     pub version: &'static str,
     pub live: bool,
     pub per_set: bool,
@@ -97,7 +99,7 @@ pub fn normalize(plugin: &Plugin, settings: &Value) -> Value {
 
 pub fn manifest(plugin: &Plugin) -> Value {
     let options: Value = plugin.options.iter().map(|(key, choices)| json!({"key": key, "choices": choices, "default": choices[0]})).collect();
-    json!({"id": plugin.id, "name": plugin.name, "version": plugin.version, "live": plugin.live, "per_set": plugin.per_set, "options": options})
+    json!({"id": plugin.id, "name": plugin.name, "summary": plugin.summary, "sample": plugin.sample, "version": plugin.version, "live": plugin.live, "per_set": plugin.per_set, "options": options})
 }
 
 pub fn missing(plugin: &Plugin, dir: &Path, settings: &Value) -> Vec<Download> {

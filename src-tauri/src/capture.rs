@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use serde_json::{json, Value};
 use windows::core::Interface;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D11::{
@@ -313,18 +314,18 @@ where
     }
 }
 
-pub fn check_capture() -> Vec<(&'static str, String)> {
+pub fn check_capture() -> Vec<(&'static str, &'static str, Value)> {
     let mut lines = Vec::new();
     let got = Arc::new(AtomicBool::new(false));
     let Ok(primary) = Monitor::primary() else {
-        return vec![("fail", "no display found".to_string())];
+        return vec![("fail", "No display found", json!({}))];
     };
     let (refused, control) = start_capture::<Probe, _>(primary, got.clone());
     if let Some(e) = refused {
-        lines.push(("warn", format!("capture without border was refused ({e}); falling back to the default border")));
+        lines.push(("warn", "Capture without a border was refused ({error}); falling back to the default border", json!({"error": e.to_string()})));
     }
     match control {
-        Err(e) => lines.push(("fail", format!("screen capture could not start: {e}"))),
+        Err(e) => lines.push(("fail", "Screen capture could not start: {error}", json!({"error": e.to_string()}))),
         Ok(control) => {
             let until = Instant::now() + PROBE_WAIT;
             while !got.load(Ordering::Relaxed) && Instant::now() < until {
@@ -332,9 +333,9 @@ pub fn check_capture() -> Vec<(&'static str, String)> {
             }
             let _ = control.stop();
             if got.load(Ordering::Relaxed) {
-                lines.push(("ok", "screen capture started and a frame arrived".into()));
+                lines.push(("ok", "Screen capture started and a frame arrived", json!({})));
             } else {
-                lines.push(("warn", format!("screen capture started but no frame arrived in {} s (idle or locked screen)", PROBE_WAIT.as_secs())));
+                lines.push(("warn", "Screen capture started but no frame arrived in {seconds} s (idle or locked screen)", json!({"seconds": PROBE_WAIT.as_secs()})));
             }
         }
     }

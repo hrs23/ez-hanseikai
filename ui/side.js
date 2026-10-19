@@ -25,7 +25,7 @@ function tickSide() {
   const timer = $("livetimer");
   if (a && timer) timer.textContent = t("Recording {time}", { time: fmt((nowUs() - a.start_us) / 1e6) });
   if (page === "player") {
-    if (a && a.voice) $("reviewrec").replaceChildren(el("i", { className: "recdot" }), t("Recording review · voice only {time}", { time: fmt((nowUs() - a.start_us) / 1e6) }));
+    if (a && a.voice) $("reviewrec").replaceChildren(el("i", { className: "recdot" }), t("Debrief {time}", { time: fmt((nowUs() - a.start_us) / 1e6) }));
     const chip = $("pchips").querySelector(".pill.rec");
     if (chip && a && !review && playSet() && playSet().live) chip.lastChild.textContent = t("Recording {time}", { time: fmt((nowUs() - a.start_us) / 1e6) });
   }
@@ -60,10 +60,9 @@ function renderStartButton() {
   if (!changed("startbtn", [state, lang])) return;
   const b = $("startbtn");
   b.className = "startbtn " + (state === "end" ? "end" : "go") + (state === "review" ? " review" : "");
-  const kbd = el("kbd", { textContent: "Ctrl+R" });
-  if (state === "end") b.replaceChildren(icon("stop", "sm"), el("span", { textContent: t("End session") }), kbd);
-  else if (state === "review") b.replaceChildren(icon("mic"), el("span", { textContent: t("Record review") }), el("span", { className: "voice", textContent: t("Voice only") }), kbd);
-  else b.replaceChildren(el("i", { className: "rd" }), el("span", { textContent: t("Start session") }), kbd);
+  if (state === "end") b.replaceChildren(icon("stop", "sm"), el("span", { textContent: t("End session") }));
+  else if (state === "review") b.replaceChildren(icon("mic"), el("span", { textContent: t("Record review") }), el("span", { className: "voice", textContent: t("Voice only") }));
+  else b.replaceChildren(el("i", { className: "rd" }), el("span", { textContent: t("Start session") }));
   b.title = state === "start" ? t("Starts recording for everyone. Everything until End session is one session; matches are chapters in it.") : state === "review" ? t("Records everyone's voice and what the Watch Party watches, with no picture.") : "";
 }
 

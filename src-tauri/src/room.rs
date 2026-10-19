@@ -586,14 +586,21 @@ pub fn start_set(core: &Arc<Core>) -> Result<(), String> {
     log_set_layout(core);
     party::log(core);
     net::broadcast(core, json!({"t": "rec", "action": "start", "set": set, "room": core.active_room_id(), "by": by, "start_us": start_us, "voice": voice}));
+    announce(core, "start", &by);
     Ok(())
+}
+
+pub fn announce(core: &Core, action: &str, by: &str) {
+    let _ = core.app.emit("session", json!({"action": action, "by": by}));
 }
 
 pub fn stop_set(core: &Arc<Core>) {
     let set = core.active_set.lock().unwrap().as_ref().map(|s| s.id.clone());
     end_set(core, true, None);
     if let Some(set) = set {
-        net::broadcast(core, json!({"t": "rec", "action": "stop", "set": set, "room": core.active_room_id()}));
+        let by = core.name.lock().unwrap().clone();
+        net::broadcast(core, json!({"t": "rec", "action": "stop", "set": set, "room": core.active_room_id(), "by": by}));
+        announce(core, "end", &by);
     }
 }
 
@@ -1092,7 +1099,6 @@ pub fn state_json(core: &Core) -> Value {
         "audio_process": core.audio_process.lock().unwrap().clone(),
         "invites": core.invites.lock().unwrap().len(),
         "limit_mbps": *core.limit_mbps.lock().unwrap(),
-        "process_jobs": core.process_jobs.load(Ordering::Relaxed),
         "recovery": core.recovery.lock().unwrap().clone(),
         "notice": core.notice.lock().unwrap().clone(),
         "disk": disk,

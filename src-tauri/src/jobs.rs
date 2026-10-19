@@ -45,16 +45,22 @@ pub struct Track {
 }
 
 #[derive(Clone, Debug, Default)]
+pub struct Part {
+    pub start_us: i64,
+    pub end_us: i64,
+    pub picture: Media,
+    pub sound: Media,
+    pub voice: Media,
+}
+
+#[derive(Clone, Debug, Default)]
 pub struct Input {
     pub file: String,
     pub set: String,
     pub owner: String,
     pub start_us: i64,
-    pub end_us: i64,
     pub here: bool,
-    pub picture: Media,
-    pub sound: Media,
-    pub voice: Media,
+    pub parts: Vec<Part>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -137,8 +143,8 @@ pub fn chosen(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> HashMap<Stri
     let mut counts: HashMap<(String, String), u64> = HashMap::new();
     for (log, records) in capped(logs, caps) {
         for r in records.iter().filter(|r| r["k"] == "seg" && r["series"] == SERIES[0]) {
-            let (Some(set), Some(capture)) = (r["set"].as_str(), r["capture"].as_str()) else { continue };
-            *counts.entry((set.to_string(), format!("{set}/{}/{capture}", log.owner))).or_default() += 1;
+            let Some(set) = r["set"].as_str() else { continue };
+            *counts.entry((set.to_string(), format!("{set}/{}", log.owner))).or_default() += 1;
         }
     }
     let mut out: HashMap<String, (u64, String)> = HashMap::new();
@@ -156,7 +162,7 @@ fn once(plugin: &str) -> bool {
 }
 
 pub fn counts(plugin: &str, file: &str, chosen: &HashMap<String, String>) -> bool {
-    !once(plugin) || file.split('/').next().is_some_and(|set| chosen.get(set).is_some_and(|f| f == file))
+    file.matches('/').count() == 1 && (!once(plugin) || file.split('/').next().is_some_and(|set| chosen.get(set).is_some_and(|f| f == file)))
 }
 
 fn current(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> Vec<String> {
@@ -277,10 +283,10 @@ pub fn moment(start_us: i64, s: f64) -> i64 {
     start_us + (s * 1e6).round() as i64
 }
 
-pub fn target(found: &Found, input: &Input) -> Value {
+pub fn target(found: &Found, input: &Input, start_us: i64) -> Value {
     let mut t = match (found.at_s, found.from_s, found.to_s) {
-        (Some(at), _, _) => json!({"t_us": moment(input.start_us, at)}),
-        (None, Some(from), Some(to)) => json!({"from_us": moment(input.start_us, from), "to_us": moment(input.start_us, to.max(from))}),
+        (Some(at), _, _) => json!({"t_us": moment(start_us, at)}),
+        (None, Some(from), Some(to)) => json!({"from_us": moment(start_us, from), "to_us": moment(start_us, to.max(from))}),
         _ => json!({}),
     };
     t["set"] = json!(input.set);
@@ -288,9 +294,9 @@ pub fn target(found: &Found, input: &Input) -> Value {
     t
 }
 
-pub fn event_record(plugin: &Plugin, key: &str, run: i64, input: &Input, found: &Found, id: i64) -> Value {
+pub fn event_record(plugin: &Plugin, key: &str, run: i64, input: &Input, start_us: i64, found: &Found, id: i64) -> Value {
     json!({
-        "k": "event", "id": id, "t_us": id, "kind": found.kind, "target": target(found, input),
+        "k": "event", "id": id, "t_us": id, "kind": found.kind, "target": target(found, input, start_us),
         "text": found.text, "values": found.values, "tags": found.tags,
         "plugin": {"id": plugin.id, "name": plugin.name, "version": plugin.version}, "job": key, "run": run,
     })
@@ -320,20 +326,25 @@ pub fn inputs(core: &Core, room: &str, logs: &[Log], locate: impl Fn(&str) -> bo
     let mut out = Vec::new();
     for set in room::sets(core, room, logs) {
         for f in set.files.iter().filter(|f| f.end_us.is_some()) {
+            let file = format!("{}/{}", set.id, f.owner);
+            let here = locate(&file);
+            let mut parts = Vec::new();
+            let mut complete = true;
             for capture in f.captures() {
                 let segs: Vec<&Seg> = f.segs.iter().filter(|s| s.capture == capture && s.series == SERIES[0]).collect();
                 let Some((start_us, end_us)) = span(&segs, f.offset_us) else { continue };
-                let file = format!("{}/{}/{capture}", set.id, f.owner);
-                let mut input = Input { set: set.id.clone(), owner: f.owner.clone(), start_us, end_us, ..Default::default() };
-                if locate(&file) {
+                let mut part = Part { start_us, end_us, ..Default::default() };
+                if here {
                     let (v, m) = (series(core, room, f, capture, SERIES[0]), series(core, room, f, capture, SERIES[1]));
-                    input.here = v.as_ref().is_some_and(|v| !v.is_empty()) && m.is_some();
+                    complete &= v.as_ref().is_some_and(|v| !v.is_empty()) && m.is_some();
                     let at = |parts: Option<Vec<PathBuf>>, stream: &str| Media { parts: parts.unwrap_or_default(), stream: stream.into() };
-                    (input.picture, input.sound, input.voice) = (at(v.clone(), "v:0"), at(v, "a:0"), at(m, "a:0"));
+                    (part.picture, part.sound, part.voice) = (at(v.clone(), "v:0"), at(v, "a:0"), at(m, "a:0"));
                 }
-                input.file = file;
-                out.push(input);
+                parts.push(part);
             }
+            parts.sort_by_key(|p| p.start_us);
+            let Some(first) = parts.first() else { continue };
+            out.push(Input { file, set: set.id.clone(), owner: f.owner.clone(), start_us: first.start_us, here: here && complete, parts });
         }
     }
     out
@@ -365,8 +376,49 @@ fn bundled() -> Vec<(&'static str, &'static str, bool)> {
     plugins::ALL.iter().map(|p| (p.id, p.version, p.live)).collect()
 }
 
-fn ready(core: &Core, id: &str, settings: &Value) -> bool {
+fn present(core: &Core, id: &str, settings: &Value) -> bool {
     plugins::find(id).is_some_and(|p| plugins::missing(p, &plugin_dir(core, id), settings).is_empty()) && ffmpeg::present()
+}
+
+fn skipped(core: &Core, id: &str) -> bool {
+    core.skip_plugins.lock().unwrap().contains(id)
+}
+
+fn ready(core: &Core, id: &str, settings: &Value) -> bool {
+    present(core, id, settings) && !skipped(core, id)
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Worker {
+    pub on: bool,
+    pub ready: bool,
+}
+
+pub fn workers(logs: &[Log]) -> HashMap<(String, String), Worker> {
+    let mut out = HashMap::new();
+    for log in logs {
+        for r in log.records.iter().filter(|r| r["k"] == "worker") {
+            if let Some(plugin) = r["plugin"].as_str() {
+                out.insert((plugin.to_string(), log.owner.clone()), Worker { on: r["on"] != false, ready: r["ready"] == true });
+            }
+        }
+    }
+    out
+}
+
+fn publish(core: &Core, room: &str, logs: &[Log], configs: &BTreeMap<String, Config>) {
+    if !core.active_room().is_some_and(|r| r.invite.is_none()) {
+        return;
+    }
+    let me = core.me();
+    let known = workers(logs);
+    for p in plugins::ALL.iter() {
+        let settings = configs.get(p.id).map_or_else(|| plugins::normalize(p, &Value::Null), |c| c.settings.clone());
+        let now = Worker { on: !skipped(core, p.id), ready: present(core, p.id, &settings) };
+        if known.get(&(p.id.to_string(), me.clone())) != Some(&now) {
+            core.append_log(room, &json!({"k": "worker", "plugin": p.id, "on": now.on, "ready": now.ready, "t_us": now_us()}));
+        }
+    }
 }
 
 fn recording(core: &Core) -> bool {
@@ -395,8 +447,9 @@ pub fn worker(core: Arc<Core>) {
 fn tick(core: &Arc<Core>) {
     let room = core.active_room_id();
     let (logs, configs, tracks) = snapshot(core, &room);
+    publish(core, &room, &logs, &configs);
     let prefixes = current(&logs, None);
-    if prefixes.is_empty() || !core.process_jobs.load(Ordering::Relaxed) || STOP.load(Ordering::Relaxed) {
+    if prefixes.is_empty() || STOP.load(Ordering::Relaxed) {
         return;
     }
     let me = core.me();
@@ -432,25 +485,12 @@ fn work(core: &Arc<Core>, room: &str, plugin: &'static Plugin, config: &Config, 
     *RUNNING.lock().unwrap() = Some(Running { room: room.into(), key: key.into(), plugin: plugin.id.into(), file: input.file.clone(), run, progress: 0.0 });
     emit(core);
     let work = work_root(core).join(run.to_string());
-    let job = plugins::Job {
-        plugin: plugin.id.into(),
-        settings: config.settings.clone(),
-        set: json!({"id": input.set, "start_us": input.start_us}),
-        file: json!({"owner": input.owner, "name": room::display_name(core, &input.owner)}),
-        duration_s: (input.end_us - input.start_us) as f64 / 1e6,
-        picture: input.picture.clone(),
-        sound: input.sound.clone(),
-        voice: input.voice.clone(),
-        ffmpeg: ffmpeg::path(),
-        dir: plugin_dir(core, plugin.id),
-        work: work.clone(),
-    };
-    let outcome = watch(core, room, plugin, key, &job);
+    let outcome = run_parts(core, room, plugin, config, key, input, &work);
     let about = json!({"plugin": plugin.id, "version": plugin.version, "file": input.file});
     match outcome {
-        Some(Ok(output)) => {
-            tracing::info!("job {key} done with {} events", output.events.len());
-            finish(core, room, plugin, key, run, input, &output)
+        Some(Ok((found, tags))) => {
+            tracing::info!("job {key} done with {} events", found.len());
+            finish(core, room, plugin, key, run, input, &found, &tags)
         }
         Some(Err(error)) => {
             tracing::warn!("job {key} failed: {error}");
@@ -470,12 +510,43 @@ fn work(core: &Arc<Core>, room: &str, plugin: &'static Plugin, config: &Config, 
     emit(core);
 }
 
-fn stale(core: &Core, room: &str, plugin: &Plugin, key: &str) -> bool {
-    let logs = room::logs(core, room);
-    core.active_room_id() != room || !core.process_jobs.load(Ordering::Relaxed) || (recording(core) && !plugin.live) || !current(&logs, None).iter().any(|p| key.starts_with(p.as_str()))
+type Results = (Vec<(i64, Found)>, BTreeMap<String, String>);
+
+fn run_parts(core: &Arc<Core>, room: &str, plugin: &'static Plugin, config: &Config, key: &str, input: &Input, work: &std::path::Path) -> Option<Result<Results, String>> {
+    let mut found = Vec::new();
+    let mut tags = BTreeMap::new();
+    let count = input.parts.len().max(1) as f64;
+    for (i, part) in input.parts.iter().enumerate() {
+        let job = plugins::Job {
+            plugin: plugin.id.into(),
+            settings: config.settings.clone(),
+            set: json!({"id": input.set, "start_us": part.start_us}),
+            file: json!({"owner": input.owner, "name": room::display_name(core, &input.owner)}),
+            duration_s: (part.end_us - part.start_us) as f64 / 1e6,
+            picture: part.picture.clone(),
+            sound: part.sound.clone(),
+            voice: part.voice.clone(),
+            ffmpeg: ffmpeg::path(),
+            dir: plugin_dir(core, plugin.id),
+            work: work.join(i.to_string()),
+        };
+        match watch(core, room, plugin, key, &job, (i as f64 / count, 1.0 / count))? {
+            Ok(output) => {
+                found.extend(output.events.into_iter().map(|e| (part.start_us, e)));
+                tags.extend(output.tags);
+            }
+            Err(e) => return Some(Err(e)),
+        }
+    }
+    Some(Ok((found, tags)))
 }
 
-fn watch(core: &Core, room: &str, plugin: &Plugin, key: &str, job: &plugins::Job) -> Option<Result<Output, String>> {
+fn stale(core: &Core, room: &str, plugin: &Plugin, key: &str) -> bool {
+    let logs = room::logs(core, room);
+    core.active_room_id() != room || skipped(core, plugin.id) || (recording(core) && !plugin.live) || !current(&logs, None).iter().any(|p| key.starts_with(p.as_str()))
+}
+
+fn watch(core: &Core, room: &str, plugin: &Plugin, key: &str, job: &plugins::Job, share: (f64, f64)) -> Option<Result<Output, String>> {
     let mut process = match plugins::spawn(job) {
         Ok(c) => c,
         Err(e) => return Some(Err(e.to_string())),
@@ -497,7 +568,7 @@ fn watch(core: &Core, room: &str, plugin: &Plugin, key: &str, job: &plugins::Job
         match rx.recv_timeout(CHECK) {
             Ok(Reply::Progress(p)) => {
                 if let Some(r) = RUNNING.lock().unwrap().as_mut() {
-                    r.progress = p;
+                    r.progress = share.0 + p * share.1;
                 }
                 if emitted.elapsed() >= EMIT_EVERY {
                     emitted = Instant::now();
@@ -521,18 +592,23 @@ fn watch(core: &Core, room: &str, plugin: &Plugin, key: &str, job: &plugins::Job
     }
 }
 
-fn finish(core: &Arc<Core>, room: &str, plugin: &Plugin, key: &str, run: i64, input: &Input, output: &Output) {
+fn finish(core: &Arc<Core>, room: &str, plugin: &Plugin, key: &str, run: i64, input: &Input, found: &[(i64, Found)], tags: &BTreeMap<String, String>) {
     let mut id = 0;
-    for found in &output.events {
+    for (start_us, one) in found {
         id = now_us().max(id + 1);
-        core.append_log(room, &event_record(plugin, key, run, input, found, id));
+        core.append_log(room, &event_record(plugin, key, run, input, *start_us, one, id));
     }
-    core.append_log(room, &job_record("done", key, run, json!({"plugin": plugin.id, "version": plugin.version, "file": input.file, "events": output.events.len(), "tags": output.tags})));
+    core.append_log(room, &job_record("done", key, run, json!({"plugin": plugin.id, "version": plugin.version, "file": input.file, "events": found.len(), "tags": tags})));
     party::send(core);
 }
 
 fn plugins_json(core: &Core) -> Vec<Value> {
-    let configs = configs(&room::logs(core, &core.active_room_id()), None);
+    let room = core.active_room_id();
+    let logs = room::logs(core, &room);
+    let configs = configs(&logs, None);
+    let known = workers(&logs);
+    let members: Vec<String> = core.rooms.lock().unwrap().list.iter().find(|r| r.id == room).map(|r| r.members.iter().map(|m| m.to_string()).collect()).unwrap_or_default();
+    let me = core.me();
     plugins::ALL
         .iter()
         .map(|p| {
@@ -545,6 +621,13 @@ fn plugins_json(core: &Core) -> Vec<Value> {
             v["settings"] = settings;
             v["download_bytes"] = json!(missing.iter().map(|d| d.size).sum::<u64>());
             v["ready"] = json!(missing.is_empty());
+            v["download"] = crate::download::progress(p.id);
+            v["process_here"] = json!(!skipped(core, p.id));
+            let others = members.iter().filter(|m| **m != me);
+            v["workers"] = std::iter::once(&me).chain(others).map(|m| {
+                let w = known.get(&(p.id.to_string(), m.clone()));
+                json!({"id": m, "on": w.is_none_or(|w| w.on), "ready": w.map(|w| w.ready)})
+            }).collect();
             v
         })
         .collect()
@@ -565,11 +648,25 @@ pub fn set_room_plugin(core: State<Arc<Core>>, id: String, on: bool, settings: V
 }
 
 #[tauri::command]
+pub fn set_process_plugin(core: State<Arc<Core>>, id: String, on: bool) -> Result<(), String> {
+    let plugin = plugins::find(&id).ok_or("Unknown plugin.")?;
+    {
+        let mut skip = core.skip_plugins.lock().unwrap();
+        if on { skip.remove(plugin.id) } else { skip.insert(plugin.id.to_string()) };
+    }
+    core.save_settings();
+    let room = core.active_room_id();
+    let logs = room::logs(&core, &room);
+    publish(&core, &room, &logs, &configs(&logs, None));
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn prepare_plugin(core: State<'_, Arc<Core>>, id: String) -> Result<(), String> {
     let plugin = plugins::find(&id).ok_or("Unknown plugin.")?;
     let settings = configs(&room::logs(&core, &core.active_room_id()), None).get(plugin.id).map_or_else(|| plugins::normalize(plugin, &Value::Null), |c| c.settings.clone());
     let dir = plugin_dir(&core, plugin.id);
-    tauri::async_runtime::spawn_blocking(move || plugins::missing(plugin, &dir, &settings).iter().try_for_each(|d| plugins::fetch(&dir, d))).await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || plugins::fetch_group(plugin.id, &dir, &plugins::missing(plugin, &dir, &settings))).await.map_err(|e| e.to_string())?
 }
 
 fn jobs_json(core: &Core) -> Value {
@@ -643,7 +740,7 @@ mod tests {
     }
 
     fn input(set: &str, owner: &str, start: i64, here: bool) -> Input {
-        Input { file: format!("{set}/{owner}"), set: set.into(), owner: owner.into(), start_us: start, end_us: start + 1000, here, ..Default::default() }
+        Input { file: format!("{set}/{owner}"), set: set.into(), owner: owner.into(), start_us: start, here, parts: vec![Part { start_us: start, end_us: start + 1000, ..Default::default() }] }
     }
 
     fn on() -> BTreeMap<String, Config> {
@@ -793,10 +890,19 @@ mod tests {
         let seg = |set: &str, n: u32, capture: &str| json!({"k": "seg", "series": "v", "set": set, "n": n, "capture": capture});
         let logs = vec![log("a", 0, vec![seg("s1", 1, "1"), seg("s1", 2, "1"), seg("s2", 1, "3")]), log("b", 0, vec![seg("s1", 1, "2"), seg("s1", 2, "2"), seg("s1", 3, "2"), seg("s2", 1, "4")])];
         let chosen = chosen(&logs, None);
-        assert_eq!(chosen["s1"], "s1/b/2");
-        assert_eq!(chosen["s2"], "s2/a/3");
-        assert!(counts("apex-matches", "s1/b/2", &chosen) && !counts("apex-matches", "s1/a/1", &chosen));
-        assert!(counts("transcribe", "s1/a/1", &chosen));
+        assert_eq!(chosen["s1"], "s1/b");
+        assert_eq!(chosen["s2"], "s2/a");
+        assert!(counts("apex-matches", "s1/b", &chosen) && !counts("apex-matches", "s1/a", &chosen));
+        assert!(counts("transcribe", "s1/a", &chosen));
+    }
+
+    #[test]
+    fn restarted_captures_of_one_person_are_one_file_and_old_keys_are_ignored() {
+        let seg = |n: u32, capture: &str| json!({"k": "seg", "series": "v", "set": "s1", "n": n, "capture": capture});
+        let logs = vec![log("a", 0, vec![seg(1, "1"), seg(2, "1"), seg(1, "2")]), log("b", 0, vec![seg(1, "3"), seg(2, "3")])];
+        assert_eq!(chosen(&logs, None)["s1"], "s1/a");
+        assert!(!counts("transcribe", "s1/a/1", &HashMap::new()));
+        assert!(!counts("transcribe", "s1", &HashMap::new()));
     }
 
     fn plugin_event(run: i64, id: i64) -> Value {
@@ -835,6 +941,16 @@ mod tests {
     }
 
     #[test]
+    fn each_member_publishes_whether_it_processes_a_plugin_and_has_it() {
+        let worker = |plugin: &str, on: bool, ready: bool| json!({"k": "worker", "plugin": plugin, "on": on, "ready": ready});
+        let logs = vec![log("a", 0, vec![worker("transcribe", true, false), worker("transcribe", false, true)]), log("b", 0, vec![worker("apex-matches", true, true)])];
+        let w = workers(&logs);
+        assert_eq!(w[&("transcribe".to_string(), "a".to_string())], Worker { on: false, ready: true });
+        assert_eq!(w[&("apex-matches".to_string(), "b".to_string())], Worker { on: true, ready: true });
+        assert!(!w.contains_key(&("transcribe".to_string(), "b".to_string())));
+    }
+
+    #[test]
     fn states_for_the_jobs_view() {
         let online = HashSet::from(["b".to_string()]);
         assert_eq!(state(None, "a", &online).0, "waiting");
@@ -850,10 +966,11 @@ mod tests {
     fn results_land_on_the_runners_clock() {
         let i = input("s1", "b", 1_000_000, true);
         let at = Found { kind: "match_end".into(), at_s: Some(2.5), ..Default::default() };
-        assert_eq!(target(&at, &i), json!({"t_us": 3_500_000, "set": "s1", "file": "b"}));
+        assert_eq!(target(&at, &i, i.start_us), json!({"t_us": 3_500_000, "set": "s1", "file": "b"}));
+        assert_eq!(target(&at, &i, 9_000_000), json!({"t_us": 11_500_000, "set": "s1", "file": "b"}));
         let range = Found { kind: "speech".into(), from_s: Some(1.0), to_s: Some(0.5), ..Default::default() };
-        assert_eq!(target(&range, &i), json!({"from_us": 2_000_000, "to_us": 2_000_000, "set": "s1", "file": "b"}));
-        let r = event_record(plugins::find("transcribe").unwrap(), "k", 7, &i, &range, 42);
+        assert_eq!(target(&range, &i, i.start_us), json!({"from_us": 2_000_000, "to_us": 2_000_000, "set": "s1", "file": "b"}));
+        let r = event_record(plugins::find("transcribe").unwrap(), "k", 7, &i, i.start_us, &range, 42);
         assert_eq!((r["k"].clone(), r["run"].clone(), r["plugin"]["name"].clone()), (json!("event"), json!(7), json!("Transcription")));
     }
 

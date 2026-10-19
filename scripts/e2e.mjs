@@ -148,6 +148,14 @@ async function evaluate(app, expression) {
   return r.result.value;
 }
 
+async function pressAndConfirm(app, call, yes = true) {
+  await evaluate(app, `${call}; true`);
+  await waitFor(`${app.key} asks before it goes on`, within(UI_REFRESH_S * 5), () => evaluate(app, `$("confirm").open`));
+  const title = await evaluate(app, `$("confirmtitle").textContent`);
+  await evaluate(app, `$(${yes ? '"confirmyes"' : '"confirmno"'}).click(); true`);
+  return title;
+}
+
 const invoke = (app, cmd, args = {}) => evaluate(app, `window.__TAURI__.core.invoke(${JSON.stringify(cmd)}, ${JSON.stringify(args)})`);
 const state = (app) => invoke(app, "state");
 
@@ -253,6 +261,7 @@ async function share(app) {
 async function launch(key) {
   const app = await attach(start(key));
   await invoke(app, "set_name", { name: app.name });
+  await invoke(app, "set_language", { language: "en" });
   await invoke(app, "set_quality", { id: "light" });
   await share(app);
   say(`${key} is ${app.id.slice(0, 10)}`);
@@ -622,14 +631,19 @@ async function scenario(ctx) {
     check(!shown.length, `plugin events shown: ${brief(shown)}`);
   });
 
-  await step("the transcription download follows the chosen model", async () => {
-    await evaluate(b, `roomTab = "plugins"; go("room"); pollPlugins(); true`);
+  await step("the transcription plugin follows the chosen model, with one job row per person", async () => {
+    await invoke(b, "set_room_plugin", { id: "transcribe", on: true, settings: {} });
+    await evaluate(b, `openPlugin = "transcribe"; roomTab = "plugins"; go("room"); pollPlugins(); true`);
+    const shown = `[...$("roomtab").querySelectorAll(".plug")].find((p) => p.querySelector(".pt b").textContent === t("Transcription"))`;
     for (const [model, size] of Object.entries(MODEL_BYTES)) {
-      const shown = `[...$("roomtab").querySelectorAll(".plug")].find((p) => p.querySelector("b").textContent === t("Transcription"))`;
-      await waitFor("B shows the transcription card", within(UI_REFRESH_S * 5), () => evaluate(b, `!!${shown}`));
+      await waitFor("B shows the transcription settings", within(UI_REFRESH_S * 5), () => evaluate(b, `!!${shown} && !!${shown}.querySelector(".field select")`));
       await evaluate(b, `(() => { const s = ${shown}.querySelector(".field select"); s.value = ${JSON.stringify(model)}; s.dispatchEvent(new Event("change")); return true; })()`);
+      await waitFor("B asks before changing the room", within(UI_REFRESH_S * 5), () => evaluate(b, `$("confirm").open`));
+      const said = await evaluate(b, `$("confirmtext").textContent`);
+      check(said === "Applies to everyone in the room.", `the change says "${said}" instead of that it applies to everyone`);
+      await evaluate(b, `$("confirmyes").click(); true`);
       const text = bytes(size + WHISPER_BYTES);
-      await waitFor(`B's card offers ${text}`, within(LOG_SYNC_S * 2), () => evaluate(b, `${shown}.querySelector(".here").textContent.includes(${JSON.stringify(text)})`));
+      await waitFor(`B's card offers ${text}`, within(LOG_SYNC_S * 2), () => evaluate(b, `${shown}.textContent.includes(${JSON.stringify(text)})`));
       for (const app of [b, a]) {
         await waitFor(`${app.key} offers the ${model} model`, within(LOG_SYNC_S * 2), async () => {
           const p = (await invoke(app, "room_plugins")).find((x) => x.id === "transcribe");
@@ -637,6 +651,21 @@ async function scenario(ctx) {
         });
       }
     }
+    const members = await evaluate(b, `${shown}.querySelectorAll(".wrow").length`);
+    check(members === 3, `B lists ${members} members under Processing`);
+    const jobs = (await invoke(b, "jobs")).jobs.filter((j) => j.plugin === "transcribe" && j.set === ctx.set);
+    const owners = jobs.map((j) => j.owner);
+    check(owners.length > 0 && new Set(owners).size === owners.length, `transcription rows per person in the set: ${brief(owners)}`);
+  });
+
+  await step("a member turns processing off for one plugin and everyone sees it", async () => {
+    await invoke(c, "set_process_plugin", { id: "transcribe", on: false });
+    for (const app of [a, b, c]) {
+      await waitFor(`${app.key} sees C not processing`, within(LOG_SYNC_S * 3), async () => (await invoke(app, "room_plugins")).find((x) => x.id === "transcribe").workers.some((w) => w.id === c.id && w.on === false));
+    }
+    check((await invoke(c, "room_plugins")).find((x) => x.id === PLUGIN).process_here === true, "turning off one plugin turned off another");
+    await invoke(c, "set_process_plugin", { id: "transcribe", on: true });
+    await invoke(b, "set_room_plugin", { id: "transcribe", on: false, settings: {} });
   });
 
   await step("Watch Party converges on a seek and a play", async () => {
@@ -667,13 +696,21 @@ async function scenario(ctx) {
     const all = [a, b, c];
     await allSee(all, "watching the set together", within(PARTY_REPEAT_S + UI_REFRESH_S * 2), (st) => st.party.on && st.party.shared.set === ctx.set);
     check(await evaluate(a, `startState() === "review"`), "A's start button does not offer to record the review");
-    await invoke(a, "start_recording");
+    await evaluate(b, `window.e2eNotes = []; window.__TAURI__.event.listen("session", (e) => e2eNotes.push(sessionNotice(e.payload.action, e.payload.by))).then(() => true)`);
+    await pressAndConfirm(a, "toggleRecording()", false);
+    await sleep(UI_REFRESH_S * 1000);
+    check(!(await state(a)).active_set, "A started recording although it answered No");
+    const asked = await pressAndConfirm(a, "toggleRecording()");
+    check(asked === "Start recording the debrief for everyone?", `A was asked "${asked}"`);
+    await waitFor("B is told who started", within(LOG_SYNC_S * 2), () => evaluate(b, `e2eNotes.includes(${JSON.stringify(a.name + " started a session")})`));
     ctx.review = (await state(a)).active_set.id;
     await allSee(all, "recording the review voice only", within(LOG_SYNC_S * 2), (st) => st.active_set?.id === ctx.review && st.active_set.voice === true);
     await waitFor(`A logs ${SEGMENTS_AFTER_RESTART} voice segments of the review`, within(SEGMENT_S * (SEGMENTS_AFTER_RESTART + 2)), () => segsOf(logOf(a, ctx.room, a.id), ctx.review, "m").length >= SEGMENTS_AFTER_RESTART);
     await evaluate(c, `act("seek", ${SEEK_TO_S * 2}); true`);
     await waitFor("C logs its seek as a party record", within(LOG_SYNC_S * 2), () => logOf(c, ctx.room, c.id).some((r) => r.k === "party" && r.set === ctx.review && r.shared.set === ctx.set));
-    await invoke(a, "stop_recording");
+    const ending = await pressAndConfirm(a, "toggleRecording()");
+    check(ending === "End the session for everyone?", `A was asked "${ending}"`);
+    await waitFor("B is told who ended", within(LOG_SYNC_S * 2), () => evaluate(b, `e2eNotes.includes(${JSON.stringify(a.name + " ended the session")})`));
     await allSee(all, "the review ended", within(LOG_SYNC_S * 2), (st) => !st.active_set && setOf(st, ctx.review) && !setOf(st, ctx.review).live);
     for (const app of all) {
       const own = logOf(app, ctx.room, app.id);
