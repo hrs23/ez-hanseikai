@@ -5,7 +5,10 @@ const SEEK_SHOWN_S = 2;
 const KEEP_NEWEST = 3;
 
 const shortId = (id) => `${String(id).slice(0, 4)}·${String(id).slice(4, 8)}`;
-const voiceOnly = (set) => !!set && set.players.length > 0 && set.players.every((p) => (p.parts || []).every((part) => !part.v));
+const voiceOnly = (set) => {
+  const parts = set ? set.players.flatMap((p) => p.parts || []) : [];
+  return parts.length > 0 && parts.every((part) => !part.v);
+};
 const isReview = (set) => voiceOnly(set) && (set.party || []).length > 0;
 
 function positionAt(shared, at, t) {

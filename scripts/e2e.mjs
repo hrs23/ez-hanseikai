@@ -498,8 +498,24 @@ async function scenario(ctx) {
     b = await launch("b");
   });
 
-  await step("create a room on A; B joins with approval", async () => {
+  await step("recording alone, the player follows the picture as it grows", async () => {
     ctx.room = await invoke(a, "create_room", { name: "Practice" });
+    await allSee([a], "encoding its test source", within(COLD_START_S), (st) => st.capture.live);
+    await evaluate(a, "openNow(); true");
+    await pressAndConfirm(a, "toggleRecording()");
+    const alone = (await waitFor("A records", within(UI_REFRESH_S * 5), async () => (await state(a)).active_set?.id)) || "";
+    const view = () => evaluate(a, `(() => { const v = Object.values(play.tiles)[0]?.media.video; return { shown: selected === ${JSON.stringify(alone)}, review: !!review, playing: clock.playing, cur: v ? v.currentTime : 0, dur: v && isFinite(v.duration) ? v.duration : 0 }; })()`);
+    const first = await waitFor("A's player plays the growing recording", within(SEGMENT_S * 4), async () => { const x = await view(); return x.shown && !x.review && x.playing && x.cur > 0 && x.dur > 0 && x; });
+    await waitFor("A's player moves on with the picture", within(SEGMENT_S * 3), async () => { const x = await view(); return !x.review && x.cur > first.cur + FRAGMENT_S * 2 && x.dur > first.dur + SEGMENT_S && x; });
+    await pressAndConfirm(a, "toggleRecording()");
+    await waitFor("A offers to discard", within(UI_REFRESH_S * 5), () => evaluate(a, `$("confirm").open && $("confirmtitle").textContent === t("Discard this recording?")`));
+    await evaluate(a, `$("confirmyes").click(); true`);
+    await waitFor("A dropped the recording", within(UI_REFRESH_S * 5), async () => { const st = await state(a); return !st.active_set && !setOf(st, alone); });
+    await evaluate(a, "openNow(); share(); true");
+    await waitFor("A shares no recording", within(UI_REFRESH_S * 5), async () => !(await state(a)).party.shared.set);
+  });
+
+  await step("B joins A's room with approval", async () => {
     const code = await invoke(a, "create_invite", { reuse: false });
     await invoke(b, "join_room", { code });
     await waitFor("A sees B asking to join", within(DIAL_S * 2), async () => (await state(a)).asks.some((x) => x.id === b.id));

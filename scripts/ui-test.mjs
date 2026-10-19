@@ -93,6 +93,9 @@ test("a review session has voices only and Watch Party records", () => {
   assert.equal(ui$.isReview({ ...voice, party: [] }), false);
   assert.equal(ui$.isReview({ players: [{ parts: [{ v: {}, m: {} }] }], party: [flow[0]] }), false);
   assert.equal(ui$.voiceOnly({ players: [] }), false);
+  const starting = { players: [{ parts: [] }], party: [flow[0]] };
+  assert.equal(ui$.isReview(starting), false);
+  assert.equal(ui$.isReview({ ...starting, players: [{ parts: [] }, { parts: [{ m: {} }] }] }), true);
 });
 
 test("the delete preview lists every part that is here and says whether the recording goes completely", () => {
