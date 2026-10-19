@@ -564,7 +564,7 @@ function renderTools() {
 function openSession(id) {
   nowView = false;
   const set = setById(id);
-  if (set && isReview(set)) { startReview(set); go("player"); return; }
+  if (set && isReview(set)) { startReview(set); share(); go("player"); return; }
   endReview();
   if (id !== selected) openSet(id);
   go("player");
@@ -610,7 +610,6 @@ function startReview(set, m = 0) {
     for (const k of Object.keys(sigs)) if (["events", "views", "panel", "bands", "flow"].includes(k)) delete sigs[k];
     side = "talk";
   }
-  share();
   refresh();
 }
 function endReview() {

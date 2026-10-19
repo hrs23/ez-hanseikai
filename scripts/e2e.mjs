@@ -872,8 +872,10 @@ async function scenario(ctx) {
     await waitFor("A sees a review session", within(UI_REFRESH_S * 3), () => evaluate(a, `isReview(setById(${JSON.stringify(ctx.review)}))`));
     await evaluate(a, `openSession(${JSON.stringify(ctx.review)}); true`);
     await waitFor("A opens the review", within(UI_REFRESH_S * 3), () => evaluate(a, `review?.id === ${JSON.stringify(ctx.review)} && reviewTotal() > 0`));
+    for (const app of [b, c]) await waitFor(`${app.key} replays the review with A`, within(PARTY_REPEAT_S + UI_REFRESH_S * 2), () => evaluate(app, `review?.id === ${JSON.stringify(ctx.review)}`));
+    for (const app of all) check((await state(app)).party.shared.origin === a.id, `${app.key} took over the review it only followed`);
     await evaluate(a, `act("seek", reviewTotal()); true`);
-    await waitFor("A replays the watched session at the seek", within(UI_REFRESH_S * 3), () => evaluate(a, `review?.id === ${JSON.stringify(ctx.review)} && selected === ${JSON.stringify(ctx.set)} && Math.abs(nowM() - ${SEEK_TO_S * 2}) < ${JUMP_MIN_S}`));
+    for (const app of all) await waitFor(`${app.key} replays the watched session at the seek`, within(UI_REFRESH_S * 3), () => evaluate(app, `review?.id === ${JSON.stringify(ctx.review)} && selected === ${JSON.stringify(ctx.set)} && Math.abs(nowM() - ${SEEK_TO_S * 2}) < ${JUMP_MIN_S}`));
     await evaluate(a, `endReview(); openSession(${JSON.stringify(ctx.set)}); true`);
     ctx.notes.push(`review session with ${(await state(a)).sets.find((s) => s.id === ctx.review).party.length} party records replayed`);
   });
