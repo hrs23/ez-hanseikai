@@ -55,16 +55,20 @@ function startState() {
 }
 function renderStartButton() {
   const state = startState();
-  if (!changed("startbtn", [state, lang])) return;
+  const online = 1 + st.peers.filter((p) => p.connected).length;
+  if (!changed("startbtn", [state, lang, online])) return;
   const b = $("startbtn");
   b.className = "startbtn " + (state === "end" ? "end" : "go");
   $("startmore").hidden = state === "end";
   $("startmore").className = "startmore go";
-  if (state === "end") b.replaceChildren(icon("stop", "sm"), el("span", { textContent: t("Stop recording") }));
+  $("standby").hidden = state === "end";
+  $("standby").replaceChildren(icon("radio", "sm"), el("span", { textContent: `${t("Standby")} · ${t("{n} online", { n: online })}` }));
+  if (state === "end") b.replaceChildren(el("i", { className: "recdot" }), el("span", { textContent: t("Stop recording") }), el("span", { className: "timer", id: "livetimer", textContent: fmt((nowUs() - st.active_set.start_us) / 1e6) }));
   else if (state === "review") b.replaceChildren(icon("mic"), el("span", { textContent: t("Record debrief") }));
   else b.replaceChildren(el("i", { className: "rd" }), el("span", { textContent: t("Start recording") }));
   b.title = state === "start" ? t("Starts recording for everyone. Everything until Stop recording is one recording; matches are chapters in it.") : state === "review" ? t("Records everyone's voice and what the Watch Party watches, with no picture.") : "";
   b.parentElement.classList.toggle("end", state === "end");
+  b.parentElement.parentElement.classList.toggle("end", state === "end");
 }
 function startMenu(anchor) {
   openMenu([
@@ -107,16 +111,12 @@ function lackingText(s) {
 }
 function liveRow() {
   const a = st.active_set;
-  const who = a ? (liveSet() ? liveSet().players.map((p) => p.owner) : []) : [st.id, ...st.peers.filter((p) => p.connected).map((p) => p.id)];
-  const online = 1 + st.peers.filter((p) => p.connected).length;
+  const who = liveSet() ? liveSet().players.map((p) => p.owner) : [];
   const on = page === "player" && showingNow() && !review;
-  const thumb = thumbBox(null, who, "xs", THUMB_FACES, !!a);
-  if (!a) thumb.firstChild.replaceWith(icon("radio"));
-  const head = el("div", { className: "l1" }, a ? el("i", { className: "recdot" }) : null, el("b", { textContent: a ? t("Recording") : t("Standby") }), a ? el("span", { className: "r rec", id: "livetimer", textContent: fmt((nowUs() - a.start_us) / 1e6) }) : null);
-  const detail = a ? (a.voice ? null : matchNow(nowM()) || t("by {name}", { name: a.by || "" })) : t("{n} online", { n: online });
-  const row = el("div", { className: "srow liverow" + (a ? " recording" : "") + (on ? " on" : ""), role: "option", tabIndex: 0, ariaSelected: on },
-    thumb,
-    el("div", { className: "txt" }, head, el("div", { className: "l2" }, a && a.voice ? pill("accent", "mic", t("Debrief")) : null, detail ? el("span", { textContent: detail }) : null)));
+  const detail = a.voice ? null : matchNow(nowM()) || t("by {name}", { name: a.by || "" });
+  const row = el("div", { className: "srow liverow recording" + (on ? " on" : ""), role: "option", tabIndex: 0, ariaSelected: on },
+    thumbBox(null, who, "xs", THUMB_FACES, true),
+    el("div", { className: "txt" }, el("div", { className: "l1" }, el("i", { className: "recdot" }), el("b", { textContent: t("Recording") })), el("div", { className: "l2" }, a.voice ? pill("accent", "mic", t("Debrief")) : null, detail ? el("span", { textContent: detail }) : null)));
   row.onclick = openNow;
   row.onkeydown = (e) => { if (e.key === "Enter") openNow(); };
   return row;
@@ -150,7 +150,7 @@ function renderSessions() {
   const rows = recentRows(recordingRows(showGone), keep);
   const sig = [rows.map(rowSignature), page, nowView, selected, review && review.id, st.active_set, st.peers.map((p) => p.connected), lang, st.colors, st.names, dayOf(new Date())];
   if (!changed("sessions", sig)) return;
-  $("sessions").replaceChildren(liveRow(), ...rows.map((r) => (r.s ? sessionRow(r.s) : goneRow(r.g))), rows.length ? "" : el("div", { className: "none", textContent: t("No recordings yet") }));
+  $("sessions").replaceChildren(...(st.active_set ? [liveRow()] : []), ...rows.map((r) => (r.s ? sessionRow(r.s) : goneRow(r.g))), rows.length || st.active_set ? "" : el("div", { className: "none", textContent: t("No recordings yet") }));
 }
 function sessionMenu(id, anchor) {
   const set = setById(id);
@@ -301,6 +301,7 @@ window.__TAURI__.event.listen("levels", (e) => { for (const kind of ["app", "mic
 $("roomname").onclick = () => { if (st.asks.length) roomTab = "members"; go("room"); };
 $("startbtn").onclick = () => toggleRecording();
 $("startmore").onclick = () => startMenu($("startbtn").parentElement);
+$("standby").onclick = openNow;
 $("allrecs").onclick = () => { roomTab = "recordings"; delete sigs.roomtab; go("room"); };
 $("sessmore").onclick = (e) => goneMenu(e.currentTarget);
 $("diskbanner").onclick = () => openSettings("storage");

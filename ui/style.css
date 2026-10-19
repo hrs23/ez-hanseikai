@@ -179,7 +179,11 @@ body.noside .side, body.boardfull .side { display: none; }
 .roombtn .avs .av { box-shadow: 0 0 0 2px var(--raised-2); }
 .roombtn .chev { color: var(--muted); flex: none; }
 .badge { min-width: 16px; height: 16px; border-radius: 8px; background: var(--accent); color: var(--on-accent); font-size: 10px; font-weight: var(--w-bold); display: inline-flex; align-items: center; justify-content: center; padding: 0 4px; }
-.startgroup { margin: 8px 8px 6px; display: flex; flex: none; border-radius: var(--r-md); box-shadow: 0 4px 18px rgba(61, 214, 198, .18); }
+.startbox { margin: 8px 8px 6px; flex: none; display: flex; flex-direction: column; gap: 4px; }
+.standby { height: 22px; padding: 0 4px; border: 0; background: transparent; color: var(--muted); font-size: var(--t-sm); justify-content: flex-start; }
+.standby:hover:not(:disabled) { background: transparent; color: var(--text); }
+.startbtn .timer { font-weight: var(--w-semibold); }
+.startgroup { display: flex; flex: none; border-radius: var(--r-md); box-shadow: 0 4px 18px rgba(61, 214, 198, .18); }
 .startgroup.end { box-shadow: none; }
 .startbtn { flex: 1; min-width: 0; height: 44px; border-radius: var(--r-md); font-size: var(--t-lg); font-weight: var(--w-bold); gap: 8px; position: relative; border: 1px solid transparent; }
 .startgroup:not(.end) .startbtn { border-top-right-radius: 0; border-bottom-right-radius: 0; }

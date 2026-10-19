@@ -544,6 +544,10 @@ async function scenario(ctx) {
     }
   });
 
+  await step("while recording the start box says Stop recording with the time and the list gets the running recording", async () => {
+    check(await evaluate(a, `$("startbtn").textContent.includes(t("Stop recording")) && !!$("startbtn").querySelector("#livetimer") && !!$("startbtn").querySelector(".recdot") && $("standby").hidden && !!$("sessions").querySelector(".liverow .thumb.live")`), "the start box or the running recording's row is wrong");
+  });
+
   await step("a note with a tag, its edit and its deletion reach everyone", async () => {
     const id = await invoke(b, "add_event", { kind: "note", text: "Rotate early #rotate", target: { t_us: Date.now() * 1000 }, values: null });
     const key = `${b.id}/${id}`;
@@ -748,6 +752,7 @@ async function scenario(ctx) {
 
   await step("each member row says one short state", async () => {
     const rows = await evaluate(a, `people().map((id) => memberOf(id).status.text)`);
+    check(await evaluate(a, `!$("sessions").querySelector(".liverow") && !$("standby").hidden && $("standby").textContent.includes(t("Standby"))`), "the idle list holds a live entry or the start box lacks Standby");
     check(rows.length === 3 && rows.every((x) => x === "Standby" || /^Receiving \d+%$/.test(x)), `member states ${brief(rows)}`);
   });
 

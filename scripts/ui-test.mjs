@@ -361,6 +361,11 @@ test("the sidebar offers a Room button with a chevron and a split record button,
   assert.match(html, /<button id="roomname" class="roombtn">[^]*?id="roomfaces"[^]*?data-icon="chevron-right"/);
   assert.match(html, /<div class="startgroup"><button id="startbtn"[^]*?<button id="startmore"[^>]*aria-haspopup="menu"/);
   assert.doesNotMatch(html, /id="faces"/);
+  assert.match(html, /<div class="startbox">[^]*?id="startbtn"[^]*?id="standby"/);
+  const side = read("side.js");
+  assert.match(side, /st\.active_set \? \[liveRow\(\)\] : \[\]/);
+  assert.match(side, /t\("Standby"\)\} · \$\{t\("\{n\} online"/);
+  assert.match(side, /id: "livetimer"/);
   const app = read("app.js");
   assert.match(app, /downloadLine\(t\("Downloading video tools…"\), st\.ffmpeg_progress\)/);
   assert.match(app, /plugins\.filter\(\(x\) => x\.download\)/);
