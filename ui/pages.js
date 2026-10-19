@@ -382,6 +382,11 @@ function renderSettings() {
   $("qinfo").textContent = [q.width ? `${q.width} × ${q.height}` : "", `${q.fps} fps`, `${(q.kbps / 1000).toFixed(1)} Mbit/s`, String(q.codec).toUpperCase()].filter(Boolean).join(" · ");
   if (document.activeElement !== $("limit")) $("limit").value = st.limit_mbps || "";
   for (const b of $("channel").children) press(b, b.dataset.c === st.channel);
+  if (document.activeElement !== $("apion")) $("apion").checked = st.api.on;
+  $("apirows").hidden = !st.api.on;
+  $("apiaddr").textContent = apiUrl(st.api.address);
+  $("apierrrow").hidden = !st.api.error;
+  $("apierr").textContent = st.api.error ? t(st.api.error) : "";
   if (settingsPane === "storage") renderStorage();
 }
 function loadStorage() {
@@ -516,6 +521,13 @@ $("boardtext").onkeydown = (e) => {
   if (e.key === "Escape") { e.preventDefault(); cancelBoard(); }
 };
 for (const b of $("setnav").querySelectorAll("button")) b.onclick = () => { settingsPane = b.dataset.pane; showPane(); };
+$("aibtn").onclick = (e) => openAiMenu(e.currentTarget, newestRecording());
+$("aiplay").onclick = (e) => openAiMenu(e.currentTarget, selected);
+$("apion").onchange = () => run("set_api", { on: $("apion").checked });
+$("apicopy").onclick = () => invoke("api_info").then((info) => navigator.clipboard.writeText(info.token)).then(() => flash(t("Token copied"))).catch(fail);
+$("apinew").onclick = async () => {
+  if (await ask(t("Make a new token?"), t("New token"), false, t("Programs using the old token stop working."))) run("new_api_token", null, () => flash(t("New token made")));
+};
 $("name").onchange = () => run("set_name", { name: $("name").value });
 $("language").onchange = () => run("set_language", { language: $("language").value });
 $("sessionsound").onchange = () => { sessionSound = $("sessionsound").checked; store("sessionSound", sessionSound); };

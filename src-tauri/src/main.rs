@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod api;
 mod audio;
 mod capture;
 mod check;
@@ -194,6 +195,9 @@ pub struct Core {
     pub language: Mutex<String>,
     pub hotkey: Mutex<String>,
     pub skip_plugins: Mutex<HashSet<String>>,
+    pub api_on: Mutex<bool>,
+    pub api_token: Mutex<String>,
+    pub api_error: Mutex<String>,
     logs: Mutex<HashMap<PathBuf, (Arc<Vec<Value>>, u64)>>,
     pub jsons: Mutex<HashMap<PathBuf, Value>>,
     pub writing: Mutex<HashSet<PathBuf>>,
@@ -280,6 +284,8 @@ impl Core {
             "layout": *self.layout.lock().unwrap(),
             "hotkey": *self.hotkey.lock().unwrap(),
             "skip_plugins": *self.skip_plugins.lock().unwrap(),
+            "api": *self.api_on.lock().unwrap(),
+            "api_token": *self.api_token.lock().unwrap(),
         });
         let _ = write_whole(&self.dir.join("settings.json"), value.to_string().as_bytes());
     }
@@ -773,7 +779,7 @@ fn add_event(core: State<Arc<Core>>, kind: String, text: String, target: Value, 
 
 fn log_event(core: &Arc<Core>, room: &str, kind: &str, text: &str, target: Value, values: Value) -> i64 {
     let id = now_us();
-    core.append_log(room, &json!({"k": "event", "id": id, "t_us": id, "kind": kind, "target": target, "text": text, "values": values, "tags": room::tags(text)}));
+    core.append_log(room, &room::user_event(id, kind, text, target, values));
     party::send(core);
     id
 }
@@ -791,6 +797,28 @@ fn mark(core: State<Arc<Core>>) -> Result<i64, String> {
 #[tauri::command]
 fn set_hotkey(core: State<Arc<Core>>, keys: String) -> Result<(), String> {
     shell::set_hotkey(&core, &keys)
+}
+
+#[tauri::command]
+fn set_api(core: State<Arc<Core>>, on: bool) {
+    *core.api_on.lock().unwrap() = on;
+    if on && core.api_token.lock().unwrap().is_empty() {
+        *core.api_token.lock().unwrap() = room::random_hex(api::TOKEN_BYTES);
+    }
+    core.save_settings();
+    api::apply(&core);
+}
+
+#[tauri::command]
+fn new_api_token(core: State<Arc<Core>>) {
+    *core.api_token.lock().unwrap() = room::random_hex(api::TOKEN_BYTES);
+    core.save_settings();
+}
+
+#[tauri::command]
+fn api_info(core: State<Arc<Core>>) -> Value {
+    let on = *core.api_on.lock().unwrap();
+    json!({"on": on, "address": api::address(), "token": if on { core.api_token.lock().unwrap().clone() } else { String::new() }, "error": core.api_error.lock().unwrap().clone()})
 }
 
 #[tauri::command]
@@ -909,6 +937,9 @@ async fn init(app: AppHandle, dir: PathBuf, left_lock: bool) -> Result<Arc<Core>
         language: Mutex::new(settings["language"].as_str().unwrap_or_default().to_string()),
         hotkey: Mutex::new(settings["hotkey"].as_str().filter(|h| shell::hotkey(h).is_some()).unwrap_or(shell::DEFAULT_HOTKEY).to_string()),
         skip_plugins: Mutex::new(strings(&settings["skip_plugins"])),
+        api_on: Mutex::new(settings["api"] == true),
+        api_token: Mutex::new(settings["api_token"].as_str().filter(|t| api::token_valid(t)).unwrap_or_default().to_string()),
+        api_error: Mutex::new(String::new()),
         logs: Mutex::new(HashMap::new()),
         jsons: Mutex::new(HashMap::new()),
         writing: Mutex::new(HashSet::new()),
@@ -1008,6 +1039,7 @@ fn main() {
             tauri::async_runtime::spawn(net::accept_loop(core.clone()));
             tauri::async_runtime::spawn(party::repeat(core.clone()));
             room::apply_active(&core);
+            api::apply(&core);
             let c = core.clone();
             std::thread::spawn(move || record::supervise(c));
             let c = core.clone();
@@ -1021,7 +1053,7 @@ fn main() {
             std::thread::spawn(move || jobs::worker(c));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug::debug_view, debug::debug_report, debug::set_report_sharing, save_report, start_recording, stop_recording, delete_set, restore_set, identity, open_set_folder, export_set, cancel_export, set_layout, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, remove_room, check_peer, set_limit, set_codecs, cancel_invites, list_sources, set_source, use_display, list_mics, set_mic, set_mix, set_audio_process, set_warn_hours, set_channel, event_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_event, answer_ask, focus_set, party_on, party_act, jobs::room_plugins, jobs::set_room_plugin, jobs::set_process_plugin, jobs::prepare_plugin, jobs::jobs, jobs::retry_job, jobs::cancel_job, install_update, check_update, save_text, jobs::run_job_next, set_quality, set_language, rename_room, draw, party_typing, open_debug, mark, set_hotkey, retry_ffmpeg])
+        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug::debug_view, debug::debug_report, debug::set_report_sharing, save_report, start_recording, stop_recording, delete_set, restore_set, identity, open_set_folder, export_set, cancel_export, set_layout, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, remove_room, check_peer, set_limit, set_codecs, cancel_invites, list_sources, set_source, use_display, list_mics, set_mic, set_mix, set_audio_process, set_warn_hours, set_channel, event_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_event, answer_ask, focus_set, party_on, party_act, jobs::room_plugins, jobs::set_room_plugin, jobs::set_process_plugin, jobs::prepare_plugin, jobs::jobs, jobs::retry_job, jobs::cancel_job, install_update, check_update, save_text, jobs::run_job_next, set_quality, set_language, rename_room, draw, party_typing, open_debug, mark, set_hotkey, retry_ffmpeg, set_api, new_api_token, api_info])
         .build(tauri::generate_context!())
         .expect("failed to start");
     app.run(|app, event| {

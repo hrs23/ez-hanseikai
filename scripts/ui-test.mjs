@@ -7,9 +7,9 @@ import { fileURLToPath } from "node:url";
 
 const ui = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "ui");
 const read = (f) => fs.readFileSync(path.join(ui, f), "utf8");
-const source = ["util.js", "i18n.js", "layout.js", "events.js", "review.js", "plugins.js"].map(read).join("\n");
+const source = ["util.js", "i18n.js", "layout.js", "events.js", "review.js", "plugins.js", "ai.js"].map(read).join("\n");
 const context = vm.createContext({ window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date });
-const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, flowAt, flowBands, flowSteps, isReview, voiceOnly, deletePreview, oldSessions, soundKey, pluginProgress, isBusy, workerState, downloadStats, sessionNotice, rateOf, liveEdge, netState, summaryLines, leftText, JA, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, flowAt, flowBands, flowSteps, isReview, voiceOnly, deletePreview, oldSessions, soundKey, pluginProgress, isBusy, workerState, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, apiUrl, rateOf, liveEdge, netState, summaryLines, leftText, JA, setLanguage: (l) => { language = l; } })`, context);
 const plain = (v) => JSON.parse(JSON.stringify(v));
 
 const moment = (m, extra = {}) => ({ role: "moment", m, plugin: { id: "apex-matches" }, tags: ["match"], ...extra });
@@ -131,7 +131,7 @@ test("the diagnostics overview marks problems", () => {
 
 test("every fixed text has a Japanese translation", () => {
   const used = new Set();
-  for (const f of ["app.js", "side.js", "pages.js", "review.js", "events.js", "util.js", "draw.js"]) {
+  for (const f of ["app.js", "side.js", "pages.js", "review.js", "events.js", "util.js", "draw.js", "ai.js"]) {
     const s = read(f);
     for (const m of s.matchAll(/\bt\(\s*"((?:[^"\\]|\\.)*)"/g)) used.add(JSON.parse(`"${m[1]}"`));
     for (const m of s.matchAll(/\bt\([^)]*\?\s*"((?:[^"\\]|\\.)*)"\s*:\s*"((?:[^"\\]|\\.)*)"/g)) { used.add(JSON.parse(`"${m[1]}"`)); used.add(JSON.parse(`"${m[2]}"`)); }
@@ -181,7 +181,7 @@ test("everyone is told who started or stopped recording", () => {
 test("the pages call a recording a recording, never a session", () => {
   const texts = [...Object.keys(ui$.JA), ...Object.values(ui$.JA)];
   assert.deepEqual(texts.filter((x) => /session|セッション/i.test(x)), []);
-  for (const f of ["app.js", "side.js", "pages.js", "review.js", "events.js", "util.js", "plugins.js", "index.html"]) {
+  for (const f of ["app.js", "side.js", "pages.js", "review.js", "events.js", "util.js", "plugins.js", "ai.js", "index.html"]) {
     const shown = [...read(f).matchAll(/\bt\(\s*"((?:[^"\\]|\\.)*)"|data-t(?:-title|-placeholder|-label)?="([^"]*)"/g)].map((m) => m[1] || m[2]);
     assert.deepEqual(shown.filter((x) => /session/i.test(x)), [], f);
   }
@@ -203,4 +203,50 @@ test("every English phrase in the pages has a Japanese one", () => {
   for (const m of read("index.html").matchAll(/data-t(?:-title|-placeholder|-label)?="([^"]*)"/g)) used.add(m[1].replaceAll("&amp;", "&"));
   const missing = [...used].filter((k) => !(k in ui$.JA));
   assert.deepEqual(missing, []);
+});
+
+const info = { on: true, address: "127.0.0.1:47625", token: "0123456789abcdef" };
+const room = { id: "ab12", name: "Practice" };
+
+test("the AI menu offers a few prompts, or the switch when the API is off", () => {
+  ui$.setLanguage("en");
+  const calls = [];
+  const actions = { enable: () => calls.push("enable"), copy: (text) => calls.push(text) };
+  const items = ui$.aiMenuItems(info, room, "2026-10-19 21-30-00", actions);
+  assert.deepEqual(plain(items.map((i) => i.label)), ["Write notes from the transcript", "Summarize a recording into the game plan", "Find the mistakes in a match"]);
+  assert.ok(items.length >= 3 && items.length <= 4);
+  items[0].run();
+  assert.equal(calls.length, 1);
+  assert.match(calls[0], /Authorization: Bearer/);
+  const off = ui$.aiMenuItems({ ...info, on: false, token: "" }, room, null, actions);
+  assert.deepEqual(plain(off.map((i) => i.label)), ["Turn on the local API"]);
+  off[0].run();
+  assert.equal(calls[1], "enable");
+});
+
+test("a prompt names the API address, the token, llms.txt, the room and the recording", () => {
+  ui$.setLanguage("en");
+  const [notes, plan, mistakes] = ui$.aiPurposes();
+  const text = ui$.aiPrompt(notes, info, room, "2026-10-19 21-30-00");
+  for (const part of ["http://127.0.0.1:47625/llms.txt", "http://127.0.0.1:47625", info.token, "ab12", "Practice", "2026-10-19 21-30-00", "transcript"]) assert.ok(text.includes(part), part);
+  assert.ok(ui$.aiPrompt(plan, info, room, null).includes("newest one in the room"));
+  assert.ok(ui$.aiPrompt(mistakes, info, room, "x").includes("#mistake"));
+  ui$.setLanguage("ja");
+  const ja = ui$.aiPrompt(ui$.aiPurposes()[0], info, room, "2026-10-19 21-30-00");
+  assert.ok(ja.includes(info.token) && ja.includes("http://127.0.0.1:47625/llms.txt") && ja.includes("ab12"));
+  assert.match(ja, /文字起こし/);
+  assert.doesNotMatch(ja, /Task:|Help my team/);
+  assert.deepEqual(plain(ui$.aiPurposes().map((p) => p.label)), ["文字起こしからメモを書く", "録画を作戦ボードにまとめる", "試合のミスを探す"]);
+  ui$.setLanguage("en");
+  assert.equal(ui$.apiUrl("127.0.0.1:1"), "http://127.0.0.1:1");
+});
+
+test("Settings has one switch for the local API with its address and token buttons, and the room and player offer AI", () => {
+  const html = read("index.html");
+  assert.match(html, /<section data-pane="api">[^]*?<input id="apion" type="checkbox" class="switch" role="switch">[^]*?id="apiaddr"[^]*?id="apicopy"[^]*?id="apinew"[^]*?<\/section>/);
+  assert.match(html, /<button data-pane="api">/);
+  assert.match(html, /<button id="aibtn"[^>]*>[^]*?data-t="AI"/);
+  assert.match(html, /<button id="aiplay"[^>]*>[^]*?data-t="AI"/);
+  assert.equal((html.match(/id="apion"/g) || []).length, 1);
+  for (const word of ["API", "Local API", "Copy token", "New token", "AI", "The port is in use"]) assert.ok(word in ui$.JA, word);
 });

@@ -55,6 +55,7 @@
         <button id="renamebtn" class="icon sm" data-icon="edit" data-t-label="Rename room" data-t-title="Rename room"></button>
         <span id="homesub" class="sub"></span>
         <span class="sp"></span>
+        <button id="aibtn" class="ghost" aria-haspopup="menu"><span data-icon="sparkles" data-icon-class="sm"></span><span data-t="AI">AI</span></button>
         <button id="invitebtn"><span data-icon="user-plus" data-icon-class="sm"></span><span data-t="Copy invite code">Copy invite code</span></button>
         <button id="leavebtn" class="ghost"><span data-icon="logout" data-icon-class="sm"></span><span data-t="Leave room">Leave room</span></button>
       </div>
@@ -96,6 +97,7 @@
           <span id="psub" class="sub"></span>
           <span class="sp"></span>
           <span id="reviewrec" class="pill rec" hidden></span>
+          <button id="aiplay" class="ghost" aria-haspopup="menu"><span data-icon="sparkles" data-icon-class="sm"></span><span data-t="AI">AI</span></button>
           <div id="wpbox" class="wpbox"></div>
           <button id="panelbtn" class="icon" data-icon="panel" data-t-title="Side panel" data-t-label="Side panel"></button>
         </div>
@@ -167,6 +169,7 @@
     <button data-pane="capture"><span data-icon="monitor" data-icon-class="sm"></span><span data-t="Capture">Capture</span></button>
     <button data-pane="shortcuts"><span data-icon="keyboard" data-icon-class="sm"></span><span data-t="Shortcuts">Shortcuts</span></button>
     <button data-pane="storage"><span data-icon="drive" data-icon-class="sm"></span><span data-t="Recordings">Recordings</span></button>
+    <button data-pane="api"><span data-icon="terminal" data-icon-class="sm"></span><span data-t="API">API</span></button>
     <button data-pane="updates"><span data-icon="refresh" data-icon-class="sm"></span><span data-t="Updates">Updates</span></button>
   </nav>
   <div class="sbody">
@@ -198,6 +201,15 @@
       <div class="row"><span class="h3" data-t="Recordings">Recordings</span><span class="sp"></span><span class="muted small" data-t="Select">Select</span><div class="seg"><button id="selnone" data-t="None">None</button><button id="selold"></button></div></div>
       <div id="storetable" class="tablebox"></div>
       <div class="row"><span id="selsum" class="muted"></span><span class="sp"></span><button id="deletesel" class="danger"><span data-icon="trash" data-icon-class="sm"></span><span data-t="Delete videos…">Delete videos…</span></button></div>
+    </section>
+    <section data-pane="api">
+      <h2 data-t="API">API</h2>
+      <div class="srow2"><span class="lab" data-t="Local API">Local API</span><input id="apion" type="checkbox" class="switch" role="switch"></div>
+      <div id="apirows" hidden>
+        <div class="srow2"><span class="lab" data-t="Address">Address</span><span id="apiaddr" class="mono"></span></div>
+        <div class="srow2"><span class="lab" data-t="Token">Token</span><button id="apicopy"><span data-icon="copy" data-icon-class="sm"></span><span data-t="Copy token">Copy token</span></button><button id="apinew"><span data-icon="refresh" data-icon-class="sm"></span><span data-t="New token">New token</span></button></div>
+      </div>
+      <div class="srow2" id="apierrrow" hidden><span class="lab"></span><span id="apierr" class="err"></span></div>
     </section>
     <section data-pane="updates">
       <h2 data-t="Updates">Updates</h2>
@@ -260,6 +272,7 @@
 <script src="app.js"></script>
 <script src="side.js"></script>
 <script src="plugins.js"></script>
+<script src="ai.js"></script>
 <script src="pages.js"></script>
 </body>
 </html>

@@ -1,0 +1,1045 @@
+use std::collections::{HashMap, HashSet};
+use std::io::{Read, Write};
+use std::net::{Ipv4Addr, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
+use std::thread::JoinHandle;
+use std::time::Duration;
+
+use serde_json::{json, Value};
+
+use crate::room::{self, Log, Set};
+use crate::{party, Core};
+
+pub const DEFAULT_PORT: u16 = 47625;
+pub const TOKEN_BYTES: usize = 24;
+const HEAD_MAX: usize = 16 << 10;
+const BODY_MAX: usize = 64 << 10;
+const CHUNK: usize = 4 << 10;
+const IO_TIMEOUT: Duration = Duration::from_secs(10);
+const POLL: Duration = Duration::from_millis(50);
+const CONNECTIONS_MAX: usize = 8;
+const TAGS_MAX: usize = 16;
+const AT_MAX_S: f64 = 7.0 * 24.0 * 3600.0;
+const LLMS: &str = include_str!("../../docs/llms.txt");
+const DEFAULT_HIDDEN: [&str; 3] = ["speech", "drawing", "board"];
+static PORT: LazyLock<u16> = LazyLock::new(|| std::env::var("EZH_API_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(DEFAULT_PORT));
+
+pub fn port() -> u16 {
+    *PORT
+}
+
+pub fn address() -> String {
+    format!("127.0.0.1:{}", port())
+}
+
+pub fn token_valid(token: &str) -> bool {
+    token.len() == TOKEN_BYTES * 2 && token.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+pub struct Request {
+    pub method: String,
+    pub path: String,
+    pub query: Vec<(String, String)>,
+    pub headers: HashMap<String, String>,
+    pub body: Vec<u8>,
+}
+
+impl Request {
+    fn header(&self, name: &str) -> Option<&str> {
+        self.headers.get(name).map(String::as_str)
+    }
+
+    fn query(&self, name: &str) -> Option<&str> {
+        self.query.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
+    }
+}
+
+pub struct Response {
+    pub status: u16,
+    pub kind: &'static str,
+    pub body: Vec<u8>,
+}
+
+fn reason(status: u16) -> &'static str {
+    match status {
+        200 => "OK",
+        201 => "Created",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        409 => "Conflict",
+        413 => "Payload Too Large",
+        431 => "Request Header Fields Too Large",
+        503 => "Service Unavailable",
+        _ => "Internal Server Error",
+    }
+}
+
+fn reply(status: u16, value: Value) -> Response {
+    Response { status, kind: "application/json; charset=utf-8", body: value.to_string().into_bytes() }
+}
+
+fn error(status: u16, text: &str) -> Response {
+    reply(status, json!({"error": text}))
+}
+
+pub fn host_ok(host: Option<&str>, port: u16) -> bool {
+    let Some((name, given)) = host.and_then(|h| h.rsplit_once(':')) else { return false };
+    ["127.0.0.1", "localhost"].contains(&name) && given.parse::<u16>().ok() == Some(port)
+}
+
+fn same(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |diff, (x, y)| diff | (x ^ y)) == 0
+}
+
+pub fn token_ok(header: Option<&str>, token: &str) -> bool {
+    let Some((scheme, given)) = header.and_then(|h| h.split_once(' ')) else { return false };
+    !token.is_empty() && scheme.eq_ignore_ascii_case("bearer") && same(given.trim().as_bytes(), token.as_bytes())
+}
+
+fn decode(text: &str, plus: bool) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'%' => {
+                let digits = text.get(i + 1..i + 3).filter(|d| d.bytes().all(|b| b.is_ascii_hexdigit()))?;
+                out.push(u8::from_str_radix(digits, 16).ok()?);
+                i += 3;
+            }
+            b'+' if plus => {
+                out.push(b' ');
+                i += 1;
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+pub fn parse_head(head: &str) -> Result<Request, Response> {
+    let bad = || error(400, "Bad request.");
+    let mut lines = head.split("\r\n");
+    let mut first = lines.next().unwrap_or_default().split(' ');
+    let (Some(method), Some(target), Some(version)) = (first.next(), first.next(), first.next()) else { return Err(bad()) };
+    if !version.starts_with("HTTP/1.") || !target.starts_with('/') {
+        return Err(bad());
+    }
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    let mut headers = HashMap::new();
+    for line in lines {
+        let (name, value) = line.split_once(':').ok_or_else(bad)?;
+        let name = name.trim().to_ascii_lowercase();
+        let single = ["host", "authorization", "content-length"].contains(&name.as_str());
+        if headers.insert(name, value.trim().to_string()).is_some() && single {
+            return Err(bad());
+        }
+    }
+    let query = query
+        .split('&')
+        .filter(|pair| !pair.is_empty())
+        .map(|pair| {
+            let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+            Some((decode(k, true)?, decode(v, true)?))
+        })
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(bad)?;
+    Ok(Request { method: method.to_string(), path: path.to_string(), query, headers, body: Vec::new() })
+}
+
+pub fn read_request(stream: &mut impl Read) -> Result<Request, Response> {
+    let mut buf: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; CHUNK];
+    let end = loop {
+        if let Some(at) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+            if at > HEAD_MAX {
+                return Err(error(431, "The request head is too large."));
+            }
+            break at;
+        }
+        if buf.len() > HEAD_MAX {
+            return Err(error(431, "The request head is too large."));
+        }
+        match stream.read(&mut chunk) {
+            Ok(0) | Err(_) => return Err(error(400, "Bad request.")),
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+        }
+    };
+    let head = std::str::from_utf8(&buf[..end]).map_err(|_| error(400, "Bad request."))?;
+    let mut request = parse_head(head)?;
+    if request.header("transfer-encoding").is_some() {
+        return Err(error(400, "Send the body with a Content-Length."));
+    }
+    let length = match request.header("content-length") {
+        Some(text) => text.parse::<usize>().map_err(|_| error(400, "Bad Content-Length."))?,
+        None => 0,
+    };
+    if length > BODY_MAX {
+        return Err(error(413, "The request body is too large."));
+    }
+    let mut body = buf[end + 4..].to_vec();
+    while body.len() < length {
+        match stream.read(&mut chunk) {
+            Ok(0) | Err(_) => return Err(error(400, "Bad request.")),
+            Ok(n) => body.extend_from_slice(&chunk[..n]),
+        }
+    }
+    body.truncate(length);
+    request.body = body;
+    Ok(request)
+}
+
+#[derive(Clone)]
+pub struct Head {
+    pub id: String,
+    pub name: String,
+    pub active: bool,
+    pub members: Vec<(String, bool)>,
+    pub names: HashMap<String, String>,
+}
+
+pub trait Backend {
+    fn app(&self) -> Value;
+    fn me(&self) -> String;
+    fn now_us(&self) -> i64;
+    fn heads(&self) -> Vec<Head>;
+    fn logs(&self, room: &str) -> Vec<Log>;
+    fn plugins(&self, room: &str) -> Vec<Value>;
+    fn jobs(&self, room: &str) -> Value;
+    fn add(&self, room: &str, record: Value) -> Result<(), String>;
+}
+
+struct Loaded {
+    head: Head,
+    logs: Vec<Log>,
+}
+
+impl Loaded {
+    fn new(be: &dyn Backend, head: Head) -> Self {
+        let logs = be.logs(&head.id);
+        Self { head, logs }
+    }
+
+    fn sets(&self) -> Vec<Set> {
+        room::derive_sets(&self.head.id, &self.logs, &HashSet::new())
+    }
+
+    fn name(&self, id: &str) -> String {
+        self.head.names.get(id).filter(|n| !n.is_empty()).cloned().unwrap_or_else(|| crate::short(id))
+    }
+
+    fn offset(&self, owner: &str) -> i64 {
+        self.logs.iter().find(|l| l.owner == owner).map_or(0, |l| l.offset_us)
+    }
+}
+
+fn seconds(set: &Set, us: Option<i64>) -> Value {
+    us.map_or(Value::Null, |us| json!(((us - set.start()) as f64 / 1e5).round() / 10.0))
+}
+
+fn rooms_json(heads: &[Head]) -> Value {
+    let name = |h: &Head, id: &str| h.names.get(id).filter(|n| !n.is_empty()).cloned().unwrap_or_else(|| crate::short(id));
+    heads
+        .iter()
+        .filter(|h| !h.id.starts_with("pending-"))
+        .map(|h| json!({"id": h.id, "name": h.name, "active": h.active, "members": h.members.iter().map(|(id, online)| json!({"id": id, "name": name(h, id), "online": online})).collect::<Vec<_>>()}))
+        .collect()
+}
+
+fn recording_json(l: &Loaded, set: &Set, debriefs: &HashMap<String, Vec<Value>>, now_us: i64) -> Value {
+    let voice_only = !set.files.is_empty() && set.files.iter().all(|f| f.series(room::SERIES[0]).is_empty());
+    let debrief = voice_only && debriefs.contains_key(&set.id);
+    let start = set.start();
+    let end = set.end();
+    let members: Vec<Value> = set
+        .files
+        .iter()
+        .map(|f| json!({"id": f.owner, "name": l.name(&f.owner), "voice_only": f.series(room::SERIES[0]).is_empty(), "start_ms": (f.start_us - f.offset_us) / 1000, "end_ms": f.end_us.map(|e| (e - f.offset_us) / 1000)}))
+        .collect();
+    json!({
+        "id": set.id, "kind": if debrief { "debrief" } else { "play" }, "recording": end.is_none(),
+        "start_ms": start / 1000, "end_ms": end.map(|e| e / 1000), "length_s": ((end.unwrap_or(now_us) - start).max(0) as f64 / 1e5).round() / 10.0,
+        "members": members,
+    })
+}
+
+fn find_set(l: &Loaded, id: &str) -> Option<Set> {
+    l.sets().into_iter().find(|s| s.id == id)
+}
+
+fn event_json(l: &Loaded, set: &Set, e: &Value) -> Value {
+    let member = e["file"].as_str();
+    json!({
+        "key": e["key"], "id": e["id"], "author": e["author"], "author_name": l.name(e["author"].as_str().unwrap_or_default()),
+        "plugin": e["plugin"]["name"], "kind": e["kind"], "at_s": seconds(set, e["local_us"].as_i64()), "to_s": seconds(set, e["end_us"].as_i64()),
+        "member": member, "member_name": member.map(|m| l.name(m)), "text": e["text"], "tags": e["tags"], "values": e["values"],
+    })
+}
+
+fn covered(l: &Loaded, set: &Set) -> Vec<Value> {
+    room::events(&l.logs, None).into_iter().filter(|e| room::covers(set, e)).collect()
+}
+
+fn events_reply(l: &Loaded, set: &Set, req: &Request) -> Response {
+    let kind = req.query("kind");
+    let tag = req.query("tag").map(|t| t.trim_start_matches('#').to_lowercase());
+    let list: Vec<Value> = covered(l, set)
+        .iter()
+        .filter(|e| match kind {
+            Some(kind) => e["kind"] == kind,
+            None => !DEFAULT_HIDDEN.iter().any(|k| e["kind"] == *k),
+        })
+        .filter(|e| tag.as_ref().is_none_or(|t| e["tags"].as_array().into_iter().flatten().any(|x| x.as_str().is_some_and(|x| x.to_lowercase() == *t))))
+        .map(|e| event_json(l, set, e))
+        .collect();
+    reply(200, json!({"events": list}))
+}
+
+fn chapters_reply(l: &Loaded, set: &Set, now_us: i64) -> Response {
+    let mut ends: Vec<f64> = covered(l, set)
+        .iter()
+        .filter(|e| !e["plugin"].is_null() && e["end_us"].is_null() && e["tags"].as_array().into_iter().flatten().any(|t| t == "match"))
+        .filter_map(|e| e["local_us"].as_i64())
+        .map(|us| (us - set.start()) as f64 / 1e6)
+        .collect();
+    ends.sort_by(|a, b| a.total_cmp(b));
+    let round = |s: f64| (s * 10.0).round() / 10.0;
+    let mut chapters = Vec::new();
+    let mut from = 0.0;
+    for (i, end) in ends.iter().enumerate() {
+        chapters.push(json!({"n": i + 1, "name": format!("Match {}", i + 1), "from_s": round(from), "to_s": round(*end)}));
+        from = *end;
+    }
+    let total = (set.end().unwrap_or(now_us) - set.start()) as f64 / 1e6;
+    if set.end().is_none() && !ends.is_empty() && total > from {
+        chapters.push(json!({"n": ends.len() + 1, "name": format!("Match {}", ends.len() + 1), "from_s": round(from), "to_s": null}));
+    }
+    reply(200, json!({"chapters": chapters}))
+}
+
+fn transcript_reply(l: &Loaded, set: &Set, req: &Request) -> Response {
+    let member = req.query("member");
+    let mut lines: Vec<(f64, Value)> = covered(l, set)
+        .iter()
+        .filter(|e| e["kind"] == "speech" && e["file"].is_string() && member.is_none_or(|m| e["file"] == m))
+        .filter_map(|e| {
+            let (from, to) = (e["local_us"].as_i64()?, e["end_us"].as_i64().unwrap_or(e["local_us"].as_i64()?));
+            let who = e["file"].as_str()?;
+            Some((from as f64, json!({"member": who, "member_name": l.name(who), "from_s": seconds(set, Some(from)), "to_s": seconds(set, Some(to)), "text": e["text"]})))
+        })
+        .collect();
+    lines.sort_by(|a, b| a.0.total_cmp(&b.0));
+    reply(200, json!({"lines": lines.into_iter().map(|(_, v)| v).collect::<Vec<_>>()}))
+}
+
+fn board_json(l: &Loaded) -> Value {
+    let at = |e: &Value| e["id"].as_i64().unwrap_or(0) - l.offset(e["author"].as_str().unwrap_or_default());
+    let events = room::events(&l.logs, None);
+    let newest = events.iter().filter(|e| e["kind"] == "board" && (e["values"]["card"].is_null() || e["values"]["card"] == "" || e["values"]["card"] == "team")).max_by_key(|e| at(e));
+    match newest {
+        Some(e) => json!({"text": e["text"], "author": e["author"], "author_name": l.name(e["author"].as_str().unwrap_or_default()), "updated_ms": at(e) / 1000}),
+        None => json!({"text": "", "author": null, "author_name": null, "updated_ms": null}),
+    }
+}
+
+fn pick(value: &Value, keys: &[&str]) -> Value {
+    keys.iter().map(|k| (k.to_string(), value[*k].clone())).collect::<serde_json::Map<String, Value>>().into()
+}
+
+fn plugins_json(l: &Loaded, list: Vec<Value>) -> Value {
+    let plugins: Vec<Value> = list
+        .iter()
+        .map(|p| {
+            let mut out = pick(p, &["id", "name", "version", "on", "settings", "ready", "process_here"]);
+            out["workers"] = p["workers"].as_array().into_iter().flatten().map(|w| json!({"id": w["id"], "name": l.name(w["id"].as_str().unwrap_or_default()), "on": w["on"], "ready": w["ready"]})).collect();
+            out
+        })
+        .collect();
+    json!({"plugins": plugins})
+}
+
+fn jobs_json(l: &Loaded, jobs: &Value) -> Value {
+    let list: Vec<Value> = jobs["jobs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|j| {
+            let mut out = pick(j, &["job", "plugin", "version", "set", "owner", "whole", "state", "by", "error"]);
+            out["owner_name"] = json!(l.name(j["owner"].as_str().unwrap_or_default()));
+            out
+        })
+        .collect();
+    let running = if jobs["running"].is_null() { Value::Null } else { pick(&jobs["running"], &["job", "plugin", "progress"]) };
+    json!({"jobs": list, "running": running})
+}
+
+fn text_of(body: &serde_json::Map<String, Value>, key: &str) -> Result<String, Response> {
+    match body.get(key) {
+        None | Some(Value::Null) => Ok(String::new()),
+        Some(Value::String(text)) => Ok(text.clone()),
+        Some(_) => Err(error(400, &format!("{key} must be a string."))),
+    }
+}
+
+fn tags_of(body: &serde_json::Map<String, Value>) -> Result<Vec<String>, Response> {
+    let bad = || error(400, "tags must be a list of words.");
+    let list = match body.get("tags") {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Array(list)) => list,
+        Some(_) => return Err(bad()),
+    };
+    let mut out = Vec::new();
+    for tag in list {
+        let tag: String = tag.as_str().ok_or_else(bad)?.trim_start_matches('#').chars().filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-').collect();
+        if !tag.is_empty() && !out.iter().any(|t: &String| t.to_lowercase() == tag.to_lowercase()) {
+            out.push(tag);
+        }
+    }
+    if out.len() > TAGS_MAX {
+        return Err(error(400, "Too many tags."));
+    }
+    Ok(out)
+}
+
+fn body_of(req: &Request) -> Result<serde_json::Map<String, Value>, Response> {
+    match serde_json::from_slice::<Value>(&req.body) {
+        Ok(Value::Object(map)) => Ok(map),
+        _ => Err(error(400, "Send a JSON object.")),
+    }
+}
+
+fn add_event(be: &dyn Backend, l: &Loaded, set: &Set, req: &Request) -> Response {
+    let built = (|| {
+        let body = body_of(req)?;
+        let kind = match body.get("kind").and_then(Value::as_str) {
+            None | Some("note") => "note",
+            Some("mark") => "mark",
+            Some(_) => return Err(error(400, "kind must be note or mark.")),
+        };
+        let at = match body.get("at_s") {
+            None | Some(Value::Null) => None,
+            Some(v) => Some(v.as_f64().filter(|s| s.is_finite() && (0.0..=AT_MAX_S).contains(s)).ok_or_else(|| error(400, "at_s must be seconds from the start of the recording."))?),
+        };
+        if kind == "mark" && at.is_none() {
+            return Err(error(400, "A mark needs at_s."));
+        }
+        let text = crate::clean_note(&text_of(&body, "text")?, usize::MAX).trim().to_string();
+        let mut words = vec![text];
+        for tag in tags_of(&body)? {
+            if !room::tags(&words[0]).iter().any(|t| t.to_lowercase() == tag.to_lowercase()) {
+                words.push(format!("#{tag}"));
+            }
+        }
+        let text = words.into_iter().filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" ");
+        if kind == "note" && text.is_empty() {
+            return Err(error(400, "Write something first."));
+        }
+        if text.chars().count() > crate::NOTE_MAX {
+            return Err(error(400, &format!("A note is at most {} characters.", crate::NOTE_MAX)));
+        }
+        let target = match at {
+            Some(s) => json!({"t_us": set.start() + (s * 1e6).round() as i64, "set": set.id}),
+            None => json!({"set": set.id}),
+        };
+        Ok((kind, text, target))
+    })();
+    let (kind, text, target) = match built {
+        Ok(parts) => parts,
+        Err(response) => return response,
+    };
+    let id = be.now_us();
+    if let Err(e) = be.add(&l.head.id, room::user_event(id, kind, &text, target, Value::Null)) {
+        return error(409, &e);
+    }
+    let key = format!("{}/{id}", be.me());
+    let again = Loaded::new(be, l.head.clone());
+    match covered(&again, set).iter().find(|e| e["key"] == key.as_str()) {
+        Some(e) => reply(201, event_json(&again, set, e)),
+        None => error(500, "The event was not found after writing it."),
+    }
+}
+
+fn put_board(be: &dyn Backend, l: &Loaded, req: &Request) -> Response {
+    let text = match body_of(req).and_then(|b| text_of(&b, "text")) {
+        Ok(text) => crate::clean_note(&text, usize::MAX),
+        Err(response) => return response,
+    };
+    if text.trim().is_empty() {
+        return error(400, "Write something first.");
+    }
+    if text.chars().count() > crate::BOARD_MAX {
+        return error(400, &format!("The game plan is at most {} characters.", crate::BOARD_MAX));
+    }
+    if let Err(e) = be.add(&l.head.id, room::user_event(be.now_us(), "board", &text, json!({}), json!({"card": "team"}))) {
+        return error(409, &e);
+    }
+    reply(200, board_json(&Loaded::new(be, l.head.clone())))
+}
+
+fn segments(path: &str) -> Option<Vec<String>> {
+    path.split('/').filter(|s| !s.is_empty()).map(|s| decode(s, false)).collect()
+}
+
+fn route(req: &Request, be: &dyn Backend, parts: &[&str]) -> Response {
+    let allowed: &[&str] = match parts {
+        ["v1"] | ["v1", "rooms"] | ["v1", "rooms", _, "recordings"] | ["v1", "rooms", _, "recordings", _] => &["GET"],
+        ["v1", "rooms", _, "recordings", _, "chapters" | "transcript"] | ["v1", "rooms", _, "plugins" | "jobs"] => &["GET"],
+        ["v1", "rooms", _, "recordings", _, "events"] => &["GET", "POST"],
+        ["v1", "rooms", _, "board"] => &["GET", "PUT"],
+        _ => return error(404, "No such endpoint."),
+    };
+    if !allowed.contains(&req.method.as_str()) {
+        return error(405, "Method not allowed.");
+    }
+    let ["v1", "rooms", room, rest @ ..] = parts else {
+        return match parts {
+            ["v1", "rooms"] => reply(200, json!({"rooms": rooms_json(&be.heads())})),
+            _ => reply(200, be.app()),
+        };
+    };
+    let Some(head) = be.heads().into_iter().find(|h| h.id == *room && !h.id.starts_with("pending-")) else { return error(404, "No such room.") };
+    let l = Loaded::new(be, head);
+    match rest {
+        ["board"] if req.method == "PUT" => put_board(be, &l, req),
+        ["board"] => reply(200, board_json(&l)),
+        ["plugins"] => reply(200, plugins_json(&l, be.plugins(room))),
+        ["jobs"] => reply(200, jobs_json(&l, &be.jobs(room))),
+        ["recordings"] => {
+            let debriefs = party::records(&l.logs);
+            let now = be.now_us();
+            reply(200, json!({"recordings": l.sets().iter().map(|s| recording_json(&l, s, &debriefs, now)).collect::<Vec<_>>()}))
+        }
+        ["recordings", id, tail @ ..] => {
+            let Some(set) = find_set(&l, id) else { return error(404, "No such recording.") };
+            match tail {
+                [] => reply(200, recording_json(&l, &set, &party::records(&l.logs), be.now_us())),
+                ["events"] if req.method == "POST" => add_event(be, &l, &set, req),
+                ["events"] => events_reply(&l, &set, req),
+                ["chapters"] => chapters_reply(&l, &set, be.now_us()),
+                _ => transcript_reply(&l, &set, req),
+            }
+        }
+        _ => error(404, "No such endpoint."),
+    }
+}
+
+pub fn handle(req: &Request, be: &dyn Backend, token: &str, port: u16) -> Response {
+    if !host_ok(req.header("host"), port) {
+        return error(403, "The Host header must be the loopback address and port.");
+    }
+    if req.method == "GET" && req.path == "/llms.txt" {
+        return Response { status: 200, kind: "text/plain; charset=utf-8", body: LLMS.as_bytes().to_vec() };
+    }
+    if !token_ok(req.header("authorization"), token) {
+        return error(401, "Send the token as: Authorization: Bearer <token>.");
+    }
+    let Some(owned) = segments(&req.path) else { return error(400, "Bad path.") };
+    let parts: Vec<&str> = owned.iter().map(String::as_str).collect();
+    route(req, be, &parts)
+}
+
+struct Live(Arc<Core>);
+
+impl Backend for Live {
+    fn app(&self) -> Value {
+        json!({"app": "EZ Hanseikai", "version": crate::VERSION, "id": self.me(), "name": *self.0.name.lock().unwrap(), "room": self.0.room_id(), "recording": self.0.active_set.lock().unwrap().is_some()})
+    }
+
+    fn me(&self) -> String {
+        self.0.me()
+    }
+
+    fn now_us(&self) -> i64 {
+        crate::now_us()
+    }
+
+    fn heads(&self) -> Vec<Head> {
+        let core = &self.0;
+        let (list, active) = {
+            let rooms = core.rooms.lock().unwrap();
+            (rooms.list.clone(), rooms.active.clone())
+        };
+        let me = core.me();
+        let mut known: HashMap<String, String> = HashMap::new();
+        let mut online: HashSet<String> = HashSet::new();
+        for p in core.peers.lock().unwrap().iter() {
+            if !p.name.is_empty() {
+                known.insert(p.id.to_string(), p.name.clone());
+            }
+            if p.alive().is_some() {
+                online.insert(p.id.to_string());
+            }
+        }
+        known.insert(me.clone(), core.name.lock().unwrap().clone());
+        list.into_iter()
+            .map(|r| {
+                let people = r.people();
+                let mut names = r.names.clone();
+                names.extend(known.iter().filter(|(id, _)| people.contains(id)).map(|(id, n)| (id.clone(), n.clone())));
+                Head { active: active.as_deref() == Some(&r.id), members: r.members.iter().map(|m| (m.clone(), *m == me || online.contains(m))).collect(), id: r.id, name: r.name, names }
+            })
+            .collect()
+    }
+
+    fn logs(&self, room: &str) -> Vec<Log> {
+        room::logs(&self.0, room)
+    }
+
+    fn plugins(&self, room: &str) -> Vec<Value> {
+        crate::jobs::plugins_json(&self.0, room)
+    }
+
+    fn jobs(&self, room: &str) -> Value {
+        crate::jobs::jobs_json(&self.0, room)
+    }
+
+    fn add(&self, room: &str, record: Value) -> Result<(), String> {
+        if self.0.room_id().as_deref() != Some(room) {
+            return Err("Enter the room first: the app writes only to the room that is open.".into());
+        }
+        self.0.append_log(room, &record);
+        party::send(&self.0);
+        Ok(())
+    }
+}
+
+fn answer(stream: &mut TcpStream, response: &Response) {
+    let head = format!(
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",
+        response.status,
+        reason(response.status),
+        response.kind,
+        response.body.len()
+    );
+    let _ = stream.write_all(head.as_bytes()).and_then(|_| stream.write_all(&response.body)).and_then(|_| stream.flush());
+}
+
+fn serve_one(mut stream: TcpStream, core: &Arc<Core>) {
+    let _ = stream.set_nonblocking(false);
+    let _ = stream.set_read_timeout(Some(IO_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
+    let response = match read_request(&mut stream) {
+        Ok(request) => {
+            let token = core.api_token.lock().unwrap().clone();
+            handle(&request, &Live(core.clone()), &token, port())
+        }
+        Err(response) => response,
+    };
+    answer(&mut stream, &response);
+}
+
+fn serve(listener: TcpListener, core: Arc<Core>, stop: Arc<AtomicBool>) {
+    let open = Arc::new(AtomicUsize::new(0));
+    while !stop.load(Ordering::Relaxed) {
+        match listener.accept() {
+            Ok((mut stream, _)) => {
+                let _ = stream.set_nonblocking(false);
+                if open.load(Ordering::Relaxed) >= CONNECTIONS_MAX {
+                    answer(&mut stream, &error(503, "Too many requests."));
+                    continue;
+                }
+                open.fetch_add(1, Ordering::Relaxed);
+                let (core, open) = (core.clone(), open.clone());
+                std::thread::spawn(move || {
+                    serve_one(stream, &core);
+                    open.fetch_sub(1, Ordering::Relaxed);
+                });
+            }
+            Err(_) => std::thread::sleep(POLL),
+        }
+    }
+}
+
+struct Running {
+    stop: Arc<AtomicBool>,
+    thread: JoinHandle<()>,
+}
+
+static SERVER: Mutex<Option<Running>> = Mutex::new(None);
+
+pub fn apply(core: &Arc<Core>) {
+    let mut server = SERVER.lock().unwrap();
+    if let Some(running) = server.take() {
+        running.stop.store(true, Ordering::Relaxed);
+        let _ = running.thread.join();
+    }
+    core.api_error.lock().unwrap().clear();
+    if !*core.api_on.lock().unwrap() {
+        return;
+    }
+    match TcpListener::bind((Ipv4Addr::LOCALHOST, port())).and_then(|l| l.set_nonblocking(true).map(|_| l)) {
+        Ok(listener) => {
+            tracing::info!("the local API listens on {}", address());
+            let stop = Arc::new(AtomicBool::new(false));
+            let (c, s) = (core.clone(), stop.clone());
+            *server = Some(Running { stop, thread: std::thread::spawn(move || serve(listener, c, s)) });
+        }
+        Err(e) => {
+            tracing::warn!("the local API cannot listen on {}: {e}", address());
+            *core.api_error.lock().unwrap() = "The port is in use".into();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PORT_FOR_TESTS: u16 = 4000;
+    const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef";
+    const S: i64 = 1_000_000;
+    const START: i64 = 1_000 * S;
+
+    struct Fake {
+        heads: Vec<(String, bool)>,
+        logs: Mutex<Vec<Log>>,
+        clock: std::sync::atomic::AtomicI64,
+    }
+
+    impl Fake {
+        fn new(records_a: Vec<Value>, records_b: Vec<Value>) -> Self {
+            let log = |owner: &str, offset_us: i64, records: Vec<Value>| Log { owner: owner.into(), offset_us, records: Arc::new(records) };
+            Self { heads: vec![("r1".into(), true), ("r2".into(), false)], logs: Mutex::new(vec![log("a", 0, records_a), log("b", 0, records_b)]), clock: std::sync::atomic::AtomicI64::new(START + 100 * S) }
+        }
+    }
+
+    impl Backend for Fake {
+        fn app(&self) -> Value {
+            json!({"app": "EZ Hanseikai", "version": "0", "id": "a"})
+        }
+        fn me(&self) -> String {
+            "a".into()
+        }
+        fn now_us(&self) -> i64 {
+            self.clock.fetch_add(1, Ordering::Relaxed)
+        }
+        fn heads(&self) -> Vec<Head> {
+            let names: HashMap<String, String> = [("a".to_string(), "Ann".to_string()), ("b".to_string(), "Ben".to_string())].into();
+            self.heads.iter().map(|(id, active)| Head { id: id.clone(), name: format!("Room {id}"), active: *active, members: vec![("a".into(), true), ("b".into(), false)], names: names.clone() }).chain([Head { id: "pending-x".into(), name: "".into(), active: false, members: vec![], names: HashMap::new() }]).collect()
+        }
+        fn logs(&self, _: &str) -> Vec<Log> {
+            self.logs.lock().unwrap().iter().map(|l| Log { owner: l.owner.clone(), offset_us: l.offset_us, records: l.records.clone() }).collect()
+        }
+        fn plugins(&self, _: &str) -> Vec<Value> {
+            vec![json!({"id": "transcribe", "name": "Transcription", "summary": "x", "version": "1", "on": true, "settings": {"model": "small"}, "ready": true, "process_here": true, "workers": [{"id": "b", "on": true, "ready": null}]})]
+        }
+        fn jobs(&self, _: &str) -> Value {
+            json!({"jobs": [{"job": "t@1/x/s1/b", "plugin": "transcribe", "version": "1", "settings": {}, "set": "s1", "owner": "b", "whole": false, "here": true, "state": "waiting", "by": null, "error": null, "next": false}], "running": null, "tags": {}})
+        }
+        fn add(&self, room: &str, record: Value) -> Result<(), String> {
+            if room != "r1" {
+                return Err("Enter the room first.".into());
+            }
+            Arc::make_mut(&mut self.logs.lock().unwrap()[0].records).push(record);
+            Ok(())
+        }
+    }
+
+    fn plugin_records(id: &str, owner: &str) -> Vec<Value> {
+        let p = crate::plugins::find(id).unwrap();
+        let config = crate::jobs::Config { on: true, version: p.version.to_string(), settings: crate::plugins::normalize(p, &Value::Null) };
+        let key = format!("{}s1/{owner}", crate::jobs::prefix(id, &config));
+        vec![
+            json!({"k": "plugin", "plugin": id, "on": true, "version": p.version, "settings": config.settings, "t_us": 1}),
+            json!({"k": "job", "state": "done", "job": key, "run": 7, "t_us": 2, "tags": {}}),
+        ]
+    }
+
+    fn plugin_event(id: &str, owner: &str, kind: &str, from: i64, to: Option<i64>, text: &str, tags: Value) -> Value {
+        let p = crate::plugins::find(id).unwrap();
+        let mut target = json!({"set": "s1", "file": owner, "t_us": START + from * S});
+        if let Some(to) = to {
+            target = json!({"set": "s1", "file": owner, "from_us": START + from * S, "to_us": START + to * S});
+        }
+        json!({"k": "event", "id": START + from * S + 1, "t_us": 1, "kind": kind, "target": target, "text": text, "values": {}, "tags": tags, "plugin": {"id": id, "name": p.name, "version": p.version}, "job": "j", "run": 7})
+    }
+
+    fn fixture() -> Fake {
+        let mut a = vec![
+            json!({"k": "rec", "set": "s1", "start_us": START}),
+            json!({"k": "seg", "capture": "111", "series": "v", "n": 1, "set": "s1", "t_us": START, "d_us": 4 * S, "size": 1, "sha256": "x"}),
+            json!({"k": "rec_end", "set": "s1", "t_us": START + 90 * S}),
+            json!({"k": "rec", "set": "s2", "start_us": START + 200 * S}),
+            json!({"k": "rec_end", "set": "s2", "t_us": START + 260 * S}),
+            json!({"k": "party", "set": "s2", "t_us": START + 210 * S, "shared": {"set": "s1"}}),
+            room::user_event(START + 10 * S, "note", "Late rotate #rotate", json!({"t_us": START + 30 * S, "set": "s1"}), Value::Null),
+            room::user_event(START + 11 * S, "mark", "", json!({"t_us": START + 40 * S}), Value::Null),
+            room::user_event(START + 12 * S, "note", "Whole recording", json!({"set": "s1"}), Value::Null),
+            room::user_event(START + 13 * S, "board", "# Plan", json!({}), json!({"card": "team"})),
+            room::user_event(START + 14 * S, "board", "# Other card", json!({}), json!({"card": "other"})),
+        ];
+        a.extend(plugin_records("apex-matches", "a"));
+        a.extend(plugin_events_a());
+        let mut b = vec![json!({"k": "rec", "set": "s1", "start_us": START + 2 * S}), json!({"k": "rec_end", "set": "s1", "t_us": START + 88 * S})];
+        b.extend(plugin_records("transcribe", "b"));
+        b.push(plugin_event("transcribe", "b", "speech", 20, Some(24), "Drop north", json!([])));
+        b.push(plugin_event("transcribe", "b", "speech", 5, Some(8), "Ready", json!([])));
+        Fake::new(a, b)
+    }
+
+    fn plugin_events_a() -> Vec<Value> {
+        vec![
+            plugin_event("apex-matches", "a", "match_end", 60, None, "", json!(["match"])),
+            plugin_event("apex-matches", "a", "match_end", 30, None, "", json!(["match"])),
+        ]
+    }
+
+    fn call(be: &dyn Backend, method: &str, path: &str, body: &str) -> (u16, Value) {
+        let text = format!("{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{PORT_FOR_TESTS}\r\nAuthorization: Bearer {TOKEN}\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+        let request = read_request(&mut text.as_bytes()).ok().unwrap();
+        let response = handle(&request, be, TOKEN, PORT_FOR_TESTS);
+        (response.status, serde_json::from_slice(&response.body).unwrap_or(Value::Null))
+    }
+
+    fn get(be: &dyn Backend, path: &str) -> (u16, Value) {
+        call(be, "GET", path, "")
+    }
+
+    #[test]
+    fn only_the_loopback_address_and_port_are_a_valid_host() {
+        assert!(host_ok(Some("127.0.0.1:4000"), 4000));
+        assert!(host_ok(Some("localhost:4000"), 4000));
+        for bad in [None, Some("127.0.0.1"), Some("127.0.0.1:4001"), Some("evil.example:4000"), Some("127.0.0.1.evil.example:4000"), Some("localhost.evil.example:4000"), Some("[::1]:4000"), Some("0.0.0.0:4000"), Some("")] {
+            assert!(!host_ok(bad, 4000), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn the_token_must_match_exactly() {
+        assert!(token_ok(Some(&format!("Bearer {TOKEN}")), TOKEN));
+        assert!(token_ok(Some(&format!("bearer {TOKEN}")), TOKEN));
+        for bad in [None, Some(""), Some(TOKEN), Some("Bearer "), Some("Bearer x"), Some(&format!("Bearer {}x", TOKEN)[..]), Some(&format!("Basic {TOKEN}")[..]), Some(&format!("Bearer {}", &TOKEN[1..])[..])] {
+            assert!(!token_ok(bad, TOKEN), "{bad:?}");
+        }
+        assert!(!token_ok(Some("Bearer "), ""));
+        assert!(!token_ok(Some("Bearer x"), ""));
+        assert!(token_valid(TOKEN) && !token_valid("short") && !token_valid(&"g".repeat(TOKEN_BYTES * 2)));
+    }
+
+    #[test]
+    fn requests_are_read_with_their_query_and_body() {
+        let text = "POST /v1/rooms/a%20b/board?tag=%23x+y&kind=note HTTP/1.1\r\nHost: h\r\nContent-Length: 5\r\n\r\nhello and more";
+        let r = read_request(&mut text.as_bytes()).ok().unwrap();
+        assert_eq!((r.method.as_str(), r.path.as_str()), ("POST", "/v1/rooms/a%20b/board"));
+        assert_eq!((r.query("tag"), r.query("kind")), (Some("#x y"), Some("note")));
+        assert_eq!(r.body, b"hello");
+        assert_eq!(segments(&r.path).unwrap(), ["v1", "rooms", "a b", "board"]);
+        assert!(segments("/v1/%zz").is_none());
+        assert!(segments("/v1/%ff").is_none());
+    }
+
+    #[test]
+    fn malformed_and_oversized_requests_are_refused() {
+        let status = |text: &str| read_request(&mut text.as_bytes()).err().map(|r| r.status);
+        assert_eq!(status("GET /x HTTP/1.1\r\nHost: a\r\nHost: b\r\n\r\n"), Some(400));
+        assert_eq!(status("GET x HTTP/1.1\r\n\r\n"), Some(400));
+        assert_eq!(status("GET / FTP/1.1\r\n\r\n"), Some(400));
+        assert_eq!(status("GET / HTTP/1.1\r\nbroken\r\n\r\n"), Some(400));
+        assert_eq!(status("GET / HTTP/1.1\r\n"), Some(400));
+        assert_eq!(status(&format!("POST / HTTP/1.1\r\nContent-Length: {}\r\n\r\n", BODY_MAX + 1)), Some(413));
+        assert_eq!(status("POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n"), Some(400));
+        assert_eq!(status("POST / HTTP/1.1\r\nContent-Length: 10\r\n\r\nshort"), Some(400));
+        assert_eq!(status(&format!("GET / HTTP/1.1\r\nX: {}\r\n\r\n", "a".repeat(HEAD_MAX + 100))), Some(431));
+    }
+
+    #[test]
+    fn a_wrong_host_or_token_gets_nothing_and_llms_txt_needs_no_token() {
+        let fake = fixture();
+        let send = |host: &str, auth: &str, path: &str| {
+            let text = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\n{auth}\r\n");
+            handle(&read_request(&mut text.as_bytes()).ok().unwrap(), &fake, TOKEN, PORT_FOR_TESTS)
+        };
+        let ok_auth = format!("Authorization: Bearer {TOKEN}\r\n");
+        assert_eq!(send("evil.example:4000", &ok_auth, "/v1/rooms").status, 403);
+        assert_eq!(send("evil.example:4000", &ok_auth, "/llms.txt").status, 403);
+        assert_eq!(send("127.0.0.1:4000", "", "/v1/rooms").status, 401);
+        assert_eq!(send("127.0.0.1:4000", "Authorization: Bearer nope\r\n", "/v1/rooms").status, 401);
+        let llms = send("127.0.0.1:4000", "", "/llms.txt");
+        assert_eq!(llms.status, 200);
+        assert!(llms.kind.starts_with("text/plain"));
+        assert!(String::from_utf8(llms.body).unwrap().contains("Authorization: Bearer"));
+        assert_eq!(send("127.0.0.1:4000", &ok_auth, "/v1").status, 200);
+    }
+
+    #[test]
+    fn rooms_list_their_members_and_skip_pending_ones() {
+        let (status, body) = get(&fixture(), "/v1/rooms");
+        assert_eq!(status, 200);
+        assert_eq!(body["rooms"].as_array().unwrap().len(), 2);
+        assert_eq!(body["rooms"][0]["name"], "Room r1");
+        assert_eq!(body["rooms"][0]["active"], true);
+        assert_eq!(body["rooms"][0]["members"], json!([{"id": "a", "name": "Ann", "online": true}, {"id": "b", "name": "Ben", "online": false}]));
+    }
+
+    #[test]
+    fn recordings_come_newest_first_with_members_length_and_kind() {
+        let (status, body) = get(&fixture(), "/v1/rooms/r1/recordings");
+        assert_eq!(status, 200);
+        let list = body["recordings"].as_array().unwrap();
+        assert_eq!(list.iter().map(|r| r["id"].as_str().unwrap()).collect::<Vec<_>>(), ["s2", "s1"]);
+        let s1 = &list[1];
+        assert_eq!((s1["kind"].as_str(), s1["recording"].as_bool()), (Some("play"), Some(false)));
+        assert_eq!((s1["start_ms"].as_i64(), s1["end_ms"].as_i64(), s1["length_s"].as_f64()), (Some(1_000_000), Some(1_090_000), Some(90.0)));
+        assert_eq!(s1["members"].as_array().unwrap().len(), 2);
+        assert_eq!((s1["members"][0]["id"].as_str(), s1["members"][0]["name"].as_str(), s1["members"][0]["voice_only"].as_bool()), (Some("a"), Some("Ann"), Some(false)));
+        assert_eq!(s1["members"][1]["voice_only"], true);
+        let s2 = &list[0];
+        assert_eq!((s2["kind"].as_str(), s2["length_s"].as_f64()), (Some("debrief"), Some(60.0)));
+        let (status, one) = get(&fixture(), "/v1/rooms/r1/recordings/s1");
+        assert_eq!((status, one["id"].as_str()), (200, Some("s1")));
+        assert_eq!(get(&fixture(), "/v1/rooms/r1/recordings/nope").0, 404);
+        assert_eq!(get(&fixture(), "/v1/rooms/nope/recordings").0, 404);
+        assert_eq!(get(&fixture(), "/v1/rooms/pending-x/recordings").0, 404);
+    }
+
+    #[test]
+    fn events_have_times_from_the_recording_start_tags_and_authors() {
+        let fake = fixture();
+        let (status, body) = get(&fake, "/v1/rooms/r1/recordings/s1/events");
+        assert_eq!(status, 200);
+        let list = body["events"].as_array().unwrap();
+        let kinds: Vec<(&str, Option<f64>)> = list.iter().map(|e| (e["kind"].as_str().unwrap(), e["at_s"].as_f64())).collect();
+        assert_eq!(kinds, [("note", None), ("note", Some(30.0)), ("match_end", Some(30.0)), ("mark", Some(40.0)), ("match_end", Some(60.0))]);
+        let note = list.iter().find(|e| e["text"] == "Late rotate #rotate").unwrap();
+        assert_eq!((note["tags"].clone(), note["author"].as_str(), note["author_name"].as_str(), note["plugin"].clone()), (json!(["rotate"]), Some("a"), Some("Ann"), Value::Null));
+        let apex = list.iter().find(|e| e["kind"] == "match_end").unwrap();
+        assert_eq!((apex["plugin"].as_str(), apex["tags"].clone(), apex["member"].as_str()), (Some("Apex matches"), json!(["match"]), Some("a")));
+        let (_, tagged) = get(&fake, "/v1/rooms/r1/recordings/s1/events?tag=%23ROTATE");
+        assert_eq!(tagged["events"].as_array().unwrap().len(), 1);
+        let (_, marks) = get(&fake, "/v1/rooms/r1/recordings/s1/events?kind=mark");
+        assert_eq!(marks["events"].as_array().unwrap().len(), 1);
+        let (_, speech) = get(&fake, "/v1/rooms/r1/recordings/s1/events?kind=speech");
+        assert_eq!(speech["events"].as_array().unwrap().len(), 2);
+        let (_, board) = get(&fake, "/v1/rooms/r1/recordings/s1/events?kind=board");
+        assert_eq!(board["events"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn chapters_are_the_matches_between_match_ends() {
+        let fake = fixture();
+        let (status, body) = get(&fake, "/v1/rooms/r1/recordings/s1/chapters");
+        assert_eq!(status, 200);
+        assert_eq!(body["chapters"], json!([{"n": 1, "name": "Match 1", "from_s": 0.0, "to_s": 30.0}, {"n": 2, "name": "Match 2", "from_s": 30.0, "to_s": 60.0}]));
+        assert_eq!(get(&fake, "/v1/rooms/r1/recordings/s2/chapters").1["chapters"], json!([]));
+    }
+
+    #[test]
+    fn the_transcript_lists_spoken_lines_in_time_order_with_the_speaker() {
+        let fake = fixture();
+        let (status, body) = get(&fake, "/v1/rooms/r1/recordings/s1/transcript");
+        assert_eq!(status, 200);
+        assert_eq!(body["lines"], json!([
+            {"member": "b", "member_name": "Ben", "from_s": 5.0, "to_s": 8.0, "text": "Ready"},
+            {"member": "b", "member_name": "Ben", "from_s": 20.0, "to_s": 24.0, "text": "Drop north"},
+        ]));
+        assert_eq!(get(&fake, "/v1/rooms/r1/recordings/s1/transcript?member=a").1["lines"], json!([]));
+    }
+
+    #[test]
+    fn the_board_is_the_newest_team_card_and_can_be_replaced() {
+        let fake = fixture();
+        let (status, board) = get(&fake, "/v1/rooms/r1/board");
+        assert_eq!((status, board["text"].as_str(), board["author_name"].as_str(), board["updated_ms"].as_i64()), (200, Some("# Plan"), Some("Ann"), Some((START + 13 * S) / 1000)));
+        let (status, put) = call(&fake, "PUT", "/v1/rooms/r1/board", r##"{"text": "# New plan\n**Goal**"}"##);
+        assert_eq!((status, put["text"].as_str()), (200, Some("# New plan\n**Goal**")));
+        assert_eq!(get(&fake, "/v1/rooms/r1/board").1["text"], "# New plan\n**Goal**");
+        assert_eq!(call(&fake, "PUT", "/v1/rooms/r1/board", r#"{"text": "  "}"#).0, 400);
+        assert_eq!(call(&fake, "PUT", "/v1/rooms/r1/board", r#"{"text": 5}"#).0, 400);
+        assert_eq!(call(&fake, "PUT", "/v1/rooms/r1/board", "nonsense").0, 400);
+        assert_eq!(call(&fake, "PUT", "/v1/rooms/r1/board", &json!({"text": "x".repeat(crate::BOARD_MAX + 1)}).to_string()).0, 400);
+        assert_eq!(call(&fake, "PUT", "/v1/rooms/r2/board", r#"{"text": "x"}"#).0, 409);
+        let empty = Fake::new(vec![], vec![]);
+        assert_eq!(get(&empty, "/v1/rooms/r1/board").1["text"], "");
+    }
+
+    #[test]
+    fn a_note_added_through_the_api_is_an_ordinary_event_with_its_tags() {
+        let fake = fixture();
+        let (status, made) = call(&fake, "POST", "/v1/rooms/r1/recordings/s1/events", r##"{"text": "Check the ring #ring", "at_s": 12.34, "tags": ["Mistake", "#ring", "bad tag!"]}"##);
+        assert_eq!(status, 201);
+        assert_eq!((made["kind"].as_str(), made["at_s"].as_f64(), made["author_name"].as_str()), (Some("note"), Some(12.3), Some("Ann")));
+        assert_eq!(made["text"], "Check the ring #ring #Mistake #badtag");
+        assert_eq!(made["tags"], json!(["ring", "Mistake", "badtag"]));
+        let (_, list) = get(&fake, "/v1/rooms/r1/recordings/s1/events?tag=mistake");
+        assert_eq!(list["events"].as_array().unwrap().len(), 1);
+        assert_eq!(list["events"][0]["key"], made["key"]);
+        let (status, mark) = call(&fake, "POST", "/v1/rooms/r1/recordings/s1/events", r#"{"kind": "mark", "at_s": 5, "tags": ["good"]}"#);
+        assert_eq!((status, mark["kind"].as_str(), mark["text"].as_str(), mark["at_s"].as_f64()), (201, Some("mark"), Some("#good"), Some(5.0)));
+        let (status, whole) = call(&fake, "POST", "/v1/rooms/r1/recordings/s1/events", r#"{"text": "Overall fine"}"#);
+        assert_eq!((status, whole["at_s"].clone()), (201, Value::Null));
+    }
+
+    #[test]
+    fn bad_events_are_refused_without_writing() {
+        let fake = fixture();
+        let before = fake.logs.lock().unwrap()[0].records.len();
+        let post = |body: &str| call(&fake, "POST", "/v1/rooms/r1/recordings/s1/events", body).0;
+        assert_eq!(post("[]"), 400);
+        assert_eq!(post("{}"), 400);
+        assert_eq!(post(r#"{"text": "  "}"#), 400);
+        assert_eq!(post(r#"{"text": "x", "kind": "drawing"}"#), 400);
+        assert_eq!(post(r#"{"text": "x", "at_s": -1}"#), 400);
+        assert_eq!(post(r#"{"text": "x", "at_s": "soon"}"#), 400);
+        assert_eq!(post(r#"{"text": "x", "at_s": 1e12}"#), 400);
+        assert_eq!(post(r#"{"kind": "mark"}"#), 400);
+        assert_eq!(post(r#"{"text": "x", "tags": "a"}"#), 400);
+        assert_eq!(post(r#"{"text": "x", "tags": [1]}"#), 400);
+        assert_eq!(post(&json!({"text": "x".repeat(crate::NOTE_MAX + 1)}).to_string()), 400);
+        assert_eq!(post(&json!({"text": "x", "tags": (0..=TAGS_MAX).map(|i| format!("t{i}")).collect::<Vec<_>>()}).to_string()), 400);
+        assert_eq!(call(&fake, "POST", "/v1/rooms/r1/recordings/nope/events", r#"{"text": "x"}"#).0, 404);
+        assert_eq!(call(&fake, "POST", "/v1/rooms/r2/recordings/s1/events", r#"{"text": "x"}"#).0, 409);
+        assert_eq!(fake.logs.lock().unwrap()[0].records.len(), before);
+    }
+
+    #[test]
+    fn unknown_paths_and_methods_are_refused() {
+        let fake = fixture();
+        assert_eq!(get(&fake, "/v1/nothing").0, 404);
+        assert_eq!(get(&fake, "/").0, 404);
+        assert_eq!(get(&fake, "/v1/rooms/r1/recordings/s1/clips").0, 404);
+        assert_eq!(call(&fake, "DELETE", "/v1/rooms/r1/board", "").0, 405);
+        assert_eq!(call(&fake, "POST", "/v1/rooms", "{}").0, 405);
+        assert_eq!(call(&fake, "PUT", "/v1/rooms/r1/recordings/s1/events", "{}").0, 405);
+        assert_eq!(call(&fake, "POST", "/v1/rooms/r1/plugins", "{}").0, 405);
+        assert_eq!(get(&fake, "/v1/rooms/r1/recordings/%zz").0, 400);
+    }
+
+    #[test]
+    fn plugins_and_jobs_show_their_state_and_who_works_on_them() {
+        let fake = fixture();
+        let (status, plugins) = get(&fake, "/v1/rooms/r1/plugins");
+        assert_eq!(status, 200);
+        assert_eq!(plugins["plugins"][0]["id"], "transcribe");
+        assert_eq!(plugins["plugins"][0]["on"], true);
+        assert_eq!(plugins["plugins"][0]["workers"], json!([{"id": "b", "name": "Ben", "on": true, "ready": null}]));
+        assert!(plugins["plugins"][0].get("summary").is_none());
+        let (status, jobs) = get(&fake, "/v1/rooms/r1/jobs");
+        assert_eq!(status, 200);
+        assert_eq!(jobs["jobs"][0]["state"], "waiting");
+        assert_eq!(jobs["jobs"][0]["owner_name"], "Ben");
+        assert!(jobs["jobs"][0].get("settings").is_none());
+        assert!(jobs.get("running").is_some());
+    }
+
+    #[test]
+    fn the_app_info_names_the_open_room() {
+        let (status, info) = get(&fixture(), "/v1");
+        assert_eq!((status, info["app"].as_str()), (200, Some("EZ Hanseikai")));
+    }
+
+    #[test]
+    fn llms_txt_describes_every_endpoint() {
+        for path in ["/v1/rooms", "recordings", "events", "chapters", "transcript", "board", "plugins", "jobs"] {
+            assert!(LLMS.contains(path), "{path}");
+        }
+        assert!(LLMS.contains("Authorization: Bearer") && LLMS.contains("127.0.0.1"));
+        assert!(!LLMS.contains(TOKEN));
+    }
+}

@@ -1,0 +1,77 @@
+# EZ Hanseikai
+
+EZ Hanseikai is a Windows app where a team records its games and reviews them together. A room holds the team's recordings. Each recording has events (notes, marks, analysis results such as match ends and spoken lines), and the room has one game plan: a Markdown page.
+
+This file describes the app's local HTTP API. An AI agent or a program can read recordings and write notes and the game plan. Whatever you write is shared with the whole room, like what people write in the app.
+
+## Turn it on
+
+The API is off by default. A person turns it on in the app: Settings > API > Local API. The address is http://127.0.0.1:47625 and Copy token puts the token on the clipboard. The token is secret; never print it into notes or the game plan.
+
+## Rules
+
+- Every request except GET /llms.txt needs the header `Authorization: Bearer <token>`.
+- Only the address above works, and the Host header must be 127.0.0.1:47625 or localhost:47625. There is no CORS.
+- JSON in, JSON out (UTF-8). Errors are `{"error": "..."}` with the status 400, 401, 403, 404, 405, 409 or 413.
+- Times in a recording are seconds from its start (`at_s`, `from_s`, `to_s`, rounded to 0.1). Clock times are milliseconds since 1970 (`start_ms`, `end_ms`).
+- Reads work for every room on this PC. Writes work only for the room that is open in the app (409 otherwise); ask the person to open it.
+- Notes are at most 500 characters and the game plan at most 4000. Write `#tag` in a note text to tag it, or send `tags`.
+
+## Read
+
+GET /v1
+  {"app": "EZ Hanseikai", "version": "0.10.0", "id": "...", "name": "Ann", "room": "<open room id or null>", "recording": false}
+
+GET /v1/rooms
+  {"rooms": [{"id": "ab12", "name": "Practice", "active": true, "members": [{"id": "...", "name": "Ann", "online": true}]}]}
+
+GET /v1/rooms/{room}/recordings
+  {"recordings": [{"id": "2026-10-19 21-30-00", "kind": "play", "recording": false, "start_ms": 1792445400000, "end_ms": 1792448100000, "length_s": 2700.0, "members": [{"id": "...", "name": "Ann", "voice_only": false, "start_ms": 1792445400000, "end_ms": 1792448100000}]}]}
+  Newest first. kind is "play" or "debrief" (a recording of people talking while they watched another one). recording is true while it is being recorded. Put the id in the URL with spaces as %20.
+
+GET /v1/rooms/{room}/recordings/{recording}
+  One element of the list above.
+
+GET /v1/rooms/{room}/recordings/{recording}/events[?tag=rotate][&kind=note]
+  {"events": [{"key": "<author>/<id>", "id": 1792445520000000, "author": "...", "author_name": "Ann", "plugin": null, "kind": "note", "at_s": 120.5, "to_s": null, "member": null, "member_name": null, "text": "Rotate early #rotate", "tags": ["rotate"], "values": null}]}
+  Notes, marks and analysis results in time order (untimed ones first). plugin is the plugin's name for analysis results, null for people. kinds: note, mark, match_end, ... Spoken lines, drawings and the game plan are left out unless you ask with kind=speech, kind=drawing or kind=board.
+
+GET /v1/rooms/{room}/recordings/{recording}/chapters
+  {"chapters": [{"n": 1, "name": "Match 1", "from_s": 0.0, "to_s": 612.3}, {"n": 2, "name": "Match 2", "from_s": 612.3, "to_s": null}]}
+  Matches found by the Apex matches plugin (empty when it is off or found none). to_s is null for the match still in progress.
+
+GET /v1/rooms/{room}/recordings/{recording}/transcript[?member=<id>]
+  {"lines": [{"member": "...", "member_name": "Ren", "from_s": 5.0, "to_s": 8.0, "text": "Drop north"}]}
+  Spoken lines from the Transcription plugin, in time order (empty when it is off or not finished).
+
+GET /v1/rooms/{room}/board
+  {"text": "# This week\n...", "author": "...", "author_name": "Ann", "updated_ms": 1792445000000}
+  text is "" when nobody has written the game plan.
+
+GET /v1/rooms/{room}/plugins
+  {"plugins": [{"id": "transcribe", "name": "Transcription", "version": "1.0.0", "on": true, "settings": {"model": "small"}, "ready": true, "process_here": true, "workers": [{"id": "...", "name": "Ren", "on": true, "ready": true}]}]}
+
+GET /v1/rooms/{room}/jobs
+  {"jobs": [{"job": "...", "plugin": "transcribe", "version": "1.0.0", "set": "<recording id>", "owner": "...", "owner_name": "Ren", "whole": false, "state": "waiting", "by": null, "error": null}], "running": null}
+  state is waiting, claimed, done or failed; by is who runs or ran it.
+
+## Write
+
+POST /v1/rooms/{room}/recordings/{recording}/events
+  {"text": "Late rotate, ring was closing", "at_s": 1325.5, "tags": ["mistake", "rotate"]}
+  Adds a note (kind "note", the default) or a mark ({"kind": "mark", "at_s": 40}; a mark needs at_s and has no text). at_s is optional for a note: without it the note belongs to the whole recording. Tags are added to the text as #tag. Answer 201 with the event, as in the list above.
+
+PUT /v1/rooms/{room}/board
+  {"text": "# This week\n**Goal: move before the ring closes**\n\n## Next match\n- Pick the drop first"}
+  Replaces the game plan for the whole room. Read it first and keep what still applies. Answer 200 with the board. The format: `#` is the title, a bold line is the goal, each `##` is a card of bullet points; [text](ezh://moment/<recording id>/<seconds>/all) links open a moment.
+
+## Recipes
+
+- Notes from the transcript: GET the transcript and chapters, read them, then POST a note at the time of each decision or mistake with a tag. Check the existing events first so you do not repeat notes.
+- Game plan from a recording: GET events, chapters and transcript, then PUT a short board: a goal and a few cards of what to do next.
+- Mistakes in a match: GET chapters, take one match's from_s and to_s, read the transcript and events between them, and POST a note with the tag mistake at each moment.
+
+Examples (replace the token and ids):
+
+  curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:47625/v1/rooms
+  curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"text":"Good call #callout","at_s":84}' "http://127.0.0.1:47625/v1/rooms/ab12/recordings/2026-10-19%2021-30-00/events"

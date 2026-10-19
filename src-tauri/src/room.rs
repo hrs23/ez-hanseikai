@@ -765,6 +765,10 @@ pub fn derive_sets(room: &str, logs: &[Log], deleted: &HashSet<String>) -> Vec<S
     sets.into_values().rev().collect()
 }
 
+pub fn user_event(id: i64, kind: &str, text: &str, target: Value, values: Value) -> Value {
+    json!({"k": "event", "id": id, "t_us": id, "kind": kind, "target": target, "text": text, "values": values, "tags": tags(text)})
+}
+
 pub fn tags(text: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for word in text.split('#').skip(1) {
@@ -1114,6 +1118,7 @@ pub fn state_json(core: &Core) -> Value {
         "rooms": room_list,
         "layout": core.layout.lock().unwrap().clone(),
         "hotkey": core.hotkey.lock().unwrap().clone(),
+        "api": {"on": *core.api_on.lock().unwrap(), "address": crate::api::address(), "error": core.api_error.lock().unwrap().clone()},
         "sets": sets,
         "gone": gone_json(&room_id, &logs, &core.deleted.lock().unwrap(), &events),
         "peers": peers,

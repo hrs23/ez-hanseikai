@@ -616,9 +616,8 @@ fn finish(core: &Arc<Core>, room: &str, plugin: &Plugin, key: &str, run: i64, in
     party::send(core);
 }
 
-fn plugins_json(core: &Core) -> Vec<Value> {
-    let room = core.active_room_id();
-    let logs = room::logs(core, &room);
+pub fn plugins_json(core: &Core, room: &str) -> Vec<Value> {
+    let logs = room::logs(core, room);
     let configs = configs(&logs, None);
     let known = workers(&logs);
     let members: Vec<String> = core.rooms.lock().unwrap().list.iter().find(|r| r.id == room).map(|r| r.members.iter().map(|m| m.to_string()).collect()).unwrap_or_default();
@@ -650,7 +649,7 @@ fn plugins_json(core: &Core) -> Vec<Value> {
 #[tauri::command]
 pub async fn room_plugins(core: State<'_, Arc<Core>>) -> Result<Vec<Value>, String> {
     let core = core.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || plugins_json(&core)).await.map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(move || plugins_json(&core, &core.active_room_id())).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -684,13 +683,12 @@ pub async fn prepare_plugin(core: State<'_, Arc<Core>>, id: String) -> Result<()
     tauri::async_runtime::spawn_blocking(move || plugins::fetch_group(plugin.id, &dir, &plugins::missing(plugin, &dir, &settings))).await.map_err(|e| e.to_string())?
 }
 
-fn jobs_json(core: &Core) -> Value {
-    let room = core.active_room_id();
-    let (logs, configs, tracks) = snapshot(core, &room);
+pub fn jobs_json(core: &Core, room: &str) -> Value {
+    let (logs, configs, tracks) = snapshot(core, room);
     let (me, online) = (core.me(), online(core));
     let on: Vec<(&String, &Config, String)> = configs.iter().filter(|(_, c)| c.on).map(|(id, c)| (id, c, prefix(id, c))).collect();
     let prefixes: Vec<String> = on.iter().map(|(_, _, p)| p.clone()).collect();
-    let inputs = if on.is_empty() { Vec::new() } else { inputs(core, &room, &logs, |file| open(file, &me, &prefixes, &tracks)) };
+    let inputs = if on.is_empty() { Vec::new() } else { inputs(core, room, &logs, |file| open(file, &me, &prefixes, &tracks)) };
     let chosen = chosen(&logs, None);
     let mut list = Vec::new();
     for (id, config, prefix) in &on {
@@ -707,7 +705,7 @@ fn jobs_json(core: &Core) -> Value {
 #[tauri::command]
 pub async fn jobs(core: State<'_, Arc<Core>>) -> Result<Value, String> {
     let core = core.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || jobs_json(&core)).await.map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(move || jobs_json(&core, &core.active_room_id())).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]

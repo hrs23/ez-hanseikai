@@ -47,6 +47,9 @@ const FRAGMENT_S = SEGMENT_S / FRAGMENTS_PER_SEGMENT;
 const CRASH_AFTER_FRAGMENTS = FRAGMENTS_PER_SEGMENT / 2;
 const PORT_BASE = Number(process.env.E2E_PORT_BASE || 9311);
 const PORTS = { a: PORT_BASE, b: PORT_BASE + 1, c: PORT_BASE + 2 };
+const API_PORT_BASE = Number(process.env.E2E_API_PORT_BASE || PORT_BASE + 100);
+const API_PORTS = { a: API_PORT_BASE, b: API_PORT_BASE + 1, c: API_PORT_BASE + 2 };
+const TOKEN_CHARS = 48;
 const OLD_ROOM = "0ld0r00m";
 const NAMES = { a: "Ann", b: "Ben", c: "Cal" };
 
@@ -210,6 +213,7 @@ function start(key) {
   const env = {
     ...process.env,
     EZH_TEST: String(PORTS[key]),
+    EZH_API_PORT: String(API_PORTS[key]),
     EZH_DIR: app.data,
     WEBVIEW2_USER_DATA_FOLDER: path.join(home, "webview"),
   };
@@ -271,6 +275,30 @@ async function launch(key) {
 async function connects(app, peer, since = 0) {
   const view = await invoke(app, "debug_view", { tab: "connections", since, set: null, addresses: false });
   return view.events.filter((e) => e.text.startsWith(peer.id.slice(0, 10)) && e.text.includes(": connected")).length;
+}
+
+function api(app, method, route, { token, host, body } = {}) {
+  const port = API_PORTS[app.key];
+  return new Promise((resolve, reject) => {
+    const payload = body === undefined ? null : Buffer.from(typeof body === "string" ? body : JSON.stringify(body));
+    const headers = { Host: host || `127.0.0.1:${port}`, ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(payload ? { "Content-Type": "application/json", "Content-Length": payload.length } : {}) };
+    const req = http.request({ host: "127.0.0.1", port, method, path: route, headers, agent: false, timeout: CALL_S * 1000 }, (res) => {
+      const chunks = [];
+      res.on("data", (c) => chunks.push(c));
+      res.on("end", () => {
+        const text = Buffer.concat(chunks).toString("utf8");
+        let json = null;
+        try {
+          json = JSON.parse(text);
+        } catch {}
+        resolve({ status: res.statusCode, text, json });
+      });
+    });
+    req.on("timeout", () => req.destroy(new Error("no answer")));
+    req.on("error", (e) => reject(new Error(e.code || e.message)));
+    if (payload) req.write(payload);
+    req.end();
+  });
 }
 
 function bytes(n) {
@@ -736,6 +764,72 @@ async function scenario(ctx) {
     await waitFor("A replays the watched session at the seek", within(UI_REFRESH_S * 3), () => evaluate(a, `review?.id === ${JSON.stringify(ctx.review)} && selected === ${JSON.stringify(ctx.set)} && Math.abs(nowM() - ${SEEK_TO_S * 2}) < ${JUMP_MIN_S}`));
     await evaluate(a, `endReview(); openSession(${JSON.stringify(ctx.set)}); true`);
     ctx.notes.push(`review session with ${(await state(a)).sets.find((s) => s.id === ctx.review).party.length} party records replayed`);
+  });
+
+  await step("the local API is off until the page switches it on, then reads recordings and takes a note and a game plan that everyone sees", async () => {
+    const refused = await api(a, "GET", "/llms.txt").then(() => false, () => true);
+    check(refused && (await state(a)).api.on === false, "the API answers before it was switched on");
+    await evaluate(a, `openSettings("api"); true`);
+    await evaluate(a, `$("apion").click(); true`);
+    await waitFor("A switches the API on", within(UI_REFRESH_S * 5), () => evaluate(a, `st.api.on && !$("apirows").hidden && $("apiaddr").textContent === "http://127.0.0.1:${API_PORTS.a}"`));
+    const { token } = await invoke(a, "api_info");
+    check(token.length === TOKEN_CHARS, `the token has ${token.length} characters`);
+    const llms = await api(a, "GET", "/llms.txt");
+    check(llms.status === 200 && llms.text.includes("Authorization: Bearer") && !llms.text.includes(token), `llms.txt: ${llms.status}`);
+    check((await api(a, "GET", "/v1/rooms")).status === 401, "a request without the token was not refused");
+    check((await api(a, "GET", "/v1/rooms", { token: "0".repeat(TOKEN_CHARS) })).status === 401, "a wrong token was not refused");
+    check((await api(a, "GET", "/v1/rooms", { token, host: "evil.example" })).status === 403, "a foreign Host header was not refused");
+    check((await api(a, "GET", "/v1/rooms", { token, host: `localhost.evil.example:${API_PORTS.a}` })).status === 403, "a look-alike Host header was not refused");
+    const rooms = await api(a, "GET", "/v1/rooms", { token });
+    const mine = rooms.json?.rooms?.find((r) => r.id === ctx.room);
+    check(rooms.status === 200 && mine?.active && mine.members.length === 3, `rooms: ${brief(rooms.json)}`);
+    const room = `/v1/rooms/${ctx.room}`;
+    const recording = (id) => `${room}/recordings/${encodeURIComponent(id)}`;
+    const list = await api(a, "GET", `${room}/recordings`, { token });
+    const found = list.json?.recordings?.find((r) => r.id === ctx.set);
+    check(found && found.kind === "play" && found.members.length >= 2 && found.length_s > 0 && found.end_ms > found.start_ms, `recordings: ${brief(list.json)}`);
+    check(list.json.recordings.find((r) => r.id === ctx.review)?.kind === "debrief", "the review is not listed as a debrief");
+    for (const tail of ["events", "chapters", "transcript"]) {
+      const r = await api(a, "GET", `${recording(ctx.set)}/${tail}`, { token });
+      check(r.status === 200 && Array.isArray(r.json?.[tail === "events" ? "events" : tail === "chapters" ? "chapters" : "lines"]), `${tail}: ${r.status} ${brief(r.text)}`);
+    }
+    const plugins = await api(a, "GET", `${room}/plugins`, { token });
+    check(plugins.status === 200 && ["apex-matches", "transcribe"].every((id) => plugins.json.plugins.some((p) => p.id === id)), `plugins: ${brief(plugins.json)}`);
+    const jobs = await api(a, "GET", `${room}/jobs`, { token });
+    check(jobs.status === 200 && jobs.json.jobs.some((j) => j.plugin === PLUGIN && j.state === "done"), `jobs: ${brief(jobs.json)}`);
+    check((await api(a, "POST", `${recording(ctx.set)}/events`, { token, body: { text: "" } })).status === 400, "an empty note was accepted");
+    check((await api(a, "GET", `${recording(ctx.set)}/clips`, { token })).status === 404, "there is an endpoint for clips");
+    const text = "Noted through the API #fromapi";
+    const made = await api(a, "POST", `${recording(ctx.set)}/events`, { token, body: { text, at_s: SEEK_TO_S, tags: ["api"] } });
+    check(made.status === 201 && made.json.at_s === SEEK_TO_S && made.json.tags.join() === "fromapi,api" && made.json.author === a.id, `the note: ${made.status} ${brief(made.text)}`);
+    await allSee([a, b, c], "the note written through the API", within(LOG_SYNC_S * 2), (st) => st.events.some((e) => e.key === made.json.key && e.text === `${text} #api` && e.kind === "note"));
+    const tagged = await api(a, "GET", `${recording(ctx.set)}/events?tag=API`, { token });
+    check(tagged.json.events.some((e) => e.key === made.json.key), "the note is not found by its tag");
+    await evaluate(a, `side = "notes"; openSession(${JSON.stringify(ctx.set)}); true`);
+    await waitFor("A lists the note in the player", within(UI_REFRESH_S * 5), () => evaluate(a, `$("notelist").textContent.includes("Noted through the API")`));
+    const board = "# Through the API\n**Goal: hold the high ground**";
+    const put = await api(a, "PUT", `${room}/board`, { token, body: { text: board } });
+    check(put.status === 200 && put.json.text === board, `the game plan: ${put.status} ${brief(put.text)}`);
+    await allSee([a, b, c], "the game plan written through the API", within(LOG_SYNC_S * 2), (st) => st.events.some((e) => e.kind === "board" && e.text === board));
+    check((await api(a, "GET", `${room}/board`, { token })).json.text === board, "the game plan reads back differently");
+    await waitFor("A shows the game plan", within(UI_REFRESH_S * 5), () => evaluate(a, `boardText() === ${JSON.stringify(board)}`));
+    await evaluate(a, `$("settings").close(); go("room"); true`);
+    await evaluate(a, `$("aibtn").click(); true`);
+    await waitFor("A opens the AI menu", within(UI_REFRESH_S * 5), () => evaluate(a, `!$("menu").hidden && $("menu").querySelectorAll("button").length === 3`));
+    const prompt = await evaluate(a, `closeMenu(), invoke("api_info").then((i) => aiPrompt(aiPurposes()[0], i, st.room, newestRecording()))`);
+    for (const part of [token, `http://127.0.0.1:${API_PORTS.a}/llms.txt`, ctx.room, ctx.review]) check(prompt.includes(part), `the prompt lacks ${part === token ? "the token" : part}`);
+    await evaluate(a, `openSettings("api"); true`);
+    await pressAndConfirm(a, `$("apinew").click()`);
+    const fresh = await waitFor("A has a new token", within(UI_REFRESH_S * 5), async () => {
+      const next = (await invoke(a, "api_info")).token;
+      return next !== token && next;
+    });
+    check((await api(a, "GET", "/v1", { token })).status === 401 && (await api(a, "GET", "/v1", { token: fresh })).status === 200, "the old token still works or the new one does not");
+    await evaluate(a, `$("apion").click(); true`);
+    await waitFor("A switches the API off", within(UI_REFRESH_S * 5), () => evaluate(a, `!st.api.on && $("apirows").hidden`));
+    check(await api(a, "GET", "/llms.txt").then(() => false, () => true), "the API still answers after it was switched off");
+    check(readJson(path.join(a.data, "settings.json")).api === false, "settings.json does not keep the switch");
+    await evaluate(a, `$("settings").close(); true`);
   });
 
   await step("export the set on A to a playable file", async () => {
