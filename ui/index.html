@@ -24,13 +24,11 @@
 
 <div id="app" class="app" hidden>
   <aside id="side" class="side">
-    <div class="roomhead">
-      <button id="roomname" class="roomname"><span data-icon="home"></span><span data-t="Room">Room</span></button>
-      <button id="faces" class="faces"></button>
-    </div>
-    <button id="startbtn" class="startbtn go"></button>
+    <button id="roomname" class="roombtn"><span data-icon="home"></span><span class="nm" data-t="Room">Room</span><span id="roomfaces" class="roomfaces"></span><span class="chev" data-icon="chevron-right" data-icon-class="sm"></span></button>
+    <div class="startgroup"><button id="startbtn" class="startbtn go"></button><button id="startmore" class="startmore go" data-icon="chevron-down" data-t-label="Recording options" data-t-title="Recording options" aria-haspopup="menu"></button></div>
     <div class="sechead"><span data-t="Recordings">Recordings</span><button id="sessmore" class="icon sm" data-icon="more" data-t-label="More" data-t-title="More" aria-haspopup="menu"></button></div>
     <div id="sessions" class="sessions" role="listbox" data-t-label="Recordings"></div>
+    <button id="allrecs" class="allrecs"><span data-t="All recordings">All recordings</span><span data-icon="chevron-right" data-icon-class="sm"></span></button>
     <div id="diskbanner" class="sidebanner" role="button" tabindex="0" hidden></div>
     <div class="dock">
       <div class="caps">
@@ -52,18 +50,17 @@
     <div id="roompage" class="page room" hidden>
       <div class="mhead">
         <h1 id="homename"></h1>
-        <button id="renamebtn" class="icon sm" data-icon="edit" data-t-label="Rename room" data-t-title="Rename room"></button>
         <span id="homesub" class="sub"></span>
         <span class="sp"></span>
         <button id="aibtn" class="ghost" aria-haspopup="menu"><span data-icon="sparkles" data-icon-class="sm"></span><span data-t="AI">AI</span></button>
-        <button id="invitebtn"><span data-icon="user-plus" data-icon-class="sm"></span><span data-t="Copy invite code">Copy invite code</span></button>
-        <button id="leavebtn" class="ghost"><span data-icon="logout" data-icon-class="sm"></span><span data-t="Leave room">Leave room</span></button>
       </div>
       <div class="ptabs" role="tablist">
         <button data-tab="members" role="tab"><span data-icon="users" data-icon-class="sm"></span><span data-t="Members">Members</span></button>
-        <button data-tab="board" role="tab"><span data-icon="board" data-icon-class="sm"></span><span data-t="Game plan">Game plan</span></button>
         <button data-tab="plugins" role="tab"><span data-icon="puzzle" data-icon-class="sm"></span><span data-t="Plugins">Plugins</span></button>
         <button data-tab="jobs" role="tab"><span data-icon="cpu" data-icon-class="sm"></span><span data-t="Jobs">Jobs</span><span id="jobcount" class="count" hidden></span></button>
+        <button data-tab="board" role="tab"><span data-icon="board" data-icon-class="sm"></span><span data-t="Game plan">Game plan</span></button>
+        <button data-tab="recordings" role="tab"><span data-icon="film" data-icon-class="sm"></span><span data-t="Recordings">Recordings</span></button>
+        <button data-tab="settings" role="tab"><span data-icon="gear" data-icon-class="sm"></span><span data-t="Settings">Settings</span></button>
       </div>
       <div id="boardpane" class="boardpane" hidden>
         <div class="bbar">
@@ -226,19 +223,15 @@
   <div class="row end"><button id="delno" data-t="Cancel">Cancel</button><button id="delyes" class="dangerfill"></button></div>
 </dialog>
 <dialog id="diagdlg" class="diag">
-  <div class="dlghead"><div class="ptabs inline" role="tablist"><button data-dtab="summary" role="tab"><span data-icon="ok" data-icon-class="sm"></span><span data-t="Summary">Summary</span></button><button data-dtab="flow" role="tab"><span data-icon="shield" data-icon-class="sm"></span><span data-t="Where data goes">Where data goes</span></button></div><button class="icon close" data-icon="x" data-t-label="Close"></button></div>
+  <div class="dlghead"><div class="ptabs inline" role="tablist"><button data-dtab="summary" role="tab"><span data-icon="ok" data-icon-class="sm"></span><span data-t="Summary">Summary</span></button><button data-dtab="flow" role="tab"><span data-icon="shield" data-icon-class="sm"></span><span data-t="Where data goes">Where data goes</span></button><button data-dtab="traffic" role="tab"><span data-icon="activity" data-icon-class="sm"></span><span data-t="Traffic">Traffic</span></button><button data-dtab="log" role="tab"><span data-icon="terminal" data-icon-class="sm"></span><span data-t="Log">Log</span></button><button data-dtab="jobs" role="tab"><span data-icon="cpu" data-icon-class="sm"></span><span data-t="Jobs">Jobs</span></button></div><button class="icon close" data-icon="x" data-t-label="Close"></button></div>
   <div id="diagbody" class="diagbody"></div>
-  <div class="row foot"><label class="inline"><input id="diagaddr" type="checkbox"><span data-t="Include names and addresses">Include names and addresses</span></label><span class="sp"></span><button id="diagcopy"><span data-icon="copy" data-icon-class="sm"></span><span data-t="Copy">Copy</span></button><button id="diagsave" class="primary"><span data-icon="download" data-icon-class="sm"></span><span data-t="Save to file…">Save to file…</span></button></div>
+  <div class="row foot"><span class="sp"></span><button id="diagcopy"><span data-icon="copy" data-icon-class="sm"></span><span data-t="Copy report">Copy report</span></button><button id="diagsave"><span data-icon="download" data-icon-class="sm"></span><span data-t="Save as file…">Save as file…</span></button></div>
 </dialog>
 <dialog id="resetdlg">
   <h2 data-t="Reset the app?">Reset the app?</h2>
   <p class="muted" data-t="Settings, downloads and logs are removed and the app restarts.">Settings, downloads and logs are removed and the app restarts.</p>
   <label class="check"><input id="keeprooms" type="checkbox" checked><span data-t="Keep my ID, rooms and recordings">Keep my ID, rooms and recordings</span></label>
   <div class="row end"><button id="resetno" data-t="Cancel">Cancel</button><button id="resetyes" class="dangerfill" data-t="Reset">Reset</button></div>
-</dialog>
-<dialog id="renamedlg">
-  <div class="dlghead"><h2 data-t="Rename room">Rename room</h2><button class="icon close" data-icon="x" data-t-label="Close"></button></div>
-  <div class="row"><input id="renameinput" class="grow" maxlength="40" autocomplete="off" data-t-label="Name"><button id="renamesave" class="primary" data-t="Save">Save</button></div>
 </dialog>
 <dialog id="importdlg" class="wide">
   <div class="dlghead"><h2 data-t="Import recording">Import recording</h2><button class="icon close" data-icon="x" data-t-label="Close"></button></div>
@@ -248,6 +241,11 @@
     <div id="importviews" class="importviews"></div>
   </div>
   <div class="row end"><button id="importgo" class="primary" data-t="Import" disabled>Import</button></div>
+</dialog>
+<dialog id="promptdlg" class="wide">
+  <div class="dlghead"><h2 id="prompttitle"></h2><button class="icon close" data-icon="x" data-t-label="Close"></button></div>
+  <textarea id="prompttext" class="prompttext" readonly spellcheck="false" data-t-label="Prompt"></textarea>
+  <div class="row end"><button id="promptcopy" class="primary"><span data-icon="copy" data-icon-class="sm"></span><span data-t="Copy prompt">Copy prompt</span></button></div>
 </dialog>
 <dialog id="folderdlg">
   <div class="dlghead"><h2 data-t="Export to folder">Export to folder</h2><button class="icon close" data-icon="x" data-t-label="Close"></button></div>
@@ -281,6 +279,8 @@
 <script src="layout.js"></script>
 <script src="events.js"></script>
 <script src="review.js"></script>
+<script src="members.js"></script>
+<script src="recordings.js"></script>
 <script src="draw.js"></script>
 <script src="media.js"></script>
 <script src="app.js"></script>

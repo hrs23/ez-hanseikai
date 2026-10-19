@@ -127,3 +127,8 @@ function groupDrawings(list) {
   }
   return out;
 }
+
+const BOARD_TEMPLATE = {
+  en: "# Goals for this week\n- Win the first fight of each match\n\n## Rules we agreed\n- Drop spots, rotations, comms\n\n## Review checklist\n- Positioning before each fight\n- Who called what\n\n## Notes\n- Right-click a video to copy a moment link, then paste it here",
+  ja: "# 今週の目標\n- 毎試合、最初の戦闘に勝つ\n\n## 決めたルール\n- 降りる場所、ローテーション、コミュニケーション\n\n## 見返すポイント\n- 戦闘前の立ち位置\n- 誰が何を伝えたか\n\n## メモ\n- 動画を右クリックして場面のリンクをコピーし、ここに貼る",
+};

@@ -24,6 +24,7 @@ mod session;
 mod shell;
 mod sources;
 mod stream;
+mod thumbs;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -145,6 +146,7 @@ pub struct Peer {
     pub codecs: Vec<String>,
     pub info: Option<(String, u32)>,
     pub sharing: bool,
+    pub seen_us: Option<i64>,
     pub have: HashMap<String, u64>,
     pub logs: HashMap<String, u64>,
     pub gone: HashSet<String>,
@@ -157,7 +159,7 @@ impl Peer {
     }
 
     pub fn new(id: EndpointId, name: String) -> Self {
-        Self { id, name, conn: None, offset_us: None, failures: 0, announce: true, codecs: default_codecs(), info: None, sharing: false, have: HashMap::new(), logs: HashMap::new(), gone: HashSet::new(), asks: Vec::new() }
+        Self { id, name, conn: None, offset_us: None, failures: 0, announce: true, codecs: default_codecs(), info: None, sharing: false, seen_us: None, have: HashMap::new(), logs: HashMap::new(), gone: HashSet::new(), asks: Vec::new() }
     }
 }
 
@@ -428,11 +430,6 @@ fn draw(core: State<Arc<Core>>, stroke: Value) {
 }
 
 #[tauri::command]
-async fn open_debug(app: AppHandle) {
-    shell::open_debug(&app);
-}
-
-#[tauri::command]
 fn party_typing(core: State<Arc<Core>>, on: bool) {
     core.party.lock().unwrap().typing = on;
     party::send(&core);
@@ -466,8 +463,8 @@ async fn save_report(core: State<'_, Arc<Core>>, include_addresses: bool, audio_
 }
 
 #[tauri::command]
-async fn start_recording(core: State<'_, Arc<Core>>) -> Result<(), String> {
-    room::start_set(&core)
+async fn start_recording(core: State<'_, Arc<Core>>, debrief: Option<bool>) -> Result<(), String> {
+    room::start_set(&core, debrief)
 }
 
 #[tauri::command]
@@ -1033,7 +1030,7 @@ fn main() {
     }
     let app = builder
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_window_state::Builder::default().with_denylist(&["debug"]).build())
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(
@@ -1102,9 +1099,11 @@ fn main() {
             std::thread::spawn(move || ffmpeg::prepare(&c.ffmpeg_status));
             let c = core.clone();
             std::thread::spawn(move || jobs::worker(c));
+            let c = core.clone();
+            std::thread::spawn(move || thumbs::keeper(c));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug::debug_view, debug::debug_report, debug::set_report_sharing, save_report, start_recording, stop_recording, delete_set, restore_set, identity, open_set_folder, export_set, cancel_export, pick_import, import_plan, import_recording, cancel_import, export_folder, set_layout, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, remove_room, check_peer, set_limit, set_codecs, cancel_invites, list_sources, set_source, use_display, list_mics, set_mic, set_mix, set_audio_process, set_warn_hours, set_channel, event_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_event, answer_ask, focus_set, party_on, party_act, jobs::room_plugins, jobs::set_room_plugin, jobs::set_process_plugin, jobs::prepare_plugin, jobs::jobs, jobs::retry_job, jobs::cancel_job, install_update, check_update, save_text, jobs::run_job_next, set_quality, set_language, rename_room, draw, party_typing, open_debug, mark, set_hotkey, retry_ffmpeg, set_api, new_api_token, api_info])
+        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug::debug_view, debug::debug_report, debug::set_report_sharing, save_report, start_recording, stop_recording, delete_set, restore_set, identity, open_set_folder, export_set, cancel_export, pick_import, import_plan, import_recording, cancel_import, export_folder, set_layout, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, remove_room, check_peer, set_limit, set_codecs, cancel_invites, list_sources, set_source, use_display, list_mics, set_mic, set_mix, set_audio_process, set_warn_hours, set_channel, event_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_event, answer_ask, focus_set, party_on, party_act, jobs::room_plugins, jobs::set_room_plugin, jobs::set_process_plugin, jobs::prepare_plugin, jobs::jobs, jobs::retry_job, jobs::cancel_job, install_update, check_update, save_text, jobs::run_job_next, set_quality, set_language, rename_room, draw, party_typing, mark, set_hotkey, retry_ffmpeg, set_api, new_api_token, api_info])
         .build(tauri::generate_context!())
         .expect("failed to start");
     app.run(|app, event| {

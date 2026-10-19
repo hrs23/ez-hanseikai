@@ -41,12 +41,12 @@ function renderFaces() {
   if (!changed("faces", sig)) return;
   const faces = ids.slice(0, AVATARS_SHOWN).map((id) => {
     const dot = memberDot(id);
-    const a = avatar(id, "", dot);
+    const a = avatar(id, "sm", dot);
     if (!dot) a.classList.add("dim");
     return a;
   });
-  $("faces").replaceChildren(el("span", { className: "avs" }, ...faces), st.asks.length ? el("span", { className: "badge", textContent: String(st.asks.length) }) : "");
-  $("faces").title = t("Members");
+  $("roomfaces").replaceChildren(el("span", { className: "avs" }, ...faces), st.asks.length ? el("span", { className: "badge", textContent: String(st.asks.length) }) : "");
+  $("roomname").title = t("Room");
 }
 
 function startState() {
@@ -57,11 +57,20 @@ function renderStartButton() {
   const state = startState();
   if (!changed("startbtn", [state, lang])) return;
   const b = $("startbtn");
-  b.className = "startbtn " + (state === "end" ? "end" : "go") + (state === "review" ? " review" : "");
+  b.className = "startbtn " + (state === "end" ? "end" : "go");
+  $("startmore").hidden = state === "end";
+  $("startmore").className = "startmore go";
   if (state === "end") b.replaceChildren(icon("stop", "sm"), el("span", { textContent: t("Stop recording") }));
-  else if (state === "review") b.replaceChildren(icon("mic"), el("span", { textContent: t("Record review") }), el("span", { className: "voice", textContent: t("Voice only") }));
+  else if (state === "review") b.replaceChildren(icon("mic"), el("span", { textContent: t("Record debrief") }));
   else b.replaceChildren(el("i", { className: "rd" }), el("span", { textContent: t("Start recording") }));
   b.title = state === "start" ? t("Starts recording for everyone. Everything until Stop recording is one recording; matches are chapters in it.") : state === "review" ? t("Records everyone's voice and what the Watch Party watches, with no picture.") : "";
+  b.parentElement.classList.toggle("end", state === "end");
+}
+function startMenu(anchor) {
+  openMenu([
+    { label: t("Start recording"), icon: "rec", run: () => toggleRecording("start") },
+    { label: t("Record debrief"), icon: "mic", run: () => toggleRecording("debrief") },
+  ], anchor);
 }
 
 function noteCount(s) {
@@ -101,47 +110,45 @@ function liveRow() {
   const who = a ? (liveSet() ? liveSet().players.map((p) => p.owner) : []) : [st.id, ...st.peers.filter((p) => p.connected).map((p) => p.id)];
   const online = 1 + st.peers.filter((p) => p.connected).length;
   const on = page === "player" && showingNow() && !review;
+  const thumb = thumbBox(null, who, "xs", THUMB_FACES, !!a);
+  if (!a) thumb.firstChild.replaceWith(icon("radio"));
+  const head = el("div", { className: "l1" }, a ? el("i", { className: "recdot" }) : null, el("b", { textContent: a ? t("Recording") : t("Standby") }), a ? el("span", { className: "r rec", id: "livetimer", textContent: fmt((nowUs() - a.start_us) / 1e6) }) : null);
+  const detail = a ? (a.voice ? null : matchNow(nowM()) || t("by {name}", { name: a.by || "" })) : t("{n} online", { n: online });
   const row = el("div", { className: "srow liverow" + (a ? " recording" : "") + (on ? " on" : ""), role: "option", tabIndex: 0, ariaSelected: on },
-    el("div", { className: "l1" }, a ? el("i", { className: "recdot" }) : icon("radio", "sm"), el("b", { textContent: a ? t("Recording") : t("Standby") }), a ? el("span", { className: "r rec", id: "livetimer", textContent: fmt((nowUs() - a.start_us) / 1e6) }) : null),
-    el("div", { className: "l2" }, avatars(who), a && a.voice ? pill("accent", "mic", t("Debrief")) : null, el("span", { textContent: a ? (a.voice ? t("Voice only") : matchNow(nowM()) || t("by {name}", { name: a.by || "" })) : t("{n} online", { n: online }) })));
+    thumb,
+    el("div", { className: "txt" }, head, el("div", { className: "l2" }, a && a.voice ? pill("accent", "mic", t("Debrief")) : null, detail ? el("span", { textContent: detail }) : null)));
   row.onclick = openNow;
   row.onkeydown = (e) => { if (e.key === "Enter") openNow(); };
   return row;
 }
-function importedPill(s) {
-  const p = pill("gray", "download", t("Imported"));
-  p.title = t("Imported by {name}", { name: s.imported_by });
-  return p;
-}
 function sessionRow(s) {
   const on = page === "player" && !showingNow() && (review ? review.id === s.id : selected === s.id);
   const state = sessionState(s);
-  const matches = matchCount(s);
-  const notes = noteCount(s);
-  const what = isReview(s) ? pill("accent", "mic", t("Debrief")) : s.imported_by ? importedPill(s) : null;
-  const detail = matches ? t(matches === 1 ? "{n} match" : "{n} matches", { n: matches }) : notes ? t(notes === 1 ? "{n} note" : "{n} notes", { n: notes }) : "";
   let l2;
   if (state && state.kind === "bar") l2 = el("div", { className: "prog", title: state.title || "" }, el("div", { className: "l2" }, icon(state.icon, "sm"), el("span", { textContent: state.text }), el("span", { className: "r", textContent: state.right || "" })), el("div", { className: "bar" }, el("i", { style: `width:${Math.round(state.frac * 100)}%` })));
   else if (state && state.kind === "line") l2 = el("div", { className: "l2 " + (state.cls || ""), title: state.title || "" }, icon(state.icon, "sm"), el("span", { textContent: state.text }));
-  else l2 = el("div", { className: "l2" }, avatars(s.players.map((p) => p.owner)), what, el("span", { textContent: detail }), state ? el("span", { className: "r " + (state.cls || ""), title: state.title || "" }, icon(state.icon, "sm"), state.text) : null);
+  else l2 = el("div", { className: "l2" }, el("span", { textContent: setLength(s) }), ...marksOf(s), state ? el("span", { className: "r " + (state.cls || ""), title: state.title || "" }, icon(state.icon, "sm"), state.text) : null);
   const row = el("div", { className: "srow" + (on ? " on" : "") + (state && state.icon === "users" ? " wp" : ""), role: "option", tabIndex: 0, ariaSelected: on },
-    el("div", { className: "l1" }, el("b", { textContent: sessionName(s.id) }), el("span", { className: "r", textContent: setLength(s) })), l2);
+    thumbBox(s, s.players.map((p) => p.owner), "xs", THUMB_FACES, false),
+    el("div", { className: "txt" }, el("div", { className: "l1" }, el("b", { textContent: sessionName(s.id) })), l2));
   row.onclick = () => openSession(s.id);
   row.onkeydown = (e) => { if (e.key === "Enter") openSession(s.id); };
   row.oncontextmenu = (e) => { e.preventDefault(); sessionMenu(s.id, e); };
   return row;
 }
+function restoreSet(g) {
+  return run("restore_set", { room: g.room, set: g.id });
+}
 function goneRow(g) {
-  const len = g.end_us ? fmt((g.end_us - g.start_us) / 1e6) : "";
-  const get = el("button", { className: "sm", onclick: (e) => { e.stopPropagation(); run("restore_set", { room: g.room, set: g.id }); } }, icon("download", "sm"), t("Download"));
-  return el("div", { className: "srow gone" }, el("div", { className: "l1" }, el("b", { textContent: sessionName(g.id) }), el("span", { className: "r", textContent: len })), el("div", { className: "l2" }, el("span", { textContent: t("Not on this PC") }), el("span", { className: "sp" }), get));
+  const get = el("button", { className: "sm", onclick: (e) => { e.stopPropagation(); restoreSet(g); } }, icon("download", "sm"), t("Download"));
+  const row = el("div", { className: "srow gone" }, thumbBox(null, g.players.map((p) => p.owner), "xs", THUMB_FACES, false), el("div", { className: "txt" }, el("div", { className: "l1" }, el("b", { textContent: sessionName(g.id) })), el("div", { className: "l2" }, el("span", { textContent: t("Not on this PC") }), el("span", { className: "sp" }), get)));
+  return row;
 }
 function renderSessions() {
   if (!inRoom()) return;
-  const list = st.sets.filter((s) => !s.live);
-  const gone = showGone ? st.gone : [];
-  const rows = [...list.map((s) => ({ id: s.id, s })), ...gone.map((g) => ({ id: g.id, g }))].sort((a, b) => (a.id < b.id ? 1 : -1));
-  const sig = [rows.map((r) => [r.id, r.s ? [setLength(r.s), sessionState(r.s), isReview(r.s), r.s.imported_by, r.s.title, matchCount(r.s), noteCount(r.s), r.s.players.map((p) => p.owner)] : r.g.end_us]), page, nowView, selected, review && review.id, st.active_set, st.peers.map((p) => p.connected), lang, st.colors, st.names, dayOf(new Date())];
+  const keep = review ? review.id : selected;
+  const rows = recentRows(recordingRows(showGone), keep);
+  const sig = [rows.map(rowSignature), page, nowView, selected, review && review.id, st.active_set, st.peers.map((p) => p.connected), lang, st.colors, st.names, dayOf(new Date())];
   if (!changed("sessions", sig)) return;
   $("sessions").replaceChildren(liveRow(), ...rows.map((r) => (r.s ? sessionRow(r.s) : goneRow(r.g))), rows.length ? "" : el("div", { className: "none", textContent: t("No recordings yet") }));
 }
@@ -291,9 +298,10 @@ function drawMeter(kind, v) {
 }
 window.__TAURI__.event.listen("levels", (e) => { for (const kind of ["app", "mic"]) drawMeter(kind, Math.max(0, e.payload[kind] || 0)); });
 
-$("roomname").onclick = () => go("room");
-$("faces").onclick = () => { roomTab = "members"; go("room"); };
-$("startbtn").onclick = toggleRecording;
+$("roomname").onclick = () => { if (st.asks.length) roomTab = "members"; go("room"); };
+$("startbtn").onclick = () => toggleRecording();
+$("startmore").onclick = () => startMenu($("startbtn").parentElement);
+$("allrecs").onclick = () => { roomTab = "recordings"; delete sigs.roomtab; go("room"); };
 $("sessmore").onclick = (e) => goneMenu(e.currentTarget);
 $("diskbanner").onclick = () => openSettings("storage");
 $("diskbanner").onkeydown = (e) => { if (e.key === "Enter") openSettings("storage"); };

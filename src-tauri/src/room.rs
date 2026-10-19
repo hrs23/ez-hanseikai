@@ -580,11 +580,11 @@ pub fn log_set_layout(core: &Core) {
     }
 }
 
-pub fn start_set(core: &Arc<Core>) -> Result<(), String> {
+pub fn start_set(core: &Arc<Core>, debrief: Option<bool>) -> Result<(), String> {
     let start_us = now_us();
     let set = set_id_for(start_us, core.tz_offset_s);
     let by = core.name.lock().unwrap().clone();
-    let voice = core.party.lock().unwrap().reviewing();
+    let voice = debrief.unwrap_or_else(|| core.party.lock().unwrap().reviewing());
     begin_set(core, &set, &by, start_us, voice)?;
     log_set_layout(core);
     party::log(core);
@@ -906,6 +906,7 @@ pub fn delete_set(core: &Core, room: &str, set: &str) -> Result<(), String> {
     if let Some(found) = found {
         data::remove_media(core, &found);
     }
+    crate::thumbs::remove(core, room, set);
     Ok(())
 }
 
@@ -1023,7 +1024,7 @@ pub fn sets_json(core: &Core, room: &str, logs: &[Log], events: &[Value]) -> Vec
         let imported = set.files.iter().find_map(|f| f.view.as_ref());
         out.push(json!({
             "id": set.id, "room": room, "start_us": set.start(), "end_us": set.end(), "live": live,
-            "title": imported.and_then(|v| v.title.clone()), "imported_by": imported.map(|v| display_name(core, &v.by)),
+            "thumb": crate::thumbs::exists(core, room, &set.id), "title": imported.and_then(|v| v.title.clone()), "imported_by": imported.map(|v| display_name(core, &v.by)),
             "players": players, "events": covered, "progress": {"have": have, "total": total, "stuck": stuck_all}, "missing": missing.len(), "lacking": lacking_by, "all_verified": all_verified,
             "status": set_status(live, all_verified, &missing), "layout": set_layout(logs, &set.id), "party": flows.remove(&set.id).unwrap_or_default(),
         }));
@@ -1064,6 +1065,7 @@ fn peer_json(core: &Core, room: &str, p: &Peer) -> Value {
         "sent": stats.as_ref().map(|s| s.udp_tx.bytes),
         "received": stats.as_ref().map(|s| s.udp_rx.bytes),
         "failures": p.failures,
+        "seen_us": p.seen_us,
         "offset_us": p.offset_us,
         "version": p.info.as_ref().map(|(version, _)| version),
         "other_version": other_version,
@@ -1126,6 +1128,7 @@ pub fn state_json(core: &Core) -> Value {
     json!({
         "version": VERSION,
         "ffmpeg": core.ffmpeg_status.lock().unwrap().clone(),
+        "ffmpeg_progress": crate::download::progress(ffmpeg::DOWNLOAD_KEY),
         "id": my_id,
         "name": core.name.lock().unwrap().clone(),
         "lang": crate::language(core),

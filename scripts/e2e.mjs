@@ -160,6 +160,7 @@ async function pressAndConfirm(app, call, yes = true) {
   await evaluate(app, `${call}; true`);
   await waitFor(`${app.key} asks before it goes on`, within(UI_REFRESH_S * 5), () => evaluate(app, `$("confirm").open`));
   const title = await evaluate(app, `$("confirmtitle").textContent`);
+  app.confirmText = await evaluate(app, `$("confirmtext").textContent`);
   await evaluate(app, `$(${yes ? '"confirmyes"' : '"confirmno"'}).click(); true`);
   return title;
 }
@@ -261,7 +262,7 @@ async function attach(app) {
       app.seen = { ...app.seen, [e.message]: (app.seen?.[e.message] || 0) + 1 };
       fail(brief(app.seen));
     });
-    return list.find((t) => t.type === "page" && t.url.startsWith("http") && !t.url.includes("debug.html") && t.webSocketDebuggerUrl);
+    return list.find((t) => t.type === "page" && t.url.startsWith("http") && t.webSocketDebuggerUrl);
   });
   app.cdp = await openSocket(target.webSocketDebuggerUrl);
   await waitFor(`${app.key} UI ready`, within(COLD_START_S), () => evaluate(app, "typeof refresh === 'function' && !!window.__TAURI__ && ready === true"));
@@ -629,6 +630,24 @@ async function scenario(ctx) {
     ctx.notes.push(`verified ${count} pieces by SHA-256 on each of ${all.length} members, set of ${ctx.durationS.toFixed(1)} s`);
   });
 
+  await step("each ended recording gets a thumbnail, and the room page lists recordings as cards", async () => {
+    await waitFor("A makes the thumbnail of the set", within(30), async () => setOf(await state(a), ctx.set)?.thumb === true);
+    const size = await evaluate(a, `new Promise((done) => { const i = new Image(); i.onload = () => done([i.naturalWidth, i.naturalHeight]); i.onerror = () => done(null); i.src = thumbSrc(setById(${JSON.stringify(ctx.set)})); })`);
+    check(size && size[0] > 0 && size[1] > 0, `the page could not load the thumbnail: ${brief(size)}`);
+    const file = fs.readFileSync(path.join(roomDir(a, ctx.room), "thumbs", `${ctx.set}.jpg`));
+    check(file[0] === 0xff && file[1] === 0xd8 && file.length > 500, "the thumbnail file is not a JPEG");
+    await evaluate(a, `roomTab = "recordings"; delete sigs.roomtab; go("room"); true`);
+    await waitFor("A lists the set as a card with a picture", within(UI_REFRESH_S * 5), () => evaluate(a, `[...$("roomtab").querySelectorAll(".reccard")].some((c) => c.querySelector("img") && c.querySelectorAll(".acts button").length === 2)`));
+    check(await evaluate(a, `!!$("sessions").querySelector(".srow:not(.liverow) .thumb img") && !!$("allrecs")`), "the sidebar row has no thumbnail");
+    await evaluate(a, `$("recfilter").value = "zzzz"; $("recfilter").dispatchEvent(new Event("input")); true`);
+    check(await evaluate(a, `$("roomtab").querySelectorAll(".reccard").length === 0`), "the filter did not hide the cards");
+    await evaluate(a, `$("recfilter").value = ""; $("recfilter").dispatchEvent(new Event("input")); true`);
+    await waitFor("the cards come back", within(UI_REFRESH_S * 3), () => evaluate(a, `$("roomtab").querySelectorAll(".reccard").length > 0`));
+    await screenshot(a, "recordings-tab");
+    await evaluate(a, `roomTab = "members"; delete sigs.roomtab; go("room"); true`);
+    await screenshot(a, "room-members");
+  });
+
   await step("C loses its own log and gets all of it back before writing again", async () => {
     kill(c);
     await stopped(c);
@@ -711,12 +730,25 @@ async function scenario(ctx) {
   await step("the game plan is a tab of the room page and a rename reaches everyone", async () => {
     await evaluate(a, `showBoard(); true`);
     await waitFor("A shows the game plan inside the room page", within(UI_REFRESH_S * 3), () => evaluate(a, `!$("boardpane").hidden && !$("roompage").hidden`));
-    check(await evaluate(a, `!$("navboard") && $("roomname").textContent === t("Room")`), "the sidebar still has a game plan entry, or the room button shows a name");
+    check(await evaluate(a, `!$("navboard") && $("roomname").querySelector(".nm").textContent === t("Room")`), "the sidebar still has a game plan entry, or the room button shows a name");
     for (const [by, name] of [[b, "Drill room"], [a, "Practice"]]) {
       await invoke(by, "rename_room", { name });
       for (const app of [a, b, c]) await waitFor(`${app.key} shows ${name}`, within(LOG_SYNC_S * 2), async () => (await state(app)).room.name === name);
     }
+    await evaluate(a, `roomTab = "settings"; delete sigs.roomtab; go("room"); true`);
+    await waitFor("A shows the room settings", within(UI_REFRESH_S * 3), () => evaluate(a, `!!$("roomnameinput") && $("roomnameinput").value === "Practice"`));
+    check(await evaluate(a, `[...document.querySelectorAll("#roompage .ptabs button")].map((x) => x.dataset.tab).join() === "members,plugins,jobs,board,recordings,settings" && !$("invitebtn") && !$("leavebtn")`), "the room page tabs or header are not as designed");
+    await screenshot(a, "room-settings");
+    await evaluate(a, `(() => { const i = $("roomnameinput"); i.value = "Scrim room"; i.dispatchEvent(new Event("input")); i.parentElement.querySelector("button.primary").click(); return true; })()`);
+    for (const app of [a, b, c]) await waitFor(`${app.key} shows the name set in the room settings`, within(LOG_SYNC_S * 2), async () => (await state(app)).room.name === "Scrim room");
+    await invoke(a, "rename_room", { name: "Practice" });
+    for (const app of [a, b, c]) await waitFor(`${app.key} shows Practice again`, within(LOG_SYNC_S * 2), async () => (await state(app)).room.name === "Practice");
     await evaluate(a, `roomTab = "members"; go("room"); true`);
+  });
+
+  await step("each member row says one short state", async () => {
+    const rows = await evaluate(a, `people().map((id) => memberOf(id).status.text)`);
+    check(rows.length === 3 && rows.every((x) => x === "Standby" || /^Receiving \d+%$/.test(x)), `member states ${brief(rows)}`);
   });
 
   await step("Watch Party converges on a seek and a play", async () => {
@@ -743,16 +775,35 @@ async function scenario(ctx) {
     await evaluate(a, `act("pause", nowM()); true`);
   });
 
+  await step("dragging a name label swaps two tiles", async () => {
+    await evaluate(a, `openSession(${JSON.stringify(ctx.set)}); true`);
+    await waitFor("A shows the tiles", within(UI_REFRESH_S * 5), () => evaluate(a, `page === "player" && play.keys.length >= 2 && play.keys.every((k) => play.tiles[k] && play.tiles[k].box.getBoundingClientRect().width > 0)`));
+    const before = await evaluate(a, `play.keys.join()`);
+    const pts = await evaluate(a, `(() => { const [k0, k1] = play.keys; const l = play.tiles[k0].lab.getBoundingClientRect(); const t = play.tiles[k1].box.getBoundingClientRect(); return { from: [l.left + l.width / 2, l.top + l.height / 2], to: [t.left + t.width / 2, t.top + t.height / 2] }; })()`);
+    const mouse = (type, [x, y], buttons) => send(a, "Input.dispatchMouseEvent", { type, x, y, button: type === "mouseMoved" && !buttons ? "none" : "left", buttons, clickCount: 1 });
+    await mouse("mouseMoved", pts.from, 0);
+    await mouse("mousePressed", pts.from, 1);
+    for (let i = 1; i <= 5; i++) await mouse("mouseMoved", [pts.from[0] + ((pts.to[0] - pts.from[0]) * i) / 5, pts.from[1] + ((pts.to[1] - pts.from[1]) * i) / 5], 1);
+    await mouse("mouseReleased", pts.to, 0);
+    const [x0, x1, ...rest] = before.split(",");
+    await waitFor("dragging a label swaps the two tiles", within(UI_REFRESH_S * 3), () => evaluate(a, `play.keys.join() === ${JSON.stringify([x1, x0, ...rest].join())}`));
+    await screenshot(a, "player-swapped");
+    await evaluate(a, `go("room"); true`);
+  });
+
   await step("a session started while watching together records voices and the Watch Party", async () => {
     const all = [a, b, c];
     await allSee(all, "watching the set together", within(PARTY_REPEAT_S + UI_REFRESH_S * 2), (st) => st.party.on && st.party.shared.set === ctx.set);
-    check(await evaluate(a, `startState() === "review"`), "A's start button does not offer to record the review");
+    check(await evaluate(a, `startState() === "review" && $("startbtn").textContent === t("Record debrief")`), "A's start button does not offer to record the debrief");
+    await evaluate(a, `$("startmore").click(); true`);
+    check(await evaluate(a, `[...$("menu").querySelectorAll("button")].map((b) => b.textContent).join() === [t("Start recording"), t("Record debrief")].join()`), "the record menu does not offer Start recording and Record debrief");
+    await evaluate(a, `closeMenu(); true`);
     await evaluate(b, `window.e2eNotes = []; window.__TAURI__.event.listen("session", (e) => e2eNotes.push(sessionNotice(e.payload.action, e.payload.by))).then(() => true)`);
     await pressAndConfirm(a, "toggleRecording()", false);
     await sleep(UI_REFRESH_S * 1000);
     check(!(await state(a)).active_set, "A started recording although it answered No");
     const asked = await pressAndConfirm(a, "toggleRecording()");
-    check(asked === "Start recording the debrief for everyone?", `A was asked "${asked}"`);
+    check(asked === "Record the debrief for everyone?" && a.confirmText === "Only the voice and the viewing flow are recorded.", `A was asked "${asked}" / "${a.confirmText}"`);
     await waitFor("B is told who started", within(LOG_SYNC_S * 2), () => evaluate(b, `e2eNotes.includes(${JSON.stringify(a.name + " started recording")})`));
     ctx.review = (await state(a)).active_set.id;
     await allSee(all, "recording the review voice only", within(LOG_SYNC_S * 2), (st) => st.active_set?.id === ctx.review && st.active_set.voice === true);
@@ -828,6 +879,11 @@ async function scenario(ctx) {
     await evaluate(a, `$("settings").close(); go("room"); true`);
     await evaluate(a, `$("aibtn").click(); true`);
     await waitFor("A opens the AI menu", within(UI_REFRESH_S * 5), () => evaluate(a, `!$("menu").hidden && $("menu").querySelectorAll("button").length === 3`));
+    await evaluate(a, `$("menu").querySelector("button").click(); true`);
+    await waitFor("A shows the prompt before copying", within(UI_REFRESH_S * 5), () => evaluate(a, `$("promptdlg").open && $("prompttext").readOnly && $("prompttext").value.includes("llms.txt")`));
+    check(await evaluate(a, `!$("prompttext").value.includes(promptFull.match(/Bearer <token>\\): (\\S+)/)[1]) && promptFull.includes("Bearer")`), "the prompt preview shows the token");
+    await screenshot(a, "ai-prompt");
+    await evaluate(a, `$("promptdlg").close(); true`);
     const prompt = await evaluate(a, `closeMenu(), invoke("api_info").then((i) => aiPrompt(aiPurposes()[0], i, st.room, newestRecording()))`);
     for (const part of [token, `http://127.0.0.1:${API_PORTS.a}/llms.txt`, ctx.room, ctx.review]) check(prompt.includes(part), `the prompt lacks ${part === token ? "the token" : part}`);
     await evaluate(a, `openSettings("api"); true`);
@@ -842,6 +898,23 @@ async function scenario(ctx) {
     check(await api(a, "GET", "/llms.txt").then(() => false, () => true), "the API still answers after it was switched off");
     check(readJson(path.join(a.data, "settings.json")).api === false, "settings.json does not keep the switch");
     await evaluate(a, `$("settings").close(); true`);
+  });
+
+  await step("Diagnostics is one screen with a masked report and the old developer window is gone", async () => {
+    check((await evaluate(a, `invoke("open_debug").then(() => "open", () => "gone")`)) === "gone", "the developer window can still be opened");
+    await evaluate(a, `openDiagnostics("summary"); true`);
+    check(await evaluate(a, `[...$("diagdlg").querySelectorAll("[data-dtab]")].map((x) => x.dataset.dtab).join() === "summary,flow,traffic,log,jobs"`), "Diagnostics lacks its tabs");
+    for (const tab of ["flow", "traffic", "log", "jobs"]) {
+      await evaluate(a, `openDiagnostics(${JSON.stringify(tab)}); true`);
+      await waitFor(`Diagnostics shows ${tab}`, within(UI_REFRESH_S * 5), () => evaluate(a, `$("diagbody").textContent.length > 0 && !$("diagbody").textContent.includes(t("Loading…"))`));
+    }
+    await evaluate(a, `openDiagnostics("flow"); true`);
+    await screenshot(a, "diagnostics");
+    const report = await evaluate(a, `diagnosticsText()`);
+    check(report.includes("ez-hanseikai") && report.includes("jobs") && report.includes("recent log"), "the report lacks its parts");
+    for (const secret of [NAMES.a, NAMES.b, NAMES.c, a.id, b.id]) check(!report.includes(secret), `the report holds ${secret.slice(0, 4)}`);
+    check(!/[A-Za-z]:\\/.test(report) && !/\b\d{1,3}(\.\d{1,3}){3}\b/.test(report), "the report holds a path or an address");
+    await evaluate(a, `$("diagdlg").close(); true`);
   });
 
   await step("export the set on A to a playable file", async () => {
@@ -958,6 +1031,7 @@ async function scenario(ctx) {
     check(made.views === 3 && made.notes === 2, `import: ${brief(made)}`);
     await allSee(all, "the walkthrough", within(LOG_SYNC_S * 3), (st) => setOf(st, made.id)?.imported_by === b.name && setOf(st, made.id).title === "Walkthrough");
     await allSee(all, "everyone has the walkthrough", within((SEGMENT_S + SYNC_ROUND_S) * 3), (st) => setOf(st, made.id)?.all_verified);
+    await waitFor("B makes the walkthrough's thumbnail", within(30), async () => setOf(await state(b), made.id)?.thumb === true);
     const seen = await state(a);
     const set = setOf(seen, made.id);
     const view = (name) => set.players.find((p) => seen.names[p.owner] === name);

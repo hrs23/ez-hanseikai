@@ -113,6 +113,7 @@ fn learn_hello(core: &Arc<Core>, id: &EndpointId, message: &Value) -> u32 {
     let codecs = codec_list(&message["codecs"]);
     core.update_peer(id, |p| {
         p.info = Some((version, proto));
+        p.seen_us = Some(now_us());
         p.codecs = codecs;
     });
     room::remember_name(core, &id.to_string(), &name, true);

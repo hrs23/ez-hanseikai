@@ -7,9 +7,9 @@ import { fileURLToPath } from "node:url";
 
 const ui = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "ui");
 const read = (f) => fs.readFileSync(path.join(ui, f), "utf8");
-const source = ["util.js", "i18n.js", "layout.js", "events.js", "review.js", "plugins.js", "ai.js"].map(read).join("\n");
-const context = vm.createContext({ window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date });
-const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, flowAt, flowBands, flowSteps, isReview, voiceOnly, deletePreview, oldSessions, soundKey, pluginProgress, isBusy, workerState, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, apiUrl, rateOf, liveEdge, netState, summaryLines, leftText, JA, t, sessionName, setTitles: (x) => { titles = x; }, setLanguage: (l) => { language = l; } })`, context);
+const source = ["util.js", "i18n.js", "layout.js", "events.js", "review.js", "members.js", "recordings.js", "plugins.js", "ai.js"].map(read).join("\n");
+const context = vm.createContext({ window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, nameOf: (id) => id });
+const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, flowAt, flowBands, flowSteps, isReview, voiceOnly, BOARD_TEMPLATE, memberStatus, receivingPercent, recordingRows, recentRows, recordingMatches, recordingWords, RECENT_SHOWN, deletePreview, oldSessions, soundKey, pluginProgress, isBusy, workerState, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, aiPreview, apiUrl, rateOf, liveEdge, netState, summaryLines, leftText, JA, t, sessionName, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 const plain = (v) => JSON.parse(JSON.stringify(v));
 
 const moment = (m, extra = {}) => ({ role: "moment", m, plugin: { id: "apex-matches" }, tags: ["match"], ...extra });
@@ -131,7 +131,7 @@ test("the diagnostics overview marks problems", () => {
 
 test("every fixed text has a Japanese translation", () => {
   const used = new Set();
-  for (const f of ["app.js", "side.js", "pages.js", "review.js", "events.js", "util.js", "draw.js", "ai.js"]) {
+  for (const f of ["app.js", "side.js", "pages.js", "review.js", "events.js", "util.js", "draw.js", "ai.js", "members.js", "recordings.js", "plugins.js"]) {
     const s = read(f);
     for (const m of s.matchAll(/\bt\(\s*"((?:[^"\\]|\\.)*)"/g)) used.add(JSON.parse(`"${m[1]}"`));
     for (const m of s.matchAll(/\bt\([^)]*\?\s*"((?:[^"\\]|\\.)*)"\s*:\s*"((?:[^"\\]|\\.)*)"/g)) { used.add(JSON.parse(`"${m[1]}"`)); used.add(JSON.parse(`"${m[2]}"`)); }
@@ -197,7 +197,7 @@ test("the sidebar has a Room button and no Game plan entry", () => {
 });
 
 test("every English phrase in the pages has a Japanese one", () => {
-  const files = fs.readdirSync(ui).filter((f) => f.endsWith(".js") && f !== "i18n.js" && f !== "debug.js");
+  const files = fs.readdirSync(ui).filter((f) => f.endsWith(".js") && f !== "i18n.js");
   const used = new Set();
   for (const f of files) for (const m of read(f).matchAll(/\bt\("((?:[^"\\]|\\.)*)"/g)) used.add(JSON.parse(`"${m[1]}"`));
   for (const m of read("index.html").matchAll(/data-t(?:-title|-placeholder|-label)?="([^"]*)"/g)) used.add(m[1].replaceAll("&amp;", "&"));
@@ -211,17 +211,24 @@ const room = { id: "ab12", name: "Practice" };
 test("the AI menu offers a few prompts, or the switch when the API is off", () => {
   ui$.setLanguage("en");
   const calls = [];
-  const actions = { enable: () => calls.push("enable"), copy: (text) => calls.push(text) };
+  const actions = { enable: () => calls.push("enable"), show: (title, text, token) => calls.push({ title, text, token }) };
   const items = ui$.aiMenuItems(info, room, "2026-10-19 21-30-00", actions);
   assert.deepEqual(plain(items.map((i) => i.label)), ["Write notes from the transcript", "Summarize a recording into the game plan", "Find the mistakes in a match"]);
   assert.ok(items.length >= 3 && items.length <= 4);
   items[0].run();
   assert.equal(calls.length, 1);
-  assert.match(calls[0], /Authorization: Bearer/);
+  assert.equal(calls[0].title, items[0].label);
+  assert.match(calls[0].text, /Authorization: Bearer/);
+  assert.ok(calls[0].text.includes(info.token));
+  const preview = ui$.aiPreview(calls[0].text, calls[0].token);
+  assert.ok(!preview.includes(info.token) && preview.includes("••••••••") && preview.includes("Authorization: Bearer"));
   const off = ui$.aiMenuItems({ ...info, on: false, token: "" }, room, null, actions);
   assert.deepEqual(plain(off.map((i) => i.label)), ["Turn on the local API"]);
   off[0].run();
   assert.equal(calls[1], "enable");
+  const html = read("index.html");
+  assert.match(html, /<dialog id="promptdlg"[^]*?id="prompttext"[^>]*readonly[^]*?id="promptcopy"/);
+  assert.ok("Copy prompt" in ui$.JA);
 });
 
 test("a prompt names the API address, the token, llms.txt, the room and the recording", () => {
@@ -288,4 +295,75 @@ test("every fixed message the import and export code can send has a Japanese one
   const fixed = [...used].filter((x) => /^[A-Z]/.test(x) && x.includes(" ") && !x.includes("{"));
   assert.ok(fixed.length > 20, `found ${fixed.length} messages`);
   assert.deepEqual(fixed.filter((x) => !(x in ui$.JA)), []);
+});
+
+test("a board that was never written starts from a short template in both languages", () => {
+  for (const lang of ["en", "ja"]) {
+    const text = ui$.BOARD_TEMPLATE[lang];
+    const lines = text.split("\n");
+    assert.ok(lines.length <= 12, `${lang} has ${lines.length} lines`);
+    assert.match(lines[0], /^# /);
+    assert.equal(lines.filter((l) => l.startsWith("## ")).length, 3);
+    assert.ok(lines.filter((l) => l.startsWith("- ")).length >= 4);
+  }
+});
+
+const HOUR = 3600e6;
+const NOW = 100 * HOUR;
+const finished = (id, extra = {}) => ({ id, live: false, end_us: NOW - HOUR, progress: { have: 40, total: 100 }, lacking: [], players: [{ owner: "a", verified_by: ["a", "b"] }, { owner: "b", verified_by: ["a"] }], ...extra });
+
+test("a member row says one short state", () => {
+  const at = new Date(2026, 9, 19, 12, 0);
+  ui$.setLanguage("en");
+  const say = (m) => ui$.memberStatus({ connected: true, sharing: false, recording: false, receiving: null, ...m }, at).text;
+  assert.equal(say({}), "Not sharing a screen");
+  assert.equal(say({ sharing: true }), "Standby");
+  assert.equal(say({ sharing: true, receiving: 42 }), "Receiving 42%");
+  assert.equal(say({ sharing: true, receiving: 42, recording: true }), "Recording");
+  assert.equal(say({ connected: false }), "Offline");
+  assert.equal(say({ connected: false, seen_us: new Date(2026, 9, 19, 9, 5).getTime() * 1000 }), "Offline · last seen Today 09:05");
+  ui$.setLanguage("ja");
+  assert.equal(say({}), "画面を選んでいません");
+  assert.equal(say({ sharing: true }), "待機中");
+  assert.equal(say({ recording: true }), "録画中");
+  assert.equal(say({ receiving: 42 }), "受信中 42%");
+  assert.match(say({ connected: false }), /^オフライン/);
+  ui$.setLanguage("en");
+});
+
+test("receiving counts only recent recordings a member still lacks", () => {
+  const lacking = [{ id: "b", n: 1 }];
+  assert.equal(ui$.receivingPercent([finished("s1", { lacking })], "b", NOW, "a"), 50);
+  assert.equal(ui$.receivingPercent([finished("s1")], "b", NOW, "a"), null);
+  assert.equal(ui$.receivingPercent([finished("old", { lacking, end_us: NOW - 24 * HOUR })], "b", NOW, "a"), null);
+  assert.equal(ui$.receivingPercent([finished("s1", { lacking: [{ id: "a", n: 1 }] })], "a", NOW, "a"), 40);
+  assert.equal(ui$.receivingPercent([finished("s1", { live: true, lacking })], "b", NOW, "a"), null);
+});
+
+test("the recordings list is one newest-first list, the sidebar keeps the recent few, and search reads names and marks", () => {
+  const sets = Array.from({ length: 9 }, (_, i) => ({ id: `2026-10-0${i + 1} 10-00-00`, live: false, players: [{ owner: "a" }], party: [], imported_by: i === 2 ? "Ann" : null }));
+  sets.push({ id: "live", live: true, players: [] });
+  ui$.setStorage({ sets, gone: [{ id: "2026-10-10 10-00-00", players: [{ owner: "a" }] }] });
+  const rows = ui$.recordingRows(true);
+  assert.equal(rows.length, 10);
+  assert.equal(rows[0].id, "2026-10-10 10-00-00");
+  assert.ok(rows.every((r, i) => !i || rows[i - 1].id > r.id));
+  assert.equal(ui$.recordingRows(false).length, 9);
+  const recent = ui$.recentRows(ui$.recordingRows(false), "2026-10-01 10-00-00");
+  assert.equal(recent.length, ui$.RECENT_SHOWN + 1);
+  assert.equal(ui$.recentRows(ui$.recordingRows(false), null).length, ui$.RECENT_SHOWN);
+  assert.ok(ui$.recordingMatches(rows.find((r) => r.id.startsWith("2026-10-03")), ui$.recordingWords("imported")));
+  assert.ok(!ui$.recordingMatches(rows.find((r) => r.id.startsWith("2026-10-04")), ui$.recordingWords("imported")));
+});
+
+test("the sidebar offers a Room button with a chevron and a split record button, and downloads always show their progress", () => {
+  const html = read("index.html");
+  assert.match(html, /<button id="roomname" class="roombtn">[^]*?id="roomfaces"[^]*?data-icon="chevron-right"/);
+  assert.match(html, /<div class="startgroup"><button id="startbtn"[^]*?<button id="startmore"[^>]*aria-haspopup="menu"/);
+  assert.doesNotMatch(html, /id="faces"/);
+  const app = read("app.js");
+  assert.match(app, /downloadLine\(t\("Downloading video tools…"\), st\.ffmpeg_progress\)/);
+  assert.match(app, /plugins\.filter\(\(x\) => x\.download\)/);
+  assert.match(read("side.js"), /t\("Record debrief"\)/);
+  for (const tab of ["members", "plugins", "jobs", "board", "recordings", "settings"]) assert.match(html, new RegExp(`data-tab="${tab}"`));
 });

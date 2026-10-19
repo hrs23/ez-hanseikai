@@ -23,6 +23,8 @@ const CHIME_NOTE_S = 0.14;
 const CHIME_GAIN = 0.15;
 const TAG_HINTS = 5;
 const AVATARS_SHOWN = 5;
+const ROOM_NAME_MAX = 40;
+const DRAG_START_PX = 4;
 const CODEC_PROBE = { width: 1280, height: 720, bitrate: 6000000, framerate: 30 };
 const GAP = 6;
 const WIDE_PANEL = 1240;
@@ -112,8 +114,8 @@ function avatar(id, size, dot) {
   return a;
 }
 
-function avatars(ids, size = "sm") {
-  return el("span", { className: "avs" }, ...ids.slice(0, AVATARS_SHOWN).map((id) => avatar(id, size)));
+function avatars(ids, size = "sm", max = AVATARS_SHOWN) {
+  return el("span", { className: "avs" }, ...ids.slice(0, max).map((id) => avatar(id, size)));
 }
 
 function iconButton(name, label, onclick, cls = "icon sm") {
@@ -127,7 +129,7 @@ function pill(cls, iconName, text) {
 function tile(s, key) {
   if (s.tiles[key]) return s.tiles[key];
   const tl = { key, media: slot(el("video", { muted: true, preload: "auto" })), mic: null, name: el("span", { className: "nm" }), av: el("span"), dot: el("i", { className: "rd", hidden: true }), imp: el("span", { className: "imp", hidden: true }), who: el("div", { className: "who" }), what: el("div", { className: "what" }), sub: el("div", { className: "subt", hidden: true }), lag: el("span", { className: "lag", hidden: true }) };
-  tl.lab = el("div", { className: "nl", draggable: true }, tl.av, tl.name, tl.imp, tl.dot);
+  tl.lab = el("div", { className: "nl" }, tl.av, tl.name, tl.imp, tl.dot);
   tl.box = el("div", { className: "tile", tabIndex: 0 }, tl.media.video, el("div", { className: "waitbox" }, tl.who, tl.what), tl.sub, tl.lab, tl.lag);
   const focus = () => { const i = s.keys.indexOf(key) + 1; setView(s, s.view === i ? 0 : i); };
   tl.box.onkeydown = (e) => { if (e.key === "Enter") focus(); };
@@ -149,10 +151,7 @@ function tile(s, key) {
     tl.box.onclick = (e) => { if (e.target.closest(".choose")) return; focus(); };
     tl.box.ondblclick = toggleFull;
   }
-  tl.lab.ondragstart = (e) => e.dataTransfer.setData("text/plain", key);
-  tl.box.ondragover = (e) => { e.preventDefault(); tl.box.classList.add("over"); };
-  tl.box.ondragleave = () => tl.box.classList.remove("over");
-  tl.box.ondrop = (e) => { e.preventDefault(); tl.box.classList.remove("over"); const from = e.dataTransfer.getData("text/plain"); if (from && from !== key && s.tiles[from]) swap(s, from, key); };
+  tl.lab.onpointerdown = (e) => dragTile(s, key, e);
   s.el.append(tl.box);
   return (s.tiles[key] = tl);
 }
@@ -198,6 +197,43 @@ function setView(s, view) {
   if (s.view) s.last = s.view;
   place(s);
   if (s === play) { applyAudio(); renderViews(); logLayout(); share(); }
+}
+function tileAt(s, x, y) {
+  return Object.entries(s.tiles).find(([, tl]) => { const r = tl.box.getBoundingClientRect(); return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom; });
+}
+function dragTile(s, key, down) {
+  if (down.button !== 0) return;
+  const label = down.currentTarget;
+  const from = { x: down.clientX, y: down.clientY };
+  let moving = false;
+  let over = null;
+  const mark = (target) => {
+    if (over && over !== target) over.box.classList.remove("over");
+    over = target;
+    if (over) over.box.classList.add("over");
+  };
+  const move = (e) => {
+    if (!moving && Math.hypot(e.clientX - from.x, e.clientY - from.y) < DRAG_START_PX) return;
+    moving = true;
+    const hit = tileAt(s, e.clientX, e.clientY);
+    mark(hit && hit[0] !== key ? hit[1] : null);
+  };
+  const end = (e) => {
+    label.removeEventListener("pointermove", move);
+    label.removeEventListener("pointerup", end);
+    label.removeEventListener("pointercancel", end);
+    label.releasePointerCapture(down.pointerId);
+    const target = over;
+    mark(null);
+    if (!moving) return;
+    label.addEventListener("click", (c) => c.stopImmediatePropagation(), { once: true, capture: true });
+    const hit = target && e.type === "pointerup" ? Object.entries(s.tiles).find(([, tl]) => tl === target) : null;
+    if (hit) swap(s, key, hit[0]);
+  };
+  label.setPointerCapture(down.pointerId);
+  label.addEventListener("pointermove", move);
+  label.addEventListener("pointerup", end);
+  label.addEventListener("pointercancel", end);
 }
 function swap(s, a, b) {
   const list = [...s.keys];
@@ -268,12 +304,6 @@ function renderLive() {
     if (p.file) feed(tl.media, p.file, true);
   }
   place(rec);
-}
-
-function memberState(p) {
-  if (!p.connected) return { text: p.failures > OFFLINE_FAILURES ? t("Offline") : t("Connecting…"), off: true };
-  if (p.other_version) return { text: t("Other version"), warn: true };
-  return { text: `${p.rtt_ms} ms`, warn: p.path === "relay" };
 }
 
 function renderShell() {
@@ -1274,9 +1304,13 @@ function codeText(m) {
   if (m.code === "removed_you") return t("{by} removed you from the room", m);
   return m.code;
 }
+function downloadLine(label, d) {
+  return d ? `${label} ${downloadStats(d).text}` : label;
+}
 function notices() {
   const list = [];
-  if (st.ffmpeg === "downloading") list.push({ key: "ffmpeg", level: "info", icon: "spinner", spin: true, text: t("Downloading video tools…"), sticky: true });
+  if (st.ffmpeg === "downloading") list.push({ key: "ffmpeg", level: "info", icon: "spinner", spin: true, text: downloadLine(t("Downloading video tools…"), st.ffmpeg_progress), sticky: true });
+  for (const p of plugins.filter((x) => x.download)) list.push({ key: "download:" + p.id, level: "info", icon: "spinner", spin: true, text: downloadLine(t("Downloading {name}…", { name: t(p.name) }), p.download), sticky: true });
   if (st.ffmpeg === "failed") list.push({ key: "ffmpegfail", level: "error", icon: "fail", text: t("Couldn't download the video tools. Check your connection."), action: { label: t("Retry"), run: () => run("retry_ffmpeg", null) } });
   if (st.notice) list.push({ key: "n:" + st.notice, level: "warn", icon: "alert", text: t(st.notice) });
   for (const p of st.peers.filter((x) => x.connected && x.other_version)) list.push({ key: "v:" + p.id, level: "warn", icon: "alert", text: t("{name} is on a different version. Both of you need the latest one.", { name: nameOf(p.id) }) });
@@ -1523,14 +1557,14 @@ function cycle(s, delta) {
   const n = s.keys.length;
   if (n) setView(s, s.view === 0 ? (delta > 0 ? 1 : n) : ((s.view - 1 + delta + n) % n) + 1);
 }
-async function toggleRecording() {
+async function toggleRecording(kind) {
   if (!st) return;
   const ending = !!st.active_set;
-  const review = !ending && reviewing();
-  const title = ending ? t("Stop recording for everyone?") : review ? t("Start recording the debrief for everyone?") : t("Start recording for everyone?");
-  const action = ending ? t("Stop recording") : review ? t("Record review") : t("Start recording");
-  const text = ending ? t("Recording stops for everyone.") : t("Everyone in the room starts recording.");
-  if (await ask(title, action, ending, text)) run(ending ? "stop_recording" : "start_recording");
+  const debrief = !ending && (kind ? kind === "debrief" : reviewing());
+  const title = ending ? t("Stop recording for everyone?") : debrief ? t("Record the debrief for everyone?") : t("Start recording for everyone?");
+  const action = ending ? t("Stop recording") : debrief ? t("Record debrief") : t("Start recording");
+  const text = ending ? t("Recording stops for everyone.") : debrief ? t("Only the voice and the viewing flow are recorded.") : t("Everyone in the room starts recording.");
+  if (await ask(title, action, ending, text)) run(ending ? "stop_recording" : "start_recording", ending ? undefined : { debrief });
 }
 const current = () => (playSet() ? play : rec);
 
@@ -1657,7 +1691,6 @@ document.addEventListener("keydown", (e) => {
   if (composing(e) || listening) return;
   if (!$("menu").hidden) { menuKey(e); return; }
   const ctrl = e.ctrlKey && !e.altKey && !e.metaKey;
-  if (ctrl && e.shiftKey && e.key.toLowerCase() === "i") { e.preventDefault(); invoke("open_debug"); return; }
   if (ctrl && e.key === ",") { e.preventDefault(); openSettings(); return; }
   if (document.querySelector("dialog[open]")) return;
   if (!inRoom()) return;

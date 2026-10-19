@@ -23,9 +23,12 @@ function aiPrompt(purpose, info, room, recording) {
   ].join("\n");
 }
 
+const AI_MASK = "••••••••";
+const aiPreview = (text, token) => (token ? text.replaceAll(token, AI_MASK) : text);
+
 function aiMenuItems(info, room, recording, actions) {
   if (!info.on) return [{ label: t("Turn on the local API"), icon: "terminal", run: actions.enable }];
-  return aiPurposes().map((p) => ({ label: p.label, icon: p.icon, run: () => actions.copy(aiPrompt(p, info, room, recording)) }));
+  return aiPurposes().map((p) => ({ label: p.label, icon: p.icon, run: () => actions.show(p.label, aiPrompt(p, info, room, recording), info.token) }));
 }
 
 async function openAiMenu(anchor, recording) {
@@ -33,9 +36,18 @@ async function openAiMenu(anchor, recording) {
   if (!info || !st.room) return;
   const actions = {
     enable: () => run("set_api", { on: true }, () => refresh().then(() => openAiMenu(anchor, recording))),
-    copy: (text) => navigator.clipboard.writeText(text).then(() => flash(t("Prompt copied"))).catch(fail),
+    show: (title, text, token) => showPrompt(title, text, token),
   };
   openMenu(aiMenuItems(info, st.room, recording, actions), anchor);
+}
+
+let promptFull = "";
+function showPrompt(title, text, token) {
+  promptFull = text;
+  $("prompttitle").textContent = title;
+  $("prompttext").value = aiPreview(text, token);
+  $("promptdlg").showModal();
+  $("promptcopy").focus();
 }
 
 const newestRecording = () => { const s = st.sets.find((x) => !x.live); return s ? s.id : null; };

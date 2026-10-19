@@ -2,10 +2,6 @@ const BOARD_WIDTH = 1080;
 const ZOOM_STEP = 0.1;
 const ZOOM_MIN = 0.5;
 const ZOOM_MAX = 2;
-const BOARD_TEMPLATE = {
-  en: "# This week\n**Move ==before the ring closes==**\n\n## Next match\n- Pick the drop before jumping\n- Call ==direction and count== on contact\n\n## Watch out\n- Don't push alone\n- Heal behind cover\n\n## Team rules\n- When unsure, high ground\n- Next move over blame\n\n## Moments to rewatch\n- Right-click a video to copy a moment link, then paste it here",
-  ja: "# 今週の目標\n**==リングが閉じる前に==動く**\n\n## 次の試合でやること\n- 降りる場所を決めてから飛ぶ\n- 接敵したら==方角と人数==を伝える\n\n## 気をつけること\n- 1人で突っ込まない\n- 回復は遮蔽の裏で\n\n## チームの約束\n- 迷ったら高所\n- 責めるより次の動き\n\n## 見返す場面\n- 動画を右クリックして場面のリンクをコピーし、ここに貼る",
-};
 const SHORTCUTS = [
   ["Room / Live / Game plan", ["Ctrl+1", "Ctrl+2", "Ctrl+3"]],
   ["Sidebar", ["Ctrl+B"]],
@@ -25,7 +21,6 @@ const SHORTCUTS = [
   ["Clear drawing", ["X"]],
   ["Undo", ["Ctrl+Z"]],
   ["Shortcuts", ["?"]],
-  ["Developer tools", ["Ctrl+Shift+I"]],
 ];
 
 let askName = false;
@@ -42,6 +37,9 @@ let settingsPane = "general";
 let storageInfo = null;
 let picked = new Set();
 let diagTab = "summary";
+let recFilter = "";
+let diagFeed = null;
+let diagFeedAt = 0;
 
 function renderStart() {
   if (inRoom()) return;
@@ -90,11 +88,12 @@ async function leaveRoom() {
 async function removeMember(id) {
   if (await ask(t("Remove {name} from the room?", { name: nameOf(id) }), t("Remove from room"), true, t("Everyone stops sending to them. What they already have stays with them."))) { drawerFor = null; run("remove_peer", { id }); }
 }
-function openRename() {
+function openRoomSettings() {
   if (!st.room) return;
-  $("renameinput").value = st.room.name;
-  $("renamedlg").showModal();
-  $("renameinput").select();
+  roomTab = "settings";
+  delete sigs.roomtab;
+  go("room");
+  setTimeout(() => { const input = $("roomnameinput"); if (input) { input.focus(); input.select(); } }, 0);
 }
 
 function renderRoom() {
@@ -112,12 +111,20 @@ function renderRoom() {
   if (roomTab === "board") renderBoard();
   else if (roomTab === "members") renderMembers();
   else if (roomTab === "plugins") renderPlugins();
+  else if (roomTab === "recordings") renderRecordings();
+  else if (roomTab === "settings") renderRoomSettings();
   else renderJobs();
   renderDrawer();
 }
+function memberOf(id) {
+  const me = id === st.id;
+  const p = me ? null : peerOf(id);
+  const status = memberStatus({ connected: me || !!(p && p.connected), sharing: me ? !!st.capture.source : !!(p && p.sharing), recording: recOf(id), receiving: receivingPercent(st.sets, id, nowUs(), st.id), seen_us: p && p.seen_us }, new Date());
+  return { p, status };
+}
 function renderMembers() {
   const rows = people().map((id) => ({ id, p: id === st.id ? null : peerOf(id) }));
-  const sig = ["members", rows.map((r) => [r.id, r.p && [r.p.connected, r.p.path, r.p.rtt_ms, r.p.version, r.p.failures]]), st.asks, st.invites, drawerFor, st.names, st.colors, lang];
+  const sig = ["members", rows.map((r) => [r.id, memberOf(r.id).status, r.p && [r.p.connected, r.p.path, r.p.rtt_ms, r.p.version, r.p.failures]]), st.asks, st.invites, drawerFor, st.names, st.colors, lang];
   if (!changed("roomtab", sig)) return;
   const out = [];
   for (const a of st.asks) {
@@ -128,13 +135,13 @@ function renderMembers() {
   const head = el("tr", {}, ...["Name", "ID", "Status", "Connection", "Round trip", "Version", ""].map((h) => el("th", { textContent: h ? t(h) : "" })));
   const body = rows.map(({ id, p }) => {
     const me = id === st.id;
-    const state = me ? null : memberState(p);
+    const state = memberOf(id).status;
     const conn = me || !p.connected ? el("span", { className: "faint", textContent: "—" }) : el("span", { className: p.path === "relay" ? "warn" : "ok" }, icon("relay", "sm"), p.path === "relay" ? t("Relay") : t("Direct"));
     const version = me ? st.version : p && p.version;
-    const tr = el("tr", { className: "pick" + (drawerFor === id ? " sel" : "") + (state && state.off ? " dim" : ""), tabIndex: 0 },
+    const tr = el("tr", { className: "pick" + (drawerFor === id ? " sel" : "") + (state.kind === "off" ? " dim" : ""), tabIndex: 0 },
       el("td", {}, el("span", { className: "who" }, avatar(id, "", me || (p && p.connected) ? (recOf(id) ? "rec" : "on") : null), el("b", { textContent: nameOf(id) }), me ? el("span", { className: "pill gray", textContent: t("You") }) : null)),
       el("td", {}, el("span", { className: "mono", textContent: `${id.slice(0, 4)}·${id.slice(4, 8)}·${id.slice(8, 12)}` }), iconButton("copy", t("Copy ID"), (e) => { e.stopPropagation(); navigator.clipboard.writeText(id).then(() => flash(t("ID copied"))); })),
-      el("td", { className: state && state.off ? "faint" : "", textContent: me ? t("Online") : p.connected ? t("Online") : state.text }),
+      el("td", { className: "state " + state.kind }, el("i", { className: "sdot" }), state.text),
       el("td", {}, conn),
       el("td", { textContent: !me && p.connected ? `${p.rtt_ms} ms` : "" }),
       el("td", { className: version && version !== st.version ? "warn" : "", textContent: version || "—" }),
@@ -174,7 +181,7 @@ function renderDrawer() {
     if (p.sent !== null && p.sent !== undefined) add(t("Sent"), bytes(p.sent));
     if (p.received !== null && p.received !== undefined) add(t("Received"), bytes(p.received));
     if (p.offset_us !== null && p.offset_us !== undefined) add(t("Clock offset"), `${p.offset_us >= 0 ? "+" : "−"}${(Math.abs(p.offset_us) / 1e6).toFixed(2)} s`);
-  } else if (!me) path = el("div", { className: "pathbox off" }, el("b", { textContent: memberState(p).text }));
+  } else if (!me) path = el("div", { className: "pathbox off" }, el("b", { textContent: memberOf(id).status.text }));
   add(t("Version"), (me ? st.version : p && p.version) || "—");
   const lines = checks[id];
   const checkBox = [el("div", { className: "h3", textContent: t("Checks") }), ...(lines ? lines.filter((l) => l.level !== "info").map((l) => el("div", { className: "line lv-" + l.level }, icon({ ok: "ok", warn: "alert", fail: "fail" }[l.level] || "info", "sm"), el("span", { textContent: t(l.text, l.args) }))) : checking[id] ? [el("div", { className: "line" }, icon("spinner", "sm spin"), t("Checking…"))] : []), el("button", { className: "ghost sm", disabled: !!checking[id] || (!me && !(p && p.connected)), onclick: () => checkMember(id) }, icon("refresh", "sm"), t("Check again"))];
@@ -188,6 +195,68 @@ function renderDrawer() {
     el("span", { className: "sp" }),
     me ? "" : el("button", { className: "danger", onclick: () => removeMember(id), textContent: t("Remove from room…") }),
   );
+}
+function exportMenu(set, anchor) {
+  openMenu([
+    { label: t("Export video…"), icon: "film", disabled: voiceOnly(set), run: () => exportSet(set) },
+    { label: t("Export to folder…"), icon: "upload", run: () => exportFolder(set) },
+  ], anchor);
+}
+function recordingCard(r) {
+  if (!r.s) {
+    const g = r.g;
+    const get = el("button", { className: "sm", onclick: (e) => { e.stopPropagation(); restoreSet(g); } }, icon("download", "sm"), t("Download"));
+    return el("div", { className: "reccard gone" }, thumbBox(null, g.players.map((p) => p.owner), "sm", CARD_FACES, false), el("div", { className: "rtxt" }, el("b", { textContent: sessionName(g.id) }), el("div", { className: "meta" }, el("span", { textContent: g.end_us ? fmt((g.end_us - g.start_us) / 1e6) : "" }), el("span", { className: "faint", textContent: t("Not on this PC") }), el("span", { className: "sp" }), get)));
+  }
+  const s = r.s;
+  const state = sessionState(s);
+  const meta = state && (state.kind === "bar" || state.kind === "line")
+    ? el("div", { className: "meta" }, icon(state.icon, "sm"), el("span", { className: state.cls || "", textContent: state.text }), el("span", { className: "sp" }), el("span", { className: "muted", textContent: state.right || "" }))
+    : el("div", { className: "meta" }, el("span", { textContent: setLength(s) }), detailText(s) ? el("span", { className: "faint", textContent: detailText(s) }) : null, ...marksOf(s));
+  const acts = el("span", { className: "acts" }, iconButton("upload", t("Export"), (e) => { e.stopPropagation(); exportMenu(s, e.currentTarget); }), iconButton("trash", t("Delete from this PC…"), (e) => { e.stopPropagation(); confirmDelete([s.id]); }));
+  const thumb = thumbBox(s, s.players.map((p) => p.owner), "sm", CARD_FACES, false);
+  thumb.append(acts);
+  if (state && state.kind === "bar") thumb.append(el("div", { className: "bar" }, el("i", { style: `width:${Math.round(state.frac * 100)}%` })));
+  const card = el("div", { className: "reccard", role: "button", tabIndex: 0 }, thumb, el("div", { className: "rtxt" }, el("b", { textContent: sessionName(s.id) }), meta));
+  card.onclick = () => openSession(s.id);
+  card.onkeydown = (e) => { if (e.key === "Enter" && e.target === card) openSession(s.id); };
+  card.oncontextmenu = (e) => { e.preventDefault(); sessionMenu(s.id, e); };
+  return card;
+}
+const recBar = el("div", { className: "recbar" },
+  el("div", { className: "selbox grow" }, el("span", { className: "lead" }, icon("search", "sm")), el("input", { id: "recfilter", type: "search", autocomplete: "off", oninput: (e) => { recFilter = e.target.value; delete sigs.roomtab; renderRoom(); } })),
+  el("button", { id: "recimport", onclick: () => openImport() }, icon("download", "sm"), el("span", { textContent: t("Import…") })));
+const recGrid = el("div", { className: "reccards" });
+function renderRecordings() {
+  const rows = recordingRows(true);
+  const words = recordingWords(recFilter);
+  const shown = rows.filter((r) => recordingMatches(r, words));
+  const sig = ["recordings", shown.map(rowSignature), recFilter, st.active_set, st.peers.map((p) => p.connected), lang, st.colors, st.names, dayOf(new Date())];
+  if (!changed("roomtab", sig)) return;
+  if ($("roomtab").firstElementChild !== recBar) $("roomtab").replaceChildren(recBar, recGrid);
+  $("recfilter").placeholder = t("Filter");
+  $("recfilter").setAttribute("aria-label", t("Filter"));
+  $("recimport").lastChild.textContent = t("Import…");
+  const a = st.active_set;
+  const live = a ? [el("div", { className: "reccard live", role: "button", tabIndex: 0, onclick: openNow, onkeydown: (e) => { if (e.key === "Enter") openNow(); } }, thumbBox(null, liveSet() ? liveSet().players.map((p) => p.owner) : [], "sm", CARD_FACES, true), el("div", { className: "rtxt" }, el("b", {}, el("i", { className: "recdot" }), t("Recording")), el("div", { className: "meta" }, a.voice ? pill("accent", "mic", t("Debrief")) : null, el("span", { textContent: t("by {name}", { name: a.by || "" }) }))))] : [];
+  const cards = shown.map(recordingCard);
+  recGrid.replaceChildren(...live, ...cards);
+  if (!live.length && !cards.length) recGrid.replaceChildren(el("div", { className: "empty", textContent: rows.length ? t("Nothing here") : t("No recordings yet") }));
+}
+function renderRoomSettings() {
+  if (!st.room) return;
+  const sig = ["settings", st.room.id, st.room.name, !!st.invites, lang];
+  if (!changed("roomtab", sig)) return;
+  const input = el("input", { id: "roomnameinput", className: "w240", maxLength: ROOM_NAME_MAX, autocomplete: "off", value: st.room.name, ariaLabel: t("Room name") });
+  const save = el("button", { className: "primary", textContent: t("Save"), disabled: true, onclick: () => run("rename_room", { name: input.value }, () => { flash(t("Saved")); refresh(); }) });
+  input.oninput = () => { save.disabled = !input.value.trim() || input.value.trim() === st.room.name; };
+  input.onkeydown = (e) => { if (e.key === "Enter" && !composing(e) && !save.disabled) save.click(); };
+  const invite = [el("button", { onclick: copyInvite }, icon("user-plus", "sm"), t("Copy invite code"))];
+  if (st.invites) invite.push(el("button", { className: "ghost", onclick: cancelInvite, textContent: t("Cancel invite") }));
+  $("roomtab").replaceChildren(el("div", { className: "rsettings" },
+    el("div", { className: "srow2" }, el("span", { className: "lab", textContent: t("Room name") }), input, save),
+    el("div", { className: "srow2" }, el("span", { className: "lab", textContent: t("Invite") }), ...invite),
+    el("div", { className: "srow2" }, el("span", { className: "lab" }), el("button", { className: "danger", onclick: leaveRoom }, icon("logout", "sm"), t("Leave room…")))));
 }
 function jobTarget(j) {
   if (j.whole) return t("Whole recording");
@@ -456,14 +525,63 @@ function openDiagnostics(tab) {
   delete sigs.diag;
   renderDiagnostics();
 }
+const DIAG_FEED_MS = 2000;
+const DIAG_LOG_LINES = 300;
+const TRANSFER_KINDS = { init: "Setup", "live picture": "Live picture", "live voice": "Live voice", "history picture": "Recorded picture", "history voice": "Recorded voice" };
+const TRANSFER_RESULTS = { ok: "Done", retry: "Retried", partial: "Partial", "hash fail": "Checksum failed" };
+function pullDiag() {
+  const tab = { traffic: "network", log: "log" }[diagTab];
+  if (!tab || Date.now() - diagFeedAt < DIAG_FEED_MS) return;
+  diagFeedAt = Date.now();
+  invoke("debug_view", { tab, since: 0, set: null, addresses: false }).then((data) => { diagFeed = { tab: diagTab, data }; delete sigs.diag; renderDiagnostics(); }).catch(warn);
+}
+function diagTable(head, rows, empty) {
+  if (!rows.length) return el("div", { className: "empty", textContent: empty });
+  return el("div", { className: "tablebox" }, el("table", { className: "table" }, el("thead", {}, el("tr", {}, ...head.map((h) => el("th", { textContent: h })))), el("tbody", {}, ...rows.map((cells) => el("tr", {}, ...cells.map((c) => el("td", { textContent: c })))))));
+}
+function trafficView(data) {
+  const kind = (k) => t(TRANSFER_KINDS[k] || k);
+  const dir = (d) => (d === "in" ? t("Received") : t("Sent"));
+  const active = diagTable([t("Direction"), t("Kind"), t("Size")], data.active.map((r) => [dir(r.dir), kind(r.kind), bytes(r.bytes || 0)]), t("Nothing is moving right now"));
+  const groups = new Map();
+  for (const r of data.rows) {
+    const key = [r.dir, r.kind, r.result].join("|");
+    const g = groups.get(key) || { r, n: 0, size: 0 };
+    g.n += 1;
+    g.size += r.bytes || 0;
+    groups.set(key, g);
+  }
+  const recent = diagTable([t("Direction"), t("Kind"), t("Result"), t("Count"), t("Size")], [...groups.values()].map((g) => [dir(g.r.dir), kind(g.r.kind), t(TRANSFER_RESULTS[g.r.result] || g.r.result), String(g.n), bytes(g.size)]), t("Nothing yet"));
+  return [el("div", { className: "h3 first", textContent: t("Moving now") }), active, el("div", { className: "h3", textContent: t("Since the app started") }), recent];
+}
+function logView(data) {
+  const lines = String(data.text || "").split("\n").filter(Boolean).slice(-DIAG_LOG_LINES);
+  return [el("pre", { className: "logview", textContent: lines.length ? lines.join("\n") : t("Nothing yet") })];
+}
+function jobsView() {
+  const jobs = jobInfo ? jobInfo.jobs : [];
+  const state = (j) => ({ failed: t("Failed"), done: t("Done"), claimed: t("Running") }[j.state] || t("Waiting"));
+  return [diagTable([t("Plugin"), t("Recorded"), t("Target"), t("State"), t("Run by")], jobs.map((j) => [pluginName(j.plugin), sessionName(j.set), jobTarget(j), state(j), j.by ? t("{name}'s PC", { name: nameOf(j.by) }) : "—"]), t("Turn on a plugin to analyse recordings"))];
+}
 function renderDiagnostics() {
   if (!$("diagdlg").open) return;
   for (const b of $("diagdlg").querySelectorAll("[data-dtab]")) b.classList.toggle("on", b.dataset.dtab === diagTab);
+  pullDiag();
   const failed = jobInfo ? jobInfo.jobs.filter((j) => j.state === "failed").length : 0;
   const lines = summaryLines(st, failed);
-  if (!changed("diag", [diagTab, lines, st.peers, lang])) return;
+  const fed = diagFeed && diagFeed.tab === diagTab ? diagFeed.data : null;
+  if (!changed("diag", [diagTab, lines, st.peers, fed, jobInfo && jobInfo.jobs, lang])) return;
   if (diagTab === "summary") {
     $("diagbody").replaceChildren(el("div", { className: "okbox" }, ...lines.map((l) => el("div", { className: "ok-line lv-" + l.level }, icon({ ok: "ok", warn: "alert", fail: "fail" }[l.level] || "info", "sm"), el("b", { textContent: t(l.key) }), el("span", { textContent: l.text }), l.key === "Plugins" && failed ? el("button", { className: "sm", textContent: t("Open jobs"), onclick: () => { $("diagdlg").close(); roomTab = "jobs"; go("room"); } }) : null))));
+    return;
+  }
+  if (diagTab === "traffic" || diagTab === "log") {
+    $("diagbody").replaceChildren(...(fed ? (diagTab === "traffic" ? trafficView(fed) : logView(fed)) : [el("div", { className: "empty", textContent: t("Loading…") })]));
+    if (diagTab === "log") $("diagbody").scrollTop = $("diagbody").scrollHeight;
+    return;
+  }
+  if (diagTab === "jobs") {
+    $("diagbody").replaceChildren(...jobsView());
     return;
   }
   const peers = st.peers;
@@ -480,8 +598,7 @@ function renderDiagnostics() {
 async function diagnosticsText() {
   const failed = jobInfo ? jobInfo.jobs.filter((j) => j.state === "failed").length : 0;
   const head = summaryLines(st, failed).map((l) => `[${l.level}] ${l.key}: ${l.text}`).join("\n");
-  const report = await invoke("debug_report", { includeAddresses: $("diagaddr").checked, everyone: false, audioProcess: st.audio_process, save: false });
-  return `EZ Hanseikai ${st.version}\n${head}\n\n${report}`;
+  return invoke("debug_report", { includeAddresses: false, everyone: false, audioProcess: st.audio_process, save: false, head });
 }
 
 function openReset() {
@@ -501,12 +618,7 @@ $("joincode").oninput = () => renderStart();
 $("join").onclick = () => run("set_name", { name: $("startname").value || st.name }, () => joinWith($("joincode")));
 $("joincode").onkeydown = (e) => { if (e.key === "Enter" && !composing(e) && !$("join").disabled) $("join").click(); };
 $("pendingcancel").onclick = () => st.room && run("remove_room", { id: st.room.id });
-$("renamebtn").onclick = openRename;
-$("invitebtn").onclick = copyInvite;
-$("leavebtn").onclick = leaveRoom;
 for (const b of document.querySelectorAll("#roompage .ptabs button")) b.onclick = () => { roomTab = b.dataset.tab; delete sigs.roomtab; renderRoom(); if (roomTab !== "members") $("drawer").hidden = true; };
-$("renamesave").onclick = () => run("rename_room", { name: $("renameinput").value }, () => { $("renamedlg").close(); refresh(); });
-$("renameinput").onkeydown = (e) => { if (e.key === "Enter" && !composing(e)) $("renamesave").click(); };
 $("zoomin").onclick = () => setZoom((zoom || fitZoom()) + ZOOM_STEP);
 $("zoomout").onclick = () => setZoom((zoom || fitZoom()) - ZOOM_STEP);
 $("zoomfit").onclick = () => setZoom(0);
@@ -521,6 +633,7 @@ $("boardtext").onkeydown = (e) => {
   if (e.key === "Escape") { e.preventDefault(); cancelBoard(); }
 };
 for (const b of $("setnav").querySelectorAll("button")) b.onclick = () => { settingsPane = b.dataset.pane; showPane(); };
+$("promptcopy").onclick = () => navigator.clipboard.writeText(promptFull).then(() => { $("promptdlg").close(); flash(t("Prompt copied")); }).catch(fail);
 $("aibtn").onclick = (e) => openAiMenu(e.currentTarget, newestRecording());
 $("aiplay").onclick = (e) => openAiMenu(e.currentTarget, selected);
 $("apion").onchange = () => run("set_api", { on: $("apion").checked });
@@ -596,7 +709,7 @@ const menuActions = {
   "settings": () => openSettings(),
   "copy-invite": copyInvite,
   "cancel-invite": cancelInvite,
-  "rename-room": openRename,
+  "rename-room": openRoomSettings,
   "leave-room": leaveRoom,
   "add-note": openQuick,
   "prev-session": () => stepSet(-1),

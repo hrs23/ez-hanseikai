@@ -27,7 +27,7 @@ Work in progress. See [the design](docs/design.md).
 
 1. Download `EZ.Hanseikai_<version>_x64-setup.exe` from [Releases](https://github.com/hrs23/ez-hanseikai/releases) and run it. It is unsigned, so SmartScreen warns: More info, then Run anyway. It installs for your Windows user only and needs no admin rights.
 2. Start the app. Allow it through the firewall when Windows asks. On first run it downloads ffmpeg, and keeps retrying until that works.
-3. Enter your name. One player presses Create room, which copies an invite code to send; the others paste it and press Join, and a member approves them (Copy invite code on the room's page makes more). Choose your screen with the Screen button at the bottom left, then press Start recording.
+3. Enter your name. One player presses Create room, which copies an invite code to send; the others paste it and press Join, and a member approves them (Copy invite code in the room's Settings makes more). Choose your screen with the Screen button at the bottom left, then press Start recording.
 
 Requires Windows 10 version 2004 or later, or Windows 11.
 

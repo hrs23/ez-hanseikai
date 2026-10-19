@@ -29,7 +29,7 @@ The text of [llms.txt](llms.txt). No token.
 ### `GET /v1`
 
 ```json
-{"app": "EZ Hanseikai", "version": "0.11.0", "id": "<own id>", "name": "Ann", "room": "ab12", "recording": false}
+{"app": "EZ Hanseikai", "version": "0.12.0", "id": "<own id>", "name": "Ann", "room": "ab12", "recording": false}
 ```
 
 `room` is the open room (or `null`); `recording` is true while a recording runs.

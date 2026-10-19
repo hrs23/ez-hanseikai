@@ -1,8 +1,7 @@
 {
   "identifier": "default",
   "windows": [
-    "main",
-    "debug"
+    "main"
   ],
   "permissions": [
     "core:default",

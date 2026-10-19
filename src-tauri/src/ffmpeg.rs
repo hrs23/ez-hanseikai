@@ -68,6 +68,8 @@ pub fn failure() -> Option<String> {
     FAILED.lock().unwrap().clone()
 }
 
+pub const DOWNLOAD_KEY: &str = "ffmpeg";
+
 fn needed() -> Download {
     Download { url: URL.into(), sha256: SHA256, size: SIZE, dest: String::new(), pick: &["ffmpeg.exe"] }
 }
@@ -82,7 +84,7 @@ pub fn prepare(status: &Mutex<String>) {
         let Some(dir) = DATA_DIR.get() else { return };
         *status.lock().unwrap() = "downloading".into();
         tracing::info!("downloading ffmpeg");
-        match download::fetch(dir, &needed()) {
+        match download::fetch_group(DOWNLOAD_KEY, dir, &[needed()]) {
             Ok(()) => *FAILED.lock().unwrap() = None,
             Err(e) => {
                 failures += 1;

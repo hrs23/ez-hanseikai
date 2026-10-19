@@ -186,8 +186,20 @@ pub fn range(text: Option<&str>, total: u64) -> Option<(u64, u64)> {
     (last >= start).then_some((start, last))
 }
 
+fn thumb(core: &Core, path: &str) -> Option<Vec<u8>> {
+    let path = decode(path.trim_start_matches('/'));
+    let parts: Vec<&str> = path.split('/').collect();
+    match parts.as_slice() {
+        ["thumb", room, set] if valid_id(room) && valid_id(set) => std::fs::read(crate::thumbs::path(core, room, set)).ok(),
+        _ => None,
+    }
+}
+
 pub fn respond(core: &Core, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
     let empty = |status: StatusCode| Response::builder().status(status).body(Vec::new()).unwrap();
+    if let Some(body) = thumb(core, request.uri().path()) {
+        return Response::builder().status(StatusCode::OK).header(header::CONTENT_TYPE, "image/jpeg").header(header::CACHE_CONTROL, "max-age=3600").body(body).unwrap();
+    }
     let Some((pieces, kind)) = pieces_for(core, request.uri().path()) else { return empty(StatusCode::NOT_FOUND) };
     let total = size(&pieces);
     let wanted = request.headers().get(header::RANGE).and_then(|v| v.to_str().ok());

@@ -21,7 +21,7 @@ The API is off by default. A person turns it on in the app: Settings > API > Loc
 ## Read
 
 GET /v1
-  {"app": "EZ Hanseikai", "version": "0.11.0", "id": "...", "name": "Ann", "room": "<open room id or null>", "recording": false}
+  {"app": "EZ Hanseikai", "version": "0.12.0", "id": "...", "name": "Ann", "room": "<open room id or null>", "recording": false}
 
 GET /v1/rooms
   {"rooms": [{"id": "ab12", "name": "Practice", "active": true, "members": [{"id": "...", "name": "Ann", "online": true}]}]}

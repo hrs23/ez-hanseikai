@@ -30,6 +30,7 @@ const LOG_TAIL: u64 = 256 << 10;
 const REPORT_LINES: usize = 400;
 const ERRORS_KEPT: usize = 50;
 const JOB_RECORDS_KEPT: usize = 200;
+const JOB_LINES: usize = 40;
 const NAME_MIN_CHARS: usize = 2;
 
 pub const ARRIVED: usize = 0;
@@ -605,13 +606,18 @@ pub fn set_report_sharing(on: bool) {
 }
 
 #[tauri::command]
-pub async fn debug_report(core: State<'_, Arc<Core>>, include_addresses: bool, everyone: bool, audio_process: String, save: bool) -> Result<String, String> {
+pub async fn debug_report(core: State<'_, Arc<Core>>, include_addresses: bool, everyone: bool, audio_process: String, save: bool, head: Option<String>) -> Result<String, String> {
     let core = core.inner().clone();
     crate::warm(&core).await;
     let c = core.clone();
     let own = tauri::async_runtime::spawn_blocking(move || {
         let lines = check::run(&c, sources::pid_of(&audio_process));
-        report_text(&c, include_addresses, !everyone && include_addresses, Some(&check::text(&lines)))
+        let text = report_text(&c, include_addresses, !everyone && include_addresses, Some(&check::text(&lines)));
+        match head.filter(|h| !h.is_empty()) {
+            Some(h) if include_addresses => format!("{h}\n\n{text}"),
+            Some(h) => format!("{}\n\n{text}", redact(&h, &known_names(&c))),
+            None => text,
+        }
     })
     .await
     .map_err(|e| e.to_string())?;
@@ -756,8 +762,7 @@ pub fn hide_addresses(text: &str) -> String {
 }
 
 pub fn redact(text: &str, names: &[String]) -> String {
-    let text = replace_all(text, &[(r"(?i)[a-z]:\\users\\[^\\]+", r"C:\Users\<user>")]);
-    let mut text = replace_all(&hide_addresses(&text), &[(r"\b[0-9a-f]{64}\b", "<id>")]);
+    let mut text = replace_all(&hide_addresses(&text), &[(r"(?i)\b[a-z]:\\[^\s\x22',;)\]}]+", "<path>"), (r"\b[0-9a-f]{64}\b", "<id>")]);
     let mut names: Vec<&String> = names.iter().filter(|n| n.chars().count() >= NAME_MIN_CHARS).collect();
     names.sort_by_key(|n| std::cmp::Reverse(n.len()));
     for name in names {
@@ -782,13 +787,24 @@ pub fn errors(log: &str) -> Vec<&str> {
     out
 }
 
+pub fn job_line(job: &Value) -> String {
+    let text = |k: &str| job[k].as_str().unwrap_or("?");
+    let progress = job["progress"].as_f64().map(|p| format!(" {}%", (p * 100.0).floor())).unwrap_or_default();
+    format!("  {} {} {}{} by {}", text("plugin"), text("set"), text("state"), progress, job["by"].as_str().map(String::from).unwrap_or_else(|| "?".into()))
+}
+
+fn jobs_text(core: &Core) -> String {
+    let jobs = jobs_json(core);
+    let lines: Vec<String> = jobs["jobs"].as_array().into_iter().flatten().take(JOB_LINES).map(job_line).collect();
+    if lines.is_empty() { "  none".into() } else { lines.join("\n") }
+}
+
 pub fn report_text(core: &Core, include_addresses: bool, peer_addresses: bool, check: Option<&str>) -> String {
     let log = fs::read_to_string(core.dir.join("log.txt")).unwrap_or_default();
     let recent: Vec<&str> = log.lines().rev().take(REPORT_LINES).collect();
     let recent: Vec<&str> = recent.into_iter().rev().collect();
     let mut out = String::new();
     out.push_str(&format!("ez-hanseikai {} on {} {}\n", crate::VERSION, std::env::consts::OS, command_line("cmd", &["/c", "ver"])));
-    out.push_str(&format!("gpu {}\n", command_line("powershell", &["-NoProfile", "-Command", "(Get-CimInstance Win32_VideoController).Name -join ', '"])));
     out.push_str(&format!("previous version {}\n", if core.previous_version.is_empty() { "none" } else { &core.previous_version }));
     out.push_str(&format!("addresses and name {}\n", if include_addresses { "included" } else { "removed" }));
     if include_addresses {
@@ -800,6 +816,8 @@ pub fn report_text(core: &Core, include_addresses: bool, peer_addresses: bool, c
     out.push_str(&text(core, peer_addresses));
     out.push_str("\nrecent errors\n");
     out.push_str(&errors(&log).join("\n"));
+    out.push_str("\n\njobs\n");
+    out.push_str(&jobs_text(core));
     out.push_str("\n\nrecent crashes\n");
     out.push_str(&tail(&core.dir.join(CRASH), 0, LOG_TAIL).0);
     out.push_str("\n\nrecent log\n");
@@ -913,7 +931,14 @@ mod tests {
         let text = format!("from 203.0.113.20:5000 via https://relay.example.net/x by {id} at C:\\Users\\someone\\data named Ren and Rena");
         let out = redact(&text, &["Ren".into(), "Rena".into(), "x".into()]);
         assert!(!out.contains("203.0") && !out.contains("relay.example") && !out.contains(&id) && !out.contains("someone") && !out.contains("Ren"), "{out}");
-        assert!(out.contains("<name> and <name>"), "{out}");
+        assert!(out.contains("<name> and <name>") && out.contains("<path> named"), "{out}");
+    }
+
+    #[test]
+    fn a_job_reads_as_one_line() {
+        let job = json!({"plugin": "transcribe", "set": "s1", "state": "running", "progress": 0.426, "by": "ab12"});
+        assert_eq!(job_line(&job), "  transcribe s1 running 42% by ab12");
+        assert_eq!(job_line(&json!({})), "  ? ? ? by ?");
     }
 
     #[test]

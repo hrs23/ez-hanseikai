@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tauri::menu::{Menu, MenuBuilder, MenuItem, MenuItemBuilder, SubmenuBuilder};
-use tauri::{AppHandle, Emitter, Manager, Theme, WebviewUrl, WebviewWindowBuilder, Wry};
+use tauri::{AppHandle, Emitter, Manager, Wry};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Modifiers, Shortcut};
 use tauri_plugin_notification::NotificationExt;
@@ -17,8 +17,7 @@ use crate::{room, Core, NO_WINDOW, VERSION};
 pub const DEFAULT_HOTKEY: &str = "Ctrl+Alt+M";
 const REPO: &str = "https://github.com/hrs23/ez-hanseikai";
 const STATUS_POLL: Duration = Duration::from_secs(1);
-const DEBUG_SIZE: (f64, f64) = (1100.0, 720.0);
-const JA: [(&str, &str); 53] = [
+const JA: [(&str, &str); 52] = [
     ("EZ Hanseikai is already running with this data folder.", "EZ Hanseikai はこのデータフォルダですでに動いています。"),
     ("File", "ファイル"),
     ("Room", "ルーム"),
@@ -55,7 +54,6 @@ const JA: [(&str, &str); 53] = [
     ("Previous player", "前のプレイヤー"),
     ("Keyboard shortcuts", "キーボードショートカット"),
     ("Diagnostics", "診断"),
-    ("Developer tools", "開発者ツール"),
     ("Check for updates", "アップデートを確認"),
     ("Reset app…", "アプリをリセット…"),
     ("Report a problem", "問題を報告"),
@@ -191,25 +189,6 @@ pub fn plain_keys(window: &tauri::WebviewWindow) {
             let _ = unsafe { settings.SetAreBrowserAcceleratorKeysEnabled(false) };
         }
     });
-}
-
-pub fn open_debug(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("debug") {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
-        return;
-    }
-    let built = WebviewWindowBuilder::new(app, "debug", WebviewUrl::App("debug.html".into()))
-        .title("EZ Hanseikai Developer tools")
-        .inner_size(DEBUG_SIZE.0, DEBUG_SIZE.1)
-        .center()
-        .theme(Some(Theme::Dark))
-        .build();
-    if let Ok(window) = built {
-        let _ = window.remove_menu();
-        plain_keys(&window);
-    }
 }
 
 pub fn exit_question(recording: bool, exporting: bool, receiving: bool) -> Option<(&'static str, &'static str)> {
@@ -362,7 +341,6 @@ fn build_menu(app: &AppHandle, lang: &str, toggle: &MenuItem<Wry>, mark: &MenuIt
         .build()?;
     let help = SubmenuBuilder::new(app, tr(lang, "Help"))
         .item(&it("diagnostics", "Diagnostics", None)?)
-        .item(&it("debug", "Developer tools", Some("CmdOrCtrl+Shift+I"))?)
         .item(&it("update", "Check for updates", None)?)
         .separator()
         .item(&it("reset", "Reset app…", None)?)
@@ -439,7 +417,6 @@ pub fn setup(app: &tauri::App, core: Arc<Core>) -> tauri::Result<()> {
             "import-identity" => dialog(import_identity),
             "exit" => dialog(exit_app),
             "mark" => marked(core),
-            "debug" => open_debug(app),
             "github" => open_url(REPO),
             "issues" => open_url(&format!("{REPO}/issues/new")),
             "releases" => open_url(&format!("{REPO}/releases")),
