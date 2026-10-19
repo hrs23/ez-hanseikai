@@ -810,7 +810,7 @@ async function scenario(ctx) {
       await invoke(by, "rename_room", { name });
       for (const app of [a, b, c]) await waitFor(`${app.key} shows ${name}`, within(LOG_SYNC_S * 2), async () => (await state(app)).room.name === name);
     }
-    check(await evaluate(a, `$("roomname").firstElementChild.textContent === "Practice" && $("roomname").getAttribute("aria-haspopup") === "menu"`), "the sidebar header does not show the room name as a menu");
+    await waitFor("the sidebar header shows the room name as a menu", within(UI_REFRESH_S * 5), () => evaluate(a, `$("roomname").firstElementChild.textContent === "Practice" && $("roomname").getAttribute("aria-haspopup") === "menu"`));
     await evaluate(a, `$("roomname").click(); true`);
     const labels = await evaluate(a, `[...$("menu").querySelectorAll("button")].map((b) => b.textContent)`);
     check(labels.filter((l) => l !== "Cancel invite").join() === ["Room settings…", "Copy invite code", "Switch room", "Leave room…"].join(), `the room menu lists ${labels}`);
