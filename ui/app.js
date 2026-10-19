@@ -1557,6 +1557,23 @@ function cycle(s, delta) {
   const n = s.keys.length;
   if (n) setView(s, s.view === 0 ? (delta > 0 ? 1 : n) : ((s.view - 1 + delta + n) % n) + 1);
 }
+const EDITABLE = "input:not([type=range]):not([type=checkbox]):not([type=radio]):not([type=button]), textarea";
+function editMenu(e, field) {
+  const has = field ? field.selectionStart !== field.selectionEnd : String(getSelection()).length > 0;
+  const editable = !!field && !field.readOnly && !field.disabled;
+  const paste = () => navigator.clipboard.readText().then((text) => { field.setRangeText(text, field.selectionStart, field.selectionEnd, "end"); field.dispatchEvent(new Event("input", { bubbles: true })); }).catch(warn);
+  openMenu([
+    ...(field ? [{ label: t("Cut"), icon: "x", disabled: !editable || !has, run: () => document.execCommand("cut") }] : []),
+    { label: t("Copy"), icon: "copy", disabled: !has, run: () => document.execCommand("copy") },
+    ...(field ? [{ label: t("Paste"), icon: "download", disabled: !editable, run: paste }, { label: t("Select all"), run: () => field.select() }] : []),
+  ], e);
+}
+document.addEventListener("contextmenu", (e) => {
+  if (e.defaultPrevented) return;
+  e.preventDefault();
+  const field = e.target.closest ? e.target.closest(EDITABLE) : null;
+  if (field || String(getSelection()).length) editMenu(e, field);
+});
 async function toggleRecording(kind) {
   if (!st) return;
   const ending = !!st.active_set;

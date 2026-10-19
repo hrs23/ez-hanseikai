@@ -297,6 +297,15 @@ test("every fixed message the import and export code can send has a Japanese one
   assert.deepEqual(fixed.filter((x) => !(x in ui$.JA)), []);
 });
 
+test("the browser's own context menu is replaced by an edit menu in text fields and for selected text", () => {
+  const app = read("app.js");
+  assert.match(app, /document\.addEventListener\("contextmenu", \(e\) => \{\s*if \(e\.defaultPrevented\) return;\s*e\.preventDefault\(\);/);
+  assert.match(app, /t\("Cut"\)[^]*?t\("Copy"\)[^]*?t\("Paste"\)[^]*?t\("Select all"\)/);
+  const shell = fs.readFileSync(path.join(ui, "..", "src-tauri", "src", "shell.rs"), "utf8");
+  assert.match(shell, /SetAreBrowserAcceleratorKeysEnabled\(false\)/);
+  for (const word of ["Cut", "Copy", "Paste", "Select all"]) assert.ok(word in ui$.JA, word);
+});
+
 test("a board that was never written starts from a short template in both languages", () => {
   for (const lang of ["en", "ja"]) {
     const text = ui$.BOARD_TEMPLATE[lang];

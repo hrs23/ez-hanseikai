@@ -1,4 +1,7 @@
 const JA = {
+  "Cut": "切り取り",
+  "Paste": "貼り付け",
+  "Select all": "すべて選択",
   "Copy prompt": "プロンプトをコピー",
   "Prompt": "プロンプト",
   "AI": "AI",

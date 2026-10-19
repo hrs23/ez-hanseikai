@@ -752,6 +752,9 @@ async function scenario(ctx) {
 
   await step("each member row says one short state", async () => {
     const rows = await evaluate(a, `people().map((id) => memberOf(id).status.text)`);
+    check(await evaluate(a, `(() => { const e = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 60, clientY: 60 }); document.body.dispatchEvent(e); return e.defaultPrevented && $("menu").hidden; })()`), "the browser's context menu is not blocked");
+    await evaluate(a, `openSettings("general"); true`);
+    check(await evaluate(a, `(() => { $("name").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 300, clientY: 300 })); const labels = [...$("menu").querySelectorAll("button")].map((b) => b.textContent).join(); closeMenu(); $("settings").close(); return labels === [t("Cut"), t("Copy"), t("Paste"), t("Select all")].join(); })()`), "a text field has no edit menu");
     check(await evaluate(a, `!$("sessions").querySelector(".liverow") && !$("standby").hidden && $("standby").textContent.includes(t("Standby"))`), "the idle list holds a live entry or the start box lacks Standby");
     check(rows.length === 3 && rows.every((x) => x === "Standby" || /^Receiving \d+%$/.test(x)), `member states ${brief(rows)}`);
   });
