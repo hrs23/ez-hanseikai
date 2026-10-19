@@ -4,6 +4,8 @@ Record your team's games and review them together.
 
 A Windows app for recording and reviewing team games together. Each player records their own screen, game sound and voice; recordings and notes reach the others while they are still recording, so the team can review the last match while the next one records.
 
+Existing videos import as recordings, and any recording exports as a plain folder for a video editor: see [the session format](docs/session-format.md).
+
 Work in progress. See [the design](docs/design.md).
 
 ## Key principles

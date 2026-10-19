@@ -117,7 +117,7 @@ pub fn graph(players: &[Vec<(f64, bool)>], rects: &[(u32, u32, u32, u32)], size:
     graph + &format!("[bg{layer}]{}[vout];{}amix=inputs={}:normalize=0:duration=longest[mix]", labels.join(","), mixes.concat(), players.len())
 }
 
-fn accept_until(listener: &TcpListener, deadline: Instant, keep_going: impl Fn() -> bool) -> Option<std::net::TcpStream> {
+pub fn accept_until(listener: &TcpListener, deadline: Instant, keep_going: impl Fn() -> bool) -> Option<std::net::TcpStream> {
     listener.set_nonblocking(true).ok()?;
     loop {
         match listener.accept() {
@@ -128,7 +128,7 @@ fn accept_until(listener: &TcpListener, deadline: Instant, keep_going: impl Fn()
     }
 }
 
-fn feed(core: Arc<Core>, listener: TcpListener, pieces: Vec<Piece>) {
+pub fn feed(core: Arc<Core>, listener: TcpListener, pieces: Vec<Piece>) {
     let Some(mut stream) = accept_until(&listener, Instant::now() + CONNECT_WAIT, || core.export.lock().unwrap().is_some()) else { return };
     let total = stream::size(&pieces);
     let mut at = 0;
@@ -141,7 +141,7 @@ fn feed(core: Arc<Core>, listener: TcpListener, pieces: Vec<Piece>) {
     }
 }
 
-fn emit(core: &Core, percent: f64, done: bool, error: Option<String>) {
+pub fn emit(core: &Core, percent: f64, done: bool, error: Option<String>) {
     let _ = core.app.emit("export", json!({"percent": (percent * 10.0).round() / 10.0, "done": done, "error": error}));
 }
 
@@ -281,7 +281,7 @@ pub fn finish(partial: &Path, path: &Path, keep_going: impl Fn() -> bool) -> std
     copied
 }
 
-fn cancelled(core: &Core) -> bool {
+pub fn cancelled(core: &Core) -> bool {
     core.export.lock().unwrap().as_ref().is_some_and(|r| r.cancelled)
 }
 
@@ -302,18 +302,7 @@ fn watch(core: &Core, stdout: ChildStdout, stderr: ChildStderr, partial: &Path, 
             emit(core, (us / 1e6 / total * 100.0).clamp(0.0, 100.0), false, None);
         }
     }
-    let ok = loop {
-        if let Some(running) = core.export.lock().unwrap().as_mut() {
-            match running.child.child.try_wait() {
-                Ok(Some(status)) => break status.success(),
-                Ok(None) => {}
-                Err(_) => break false,
-            }
-        } else {
-            break false;
-        }
-        std::thread::sleep(POLL);
-    };
+    let ok = wait(core);
     let text = errors.join().unwrap_or_default();
     let result = if cancelled(core) {
         Err("Export cancelled".to_string())
@@ -335,6 +324,43 @@ fn watch(core: &Core, stdout: ChildStdout, stderr: ChildStderr, partial: &Path, 
             emit(core, 0.0, true, Some(e))
         }
     }
+}
+
+pub fn wait(core: &Core) -> bool {
+    loop {
+        if let Some(running) = core.export.lock().unwrap().as_mut() {
+            match running.child.child.try_wait() {
+                Ok(Some(status)) => return status.success(),
+                Ok(None) => {}
+                Err(_) => return false,
+            }
+        } else {
+            return false;
+        }
+        std::thread::sleep(POLL);
+    }
+}
+
+pub fn begin(core: &Core, set: (String, String), mut child: Process) -> Result<(), String> {
+    let mut slot = core.export.lock().unwrap();
+    match slot.as_mut() {
+        Some(running) if running.set == set => {
+            running.child = child;
+            Ok(())
+        }
+        Some(_) => {
+            child.kill();
+            Err("An export is already running.".into())
+        }
+        None => {
+            *slot = Some(Running { set, child, cancelled: false });
+            Ok(())
+        }
+    }
+}
+
+pub fn end(core: &Core) {
+    *core.export.lock().unwrap() = None;
 }
 
 pub fn cancel(core: &Core) {

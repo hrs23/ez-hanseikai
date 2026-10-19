@@ -16,18 +16,19 @@ The API is off by default. A person turns it on in the app: Settings > API > Loc
 - Times in a recording are seconds from its start (`at_s`, `from_s`, `to_s`, rounded to 0.1). Clock times are milliseconds since 1970 (`start_ms`, `end_ms`).
 - Reads work for every room on this PC. Writes work only for the room that is open in the app (409 otherwise); ask the person to open it.
 - Notes are at most 500 characters and the game plan at most 4000. Write `#tag` in a note text to tag it, or send `tags`.
+- Paths are on this PC (write them like C:/videos/scrim). A recording comes in as video files or a session folder and leaves as a folder of plain files; the format is in docs/session-format.md of the repository.
 
 ## Read
 
 GET /v1
-  {"app": "EZ Hanseikai", "version": "0.10.0", "id": "...", "name": "Ann", "room": "<open room id or null>", "recording": false}
+  {"app": "EZ Hanseikai", "version": "0.11.0", "id": "...", "name": "Ann", "room": "<open room id or null>", "recording": false}
 
 GET /v1/rooms
   {"rooms": [{"id": "ab12", "name": "Practice", "active": true, "members": [{"id": "...", "name": "Ann", "online": true}]}]}
 
 GET /v1/rooms/{room}/recordings
   {"recordings": [{"id": "2026-10-19 21-30-00", "kind": "play", "recording": false, "start_ms": 1792445400000, "end_ms": 1792448100000, "length_s": 2700.0, "members": [{"id": "...", "name": "Ann", "voice_only": false, "start_ms": 1792445400000, "end_ms": 1792448100000}]}]}
-  Newest first. kind is "play" or "debrief" (a recording of people talking while they watched another one). recording is true while it is being recorded. Put the id in the URL with spaces as %20.
+  Newest first. A recording that was imported also has "title", "imported_by" ({"id", "name"}) and "imported": true on its members (the views). kind is "play" or "debrief" (a recording of people talking while they watched another one). recording is true while it is being recorded. Put the id in the URL with spaces as %20.
 
 GET /v1/rooms/{room}/recordings/{recording}
   One element of the list above.
@@ -65,10 +66,21 @@ PUT /v1/rooms/{room}/board
   {"text": "# This week\n**Goal: move before the ring closes**\n\n## Next match\n- Pick the drop first"}
   Replaces the game plan for the whole room. Read it first and keep what still applies. Answer 200 with the board. The format: `#` is the title, a bold line is the goal, each `##` is a card of bullet points; [text](ezh://moment/<recording id>/<seconds>/all) links open a moment.
 
+POST /v1/rooms/{room}/recordings/import
+  {"folder": "C:/videos/Scrim night", "title": "Scrim night", "names": ["Ann", "Ben"]}   or   {"files": ["C:/videos/ann.mp4", "C:/videos/ben.mp4"]}
+  Makes a recording from a session folder (session.json is optional; every video file is a view named after the file, offsets 0, the folder name is the title) or from video files, and shares it with the room. title and names (one per view) are optional. Answer 201 {"id": "...", "views": 2, "notes": 0} when done; 400 says what is wrong with the files; 409 when the room is not the open one.
+
+POST /v1/rooms/{room}/recordings/{recording}/export
+  {"folder": "C:/exports/scrim", "aligned": false}
+  Writes the recording into a new or empty folder: one mp4 per view, session.json, notes.csv, chapters.vtt and subtitles. aligned pads the files so all start together. Answer 201 {"folder": "...", "files": 2, "skipped": []}.
+
+session.json example (every field optional): {"title": "Scrim vs Team B", "start": "2026-10-19T12:30:00Z", "views": [{"name": "Ann", "file": "Ann.mp4"}, {"name": "Ben", "file": "Ben.mp4", "offset_ms": 2500}], "events": [{"at_s": 84.5, "text": "Late rotate #rotate"}, {"at_s": 0, "to_s": 612.3, "text": "Match 1"}]}. Times in a recording are seconds from start.
+
 ## Recipes
 
 - Notes from the transcript: GET the transcript and chapters, read them, then POST a note at the time of each decision or mistake with a tag. Check the existing events first so you do not repeat notes.
 - Game plan from a recording: GET events, chapters and transcript, then PUT a short board: a goal and a few cards of what to do next.
+- A made video (a walkthrough, a highlight reel): put the mp4 in a folder, POST the folder to import, then POST notes at the moments that matter; everyone in the room can watch it in the player.
 - Mistakes in a match: GET chapters, take one match's from_s and to_s, read the transcript and events between them, and POST a note with the tag mistake at each moment.
 
 Examples (replace the token and ids):

@@ -67,7 +67,8 @@ function dayLabel(day, now, lang) {
   const options = y === now.getFullYear() ? { month: "short", day: "numeric" } : { year: "numeric", month: "short", day: "numeric" };
   return new Intl.DateTimeFormat(lang === "ja" ? "ja-JP" : "en-US", options).format(new Date(y, m - 1, d));
 }
-const sessionName = (id, now = new Date()) => `${dayLabel(sessionDay(id), now, language)} ${sessionClock(id)}`;
+let titles = {};
+const sessionName = (id, now = new Date()) => titles[id] || `${dayLabel(sessionDay(id), now, language)} ${sessionClock(id)}`;
 function keysOf(e) {
   const named = { " ": "Space", ArrowLeft: "Left", ArrowRight: "Right", ArrowUp: "Up", ArrowDown: "Down" };
   const code = e.code || "";

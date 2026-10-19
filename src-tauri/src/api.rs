@@ -214,6 +214,8 @@ pub trait Backend {
     fn plugins(&self, room: &str) -> Vec<Value>;
     fn jobs(&self, room: &str) -> Value;
     fn add(&self, room: &str, record: Value) -> Result<(), String>;
+    fn import(&self, room: &str, spec: &Value) -> Result<Value, (u16, String)>;
+    fn export(&self, room: &str, set: &str, folder: &str, aligned: bool) -> Result<Value, (u16, String)>;
 }
 
 struct Loaded {
@@ -261,10 +263,12 @@ fn recording_json(l: &Loaded, set: &Set, debriefs: &HashMap<String, Vec<Value>>,
     let members: Vec<Value> = set
         .files
         .iter()
-        .map(|f| json!({"id": f.owner, "name": l.name(&f.owner), "voice_only": f.series(room::SERIES[0]).is_empty(), "start_ms": (f.start_us - f.offset_us) / 1000, "end_ms": f.end_us.map(|e| (e - f.offset_us) / 1000)}))
+        .map(|f| json!({"id": f.owner, "name": l.name(&f.owner), "voice_only": f.series(room::SERIES[0]).is_empty(), "imported": f.view.is_some(), "start_ms": (f.start_us - f.offset_us) / 1000, "end_ms": f.end_us.map(|e| (e - f.offset_us) / 1000)}))
         .collect();
+    let imported = set.files.iter().find_map(|f| f.view.as_ref());
     json!({
         "id": set.id, "kind": if debrief { "debrief" } else { "play" }, "recording": end.is_none(),
+        "title": imported.and_then(|v| v.title.clone()), "imported_by": imported.map(|v| json!({"id": v.by, "name": l.name(&v.by)})),
         "start_ms": start / 1000, "end_ms": end.map(|e| e / 1000), "length_s": ((end.unwrap_or(now_us) - start).max(0) as f64 / 1e5).round() / 10.0,
         "members": members,
     })
@@ -483,15 +487,61 @@ fn put_board(be: &dyn Backend, l: &Loaded, req: &Request) -> Response {
     reply(200, board_json(&Loaded::new(be, l.head.clone())))
 }
 
+fn text_field(body: &serde_json::Map<String, Value>, key: &str) -> Result<Option<String>, Response> {
+    match body.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(text)) if !text.trim().is_empty() => Ok(Some(text.clone())),
+        Some(_) => Err(error(400, &format!("{key} must be a text."))),
+    }
+}
+
+fn import_recording(be: &dyn Backend, l: &Loaded, req: &Request) -> Response {
+    let spec = match body_of(req) {
+        Ok(body) => Value::Object(body),
+        Err(response) => return response,
+    };
+    let fine = |key: &str, kind: fn(&Value) -> bool| spec.get(key).is_none_or(|v| v.is_null() || kind(v));
+    if !fine("folder", Value::is_string) || !fine("title", Value::is_string) || !fine("files", |v| v.as_array().is_some_and(|a| a.iter().all(Value::is_string))) || !fine("names", |v| v.as_array().is_some_and(|a| a.iter().all(Value::is_string))) {
+        return error(400, "Send folder, or files (a list of paths), and optionally title and names.");
+    }
+    match be.import(&l.head.id, &spec) {
+        Ok(done) => reply(201, done),
+        Err((status, text)) => error(status, &text),
+    }
+}
+
+fn export_recording(be: &dyn Backend, l: &Loaded, set: &Set, req: &Request) -> Response {
+    let built = (|| {
+        let body = body_of(req)?;
+        let folder = text_field(&body, "folder")?.ok_or_else(|| error(400, "folder is needed: a new or empty folder on this PC."))?;
+        let aligned = match body.get("aligned") {
+            None | Some(Value::Null) => false,
+            Some(Value::Bool(b)) => *b,
+            Some(_) => return Err(error(400, "aligned must be true or false.")),
+        };
+        Ok((folder, aligned))
+    })();
+    let (folder, aligned) = match built {
+        Ok(parts) => parts,
+        Err(response) => return response,
+    };
+    match be.export(&l.head.id, &set.id, &folder, aligned) {
+        Ok(done) => reply(201, done),
+        Err((status, text)) => error(status, &text),
+    }
+}
+
 fn segments(path: &str) -> Option<Vec<String>> {
     path.split('/').filter(|s| !s.is_empty()).map(|s| decode(s, false)).collect()
 }
 
 fn route(req: &Request, be: &dyn Backend, parts: &[&str]) -> Response {
     let allowed: &[&str] = match parts {
+        ["v1", "rooms", _, "recordings", "import"] => &["POST"],
         ["v1"] | ["v1", "rooms"] | ["v1", "rooms", _, "recordings"] | ["v1", "rooms", _, "recordings", _] => &["GET"],
         ["v1", "rooms", _, "recordings", _, "chapters" | "transcript"] | ["v1", "rooms", _, "plugins" | "jobs"] => &["GET"],
         ["v1", "rooms", _, "recordings", _, "events"] => &["GET", "POST"],
+        ["v1", "rooms", _, "recordings", _, "export"] => &["POST"],
         ["v1", "rooms", _, "board"] => &["GET", "PUT"],
         _ => return error(404, "No such endpoint."),
     };
@@ -511,6 +561,7 @@ fn route(req: &Request, be: &dyn Backend, parts: &[&str]) -> Response {
         ["board"] => reply(200, board_json(&l)),
         ["plugins"] => reply(200, plugins_json(&l, be.plugins(room))),
         ["jobs"] => reply(200, jobs_json(&l, &be.jobs(room))),
+        ["recordings", "import"] => import_recording(be, &l, req),
         ["recordings"] => {
             let debriefs = party::records(&l.logs);
             let now = be.now_us();
@@ -522,6 +573,7 @@ fn route(req: &Request, be: &dyn Backend, parts: &[&str]) -> Response {
                 [] => reply(200, recording_json(&l, &set, &party::records(&l.logs), be.now_us())),
                 ["events"] if req.method == "POST" => add_event(be, &l, &set, req),
                 ["events"] => events_reply(&l, &set, req),
+                ["export"] => export_recording(be, &l, &set, req),
                 ["chapters"] => chapters_reply(&l, &set, be.now_us()),
                 _ => transcript_reply(&l, &set, req),
             }
@@ -583,6 +635,7 @@ impl Backend for Live {
                 let people = r.people();
                 let mut names = r.names.clone();
                 names.extend(known.iter().filter(|(id, _)| people.contains(id)).map(|(id, n)| (id.clone(), n.clone())));
+                names.extend(room::imported_views(core, &r.id).into_iter().map(|(id, v)| (id, v.name)));
                 Head { active: active.as_deref() == Some(&r.id), members: r.members.iter().map(|m| (m.clone(), *m == me || online.contains(m))).collect(), id: r.id, name: r.name, names }
             })
             .collect()
@@ -607,6 +660,20 @@ impl Backend for Live {
         self.0.append_log(room, &record);
         party::send(&self.0);
         Ok(())
+    }
+
+    fn import(&self, room: &str, spec: &Value) -> Result<Value, (u16, String)> {
+        if self.0.room_id().as_deref() != Some(room) {
+            return Err((409, "Enter the room first: the app writes only to the room that is open.".into()));
+        }
+        if crate::import::busy().is_some() {
+            return Err((409, "An import is already running.".into()));
+        }
+        crate::import::run(&self.0, spec).map_err(|e| (400, e))
+    }
+
+    fn export(&self, room: &str, set: &str, folder: &str, aligned: bool) -> Result<Value, (u16, String)> {
+        crate::bundle::run(&self.0, room, set, std::path::Path::new(folder), aligned).map_err(|e| (if e.contains("already running") || e.contains("Stop recording") { 409 } else { 400 }, e))
     }
 }
 
@@ -701,12 +768,13 @@ mod tests {
         heads: Vec<(String, bool)>,
         logs: Mutex<Vec<Log>>,
         clock: std::sync::atomic::AtomicI64,
+        calls: Mutex<Vec<String>>,
     }
 
     impl Fake {
         fn new(records_a: Vec<Value>, records_b: Vec<Value>) -> Self {
             let log = |owner: &str, offset_us: i64, records: Vec<Value>| Log { owner: owner.into(), offset_us, records: Arc::new(records) };
-            Self { heads: vec![("r1".into(), true), ("r2".into(), false)], logs: Mutex::new(vec![log("a", 0, records_a), log("b", 0, records_b)]), clock: std::sync::atomic::AtomicI64::new(START + 100 * S) }
+            Self { heads: vec![("r1".into(), true), ("r2".into(), false)], logs: Mutex::new(vec![log("a", 0, records_a), log("b", 0, records_b)]), clock: std::sync::atomic::AtomicI64::new(START + 100 * S), calls: Mutex::new(Vec::new()) }
         }
     }
 
@@ -739,6 +807,20 @@ mod tests {
             }
             Arc::make_mut(&mut self.logs.lock().unwrap()[0].records).push(record);
             Ok(())
+        }
+        fn import(&self, room: &str, spec: &Value) -> Result<Value, (u16, String)> {
+            if room != "r1" {
+                return Err((409, "Enter the room first.".into()));
+            }
+            self.calls.lock().unwrap().push(format!("import {spec}"));
+            Ok(json!({"id": "2026-10-19 21-30-00", "views": 1, "notes": 0}))
+        }
+        fn export(&self, room: &str, set: &str, folder: &str, aligned: bool) -> Result<Value, (u16, String)> {
+            if folder.contains("busy") {
+                return Err((409, "An export is already running.".into()));
+            }
+            self.calls.lock().unwrap().push(format!("export {room} {set} {folder} {aligned}"));
+            Ok(json!({"folder": folder, "files": 2, "skipped": []}))
         }
     }
 
@@ -996,6 +1078,49 @@ mod tests {
         assert_eq!(call(&fake, "POST", "/v1/rooms/r1/recordings/nope/events", r#"{"text": "x"}"#).0, 404);
         assert_eq!(call(&fake, "POST", "/v1/rooms/r2/recordings/s1/events", r#"{"text": "x"}"#).0, 409);
         assert_eq!(fake.logs.lock().unwrap()[0].records.len(), before);
+    }
+
+    #[test]
+    fn recordings_can_be_imported_and_exported() {
+        let fake = fixture();
+        let (status, made) = call(&fake, "POST", "/v1/rooms/r1/recordings/import", r#"{"folder": "C:/videos/scrim", "title": "Scrim", "names": ["Ann"]}"#);
+        assert_eq!((status, made["id"].as_str()), (201, Some("2026-10-19 21-30-00")));
+        let (status, _) = call(&fake, "POST", "/v1/rooms/r1/recordings/import", r#"{"files": ["C:/a.mp4", "C:/b.mp4"]}"#);
+        assert_eq!(status, 201);
+        for bad in ["[]", "nonsense", r#"{"folder": 3}"#, r#"{"files": "a.mp4"}"#, r#"{"files": [1]}"#, r#"{"title": []}"#, r#"{"names": "x"}"#] {
+            assert_eq!(call(&fake, "POST", "/v1/rooms/r1/recordings/import", bad).0, 400, "{bad}");
+        }
+        assert_eq!(call(&fake, "POST", "/v1/rooms/r2/recordings/import", r#"{"folder": "C:/x"}"#).0, 409);
+        assert_eq!(get(&fake, "/v1/rooms/r1/recordings/import").0, 405);
+        let (status, done) = call(&fake, "POST", "/v1/rooms/r1/recordings/s1/export", r#"{"folder": "C:/out/s1", "aligned": true}"#);
+        assert_eq!((status, done["files"].as_i64()), (201, Some(2)));
+        assert_eq!(call(&fake, "POST", "/v1/rooms/r1/recordings/s1/export", r#"{"folder": "C:/out/raw"}"#).0, 201);
+        assert_eq!(call(&fake, "POST", "/v1/rooms/r1/recordings/s1/export", "{}").0, 400);
+        assert_eq!(call(&fake, "POST", "/v1/rooms/r1/recordings/s1/export", r#"{"folder": "C:/out", "aligned": "yes"}"#).0, 400);
+        assert_eq!(call(&fake, "POST", "/v1/rooms/r1/recordings/s1/export", r#"{"folder": "busy"}"#).0, 409);
+        assert_eq!(call(&fake, "POST", "/v1/rooms/r1/recordings/nope/export", r#"{"folder": "C:/out"}"#).0, 404);
+        assert_eq!(get(&fake, "/v1/rooms/r1/recordings/s1/export").0, 405);
+        let calls = fake.calls.lock().unwrap().clone();
+        assert_eq!(calls.len(), 4);
+        assert!(calls[0].starts_with("import {") && calls[0].contains("\"names\":[\"Ann\"]"));
+        assert_eq!(calls[2], "export r1 s1 C:/out/s1 true");
+        assert_eq!(calls[3], "export r1 s1 C:/out/raw false");
+    }
+
+    #[test]
+    fn an_imported_recording_shows_its_title_importer_and_views() {
+        let importer = iroh::SecretKey::generate().public().to_string();
+        let view = iroh::SecretKey::generate().public().to_string();
+        let rec = json!({"k": "rec", "set": "s7", "start_us": START, "imported": importer, "view": "Walkthrough", "title": "What went wrong"});
+        let end = json!({"k": "rec_end", "set": "s7", "t_us": START + 60 * S});
+        let log = |owner: &str, records: Vec<Value>| Log { owner: owner.into(), offset_us: 0, records: Arc::new(records) };
+        let fake = Fake::new(vec![], vec![]);
+        *fake.logs.lock().unwrap() = vec![log(&importer, vec![]), log(&view, vec![rec, end])];
+        let (status, one) = get(&fake, "/v1/rooms/r1/recordings/s7");
+        assert_eq!(status, 200);
+        assert_eq!((one["title"].as_str(), one["imported_by"]["id"].as_str(), one["members"][0]["imported"].as_bool(), one["members"][0]["id"].as_str()), (Some("What went wrong"), Some(importer.as_str()), Some(true), Some(view.as_str())));
+        let (_, plain) = get(&fixture(), "/v1/rooms/r1/recordings/s1");
+        assert_eq!((plain["title"].clone(), plain["imported_by"].clone(), plain["members"][0]["imported"].clone()), (Value::Null, Value::Null, json!(false)));
     }
 
     #[test]

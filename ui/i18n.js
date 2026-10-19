@@ -517,6 +517,51 @@ const JA = {
   "{n} online": "{n}人がオンライン",
   "{n} players": "{n}人",
   "{n} s left": "残り {n} 秒",
+  "Imported": "インポート済み",
+  "Imported by {name}": "{name} がインポート",
+  "Import recording": "録画をインポート",
+  "Choose folder…": "フォルダを選ぶ…",
+  "Choose files…": "ファイルを選ぶ…",
+  "Title": "タイトル",
+  "Import": "インポート",
+  "Importing {n}%": "インポート中 {n}%",
+  "Import finished": "インポートが終わりました",
+  "Import cancelled": "インポートを中止しました",
+  "Export": "エクスポート",
+  "Export to folder": "フォルダにエクスポート",
+  "Export to folder…": "フォルダにエクスポート…",
+  "Start every video together": "すべての動画の開始をそろえる",
+  "Enter a room first.": "先にルームに入ってください。",
+  "Enter the room first: the app writes only to the room that is open.": "先にそのルームに入ってください。アプリは開いているルームにだけ書き込みます。",
+  "An import is already running.": "インポートはすでに実行中です。",
+  "Choose a folder or video files.": "フォルダか動画ファイルを選んでください。",
+  "That folder does not exist.": "そのフォルダはありません。",
+  "There is no video file to import.": "インポートできる動画ファイルがありません。",
+  "There are too many notes to import.": "インポートするメモが多すぎます。",
+  "The file has no picture or sound.": "このファイルには映像も音声もありません。",
+  "The video could not be read.": "動画を読み込めませんでした。",
+  "The recording could not be written.": "録画を書き込めませんでした。",
+  "The recording's JSON file is not valid.": "録画のJSONファイルが正しくありません。",
+  "The recording's JSON file must be an object.": "録画のJSONファイルはオブジェクトでなければなりません。",
+  "start must be a UTC time like 2026-10-19T12:30:00Z.": "start は 2026-10-19T12:30:00Z のようなUTCの時刻でなければなりません。",
+  "views must be a list.": "views はリストでなければなりません。",
+  "events must be a list.": "events はリストでなければなりません。",
+  "A recording has at most 6 views.": "1つの録画のビューは最大6つです。",
+  "A view needs a file or a name.": "ビューにはファイルか名前が必要です。",
+  "offset_ms must be between 0 and 86400000.": "offset_ms は 0 から 86400000 の間でなければなりません。",
+  "A time must be seconds from the start of the recording.": "時刻は録画の開始からの秒数でなければなりません。",
+  "A note needs text.": "メモには文章が必要です。",
+  "Only a chapter has to_s.": "to_s を持てるのはチャプターだけです。",
+  "A chapter needs text and a to_s after at_s.": "チャプターには文章と、at_s より後の to_s が必要です。",
+  "kind must be note, mark or chapter.": "kind は note、mark、chapter のいずれかでなければなりません。",
+  "tags must be a list of words.": "tags は単語のリストでなければなりません。",
+  "Too many tags.": "タグが多すぎます。",
+  "The notes file has a quote that never closes.": "メモのファイルに閉じていない引用符があります。",
+  "The notes file needs a seconds column.": "メモのファイルには seconds の列が必要です。",
+  "A WebVTT file starts with WEBVTT.": "WebVTTファイルは WEBVTT で始まります。",
+  "Choose a new or empty folder.": "新しいフォルダか空のフォルダを選んでください。",
+  "This recording is still being recorded.": "この録画はまだ録画中です。",
+  "Unknown recording.": "その録画は見つかりません。",
   "{n} selected · {size}": "{n} 件を選択 · {size}",
   "{n} watching": "{n}人が視聴中",
   "{size} on this PC": "このPCに {size}",
@@ -524,8 +569,33 @@ const JA = {
 
 let language = "en";
 
+const PATTERNS = [
+  [/^(.+) is missing\.$/, "{1} が見つかりません。"],
+  [/^(.+) must be a text\.$/, "{1} は文字列でなければなりません。"],
+  [/^(.+) must be a number\.$/, "{1} は数でなければなりません。"],
+  [/^(.+) must be a file inside the folder\.$/, "{1} はフォルダの中のファイルでなければなりません。"],
+  [/^(.+) is not a video or audio file\.$/, "{1} は動画でも音声でもありません。"],
+  [/^(.+) has no sound\.$/, "{1} には音声がありません。"],
+  [/^Row (\d+) of the notes file has no valid time\.$/, "メモのファイルの {1} 行目の時刻が正しくありません。"],
+  [/^Row (\d+) of the notes file: (.+)$/, "メモのファイルの {1} 行目: {2}"],
+  [/^Bad time in WebVTT line: (.+)$/, "WebVTTの時刻が正しくありません: {1}"],
+  [/^ffmpeg could not convert the file: (.+)$/, "ファイルを変換できませんでした: {1}"],
+  [/^The folder cannot be read: (.+)$/, "フォルダを読み込めません: {1}"],
+  [/^The folder cannot be made: (.+)$/, "フォルダを作成できません: {1}"],
+  [/^(.+) cannot be read: (.+)$/, "{1} を読み込めません: {2}"],
+  [/^Export failed: (.+)$/, "エクスポートに失敗しました: {1}"],
+];
+
+function pattern(text) {
+  for (const [re, ja] of PATTERNS) {
+    const m = re.exec(text);
+    if (m) return ja.replace(/\{(\d)\}/g, (x, i) => JA[m[+i]] || m[+i]);
+  }
+  return null;
+}
+
 function t(text, vars) {
-  const out = (language === "ja" && JA[text]) || text;
+  const out = (language === "ja" && (JA[text] || pattern(text))) || text;
   return vars ? out.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m)) : out;
 }
 

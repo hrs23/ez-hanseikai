@@ -64,6 +64,8 @@ let checkedAt = 0;
 let updateText = "";
 let menuReturn = null;
 let exporting = null;
+let importing = null;
+let importedIds = new Set();
 let side = "review";
 let scope = "session";
 let subtitles = stored("subtitles", true);
@@ -124,8 +126,8 @@ function pill(cls, iconName, text) {
 
 function tile(s, key) {
   if (s.tiles[key]) return s.tiles[key];
-  const tl = { key, media: slot(el("video", { muted: true, preload: "auto" })), mic: null, name: el("span", { className: "nm" }), av: el("span"), dot: el("i", { className: "rd", hidden: true }), who: el("div", { className: "who" }), what: el("div", { className: "what" }), sub: el("div", { className: "subt", hidden: true }), lag: el("span", { className: "lag", hidden: true }) };
-  tl.lab = el("div", { className: "nl", draggable: true }, tl.av, tl.name, tl.dot);
+  const tl = { key, media: slot(el("video", { muted: true, preload: "auto" })), mic: null, name: el("span", { className: "nm" }), av: el("span"), dot: el("i", { className: "rd", hidden: true }), imp: el("span", { className: "imp", hidden: true }), who: el("div", { className: "who" }), what: el("div", { className: "what" }), sub: el("div", { className: "subt", hidden: true }), lag: el("span", { className: "lag", hidden: true }) };
+  tl.lab = el("div", { className: "nl", draggable: true }, tl.av, tl.name, tl.imp, tl.dot);
   tl.box = el("div", { className: "tile", tabIndex: 0 }, tl.media.video, el("div", { className: "waitbox" }, tl.who, tl.what), tl.sub, tl.lab, tl.lag);
   const focus = () => { const i = s.keys.indexOf(key) + 1; setView(s, s.view === i ? 0 : i); };
   tl.box.onkeydown = (e) => { if (e.key === "Enter") focus(); };
@@ -158,6 +160,8 @@ function nameTile(tl, key, recording) {
   tl.name.textContent = nameOf(key);
   tl.who.textContent = nameOf(key);
   tl.dot.hidden = !recording;
+  tl.imp.hidden = !importedIds.has(key);
+  tl.imp.textContent = t("Imported");
   const sig = JSON.stringify([nameOf(key), colorIndex(key), st.palette]);
   if (tl.avSig !== sig) { tl.avSig = sig; tl.av.replaceChildren(avatar(key, "sm")); }
 }
@@ -448,6 +452,7 @@ function headerChips(set) {
     const edge = liveEdge(total(), nowM());
     return [pill("rec", "rec", t("Recording {time}", { time: fmt((nowUs() - a.start_us) / 1e6) })), live ? null : pill("gray", null, t("Playing back · {time} behind the latest", { time: fmt(edge.behind) }))];
   }
+  if (set.imported_by) return [pill("gray", "download", t("Imported by {name}", { name: set.imported_by }))];
   return [isReview(set) ? pill("accent", "mic", t("Debrief")) : pill("gray", "film", t("Recorded"))];
 }
 function headerSub(set) {
@@ -1277,6 +1282,7 @@ function notices() {
   for (const p of st.peers.filter((x) => x.connected && x.other_version)) list.push({ key: "v:" + p.id, level: "warn", icon: "alert", text: t("{name} is on a different version. Both of you need the latest one.", { name: nameOf(p.id) }) });
   if (available && installAfter) list.push({ key: "after", level: "info", icon: "download", text: t("Version {version} installs after recording", { version: available.version }), action: { label: t("Cancel"), run: () => { installAfter = false; renderNotices(); } }, sticky: true });
   else if (available) list.push({ key: "update", level: "info", icon: "download", text: t("Version {version} is available", { version: available.version }), action: st.recording ? { label: t("Install after recording"), run: () => { installAfter = true; renderNotices(); } } : { label: t("Install"), primary: true, run: installUpdate } });
+  if (importing) list.push({ key: "import", level: "info", icon: "spinner", spin: true, text: t("Importing {n}%", { n: Math.floor(importing.percent) }), sticky: true, action: { label: t("Cancel"), run: () => invoke("cancel_import") } });
   if (updateText) list.push({ key: "updating", level: "info", icon: "spinner", spin: true, text: updateText, sticky: true });
   return list.filter((n) => !dismissed.has(n.key));
 }
@@ -1294,6 +1300,54 @@ function exportSet(set) {
     if (r) { exporting = { set: set.id, percent: 0 }; if (r.skipped.length) flash(t("Exporting without {names}: not on this PC yet", { names: r.skipped.map(nameOf).join(", ") })); refresh(); }
   }).catch(fail);
 }
+let folderSet = null;
+function exportFolder(set) {
+  if (!set) { flash(t("Open a recording first")); return; }
+  folderSet = set;
+  $("folderaligned").checked = false;
+  $("folderdlg").showModal();
+}
+function startFolderExport() {
+  const set = folderSet;
+  $("folderdlg").close();
+  exporting = { set: set.id, percent: 0 };
+  refresh();
+  invoke("export_folder", { room: set.room, set: set.id, aligned: $("folderaligned").checked }).then((r) => {
+    if (!r) { exporting = null; refresh(); return; }
+    if (r.skipped.length) flash(t("Exporting without {names}: not on this PC yet", { names: r.skipped.join(", ") }));
+  }).catch((e) => { if (exporting) { exporting = null; fail(e); refresh(); } });
+}
+function openImport(spec) {
+  if (!inRoom()) { flash(t("Enter a room first.")); return; }
+  importSpec = null;
+  renderImport(null);
+  $("importdlg").showModal();
+  if (spec) planImport(spec);
+}
+let importSpec = null;
+function planImport(spec) {
+  invoke("import_plan", { spec }).then((plan) => { importSpec = spec; renderImport(plan); }).catch((e) => { importSpec = null; renderImport(null); fail(e); });
+}
+function renderImport(plan) {
+  $("importplan").hidden = !plan;
+  $("importgo").disabled = !plan;
+  if (!plan) return;
+  $("importtitle").value = plan.title;
+  $("importviews").replaceChildren(...plan.views.map((v) => el("div", { className: "importview" }, el("input", { value: v.name, maxLength: 24, ariaLabel: t("Name") }), el("span", { className: "file", textContent: v.file }))));
+}
+function startImport() {
+  const names = [...$("importviews").querySelectorAll("input")].map((i) => i.value);
+  const spec = { ...importSpec, title: $("importtitle").value, names };
+  $("importdlg").close();
+  importing = { percent: 0 };
+  renderNotices();
+  invoke("import_recording", { spec }).then((r) => { importing = null; flash(t("Import finished")); return refresh().then(() => openSession(r.id)); }).catch((e) => { importing = null; fail(e); }).finally(() => { delete sigs.notices; renderNotices(); });
+}
+window.__TAURI__.event.listen("import", (e) => {
+  if (!importing || e.payload.done) return;
+  importing.percent = e.payload.percent;
+  renderNotices();
+});
 window.__TAURI__.event.listen("export", (e) => {
   const x = e.payload;
   if (x.done) { exporting = null; if (x.error) fail(x.error); else flash(t("Export finished")); refresh(); return; }
@@ -1317,7 +1371,7 @@ async function checkUpdate(manual) {
 }
 function busy() {
   const party = watchParty && st.party.on && st.party.watching.some((id) => id !== st.id);
-  return st.recording || party || clock.playing || (review && review.playing) || !!exporting || !!(jobInfo && jobInfo.running);
+  return st.recording || party || clock.playing || (review && review.playing) || !!exporting || !!importing || !!(jobInfo && jobInfo.running);
 }
 async function askUpdate() {
   askingUpdate = true;
@@ -1350,6 +1404,8 @@ const steps = () => [renderShell, renderStart, renderSide, renderNotices, render
 async function update() {
   st = await invoke("state");
   idx = indexOf(st);
+  titles = Object.fromEntries(st.sets.filter((x) => x.title).map((x) => [x.id, x.title]));
+  importedIds = new Set(st.sets.flatMap((x) => x.players.filter((p) => p.imported).map((p) => p.owner)));
   if (lang !== st.lang) { lang = st.lang; setLanguage(lang); for (const k of Object.keys(sigs)) delete sigs[k]; }
   if (!ready) { ready = true; invoke("ui_ready"); pollPlugins(); }
   if (installAfter && available && !busy() && !askingUpdate) askUpdate();

@@ -40,6 +40,11 @@ const SOURCE = { kind: "display", index: 1 };
 const MODEL_BYTES = { base: 147_951_465, medium: 1_533_763_059 };
 const WHISPER_BYTES = 8_573_270;
 const LOG_LINE_CHARS = 200;
+const IMPORT_S = 60;
+const EXPORT_FOLDER_S = 120;
+const MEDIA_SECONDS = { coach: 8, camera: 6, commentary: 7 };
+const PLAN_START = "2026-10-19T12:30:00Z";
+const START_TOLERANCE_US = 5e6;
 
 const DIAL_S = DIAL_RETRY_S + CONNECT_TIMEOUT_S;
 const SYNC_ROUND_S = LOG_SYNC_S * HELLO_EVERY;
@@ -161,6 +166,13 @@ async function pressAndConfirm(app, call, yes = true) {
 
 const invoke = (app, cmd, args = {}) => evaluate(app, `window.__TAURI__.core.invoke(${JSON.stringify(cmd)}, ${JSON.stringify(args)})`);
 const state = (app) => invoke(app, "state");
+
+async function invokeLong(app, cmd, args, seconds, label) {
+  await evaluate(app, `window.e2eLong = null; window.__TAURI__.core.invoke(${JSON.stringify(cmd)}, ${JSON.stringify(args)}).then((r) => { window.e2eLong = { ok: r }; }, (e) => { window.e2eLong = { error: String(e) }; }); true`);
+  const done = await waitFor(label, within(seconds), () => evaluate(app, "window.e2eLong"));
+  check(!done.error, `${label}: ${done.error}`);
+  return done.ok;
+}
 
 function frame(record) {
   const body = Buffer.from(JSON.stringify(record));
@@ -850,6 +862,161 @@ async function scenario(ctx) {
     check(decode.ok && !decode.err, `export does not decode cleanly: ${decode.err.slice(0, 400)}`);
     ctx.notes.push(`export of ${duration.toFixed(1)} s with streams ${kinds.join(" ")}`);
     ffmpeg("ffmpeg", ["-v", "error", "-y", "-ss", String(duration / 2), "-i", file, "-frames:v", "1", path.join(OUT, "export-frame.png")]);
+  });
+
+  await step("the set exports to a folder of plain files and imports back as a recording everyone receives", async () => {
+    const all = [a, b, c];
+    const names = all.map((x) => x.name).sort().join();
+    const raw = await invokeLong(a, "export_folder", { room: ctx.room, set: ctx.set, aligned: false }, EXPORT_FOLDER_S, "the folder export");
+    check(raw.files === 3 && raw.skipped.length === 0, `folder export: ${brief(raw)}`);
+    const session = readJson(path.join(raw.folder, "session.json"));
+    check(session?.id === ctx.set && session.start && session.views?.length === 3 && session.views.map((v) => v.name).sort().join() === names, `session.json: ${brief(session)}`);
+    const offsets = session.views.map((v) => v.offset_ms);
+    check(Math.min(...offsets) === 0 && Math.max(...offsets) >= SEGMENT_S * 1000, `raw offsets ${brief(offsets)}`);
+    const plain = (file, kinds) => {
+      const probe = ffmpeg("ffprobe", ["-v", "error", "-show_entries", "format=duration:stream=codec_type", "-of", "json", file]);
+      check(probe.ok, `ffprobe ${path.basename(file)}: ${probe.err}`);
+      const info = JSON.parse(probe.out);
+      const got = info.streams.map((x) => x.codec_type).sort().join();
+      check(got === kinds, `${path.basename(file)} has streams ${got}, not ${kinds}`);
+      const decode = ffmpeg("ffmpeg", ["-v", "error", "-i", file, "-f", "null", "-"]);
+      check(decode.ok && !decode.err, `${path.basename(file)} does not decode cleanly: ${decode.err.slice(0, 300)}`);
+      return Number(info.format.duration);
+    };
+    for (const v of session.views) {
+      check(v.file.endsWith(".mp4") && v.voice?.endsWith(".m4a"), `view ${brief(v)}`);
+      plain(path.join(raw.folder, v.file), "audio,video");
+      plain(path.join(raw.folder, v.voice), "audio");
+    }
+    check(fs.readFileSync(path.join(raw.folder, "notes.csv"), "utf8").includes("Noted through the API"), "notes.csv lacks the note written through the API");
+    const aligned = await invokeLong(a, "export_folder", { room: ctx.room, set: ctx.set, aligned: true }, EXPORT_FOLDER_S, "the aligned folder export");
+    const second = readJson(path.join(aligned.folder, "session.json"));
+    check(second.views.every((v) => v.offset_ms === 0), `aligned offsets ${brief(second.views.map((v) => v.offset_ms))}`);
+    for (const v of second.views) {
+      const seconds = plain(path.join(aligned.folder, v.file), "audio,video");
+      check(Math.abs(seconds - ctx.durationS) <= SEGMENT_S, `${v.file} lasts ${seconds} s in the aligned export, the set ${ctx.durationS} s`);
+    }
+
+    const made = await invokeLong(a, "import_recording", { spec: { folder: raw.folder } }, IMPORT_S, "the import of the exported folder");
+    ctx.imported = made.id;
+    check(made.views === 3 && made.id !== ctx.set, `import: ${brief(made)}`);
+    await allSee(all, "the imported recording", within(LOG_SYNC_S * 3), (st) => setOf(st, made.id)?.imported_by === a.name);
+    const owners = setOf(await state(a), made.id).players.map((p) => p.owner);
+    for (const app of all) {
+      const st = await state(app);
+      const set = setOf(st, made.id);
+      check(set.title === path.basename(raw.folder) && set.players.length === 3 && set.players.every((p) => p.imported), `${app.key} lists the import as ${brief({ title: set.title, players: set.players.map((p) => p.imported) })}`);
+      check(owners.every((o) => !all.some((x) => x.id === o) && names.split(",").includes(st.names[o])), `${app.key} names the imported views ${brief(owners.map((o) => st.names[o]))}`);
+      check(st.rooms.find((r) => r.id === ctx.room).members.length === 3 && st.peers.length === 2, `${app.key} counts ${st.peers.length} peers and ${st.rooms.find((r) => r.id === ctx.room).members.length} members`);
+    }
+    await allSee(all, "everyone has the imported recording", within((SEGMENT_S + SYNC_ROUND_S) * 3), (st) => setOf(st, made.id)?.all_verified);
+    for (const owner of owners) {
+      const list = pieces(logOf(a, ctx.room, owner), made.id);
+      check(list.length > 2, `the imported view has ${list.length} pieces`);
+      for (const holder of [a, b, c]) check(!badCopies(holder, ctx.room, owner, list).length, `${holder.key} lacks pieces of an imported view`);
+    }
+    await allSee([b, c], "the note of the imported folder", within(LOG_SYNC_S * 2), (st) => st.events.some((e) => e.set === made.id && e.text.includes("Noted through the API")));
+    await evaluate(a, `openSession(${JSON.stringify(made.id)}); true`);
+    await waitFor("A plays the three imported views", within(UI_REFRESH_S * 10), () => evaluate(a, `play.keys.length === 3 && play.keys.filter((k) => play.tiles[k].media.video.videoWidth > 0).length === 3`));
+    check(await evaluate(a, `$("pchips").textContent.includes("Imported by")`), "the player header does not say the recording is imported");
+    check(await evaluate(a, `play.keys.every((k) => !play.tiles[k].imp.hidden)`), "a tile of an imported view has no Imported mark");
+    await screenshot(a, "imported-player");
+    ctx.notes.push(`folder export of ${session.views.length} views imported back and received by SHA-256 on 3 members`);
+  });
+
+  await step("a folder made by hand, with a transcoded file and a sound-only file, imports on B and plays for everyone", async () => {
+    const all = [a, b, c];
+    const media = path.join(OUT, "media", "Walkthrough");
+    fs.mkdirSync(media, { recursive: true });
+    const make = (inputs, out) => {
+      const r = ffmpeg("ffmpeg", ["-v", "error", "-y", ...inputs.flatMap((i) => ["-f", "lavfi", "-i", i]), ...out]);
+      check(r.ok, `ffmpeg ${out.at(-1)}: ${r.err}`);
+    };
+    make([`testsrc2=size=320x180:rate=15:duration=${MEDIA_SECONDS.coach}`, `sine=frequency=440:duration=${MEDIA_SECONDS.coach}`], ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-g", "15", "-c:a", "aac", "-shortest", path.join(media, "Coach.mp4")]);
+    make([`testsrc2=size=160x120:rate=10:duration=${MEDIA_SECONDS.camera}`, `sine=frequency=660:duration=${MEDIA_SECONDS.camera}`], ["-c:v", "mpeg4", "-c:a", "pcm_s16le", "-shortest", path.join(media, "Old camera.avi")]);
+    make([`sine=frequency=880:duration=${MEDIA_SECONDS.commentary}`], ["-c:a", "aac", path.join(media, "Commentary.m4a")]);
+    fs.writeFileSync(path.join(media, "session.json"), JSON.stringify({
+      title: "Walkthrough", start: PLAN_START,
+      views: [{ name: "Coach", file: "Coach.mp4" }, { name: "Old camera", file: "Old camera.avi", offset_ms: 2000 }, { name: "Commentary", file: "Commentary.m4a" }],
+      events: [{ at_s: 3, text: "The ring closes here #callout" }, { at_s: 0, to_s: 4, text: "Intro" }],
+    }));
+    const plan = await invoke(b, "import_plan", { spec: { folder: media } });
+    check(plan.title === "Walkthrough" && plan.views.length === 3 && plan.notes === 2 && plan.start === "2026-10-19T12:30:00.000Z", `plan ${brief(plan)}`);
+    const broken = path.join(OUT, "media", "Broken");
+    fs.mkdirSync(broken, { recursive: true });
+    fs.writeFileSync(path.join(broken, "session.json"), "{oops");
+    const refused = await invoke(b, "import_plan", { spec: { folder: broken } }).then(() => "", (e) => String(e));
+    check(refused.includes("is not valid"), `a broken session.json was answered with "${refused}"`);
+    const before = (await state(b)).sets.length;
+    check((await invoke(b, "import_recording", { spec: { folder: broken } }).then(() => "", (e) => String(e))).includes("is not valid") && (await state(b)).sets.length === before, "a refused import changed the recordings");
+    await evaluate(b, `openImport({ folder: ${JSON.stringify(media)} }); true`);
+    await waitFor("B's import dialog lists the three views", within(UI_REFRESH_S * 5), () => evaluate(b, `$("importdlg").open && $("importviews").children.length === 3 && !$("importgo").disabled`));
+    check(await evaluate(b, `$("importtitle").value === "Walkthrough" && [...$("importviews").querySelectorAll("input")].map((i) => i.value).join() === "Coach,Old camera,Commentary"`), "the import dialog does not show the title and the view names");
+    await screenshot(b, "import-dialog");
+    await evaluate(b, `$("importdlg").close(); true`);
+    const made = await invokeLong(b, "import_recording", { spec: { folder: media } }, IMPORT_S, "the import of the hand-made folder");
+    check(made.views === 3 && made.notes === 2, `import: ${brief(made)}`);
+    await allSee(all, "the walkthrough", within(LOG_SYNC_S * 3), (st) => setOf(st, made.id)?.imported_by === b.name && setOf(st, made.id).title === "Walkthrough");
+    await allSee(all, "everyone has the walkthrough", within((SEGMENT_S + SYNC_ROUND_S) * 3), (st) => setOf(st, made.id)?.all_verified);
+    const seen = await state(a);
+    const set = setOf(seen, made.id);
+    const view = (name) => set.players.find((p) => seen.names[p.owner] === name);
+    const [coach, camera, commentary] = ["Coach", "Old camera", "Commentary"].map(view);
+    check(coach && camera && commentary, `views ${brief(set.players.map((p) => seen.names[p.owner]))}`);
+    check(Math.abs(set.start_us - Date.parse(PLAN_START) * 1000) <= START_TOLERANCE_US, `start ${set.start_us}`);
+    check(Math.abs(Math.abs(camera.start_us - coach.start_us) - 2e6) <= 1, `the second view starts ${camera.start_us - coach.start_us} us after the first`);
+    check(coach.parts.every((part) => part.v && !part.m) && camera.parts.every((part) => part.v) && commentary.parts.every((part) => !part.v && part.m), "the views have the wrong series");
+    const codecs = [coach, camera].map((p) => logOf(b, ctx.room, p.owner).find((r) => r.k === "cap")?.codec);
+    check(codecs.join() === "h264,h264", `the stored codecs are ${codecs}`);
+    await waitFor("A shows the notes and the chapter", within(LOG_SYNC_S * 2), async () => {
+      const st = await state(a);
+      const callout = st.events.find((e) => e.set === made.id && e.text === "The ring closes here #callout");
+      const intro = st.events.find((e) => e.set === made.id && e.text === "Intro");
+      return callout?.tags.includes("callout") && intro?.end_us > intro?.local_us;
+    });
+    await evaluate(c, `openSession(${JSON.stringify(made.id)}); true`);
+    await waitFor("C plays the two pictures", within(UI_REFRESH_S * 10), () => evaluate(c, `play.keys.length === 3 && play.keys.filter((k) => play.tiles[k].media.video.videoWidth > 0).length === 2`));
+    await waitFor("the walkthrough has one finished Apex job", within(JOB_CHECK_S + LOG_SYNC_S + 60), async () => {
+      const jobs = (await invoke(a, "jobs")).jobs.filter((j) => j.plugin === PLUGIN && j.set === made.id);
+      check(!jobs.some((j) => j.state === "failed"), `the Apex job failed: ${brief(jobs)}`);
+      return jobs.length === 1 && jobs[0].state === "done";
+    });
+    await evaluate(c, `openSession(${JSON.stringify(ctx.set)}); true`);
+    ctx.notes.push("hand-made folder with a copied, a transcoded and a sound-only file imported on B and played on C");
+  });
+
+  await step("the local API imports a bare folder of videos and exports a recording to a folder", async () => {
+    const bare = path.join(OUT, "media", "Review night");
+    fs.mkdirSync(bare, { recursive: true });
+    for (const [name, hz] of [["Ann POV", 440], ["Ben POV", 660]]) {
+      const r = ffmpeg("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=160x90:rate=10:duration=4", "-f", "lavfi", "-i", `sine=frequency=${hz}:duration=4`, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", path.join(bare, `${name}.mp4`)]);
+      check(r.ok, `ffmpeg ${name}: ${r.err}`);
+    }
+    await invoke(a, "set_api", { on: true });
+    await waitFor("the API answers", within(UI_REFRESH_S * 5), () => api(a, "GET", "/llms.txt").then((r) => r.status === 200, () => false));
+    const llms = await api(a, "GET", "/llms.txt");
+    check(llms.text.includes("recordings/import") && llms.text.includes("/export"), "llms.txt does not describe import and export");
+    const { token } = await invoke(a, "api_info");
+    const room = `/v1/rooms/${ctx.room}`;
+    check((await api(a, "POST", `${room}/recordings/import`, { token, body: { folder: path.join(OUT, "media", "Nothing here") } })).status === 400, "a missing folder was not refused");
+    check((await api(a, "POST", `${room}/recordings/import`, { token, body: { files: "x" } })).status === 400, "a bad body was not refused");
+    const made = await api(a, "POST", `${room}/recordings/import`, { token, body: { folder: bare } });
+    check(made.status === 201 && made.json.views === 2, `import: ${made.status} ${brief(made.text)}`);
+    const one = await api(a, "GET", `${room}/recordings/${encodeURIComponent(made.json.id)}`, { token });
+    check(one.status === 200 && one.json.title === "Review night" && one.json.imported_by?.id === a.id && one.json.members.length === 2 && one.json.members.every((m) => m.imported) && one.json.members.map((m) => m.name).sort().join() === "Ann POV,Ben POV", `recording: ${brief(one.json)}`);
+    await allSee([b, c], "the bare folder's recording", within(LOG_SYNC_S * 3), (st) => setOf(st, made.json.id)?.imported_by === a.name);
+    const out = path.join(OUT, "api-export");
+    check((await api(a, "POST", `${room}/recordings/${encodeURIComponent(made.json.id)}/export`, { token, body: {} })).status === 400, "an export without a folder was accepted");
+    const exported = await api(a, "POST", `${room}/recordings/${encodeURIComponent(made.json.id)}/export`, { token, body: { folder: out, aligned: true } });
+    check(exported.status === 201 && exported.json.files === 2, `export: ${exported.status} ${brief(exported.text)}`);
+    const session = readJson(path.join(out, "session.json"));
+    check(session.views.map((v) => v.file).sort().join() === "Ann POV.mp4,Ben POV.mp4" && session.views.every((v) => v.offset_ms === 0), `exported session.json ${brief(session)}`);
+    for (const v of session.views) {
+      const probe = ffmpeg("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", path.join(out, v.file)]);
+      check(probe.ok && Math.abs(Number(probe.out) - 4) <= 1.5, `${v.file} lasts ${probe.out.trim()} s`);
+    }
+    check((await api(a, "POST", `${room}/recordings/${encodeURIComponent(made.json.id)}/export`, { token, body: { folder: out } })).status === 400, "an export into a folder that is not empty was accepted");
+    await invoke(a, "set_api", { on: false });
   });
 
   await step("a deleted session stays listed and comes back with Download", async () => {

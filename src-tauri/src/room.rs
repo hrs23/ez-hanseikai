@@ -177,7 +177,9 @@ pub fn display_name(core: &Core, id: &str) -> String {
         return core.name.lock().unwrap().clone();
     }
     let peer = core.peers.lock().unwrap().iter().find(|p| p.id.to_string() == id && !p.name.is_empty()).map(|p| p.name.clone());
-    peer.or_else(|| core.active_room().and_then(|r| r.names.get(id).cloned())).unwrap_or_else(|| short(id))
+    peer.or_else(|| core.active_room().and_then(|r| r.names.get(id).cloned()))
+        .or_else(|| core.active_room().and_then(|r| view_info(&core.room_log(&r.id, id)).map(|v| v.name)))
+        .unwrap_or_else(|| short(id))
 }
 
 pub fn remember_name(core: &Core, id: &str, name: &str, replace: bool) {
@@ -628,6 +630,21 @@ pub struct File {
     pub offset_us: i64,
     pub segs: Vec<Seg>,
     pub caps: HashMap<String, Value>,
+    pub view: Option<ViewInfo>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ViewInfo {
+    pub name: String,
+    pub by: String,
+    pub title: Option<String>,
+}
+
+pub fn view_info(records: &[Value]) -> Option<ViewInfo> {
+    let r = records.iter().find(|r| r["k"] == "rec")?;
+    let by = r["imported"].as_str().filter(|b| b.parse::<EndpointId>().is_ok())?;
+    let name = crate::clean_name(r["view"].as_str()?);
+    (!name.is_empty()).then(|| ViewInfo { name, by: by.to_string(), title: r["title"].as_str().map(|t| crate::clean_text(t, crate::session::TITLE_MAX)).filter(|t| !t.is_empty()) })
 }
 
 impl File {
@@ -697,9 +714,20 @@ pub fn logs(core: &Core, room: &str) -> Vec<Log> {
     let me = core.me();
     let mut out = vec![Log { owner: me.clone(), offset_us: 0, records: own }];
     for id in people.iter().filter(|id| id.parse::<EndpointId>().is_ok() && **id != me) {
-        out.push(Log { owner: id.clone(), offset_us: offsets.get(&short(id)).copied().unwrap_or(0), records: core.room_log(room, id) });
+        let records = core.room_log(room, id);
+        let offset_us = match view_info(&records) {
+            Some(view) if view.by == me => 0,
+            Some(view) => offsets.get(&short(&view.by)).copied().unwrap_or(0),
+            None => offsets.get(&short(id)).copied().unwrap_or(0),
+        };
+        out.push(Log { owner: id.clone(), offset_us, records });
     }
     out
+}
+
+pub fn imported_views(core: &Core, room: &str) -> HashMap<String, ViewInfo> {
+    let people = core.rooms.lock().unwrap().list.iter().find(|r| r.id == room).map(|r| r.removed.clone()).unwrap_or_default();
+    people.into_iter().filter(|id| id.parse::<EndpointId>().is_ok()).filter_map(|id| Some((id.clone(), view_info(&core.room_log(room, &id))?))).collect()
 }
 
 pub fn sets(core: &Core, room: &str, logs: &[Log]) -> Vec<Set> {
@@ -741,7 +769,7 @@ pub fn derive_sets(room: &str, logs: &[Log], deleted: &HashSet<String>) -> Vec<S
                     }
                     let set = sets.entry(id.to_string()).or_insert_with(|| Set { id: id.to_string(), room: room.to_string(), files: Vec::new() });
                     open.insert(id, (set.files.len(), false));
-                    set.files.push(File { owner: log.owner.clone(), start_us: r["start_us"].as_i64().unwrap_or(0), end_us: None, offset_us: log.offset_us, segs: Vec::new(), caps: HashMap::new() });
+                    set.files.push(File { owner: log.owner.clone(), start_us: r["start_us"].as_i64().unwrap_or(0), end_us: None, offset_us: log.offset_us, segs: Vec::new(), caps: HashMap::new(), view: view_info(&log.records) });
                 }
                 Some("rec_end") => {
                     if let Some((i, ended)) = open.get_mut(id).filter(|(_, ended)| !ended) {
@@ -980,7 +1008,7 @@ pub fn sets_json(core: &Core, room: &str, logs: &[Log], events: &[Value]) -> Vec
             let (have, total) = data::held(core, room, f);
             let by: Vec<&str> = holders.iter().filter(|h| full(h.have, &set, f)).map(|h| h.id).collect();
             players.push(json!({
-                "owner": f.owner, "start_us": f.start_us, "end_us": f.end_us, "offset_us": f.offset_us, "have": have, "total": total,
+                "owner": f.owner, "imported": f.view.is_some(), "start_us": f.start_us, "end_us": f.end_us, "offset_us": f.offset_us, "have": have, "total": total,
                 "recording": f.end_us.is_none(), "verified_by": by, "stuck": stuck(&mine, &online, &set, f), "parts": parts_json(core, room, &set, f),
             }));
         }
@@ -992,8 +1020,10 @@ pub fn sets_json(core: &Core, room: &str, logs: &[Log], events: &[Value]) -> Vec
         let live = set.end().is_none();
         let all_verified = missing.is_empty() && finished.len() == set.files.len();
         let covered: Vec<&Value> = events.iter().filter(|e| covers(&set, e)).map(|e| &e["key"]).collect();
+        let imported = set.files.iter().find_map(|f| f.view.as_ref());
         out.push(json!({
             "id": set.id, "room": room, "start_us": set.start(), "end_us": set.end(), "live": live,
+            "title": imported.and_then(|v| v.title.clone()), "imported_by": imported.map(|v| display_name(core, &v.by)),
             "players": players, "events": covered, "progress": {"have": have, "total": total, "stuck": stuck_all}, "missing": missing.len(), "lacking": lacking_by, "all_verified": all_verified,
             "status": set_status(live, all_verified, &missing), "layout": set_layout(logs, &set.id), "party": flows.remove(&set.id).unwrap_or_default(),
         }));
@@ -1064,6 +1094,7 @@ pub fn state_json(core: &Core) -> Value {
         })
         .collect();
     names.insert(my_id.clone(), "You".to_string());
+    names.extend(imported_views(core, &room_id).into_iter().map(|(id, v)| (id, v.name)));
     let logs = logs(core, &room_id);
     if let Some(name) = latest_name(&logs) {
         keep_name(core, &room_id, &name);
@@ -1163,6 +1194,21 @@ mod tests {
         assert_eq!((rejoined[0].files.len(), rejoined[0].files[0].start_us, rejoined[0].files[0].end_us), (1, 100, None));
         let deleted: HashSet<String> = ["r/s2".to_string()].into();
         assert_eq!(derive_sets("r", &[log("a", 0, vec![json!({"k": "rec", "set": "s2"})])], &deleted).len(), 0);
+    }
+
+    #[test]
+    fn an_imported_view_carries_its_name_importer_and_title_in_its_first_rec() {
+        let (importer, view) = (iroh::SecretKey::generate().public().to_string(), iroh::SecretKey::generate().public().to_string());
+        let imported = |by: &str, name: &str, title: Value| vec![json!({"k": "rec", "set": "s1", "start_us": 5, "imported": by, "view": name, "title": title}), json!({"k": "rec_end", "set": "s1", "t_us": 9})];
+        let sets = derive_sets("r", &[log("a", 0, vec![json!({"k": "rec", "set": "s2", "start_us": 1})]), log(&view, 0, imported(&importer, "  Walk\u{7}through ", json!("What went wrong")))], &HashSet::new());
+        let found = sets.iter().find(|s| s.id == "s1").unwrap().files[0].view.clone();
+        assert_eq!(found, Some(ViewInfo { name: "Walkthrough".into(), by: importer.clone(), title: Some("What went wrong".into()) }));
+        assert_eq!(sets.iter().find(|s| s.id == "s2").unwrap().files[0].view, None);
+        assert_eq!(view_info(&imported(&importer, "Coach", Value::Null)).map(|v| v.title), Some(None));
+        assert_eq!(view_info(&imported("not an id", "Coach", Value::Null)), None);
+        assert_eq!(view_info(&imported(&importer, "  ", Value::Null)), None);
+        assert_eq!(view_info(&[json!({"k": "seg"}), json!({"k": "rec", "set": "s1", "view": "Coach"})]), None);
+        assert_eq!(view_info(&[]), None);
     }
 
     fn seg(capture: &str, series: &str, n: u32, set: &str) -> Value {
@@ -1290,7 +1336,7 @@ mod tests {
 
     #[test]
     fn coverage_by_moment_or_set() {
-        let set = Set { id: "s1".into(), room: "r".into(), files: vec![File { owner: "a".into(), start_us: 100, end_us: Some(200), offset_us: 0, segs: Vec::new(), caps: HashMap::new() }] };
+        let set = Set { id: "s1".into(), room: "r".into(), files: vec![File { owner: "a".into(), start_us: 100, end_us: Some(200), offset_us: 0, segs: Vec::new(), caps: HashMap::new(), view: None }] };
         assert!(covers(&set, &json!({"local_us": 150, "set": null})));
         assert!(!covers(&set, &json!({"local_us": 250, "set": null})));
         assert!(covers(&set, &json!({"local_us": null, "set": "s1"})));

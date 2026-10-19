@@ -240,6 +240,20 @@
   <div class="dlghead"><h2 data-t="Rename room">Rename room</h2><button class="icon close" data-icon="x" data-t-label="Close"></button></div>
   <div class="row"><input id="renameinput" class="grow" maxlength="40" autocomplete="off" data-t-label="Name"><button id="renamesave" class="primary" data-t="Save">Save</button></div>
 </dialog>
+<dialog id="importdlg" class="wide">
+  <div class="dlghead"><h2 data-t="Import recording">Import recording</h2><button class="icon close" data-icon="x" data-t-label="Close"></button></div>
+  <div class="row"><button id="importfolder"><span data-icon="folder" data-icon-class="sm"></span><span data-t="Choose folder…">Choose folder…</span></button><button id="importfiles"><span data-icon="film" data-icon-class="sm"></span><span data-t="Choose files…">Choose files…</span></button></div>
+  <div id="importplan" class="importplan" hidden>
+    <label class="fl"><span data-t="Title">Title</span><input id="importtitle" maxlength="80" autocomplete="off"></label>
+    <div id="importviews" class="importviews"></div>
+  </div>
+  <div class="row end"><button id="importgo" class="primary" data-t="Import" disabled>Import</button></div>
+</dialog>
+<dialog id="folderdlg">
+  <div class="dlghead"><h2 data-t="Export to folder">Export to folder</h2><button class="icon close" data-icon="x" data-t-label="Close"></button></div>
+  <label class="check"><input id="folderaligned" type="checkbox"><span data-t="Start every video together">Start every video together</span></label>
+  <div class="row end"><button id="folderno" data-t="Cancel">Cancel</button><button id="folderyes" class="primary" data-t="Export">Export</button></div>
+</dialog>
 <dialog id="confirm">
   <h2 id="confirmtitle"></h2>
   <p id="confirmtext" class="muted" hidden></p>

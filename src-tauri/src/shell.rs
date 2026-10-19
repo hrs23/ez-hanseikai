@@ -18,7 +18,7 @@ pub const DEFAULT_HOTKEY: &str = "Ctrl+Alt+M";
 const REPO: &str = "https://github.com/hrs23/ez-hanseikai";
 const STATUS_POLL: Duration = Duration::from_secs(1);
 const DEBUG_SIZE: (f64, f64) = (1100.0, 720.0);
-const JA: [(&str, &str); 51] = [
+const JA: [(&str, &str); 53] = [
     ("EZ Hanseikai is already running with this data folder.", "EZ Hanseikai はこのデータフォルダですでに動いています。"),
     ("File", "ファイル"),
     ("Room", "ルーム"),
@@ -42,6 +42,8 @@ const JA: [(&str, &str); 51] = [
     ("Previous recording", "前のセッション"),
     ("Next recording", "次のセッション"),
     ("Export video…", "動画をエクスポート…"),
+    ("Export to folder…", "フォルダにエクスポート…"),
+    ("Import recording…", "録画をインポート…"),
     ("Delete from this PC…", "このPCから削除…"),
     ("Live", "ライブ"),
     ("Game plan", "作戦ボード"),
@@ -109,6 +111,22 @@ pub fn save_file(app: &AppHandle, name: &str, kind: &str, ext: &str) -> Option<P
         dialog = dialog.set_directory(dir);
     }
     dialog.blocking_save_file().and_then(|p| p.into_path().ok())
+}
+
+pub fn pick_folder(app: &AppHandle) -> Option<PathBuf> {
+    let mut dialog = app.dialog().file();
+    if let Some(dir) = documents(app) {
+        dialog = dialog.set_directory(dir);
+    }
+    dialog.blocking_pick_folder().and_then(|p| p.into_path().ok())
+}
+
+pub fn pick_files(app: &AppHandle, kind: &str, extensions: &[&str]) -> Vec<PathBuf> {
+    let mut dialog = app.dialog().file().add_filter(kind, extensions);
+    if let Some(dir) = documents(app) {
+        dialog = dialog.set_directory(dir);
+    }
+    dialog.blocking_pick_files().into_iter().flatten().filter_map(|p| p.into_path().ok()).collect()
 }
 
 fn open_file(app: &AppHandle, kind: &str, ext: &str) -> Option<PathBuf> {
@@ -297,6 +315,8 @@ fn toggle_text(recording: bool, reviewing: bool) -> &'static str {
 fn build_menu(app: &AppHandle, lang: &str, toggle: &MenuItem<Wry>, mark: &MenuItem<Wry>) -> tauri::Result<Menu<Wry>> {
     let it = |id: &str, text: &'static str, accel: Option<&str>| item(app, lang, id, text, accel);
     let file = SubmenuBuilder::new(app, tr(lang, "File"))
+        .item(&it("import-recording", "Import recording…", None)?)
+        .separator()
         .item(&it("open-folder", "Open data folder", None)?)
         .separator()
         .item(&it("export-identity", "Export identity…", None)?)
@@ -322,6 +342,7 @@ fn build_menu(app: &AppHandle, lang: &str, toggle: &MenuItem<Wry>, mark: &MenuIt
         .item(&it("next-session", "Next recording", None)?)
         .separator()
         .item(&it("export-session", "Export video…", None)?)
+        .item(&it("export-folder", "Export to folder…", None)?)
         .item(&it("delete-session", "Delete from this PC…", None)?)
         .build()?;
     let view = SubmenuBuilder::new(app, tr(lang, "View"))

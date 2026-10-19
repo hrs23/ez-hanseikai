@@ -5,7 +5,7 @@ use std::process::{Command, Stdio};
 
 use serde_json::Value;
 
-use super::{ffmpeg, Download, Found, Job, Output, Plugin};
+use super::{ffmpeg, Download, Found, Job, Media, Output, Plugin};
 use crate::proc::{IDLE, NO_WINDOW};
 
 pub const PLUGIN: Plugin = Plugin {
@@ -125,15 +125,20 @@ pub fn threads(cores: usize) -> usize {
     (cores / 2).max(1)
 }
 
+fn speech_source(job: &Job) -> &Media {
+    if job.voice.parts.is_empty() { &job.sound } else { &job.voice }
+}
+
 fn run(job: &Job, progress: &mut dyn FnMut(f64)) -> Result<Output, String> {
-    if job.voice.parts.is_empty() {
+    let speech = speech_source(job);
+    if speech.parts.is_empty() {
         return Ok(Output::default());
     }
     std::fs::create_dir_all(&job.work).map_err(|e| e.to_string())?;
     let wav = job.work.join("voice.wav");
     let filters = filters();
     let after = ["-vn", "-af", &filters, "-ac", "1", "-ar", RATE, "-c:a", "pcm_s16le"].iter().map(|s| s.to_string()).chain([wav.display().to_string()]).collect::<Vec<_>>();
-    let out = ffmpeg(job, &job.voice, &["-v", "info", "-nostats"], &after, Stdio::null(), Stdio::piped()).and_then(|c| c.wait_with_output()).map_err(|e| e.to_string())?;
+    let out = ffmpeg(job, speech, &["-v", "info", "-nostats"], &after, Stdio::null(), Stdio::piped()).and_then(|c| c.wait_with_output()).map_err(|e| e.to_string())?;
     let log = String::from_utf8_lossy(&out.stderr);
     if !out.status.success() {
         return if log.contains("matches no streams") { Ok(Output::default()) } else { Err(log.trim().lines().last().unwrap_or_default().to_string()) };
@@ -176,6 +181,17 @@ fn run(job: &Job, progress: &mut dyn FnMut(f64)) -> Result<Output, String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_file_without_a_voice_series_is_transcribed_from_its_sound() {
+        let media = |path: &str| Media { parts: vec![path.into()], stream: "a:0".into() };
+        let mut job = Job::default();
+        assert!(speech_source(&job).parts.is_empty());
+        job.sound = media("picture.mp4");
+        assert_eq!(speech_source(&job).parts, [std::path::PathBuf::from("picture.mp4")]);
+        job.voice = media("voice.mp4");
+        assert_eq!(speech_source(&job).parts, [std::path::PathBuf::from("voice.mp4")]);
+    }
 
     #[test]
     fn segments_become_ranges_without_noise() {

@@ -2,6 +2,7 @@
 
 mod api;
 mod audio;
+mod bundle;
 mod capture;
 mod check;
 mod data;
@@ -9,6 +10,7 @@ mod debug;
 mod download;
 mod export;
 mod ffmpeg;
+mod import;
 mod jobs;
 mod log;
 mod media;
@@ -18,6 +20,7 @@ mod plugins;
 mod proc;
 mod record;
 mod room;
+mod session;
 mod shell;
 mod sources;
 mod stream;
@@ -578,6 +581,54 @@ fn cancel_export(core: State<Arc<Core>>) {
 }
 
 #[tauri::command]
+async fn pick_import(core: State<'_, Arc<Core>>, folder: bool) -> Result<Value, String> {
+    let app = core.app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if folder {
+            shell::pick_folder(&app).map_or(Value::Null, |p| json!({"folder": p.to_string_lossy()}))
+        } else {
+            let files = shell::pick_files(&app, "Video", &session::VIDEO_EXTENSIONS.iter().chain(session::AUDIO_EXTENSIONS.iter()).copied().collect::<Vec<_>>());
+            if files.is_empty() { Value::Null } else { json!({"files": files.iter().map(|f| f.to_string_lossy()).collect::<Vec<_>>()}) }
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn import_plan(spec: Value) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || import::plan_from_spec(&spec).map(|p| import::plan_json(&p))).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn import_recording(core: State<'_, Arc<Core>>, spec: Value) -> Result<Value, String> {
+    let core = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || import::run(&core, &spec)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn cancel_import() {
+    import::cancel();
+}
+
+#[tauri::command]
+async fn export_folder(core: State<'_, Arc<Core>>, room: String, set: String, aligned: bool) -> Result<Value, String> {
+    if !room::valid_id(&room) || !room::valid_id(&set) {
+        return Err("That recording is not on this PC.".into());
+    }
+    let core = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        export::check(&core)?;
+        let parent = if test_mode() { Some(core.dir.join("bundles")) } else { shell::pick_folder(&core.app) };
+        let Some(parent) = parent else { return Ok(Value::Null) };
+        let dir = (0..).map(|i| parent.join(if i == 0 { set.clone() } else { format!("{set} {}", i + 1) })).find(|d| !d.exists()).unwrap_or_default();
+        bundle::run(&core, &room, &set, &dir, aligned)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 fn set_layout(core: State<Arc<Core>>, layout: Value) {
     *core.layout.lock().unwrap() = layout;
     core.save_settings();
@@ -1053,7 +1104,7 @@ fn main() {
             std::thread::spawn(move || jobs::worker(c));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug::debug_view, debug::debug_report, debug::set_report_sharing, save_report, start_recording, stop_recording, delete_set, restore_set, identity, open_set_folder, export_set, cancel_export, set_layout, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, remove_room, check_peer, set_limit, set_codecs, cancel_invites, list_sources, set_source, use_display, list_mics, set_mic, set_mix, set_audio_process, set_warn_hours, set_channel, event_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_event, answer_ask, focus_set, party_on, party_act, jobs::room_plugins, jobs::set_room_plugin, jobs::set_process_plugin, jobs::prepare_plugin, jobs::jobs, jobs::retry_job, jobs::cancel_job, install_update, check_update, save_text, jobs::run_job_next, set_quality, set_language, rename_room, draw, party_typing, open_debug, mark, set_hotkey, retry_ffmpeg, set_api, new_api_token, api_info])
+        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug::debug_view, debug::debug_report, debug::set_report_sharing, save_report, start_recording, stop_recording, delete_set, restore_set, identity, open_set_folder, export_set, cancel_export, pick_import, import_plan, import_recording, cancel_import, export_folder, set_layout, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, remove_room, check_peer, set_limit, set_codecs, cancel_invites, list_sources, set_source, use_display, list_mics, set_mic, set_mix, set_audio_process, set_warn_hours, set_channel, event_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_event, answer_ask, focus_set, party_on, party_act, jobs::room_plugins, jobs::set_room_plugin, jobs::set_process_plugin, jobs::prepare_plugin, jobs::jobs, jobs::retry_job, jobs::cancel_job, install_update, check_update, save_text, jobs::run_job_next, set_quality, set_language, rename_room, draw, party_typing, open_debug, mark, set_hotkey, retry_ffmpeg, set_api, new_api_token, api_info])
         .build(tauri::generate_context!())
         .expect("failed to start");
     app.run(|app, event| {

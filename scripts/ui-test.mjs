@@ -9,7 +9,7 @@ const ui = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "ui");
 const read = (f) => fs.readFileSync(path.join(ui, f), "utf8");
 const source = ["util.js", "i18n.js", "layout.js", "events.js", "review.js", "plugins.js", "ai.js"].map(read).join("\n");
 const context = vm.createContext({ window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date });
-const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, flowAt, flowBands, flowSteps, isReview, voiceOnly, deletePreview, oldSessions, soundKey, pluginProgress, isBusy, workerState, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, apiUrl, rateOf, liveEdge, netState, summaryLines, leftText, JA, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, flowAt, flowBands, flowSteps, isReview, voiceOnly, deletePreview, oldSessions, soundKey, pluginProgress, isBusy, workerState, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, apiUrl, rateOf, liveEdge, netState, summaryLines, leftText, JA, t, sessionName, setTitles: (x) => { titles = x; }, setLanguage: (l) => { language = l; } })`, context);
 const plain = (v) => JSON.parse(JSON.stringify(v));
 
 const moment = (m, extra = {}) => ({ role: "moment", m, plugin: { id: "apex-matches" }, tags: ["match"], ...extra });
@@ -249,4 +249,43 @@ test("Settings has one switch for the local API with its address and token butto
   assert.match(html, /<button id="aiplay"[^>]*>[^]*?data-t="AI"/);
   assert.equal((html.match(/id="apion"/g) || []).length, 1);
   for (const word of ["API", "Local API", "Copy token", "New token", "AI", "The port is in use"]) assert.ok(word in ui$.JA, word);
+});
+
+test("an imported recording is named by its title and the others by their time", () => {
+  ui$.setLanguage("en");
+  ui$.setTitles({ "2026-10-19 12-30-00": "Scrim vs Team B" });
+  assert.equal(ui$.sessionName("2026-10-19 12-30-00"), "Scrim vs Team B");
+  assert.match(ui$.sessionName("2026-10-19 13-00-00", new Date(2026, 9, 19)), /^Today 13:00$/);
+  ui$.setTitles({});
+});
+
+test("the import and folder export dialogs, menu actions and phrases exist", () => {
+  const html = read("index.html");
+  for (const id of ["importdlg", "importfolder", "importfiles", "importtitle", "importviews", "importgo", "folderdlg", "folderaligned", "folderyes", "folderno"]) assert.match(html, new RegExp(`id="${id}"`), id);
+  const pages = read("pages.js");
+  for (const action of ["import-recording", "export-folder"]) assert.match(pages, new RegExp(`"${action}":`), action);
+  assert.match(pages, /tauri:\/\/drag-drop/);
+  for (const word of ["Imported", "Imported by {name}", "Import recording", "Choose folder…", "Choose files…", "Importing {n}%", "Import finished", "Export to folder…", "Start every video together"]) assert.ok(word in ui$.JA, word);
+});
+
+test("errors about a session folder read in Japanese too", () => {
+  ui$.setLanguage("ja");
+  assert.equal(ui$.t("Row 3 of the notes file: A note needs text."), "メモのファイルの 3 行目: メモには文章が必要です。");
+  assert.equal(ui$.t("Row 3 of the notes file has no valid time."), "メモのファイルの 3 行目の時刻が正しくありません。");
+  assert.equal(ui$.t("gone.mp4 is missing."), "gone.mp4 が見つかりません。");
+  assert.equal(ui$.t("views must be a list."), "views はリストでなければなりません。");
+  assert.equal(ui$.t("../x.mp4 must be a file inside the folder."), "../x.mp4 はフォルダの中のファイルでなければなりません。");
+  assert.equal(ui$.t("Something nobody translated."), "Something nobody translated.");
+  ui$.setLanguage("en");
+  assert.equal(ui$.t("gone.mp4 is missing."), "gone.mp4 is missing.");
+});
+
+test("every fixed message the import and export code can send has a Japanese one", () => {
+  const sources = ["session.rs", "import.rs", "bundle.rs"].map((f) => fs.readFileSync(path.join(ui, "..", "src-tauri", "src", f), "utf8").split("#[cfg(test)]")[0]);
+  const used = new Set();
+  for (const text of sources) for (const m of text.matchAll(/(?:Err\(|ok_or\(|ok_or_else\(\|\| |return Err\()"((?:[^"\\]|\\.)*)"/g)) used.add(JSON.parse(`"${m[1]}"`));
+  for (const text of sources) for (const m of text.matchAll(/"((?:[A-Z][^"{}\\]*)\.)"(?:\.into\(\)|\.to_string\(\))/g)) used.add(JSON.parse(`"${m[1]}"`));
+  const fixed = [...used].filter((x) => /^[A-Z]/.test(x) && x.includes(" ") && !x.includes("{"));
+  assert.ok(fixed.length > 20, `found ${fixed.length} messages`);
+  assert.deepEqual(fixed.filter((x) => !(x in ui$.JA)), []);
 });

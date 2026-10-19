@@ -579,7 +579,20 @@ for (const d of document.querySelectorAll("dialog")) {
   });
 }
 
+$("importfolder").onclick = () => invoke("pick_import", { folder: true }).then((spec) => { if (spec) planImport(spec); }).catch(fail);
+$("importfiles").onclick = () => invoke("pick_import", { folder: false }).then((spec) => { if (spec) planImport(spec); }).catch(fail);
+$("importgo").onclick = startImport;
+$("importtitle").onkeydown = (e) => { if (e.key === "Enter" && !composing(e) && !$("importgo").disabled) $("importgo").click(); };
+$("folderno").onclick = () => $("folderdlg").close();
+$("folderyes").onclick = startFolderExport;
+window.__TAURI__.event.listen("tauri://drag-drop", (e) => {
+  const paths = (e.payload && e.payload.paths) || [];
+  if (paths.length && inRoom() && !importing) openImport({ files: paths });
+});
+
 const menuActions = {
+  "import-recording": () => openImport(),
+  "export-folder": () => exportFolder(playSet()),
   "settings": () => openSettings(),
   "copy-invite": copyInvite,
   "cancel-invite": cancelInvite,

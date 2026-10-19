@@ -14,6 +14,7 @@ pub const LIVE_WINDOW: u32 = 3;
 const RANGE_MAX: u64 = 4 << 20;
 const INDEX_MAX: usize = 4096;
 
+#[derive(Clone)]
 pub struct Piece {
     pub path: PathBuf,
     pub len: u64,

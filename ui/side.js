@@ -108,12 +108,17 @@ function liveRow() {
   row.onkeydown = (e) => { if (e.key === "Enter") openNow(); };
   return row;
 }
+function importedPill(s) {
+  const p = pill("gray", "download", t("Imported"));
+  p.title = t("Imported by {name}", { name: s.imported_by });
+  return p;
+}
 function sessionRow(s) {
   const on = page === "player" && !showingNow() && (review ? review.id === s.id : selected === s.id);
   const state = sessionState(s);
   const matches = matchCount(s);
   const notes = noteCount(s);
-  const what = isReview(s) ? pill("accent", "mic", t("Debrief")) : null;
+  const what = isReview(s) ? pill("accent", "mic", t("Debrief")) : s.imported_by ? importedPill(s) : null;
   const detail = matches ? t(matches === 1 ? "{n} match" : "{n} matches", { n: matches }) : notes ? t(notes === 1 ? "{n} note" : "{n} notes", { n: notes }) : "";
   let l2;
   if (state && state.kind === "bar") l2 = el("div", { className: "prog", title: state.title || "" }, el("div", { className: "l2" }, icon(state.icon, "sm"), el("span", { textContent: state.text }), el("span", { className: "r", textContent: state.right || "" })), el("div", { className: "bar" }, el("i", { style: `width:${Math.round(state.frac * 100)}%` })));
@@ -136,7 +141,7 @@ function renderSessions() {
   const list = st.sets.filter((s) => !s.live);
   const gone = showGone ? st.gone : [];
   const rows = [...list.map((s) => ({ id: s.id, s })), ...gone.map((g) => ({ id: g.id, g }))].sort((a, b) => (a.id < b.id ? 1 : -1));
-  const sig = [rows.map((r) => [r.id, r.s ? [setLength(r.s), sessionState(r.s), isReview(r.s), matchCount(r.s), noteCount(r.s), r.s.players.map((p) => p.owner)] : r.g.end_us]), page, nowView, selected, review && review.id, st.active_set, st.peers.map((p) => p.connected), lang, st.colors, st.names, dayOf(new Date())];
+  const sig = [rows.map((r) => [r.id, r.s ? [setLength(r.s), sessionState(r.s), isReview(r.s), r.s.imported_by, r.s.title, matchCount(r.s), noteCount(r.s), r.s.players.map((p) => p.owner)] : r.g.end_us]), page, nowView, selected, review && review.id, st.active_set, st.peers.map((p) => p.connected), lang, st.colors, st.names, dayOf(new Date())];
   if (!changed("sessions", sig)) return;
   $("sessions").replaceChildren(liveRow(), ...rows.map((r) => (r.s ? sessionRow(r.s) : goneRow(r.g))), rows.length ? "" : el("div", { className: "none", textContent: t("No recordings yet") }));
 }
@@ -147,6 +152,7 @@ function sessionMenu(id, anchor) {
   openMenu([
     { heading: `${sessionName(id)} · ${t("{size} on this PC", { size: bytes(set.progress.have) })}` },
     { label: t("Export video…"), icon: "film", disabled: set.live || voiceOnly(set), run: () => exportSet(set) },
+    { label: t("Export to folder…"), icon: "upload", disabled: set.live, run: () => exportFolder(set) },
     { label: t("Open folder"), icon: "folder", run: () => run("open_set_folder", { room: set.room, set: set.id }, null) },
     { label: t("Copy link"), icon: "link", run: () => navigator.clipboard.writeText(momentLink(set.id, 0, null)).then(() => flash(t("Link copied"))).catch(fail) },
     ...(failed.length ? [{ label: t("Retry analysis"), icon: "rotate-cw", run: () => Promise.all(failed.map((j) => invoke("retry_job", { job: j.job }))).then(pollPlugins).catch(fail) }] : []),
