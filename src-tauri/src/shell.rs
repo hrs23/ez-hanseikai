@@ -22,7 +22,7 @@ const JA: [(&str, &str); 51] = [
     ("EZ Hanseikai is already running with this data folder.", "EZ Hanseikai はこのデータフォルダですでに動いています。"),
     ("File", "ファイル"),
     ("Room", "ルーム"),
-    ("Session", "セッション"),
+    ("Recording", "録画"),
     ("View", "表示"),
     ("Help", "ヘルプ"),
     ("Open data folder", "データフォルダを開く"),
@@ -34,13 +34,13 @@ const JA: [(&str, &str); 51] = [
     ("Cancel invite", "招待を取り消す"),
     ("Rename room…", "ルーム名を変更…"),
     ("Leave room", "ルームを離れる"),
-    ("Start session", "セッション開始"),
-    ("End session", "セッション終了"),
+    ("Start recording", "セッション開始"),
+    ("Stop recording", "セッション終了"),
     ("Record review", "反省を録音"),
     ("Mark this moment", "この瞬間をマーク"),
     ("Add note", "メモを追加"),
-    ("Previous session", "前のセッション"),
-    ("Next session", "次のセッション"),
+    ("Previous recording", "前のセッション"),
+    ("Next recording", "次のセッション"),
     ("Export video…", "動画をエクスポート…"),
     ("Delete from this PC…", "このPCから削除…"),
     ("Live", "ライブ"),
@@ -59,8 +59,8 @@ const JA: [(&str, &str); 51] = [
     ("Report a problem", "問題を報告"),
     ("Release notes", "リリースノート"),
     ("About", "バージョン情報"),
-    ("End the session for everyone and exit?", "全員のセッションを終了してアプリを終了しますか?"),
-    ("End session and exit", "セッションを終了して終了"),
+    ("Stop recording for everyone and exit?", "全員のセッションを終了してアプリを終了しますか?"),
+    ("Stop recording and exit", "セッションを終了して終了"),
     ("Cancel the export and exit?", "エクスポートを中止してアプリを終了しますか?"),
     ("Files are still arriving. Exit anyway?", "まだファイルを受け取っています。それでも終了しますか?"),
     ("Cancel", "キャンセル"),
@@ -147,6 +147,23 @@ fn window_shown(app: &AppHandle) -> bool {
     app.get_webview_window("main").is_some_and(|w| w.is_visible().unwrap_or(false) && !w.is_minimized().unwrap_or(false))
 }
 
+const CAPTION: u32 = 0x0f1115;
+const CAPTION_TEXT: u32 = 0xe7e9ee;
+
+fn colorref(rgb: u32) -> u32 {
+    ((rgb & 0xff) << 16) | (rgb & 0xff00) | (rgb >> 16)
+}
+
+pub fn match_caption(window: &tauri::WebviewWindow) {
+    use ::windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR};
+    let Ok(hwnd) = window.hwnd() else { return };
+    let hwnd = ::windows::Win32::Foundation::HWND(hwnd.0);
+    for (attribute, rgb) in [(DWMWA_CAPTION_COLOR, CAPTION), (DWMWA_BORDER_COLOR, CAPTION), (DWMWA_TEXT_COLOR, CAPTION_TEXT)] {
+        let color = colorref(rgb);
+        let _ = unsafe { DwmSetWindowAttribute(hwnd, attribute, &color as *const u32 as *const _, std::mem::size_of::<u32>() as u32) };
+    }
+}
+
 pub fn plain_keys(window: &tauri::WebviewWindow) {
     let _ = window.with_webview(|webview| {
         use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
@@ -179,7 +196,7 @@ pub fn open_debug(app: &AppHandle) {
 
 pub fn exit_question(recording: bool, exporting: bool, receiving: bool) -> Option<(&'static str, &'static str)> {
     if recording {
-        Some(("End the session for everyone and exit?", "End session and exit"))
+        Some(("Stop recording for everyone and exit?", "Stop recording and exit"))
     } else if exporting {
         Some(("Cancel the export and exit?", "Exit"))
     } else if receiving {
@@ -271,9 +288,9 @@ fn item(app: &AppHandle, lang: &str, id: &str, text: &'static str, accel: Option
 
 fn toggle_text(recording: bool, reviewing: bool) -> &'static str {
     match (recording, reviewing) {
-        (true, _) => "End session",
+        (true, _) => "Stop recording",
         (false, true) => "Record review",
-        (false, false) => "Start session",
+        (false, false) => "Start recording",
     }
 }
 
@@ -296,13 +313,13 @@ fn build_menu(app: &AppHandle, lang: &str, toggle: &MenuItem<Wry>, mark: &MenuIt
         .separator()
         .item(&it("leave-room", "Leave room", None)?)
         .build()?;
-    let session = SubmenuBuilder::new(app, tr(lang, "Session"))
+    let session = SubmenuBuilder::new(app, tr(lang, "Recording"))
         .item(toggle)
         .item(mark)
         .item(&it("add-note", "Add note", None)?)
         .separator()
-        .item(&it("prev-session", "Previous session", None)?)
-        .item(&it("next-session", "Next session", None)?)
+        .item(&it("prev-session", "Previous recording", None)?)
+        .item(&it("next-session", "Next recording", None)?)
         .separator()
         .item(&it("export-session", "Export video…", None)?)
         .item(&it("delete-session", "Delete from this PC…", None)?)
@@ -450,6 +467,12 @@ pub fn setup(app: &tauri::App, core: Arc<Core>) -> tauri::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn colors_are_written_blue_first_for_windows() {
+        assert_eq!(super::colorref(0x0f1115), 0x0015110f);
+        assert_eq!(super::colorref(0xff0000), 0x0000ff);
+    }
+
     use super::*;
 
     #[test]
@@ -465,9 +488,9 @@ mod tests {
 
     #[test]
     fn the_start_command_says_what_it_records() {
-        assert_eq!(toggle_text(false, false), "Start session");
+        assert_eq!(toggle_text(false, false), "Start recording");
         assert_eq!(toggle_text(false, true), "Record review");
-        assert_eq!(toggle_text(true, true), "End session");
+        assert_eq!(toggle_text(true, true), "Stop recording");
     }
 
     #[test]
@@ -483,7 +506,7 @@ mod tests {
     #[test]
     fn closing_asks_only_while_work_would_be_lost() {
         assert_eq!(exit_question(false, false, false), None);
-        assert_eq!(exit_question(true, true, true).unwrap().0, "End the session for everyone and exit?");
+        assert_eq!(exit_question(true, true, true).unwrap().0, "Stop recording for everyone and exit?");
         assert_eq!(exit_question(false, true, true).unwrap().0, "Cancel the export and exit?");
         assert_eq!(exit_question(false, false, true).unwrap().0, "Files are still arriving. Exit anyway?");
     }

@@ -58,7 +58,10 @@ fn open_main(app: &tauri::App) -> tauri::Result<()> {
     if let Some(port) = TEST_PORT.as_ref().and_then(|p| p.parse::<u16>().ok()) {
         builder = builder.additional_browser_args(&format!("{BROWSER_ARGS} --remote-debugging-port={port}"));
     }
-    builder.build().map(|window| shell::plain_keys(&window))
+    builder.build().map(|window| {
+        shell::plain_keys(&window);
+        shell::match_caption(&window);
+    })
 }
 
 pub fn now_us() -> i64 {
@@ -550,7 +553,7 @@ fn open_set_folder(core: State<Arc<Core>>, room: String, set: String) {
 #[tauri::command]
 async fn export_set(core: State<'_, Arc<Core>>, room: String, set: String) -> Result<Value, String> {
     if !room::valid_id(&room) || !room::valid_id(&set) {
-        return Err("That session is not on this PC.".into());
+        return Err("That recording is not on this PC.".into());
     }
     let core = core.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -776,7 +779,7 @@ fn log_event(core: &Arc<Core>, room: &str, kind: &str, text: &str, target: Value
 }
 
 pub fn mark_moment(core: &Arc<Core>) -> Result<i64, String> {
-    let room = core.active_set.lock().unwrap().as_ref().map(|s| s.room.clone()).ok_or("Start a session first.")?;
+    let room = core.active_set.lock().unwrap().as_ref().map(|s| s.room.clone()).ok_or("Start recording first.")?;
     Ok(log_event(core, &room, "mark", "", json!({"t_us": now_us()}), Value::Null))
 }
 

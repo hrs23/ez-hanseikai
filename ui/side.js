@@ -11,9 +11,7 @@ let showGone = stored("showGone", true);
 
 function renderSide() {
   if (!inRoom()) return;
-  $("roomtitle").textContent = st.room.name;
   $("roomname").classList.toggle("on", page === "room");
-  $("navboard").classList.toggle("on", page === "board");
   renderFaces();
   renderStartButton();
   renderSessions();
@@ -23,7 +21,7 @@ function renderSide() {
 function tickSide() {
   const a = st.active_set;
   const timer = $("livetimer");
-  if (a && timer) timer.textContent = t("Recording {time}", { time: fmt((nowUs() - a.start_us) / 1e6) });
+  if (a && timer) timer.textContent = fmt((nowUs() - a.start_us) / 1e6);
   if (page === "player") {
     if (a && a.voice) $("reviewrec").replaceChildren(el("i", { className: "recdot" }), t("Debrief {time}", { time: fmt((nowUs() - a.start_us) / 1e6) }));
     const chip = $("pchips").querySelector(".pill.rec");
@@ -60,10 +58,10 @@ function renderStartButton() {
   if (!changed("startbtn", [state, lang])) return;
   const b = $("startbtn");
   b.className = "startbtn " + (state === "end" ? "end" : "go") + (state === "review" ? " review" : "");
-  if (state === "end") b.replaceChildren(icon("stop", "sm"), el("span", { textContent: t("End session") }));
+  if (state === "end") b.replaceChildren(icon("stop", "sm"), el("span", { textContent: t("Stop recording") }));
   else if (state === "review") b.replaceChildren(icon("mic"), el("span", { textContent: t("Record review") }), el("span", { className: "voice", textContent: t("Voice only") }));
-  else b.replaceChildren(el("i", { className: "rd" }), el("span", { textContent: t("Start session") }));
-  b.title = state === "start" ? t("Starts recording for everyone. Everything until End session is one session; matches are chapters in it.") : state === "review" ? t("Records everyone's voice and what the Watch Party watches, with no picture.") : "";
+  else b.replaceChildren(el("i", { className: "rd" }), el("span", { textContent: t("Start recording") }));
+  b.title = state === "start" ? t("Starts recording for everyone. Everything until Stop recording is one recording; matches are chapters in it.") : state === "review" ? t("Records everyone's voice and what the Watch Party watches, with no picture.") : "";
 }
 
 function noteCount(s) {
@@ -104,7 +102,7 @@ function liveRow() {
   const online = 1 + st.peers.filter((p) => p.connected).length;
   const on = page === "player" && showingNow() && !review;
   const row = el("div", { className: "srow liverow" + (a ? " recording" : "") + (on ? " on" : ""), role: "option", tabIndex: 0, ariaSelected: on },
-    el("div", { className: "l1" }, a ? el("i", { className: "recdot" }) : icon("radio", "sm live"), el("b", { textContent: t("Live") }), a ? el("span", { className: "r rec", id: "livetimer", textContent: t("Recording {time}", { time: fmt((nowUs() - a.start_us) / 1e6) }) }) : null),
+    el("div", { className: "l1" }, a ? el("i", { className: "recdot" }) : icon("radio", "sm"), el("b", { textContent: a ? t("Recording") : t("Standby") }), a ? el("span", { className: "r rec", id: "livetimer", textContent: fmt((nowUs() - a.start_us) / 1e6) }) : null),
     el("div", { className: "l2" }, avatars(who), a && a.voice ? pill("accent", "mic", t("Debrief")) : null, el("span", { textContent: a ? (a.voice ? t("Voice only") : matchNow(nowM()) || t("by {name}", { name: a.by || "" })) : t("{n} online", { n: online }) })));
   row.onclick = openNow;
   row.onkeydown = (e) => { if (e.key === "Enter") openNow(); };
@@ -140,7 +138,7 @@ function renderSessions() {
   const rows = [...list.map((s) => ({ id: s.id, s })), ...gone.map((g) => ({ id: g.id, g }))].sort((a, b) => (a.id < b.id ? 1 : -1));
   const sig = [rows.map((r) => [r.id, r.s ? [setLength(r.s), sessionState(r.s), isReview(r.s), matchCount(r.s), noteCount(r.s), r.s.players.map((p) => p.owner)] : r.g.end_us]), page, nowView, selected, review && review.id, st.active_set, st.peers.map((p) => p.connected), lang, st.colors, st.names, dayOf(new Date())];
   if (!changed("sessions", sig)) return;
-  $("sessions").replaceChildren(liveRow(), ...rows.map((r) => (r.s ? sessionRow(r.s) : goneRow(r.g))), rows.length ? "" : el("div", { className: "none", textContent: t("No sessions yet") }));
+  $("sessions").replaceChildren(liveRow(), ...rows.map((r) => (r.s ? sessionRow(r.s) : goneRow(r.g))), rows.length ? "" : el("div", { className: "none", textContent: t("No recordings yet") }));
 }
 function sessionMenu(id, anchor) {
   const set = setById(id);
@@ -157,7 +155,7 @@ function sessionMenu(id, anchor) {
   ], anchor);
 }
 function goneMenu(anchor) {
-  openMenu([{ label: t("Show sessions not on this PC"), check: showGone, run: () => { showGone = !showGone; store("showGone", showGone); delete sigs.sessions; renderSessions(); } }], anchor);
+  openMenu([{ label: t("Show recordings not on this PC"), check: showGone, run: () => { showGone = !showGone; store("showGone", showGone); delete sigs.sessions; renderSessions(); } }], anchor);
 }
 function renderBanner() {
   const d = st.disk;
@@ -206,7 +204,7 @@ function renderDock() {
 }
 
 async function stopScreen() {
-  if (st.recording && !(await ask(t("Stop sending your screen?"), t("Stop"), false, t("Your part of the session goes on with your voice only.")))) return;
+  if (st.recording && !(await ask(t("Stop sending your screen?"), t("Stop"), false, t("Your part of the recording goes on with your voice only.")))) return;
   run("set_source", { source: null });
 }
 function popHead(text) {
@@ -289,7 +287,6 @@ window.__TAURI__.event.listen("levels", (e) => { for (const kind of ["app", "mic
 
 $("roomname").onclick = () => go("room");
 $("faces").onclick = () => { roomTab = "members"; go("room"); };
-$("navboard").onclick = () => go("board");
 $("startbtn").onclick = toggleRecording;
 $("sessmore").onclick = (e) => goneMenu(e.currentTarget);
 $("diskbanner").onclick = () => openSettings("storage");

@@ -941,7 +941,19 @@ async fn run(core: &Arc<Core>, id: EndpointId, conn: Connection, outgoing: bool)
     debug::event(core, started, format!("{label}: closed on the {path} path after {:.0} s", lived.as_secs_f64()));
 }
 
+fn repeated_failures(failed: u32) -> Option<String> {
+    (failed > 1).then(|| format!("{failed} connect attempts failed in a row"))
+}
+
+fn reached(id: &EndpointId, failed: &mut u32) {
+    if let Some(text) = repeated_failures(*failed) {
+        tracing::info!("{}: {text}, then reachable", short(id));
+    }
+    *failed = 0;
+}
+
 pub async fn peer_loop(core: Arc<Core>, id: EndpointId) {
+    let mut failed = 0u32;
     loop {
         let Some(failures) = core.update_peer(&id, |p| p.failures) else { return };
         sleep(backoff(failures, jitter())).await;
@@ -949,6 +961,7 @@ pub async fn peer_loop(core: Arc<Core>, id: EndpointId) {
             return;
         }
         if let Some(conn) = alive(&core, &id) {
+            reached(&id, &mut failed);
             conn.closed().await;
             continue;
         }
@@ -961,10 +974,14 @@ pub async fn peer_loop(core: Arc<Core>, id: EndpointId) {
             Ok(Ok(conn)) => conn,
             other => {
                 core.update_peer(&id, |p| p.failures += 1);
-                debug::event(&core, dialing, format!("{} connect failed: {:?}", short(&id), other.map(|r| r.map(|_| ()))));
+                failed += 1;
+                if failed == 1 {
+                    debug::event(&core, dialing, format!("{} connect failed: {:?}", short(&id), other.map(|r| r.map(|_| ()))));
+                }
                 continue;
             }
         };
+        reached(&id, &mut failed);
         if !adopt(&core, &id, &conn).await {
             conn.close(0u32.into(), b"duplicate");
             continue;
@@ -976,6 +993,13 @@ pub async fn peer_loop(core: Arc<Core>, id: EndpointId) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_run_of_failed_connects_is_reported_once() {
+        assert_eq!(repeated_failures(0), None);
+        assert_eq!(repeated_failures(1), None);
+        assert_eq!(repeated_failures(5).as_deref(), Some("5 connect attempts failed in a row"));
+    }
 
     #[test]
     fn a_ping_reply_is_eight_bytes_and_an_empty_one_is_no_answer() {

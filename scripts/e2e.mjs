@@ -668,6 +668,17 @@ async function scenario(ctx) {
     await invoke(b, "set_room_plugin", { id: "transcribe", on: false, settings: {} });
   });
 
+  await step("the game plan is a tab of the room page and a rename reaches everyone", async () => {
+    await evaluate(a, `showBoard(); true`);
+    await waitFor("A shows the game plan inside the room page", within(UI_REFRESH_S * 3), () => evaluate(a, `!$("boardpane").hidden && !$("roompage").hidden`));
+    check(await evaluate(a, `!$("navboard") && $("roomname").textContent === t("Room")`), "the sidebar still has a game plan entry, or the room button shows a name");
+    for (const [by, name] of [[b, "Drill room"], [a, "Practice"]]) {
+      await invoke(by, "rename_room", { name });
+      for (const app of [a, b, c]) await waitFor(`${app.key} shows ${name}`, within(LOG_SYNC_S * 2), async () => (await state(app)).room.name === name);
+    }
+    await evaluate(a, `roomTab = "members"; go("room"); true`);
+  });
+
   await step("Watch Party converges on a seek and a play", async () => {
     const all = [a, b, c];
     const seconds = within(PARTY_REPEAT_S + UI_REFRESH_S * 2);
@@ -702,15 +713,15 @@ async function scenario(ctx) {
     check(!(await state(a)).active_set, "A started recording although it answered No");
     const asked = await pressAndConfirm(a, "toggleRecording()");
     check(asked === "Start recording the debrief for everyone?", `A was asked "${asked}"`);
-    await waitFor("B is told who started", within(LOG_SYNC_S * 2), () => evaluate(b, `e2eNotes.includes(${JSON.stringify(a.name + " started a session")})`));
+    await waitFor("B is told who started", within(LOG_SYNC_S * 2), () => evaluate(b, `e2eNotes.includes(${JSON.stringify(a.name + " started recording")})`));
     ctx.review = (await state(a)).active_set.id;
     await allSee(all, "recording the review voice only", within(LOG_SYNC_S * 2), (st) => st.active_set?.id === ctx.review && st.active_set.voice === true);
     await waitFor(`A logs ${SEGMENTS_AFTER_RESTART} voice segments of the review`, within(SEGMENT_S * (SEGMENTS_AFTER_RESTART + 2)), () => segsOf(logOf(a, ctx.room, a.id), ctx.review, "m").length >= SEGMENTS_AFTER_RESTART);
     await evaluate(c, `act("seek", ${SEEK_TO_S * 2}); true`);
     await waitFor("C logs its seek as a party record", within(LOG_SYNC_S * 2), () => logOf(c, ctx.room, c.id).some((r) => r.k === "party" && r.set === ctx.review && r.shared.set === ctx.set));
     const ending = await pressAndConfirm(a, "toggleRecording()");
-    check(ending === "End the session for everyone?", `A was asked "${ending}"`);
-    await waitFor("B is told who ended", within(LOG_SYNC_S * 2), () => evaluate(b, `e2eNotes.includes(${JSON.stringify(a.name + " ended the session")})`));
+    check(ending === "Stop recording for everyone?", `A was asked "${ending}"`);
+    await waitFor("B is told who ended", within(LOG_SYNC_S * 2), () => evaluate(b, `e2eNotes.includes(${JSON.stringify(a.name + " stopped recording")})`));
     await allSee(all, "the review ended", within(LOG_SYNC_S * 2), (st) => !st.active_set && setOf(st, ctx.review) && !setOf(st, ctx.review).live);
     for (const app of all) {
       const own = logOf(app, ctx.room, app.id);

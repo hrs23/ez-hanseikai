@@ -77,6 +77,6 @@ function keysOf(e) {
 }
 
 function sessionNotice(action, by) {
-  if (action === "start") return by ? t("{by} started a session", { by }) : t("A session started");
-  return by ? t("{by} ended the session", { by }) : t("The session ended");
+  if (action === "start") return by ? t("{by} started recording", { by }) : t("Recording started");
+  return by ? t("{by} stopped recording", { by }) : t("Recording stopped");
 }

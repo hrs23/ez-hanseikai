@@ -169,7 +169,7 @@ impl Core {
 }
 
 fn idle(core: &Core) -> Result<(), String> {
-    if core.active_set.lock().unwrap().is_some() { Err("End the session before switching rooms.".into()) } else { Ok(()) }
+    if core.active_set.lock().unwrap().is_some() { Err("Stop recording before switching rooms.".into()) } else { Ok(()) }
 }
 
 pub fn display_name(core: &Core, id: &str) -> String {
@@ -307,17 +307,18 @@ pub fn rename_room(core: &Arc<Core>, name: &str) -> Result<(), String> {
     if name.is_empty() {
         return Err("Enter a room name.".into());
     }
-    core.append_log(&room, &json!({"k": "room_name", "name": name, "t_us": now_us()}));
+    let t_us = named(&logs(core, &room)).map_or(now_us(), |(t, ..)| now_us().max(t + 1));
+    core.append_log(&room, &json!({"k": "room_name", "name": name, "t_us": t_us}));
     keep_name(core, &room, &name);
     Ok(())
 }
 
+fn named(logs: &[Log]) -> Option<(i64, &String, &str)> {
+    logs.iter().flat_map(|log| log.records.iter().filter(|r| r["k"] == "room_name").filter_map(|r| Some((r["t_us"].as_i64()? - log.offset_us, &log.owner, r["name"].as_str()?)))).max()
+}
+
 pub fn latest_name(logs: &[Log]) -> Option<String> {
-    logs.iter()
-        .flat_map(|log| log.records.iter().filter(|r| r["k"] == "room_name").filter_map(|r| Some((r["t_us"].as_i64()? - log.offset_us, &log.owner, r["name"].as_str()?))))
-        .max()
-        .map(|(_, _, name)| clean_text(name, ROOM_NAME_MAX))
-        .filter(|name| !name.is_empty())
+    named(logs).map(|(_, _, name)| clean_text(name, ROOM_NAME_MAX)).filter(|name| !name.is_empty())
 }
 
 fn keep_name(core: &Core, room: &str, name: &str) {
@@ -527,13 +528,13 @@ pub fn begin_set(core: &Arc<Core>, set: &str, by: &str, start_us: i64, voice: bo
     ffmpeg::ready()?;
     let room = core.active_room_id();
     if core.is_deleted(&room, set) {
-        return Err("That session was deleted on this PC.".into());
+        return Err("That recording was deleted on this PC.".into());
     }
     let active = ActiveSet { id: set.to_string(), room, by: by.to_string(), start_us, voice };
     {
         let mut slot = core.active_set.lock().unwrap();
         if slot.is_some() {
-            return Err("A session is already recording.".into());
+            return Err("A recording is already in progress.".into());
         }
         *slot = Some(active);
     }
@@ -859,13 +860,13 @@ pub fn someone_else_has(core: &Core, key: &str, index: u64) -> bool {
 
 pub fn delete_set(core: &Core, room: &str, set: &str) -> Result<(), String> {
     if !valid_id(room) || !valid_id(set) {
-        return Err("That session is not on this PC.".into());
+        return Err("That recording is not on this PC.".into());
     }
     if core.is_recording(room, set) {
-        return Err("This session is still recording.".into());
+        return Err("This recording is still in progress.".into());
     }
     if core.in_use(room, set) {
-        return Err("This session is being exported. Cancel the export first.".into());
+        return Err("This recording is being exported. Cancel the export first.".into());
     }
     let found = sets(core, room, &logs(core, room)).into_iter().find(|s| s.id == set);
     core.deleted.lock().unwrap().insert(format!("{room}/{set}"));
@@ -1334,6 +1335,14 @@ mod tests {
         assert_eq!(latest_name(&[a, b]), Some("Newer".to_string()));
         let c = log("c", -500, vec![json!({"k": "room_name", "name": "Last", "t_us": -150})]);
         assert_eq!(latest_name(&[c, log("a", 0, vec![json!({"k": "room_name", "name": "First", "t_us": 340})])]), Some("Last".to_string()));
+    }
+
+    #[test]
+    fn a_rename_made_here_beats_a_name_from_a_fast_clock() {
+        let ahead = log("b", 0, vec![json!({"k": "room_name", "name": "Theirs", "t_us": 5000})]);
+        let t = named(std::slice::from_ref(&ahead)).map_or(0, |(t, ..)| 1000i64.max(t + 1));
+        let mine = log("a", 0, vec![json!({"k": "room_name", "name": "Mine", "t_us": t})]);
+        assert_eq!(latest_name(&[ahead, mine]), Some("Mine".to_string()));
     }
 
     #[test]

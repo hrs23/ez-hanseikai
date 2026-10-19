@@ -132,7 +132,7 @@ impl<'a> MakeWriter<'a> for RollingFile {
 pub fn init(dir: &Path) {
     let tz = data::tz_offset_seconds();
     let Ok(writer) = RollingFile::open(dir) else { return };
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn,ez_hanseikai=debug,iroh=info"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn,ez_hanseikai=debug"));
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(writer)

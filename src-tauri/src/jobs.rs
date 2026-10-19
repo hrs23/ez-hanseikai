@@ -92,7 +92,7 @@ fn capped<'a>(logs: &'a [Log], caps: Option<&'a HashMap<String, u64>>) -> impl I
     })
 }
 
-pub fn configs(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> BTreeMap<String, Config> {
+fn newest(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> BTreeMap<String, ((i64, String), Config)> {
     let mut latest: BTreeMap<String, ((i64, String), Config)> = BTreeMap::new();
     for (log, records) in capped(logs, caps) {
         for r in records.iter().filter(|r| r["k"] == "plugin") {
@@ -104,7 +104,15 @@ pub fn configs(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> BTreeMap<St
             }
         }
     }
-    latest.into_iter().map(|(id, (_, c))| (id, c)).collect()
+    latest
+}
+
+pub fn configs(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> BTreeMap<String, Config> {
+    newest(logs, caps).into_iter().map(|(id, (_, c))| (id, c)).collect()
+}
+
+pub fn change_time(now: i64, logs: &[Log], id: &str) -> i64 {
+    newest(logs, None).get(id).map_or(now, |((at, _), _)| now.max(at + 1))
 }
 
 pub fn prefix(plugin: &str, config: &Config) -> String {
@@ -488,9 +496,9 @@ fn work(core: &Arc<Core>, room: &str, plugin: &'static Plugin, config: &Config, 
     let outcome = run_parts(core, room, plugin, config, key, input, &work);
     let about = json!({"plugin": plugin.id, "version": plugin.version, "file": input.file});
     match outcome {
-        Some(Ok((found, tags))) => {
-            tracing::info!("job {key} done with {} events", found.len());
-            finish(core, room, plugin, key, run, input, &found, &tags)
+        Some(Ok((found, tags, note))) => {
+            tracing::info!("job {key} done with {} events{}", found.len(), if note.is_empty() { String::new() } else { format!(" ({note})") });
+            finish(core, room, plugin, key, run, input, &found, &tags, &note)
         }
         Some(Err(error)) => {
             tracing::warn!("job {key} failed: {error}");
@@ -510,11 +518,12 @@ fn work(core: &Arc<Core>, room: &str, plugin: &'static Plugin, config: &Config, 
     emit(core);
 }
 
-type Results = (Vec<(i64, Found)>, BTreeMap<String, String>);
+type Results = (Vec<(i64, Found)>, BTreeMap<String, String>, String);
 
 fn run_parts(core: &Arc<Core>, room: &str, plugin: &'static Plugin, config: &Config, key: &str, input: &Input, work: &std::path::Path) -> Option<Result<Results, String>> {
     let mut found = Vec::new();
     let mut tags = BTreeMap::new();
+    let mut notes = Vec::new();
     let count = input.parts.len().max(1) as f64;
     for (i, part) in input.parts.iter().enumerate() {
         let job = plugins::Job {
@@ -534,11 +543,12 @@ fn run_parts(core: &Arc<Core>, room: &str, plugin: &'static Plugin, config: &Con
             Ok(output) => {
                 found.extend(output.events.into_iter().map(|e| (part.start_us, e)));
                 tags.extend(output.tags);
+                notes.extend(Some(output.note).filter(|n| !n.is_empty()));
             }
             Err(e) => return Some(Err(e)),
         }
     }
-    Some(Ok((found, tags)))
+    Some(Ok((found, tags, notes.join("; "))))
 }
 
 fn stale(core: &Core, room: &str, plugin: &Plugin, key: &str) -> bool {
@@ -592,13 +602,17 @@ fn watch(core: &Core, room: &str, plugin: &Plugin, key: &str, job: &plugins::Job
     }
 }
 
-fn finish(core: &Arc<Core>, room: &str, plugin: &Plugin, key: &str, run: i64, input: &Input, found: &[(i64, Found)], tags: &BTreeMap<String, String>) {
+fn finish(core: &Arc<Core>, room: &str, plugin: &Plugin, key: &str, run: i64, input: &Input, found: &[(i64, Found)], tags: &BTreeMap<String, String>, note: &str) {
     let mut id = 0;
     for (start_us, one) in found {
         id = now_us().max(id + 1);
         core.append_log(room, &event_record(plugin, key, run, input, *start_us, one, id));
     }
-    core.append_log(room, &job_record("done", key, run, json!({"plugin": plugin.id, "version": plugin.version, "file": input.file, "events": found.len(), "tags": tags})));
+    let mut done = json!({"plugin": plugin.id, "version": plugin.version, "file": input.file, "events": found.len(), "tags": tags});
+    if !note.is_empty() {
+        done["note"] = json!(note);
+    }
+    core.append_log(room, &job_record("done", key, run, done));
     party::send(core);
 }
 
@@ -642,8 +656,9 @@ pub async fn room_plugins(core: State<'_, Arc<Core>>) -> Result<Vec<Value>, Stri
 #[tauri::command]
 pub fn set_room_plugin(core: State<Arc<Core>>, id: String, on: bool, settings: Value) -> Result<(), String> {
     let plugin = plugins::find(&id).ok_or("Unknown plugin.")?;
-    let record = json!({"k": "plugin", "plugin": plugin.id, "on": on, "version": plugin.version, "settings": plugins::normalize(plugin, &settings), "t_us": now_us()});
-    core.append_log(&core.active_room_id(), &record);
+    let room = core.active_room_id();
+    let record = json!({"k": "plugin", "plugin": plugin.id, "on": on, "version": plugin.version, "settings": plugins::normalize(plugin, &settings), "t_us": change_time(now_us(), &room::logs(&core, &room), plugin.id)});
+    core.append_log(&room, &record);
     Ok(())
 }
 
@@ -771,6 +786,34 @@ mod tests {
         assert!(c["transcribe"].on);
         let logs = vec![log("a", 0, vec![config_record(100, true, "small")]), log("b", -50, vec![config_record(120, false, "base")])];
         assert!(!configs(&logs, None)["transcribe"].on);
+    }
+
+    #[test]
+    fn a_change_made_here_beats_a_record_from_a_fast_clock() {
+        let ahead = log("b", 0, vec![config_record(5_000, true, "small")]);
+        let t = change_time(1_000, &[ahead], "transcribe");
+        assert_eq!(t, 5_001);
+        let logs = vec![log("a", 0, vec![config_record(t, true, "base")]), log("b", 0, vec![config_record(5_000, true, "small")])];
+        assert_eq!(configs(&logs, None)["transcribe"].settings["model"], "base");
+        assert_eq!(change_time(9_000, &logs[1..], "transcribe"), 9_000);
+        assert_eq!(change_time(7, &[], "transcribe"), 7);
+    }
+
+    #[test]
+    fn the_download_size_follows_the_chosen_model_until_it_is_installed() {
+        let dir = std::env::temp_dir().join(format!("ezh-test-size-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let plugin = plugins::find("transcribe").unwrap();
+        let size = |model: &str| plugins::missing(plugin, &dir, &plugins::normalize(plugin, &json!({"model": model}))).iter().map(|d| d.size).sum::<u64>();
+        let (small, base, medium) = (size("small"), size("base"), size("medium"));
+        assert!(base < small && small < medium);
+        std::fs::create_dir_all(dir.join("whisper")).unwrap();
+        std::fs::write(dir.join("whisper").join("whisper-cli.exe"), b"").unwrap();
+        std::fs::write(dir.join("ggml-base.bin"), b"").unwrap();
+        assert_eq!(size("base"), 0);
+        assert_eq!(size("small"), 487_601_967);
+        assert_eq!(size("medium"), 1_533_763_059);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

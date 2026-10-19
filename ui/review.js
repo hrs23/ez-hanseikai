@@ -103,7 +103,7 @@ function summaryLines(s, failed) {
   lines.push({ key: "Microphone", level: c.mix.mic.muted ? "info" : "ok", text: c.mix.mic.muted ? t("Muted") : t("On") });
   const receiving = s.sets.filter((x) => x.progress.total && x.progress.have < x.progress.total);
   const stuck = receiving.filter((x) => x.progress.stuck);
-  lines.push({ key: "Transfers", level: stuck.length ? "warn" : "ok", text: receiving.length ? t("Receiving {n} sessions", { n: receiving.length }) : t("Everything is here") });
+  lines.push({ key: "Transfers", level: stuck.length ? "warn" : "ok", text: receiving.length ? t("Receiving {n} recordings", { n: receiving.length }) : t("Everything is here") });
   const d = s.disk;
   const space = d.hours_left !== null && d.hours_left !== undefined ? t("{free} free · about {h} h left", { free: bytes(d.free), h: Math.floor(d.hours_left) }) : t("{free} free", { free: bytes(d.free) });
   lines.push({ key: "Storage", level: d.full ? "fail" : d.low ? "warn" : "ok", text: space });

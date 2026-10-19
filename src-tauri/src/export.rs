@@ -224,7 +224,7 @@ pub fn start(core: &Arc<Core>, room_id: &str, set_id: &str, mut path: PathBuf) -
     }
     let (players, skipped) = players(core, room_id, &set);
     if players.is_empty() {
-        return Err("None of this set's files are on this PC yet.".into());
+        return Err("None of this recording's files are on this PC yet.".into());
     }
     let work = core.dir.join("export");
     std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;

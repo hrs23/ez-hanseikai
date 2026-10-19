@@ -18,7 +18,7 @@ const SHORTCUTS = [
   ["Mute / volume", ["M", "↑", "↓"]],
   ["Full screen / leave", ["F", "Esc"]],
   ["All players / one player", ["0", "1–6", "Tab"]],
-  ["Previous / next session", ["Shift+P", "Shift+N"]],
+  ["Previous / next recording", ["Shift+P", "Shift+N"]],
   ["Add note", ["C"]],
   ["Previous / next note", ["Q", "E"]],
   ["Previous / next match (or event)", ["A", "D"]],
@@ -84,7 +84,7 @@ const cancelInvite = () => run("cancel_invites", null, () => { flash(t("Invite c
 const createRoom = () => invoke("create_room", { name: "" }).then(() => { go("room"); return refresh().then(copyInvite); }).catch(fail);
 async function leaveRoom() {
   if (!st.room) return;
-  if (st.recording && !(await ask(t("End the session and leave {room}?", { room: st.room.name }), t("Leave room"), true))) return;
+  if (st.recording && !(await ask(t("Stop recording and leave {room}?", { room: st.room.name }), t("Leave room"), true))) return;
   run("leave_room", { id: st.room.id }, () => { endReview(); selectSet(null); go("room"); });
 }
 async function removeMember(id) {
@@ -107,7 +107,10 @@ function renderRoom() {
   const failed = jobInfo ? jobInfo.jobs.filter((j) => j.state !== "done").length : 0;
   $("jobcount").hidden = !failed;
   $("jobcount").textContent = String(failed);
-  if (roomTab === "members") renderMembers();
+  $("boardpane").hidden = roomTab !== "board";
+  $("roomtab").parentElement.hidden = roomTab === "board";
+  if (roomTab === "board") renderBoard();
+  else if (roomTab === "members") renderMembers();
   else if (roomTab === "plugins") renderPlugins();
   else renderJobs();
   renderDrawer();
@@ -187,7 +190,7 @@ function renderDrawer() {
   );
 }
 function jobTarget(j) {
-  if (j.whole) return t("Whole session");
+  if (j.whole) return t("Whole recording");
   const set = setById(j.set);
   return set && isReview(set) ? t("{name}'s voice (debrief)", { name: nameOf(j.owner) }) : t("{name}'s voice", { name: nameOf(j.owner) });
 }
@@ -204,7 +207,7 @@ function jobMenu(j, anchor) {
 }
 async function rerunWith(plugin, model) {
   if (plugin.settings.model === model) return;
-  if (!(await ask(t("Use {model} for the room?", { model }), t("Use {model}", { model }), false, t("Every session is analysed again with it, on whichever PC has it.")))) return;
+  if (!(await ask(t("Use {model} for the room?", { model }), t("Use {model}", { model }), false, t("Every recording is analysed again with it, on whichever PC has it.")))) return;
   invoke("set_room_plugin", { id: plugin.id, on: true, settings: { ...plugin.settings, model } }).then(pollPlugins).catch(fail);
 }
 function renderJobs() {
@@ -229,8 +232,8 @@ function renderJobs() {
     const err = j.state === "failed" && j.error ? el("tr", { className: "err" }, el("td", { colSpan: 6 }, icon("info", "sm"), t("Failed: {error}", { error: j.error }))) : null;
     return [tr, err];
   }).flat().filter(Boolean);
-  const head = el("tr", {}, ...["Plugin", "Session", "Target", "State", "Run by", ""].map((h) => el("th", { textContent: h ? t(h) : "" })));
-  const table = shown.length ? el("div", { className: "tablebox" }, el("table", { className: "table" }, el("thead", {}, head), el("tbody", {}, ...rows))) : el("div", { className: "empty", textContent: jobs.length ? t("Nothing here") : t("Turn on a plugin to analyse sessions") });
+  const head = el("tr", {}, ...["Plugin", "Recorded", "Target", "State", "Run by", ""].map((h) => el("th", { textContent: h ? t(h) : "" })));
+  const table = shown.length ? el("div", { className: "tablebox" }, el("table", { className: "table" }, el("thead", {}, head), el("tbody", {}, ...rows))) : el("div", { className: "empty", textContent: jobs.length ? t("Nothing here") : t("Turn on a plugin to analyse recordings") });
   $("roomtab").replaceChildren(el("div", { className: "row" }, seg), table);
 }
 function pollPlugins() {
@@ -257,6 +260,11 @@ function boardEvent() {
   let out = null;
   for (const e of st.events) if (e.kind === "board" && (!e.values || !e.values.card || e.values.card === "team") && (!out || at(e) >= at(out))) out = e;
   return out;
+}
+const onBoard = () => page === "room" && roomTab === "board";
+function showBoard() {
+  roomTab = "board";
+  go("room");
 }
 const boardText = () => { const e = boardEvent(); return e ? e.text : BOARD_TEMPLATE[lang === "ja" ? "ja" : "en"]; };
 function boardSections(text) {
@@ -292,7 +300,7 @@ function placeBoard() {
   $("zoomfit").title = t("Fit to the window");
 }
 function renderBoard() {
-  if (page !== "board" || !inRoom()) return;
+  if (!onBoard() || !inRoom()) return;
   $("boardwrap").hidden = boardEditing;
   $("editor").hidden = !boardEditing;
   $("boardview").hidden = boardEditing;
@@ -306,7 +314,7 @@ function renderBoard() {
   placeBoard();
 }
 function editBoard() {
-  go("board");
+  showBoard();
   boardEditing = true;
   $("boardtext").value = boardText();
   renderMini();
@@ -340,7 +348,7 @@ function setZoom(z) {
   store("boardZoom", zoom);
   placeBoard();
 }
-new ResizeObserver(() => { if (page === "board" && !boardEditing) placeBoard(); else if (boardEditing) renderMini(); }).observe($("boardpage"));
+new ResizeObserver(() => { if (onBoard() && !boardEditing) placeBoard(); else if (boardEditing) renderMini(); }).observe($("boardpane"));
 
 function openSettings(pane) {
   if (!st) return;
@@ -405,7 +413,7 @@ function renderStorage() {
     return el("tr", { className: picked.has(s.id) ? "sel" : "" }, el("td", {}, box), el("td", {}, el("b", { textContent: sessionName(s.id) }), " ", el("span", { className: "muted small", textContent: voiceOnly(s) ? t("voice only") : t(notes === 1 ? "{n} note" : "{n} notes", { n: notes }) })), el("td", { textContent: setLength(s) }), el("td", { textContent: String(s.players.length) }), el("td", {}, el("span", { className: "sizebar" }, el("i", { style: `width:${(s.progress.have / biggest) * 100}%` })), bytes(s.progress.have)), el("td", { className: "muted small", textContent: recv }));
   });
   const gone = st.gone.map((g) => el("tr", { className: "dim" }, el("td"), el("td", {}, el("b", { textContent: sessionName(g.id) })), el("td", { textContent: g.end_us ? fmt((g.end_us - g.start_us) / 1e6) : "" }), el("td", { textContent: String(g.players.length) }), el("td", { textContent: "—" }), el("td", { className: "small", textContent: t("Not on this PC") })));
-  const head = el("tr", {}, ...["", "Session", "Length", "People", "On this PC", ""].map((h) => el("th", { textContent: h ? t(h) : "" })));
+  const head = el("tr", {}, ...["", "Recorded", "Length", "People", "On this PC", ""].map((h) => el("th", { textContent: h ? t(h) : "" })));
   $("storetable").replaceChildren(el("table", { className: "table" }, el("thead", {}, head), el("tbody", {}, ...rows, ...gone)));
   const size = sets.filter((s) => picked.has(s.id)).reduce((n, s) => n + s.progress.have, 0);
   $("selsum").textContent = picked.size ? t("{n} selected · {size}", { n: picked.size, size: bytes(size) }) : "";
@@ -416,7 +424,7 @@ function confirmDelete(ids) {
   if (!sets.length) return;
   const preview = deletePreview(sets, st.id);
   const size = preview.reduce((n, p) => n + p.bytes, 0);
-  $("deltitle").textContent = t(sets.length === 1 ? "Delete the videos of this session?" : "Delete the videos of {n} sessions?", { n: sets.length });
+  $("deltitle").textContent = t(sets.length === 1 ? "Delete the videos of this recording?" : "Delete the videos of {n} recordings?", { n: sets.length });
   $("delsub").textContent = t("Frees {size} on this PC", { size: bytes(size) });
   $("dellist").replaceChildren(...preview.map((p) => {
     const alone = p.players.filter((x) => x.alone).map((x) => nameOf(x.owner));
@@ -455,7 +463,7 @@ function renderDiagnostics() {
   }
   const peers = st.peers;
   const sendsLive = st.capture.sharing;
-  const what = (p) => [sendsLive ? t("Live picture and voice") : null, t("Recordings"), t("Log")].filter(Boolean).join(" · ");
+  const what = (p) => [sendsLive ? t("Live picture and voice") : null, t("Recorded files"), t("Log")].filter(Boolean).join(" · ");
   const node = (id, sub, cls = "") => el("div", { className: "node " + cls }, avatar(id, "lg"), el("div", { className: "t" }, el("b", { textContent: nameOf(id) }), sub ? el("small", { textContent: sub }) : null));
   const links = peers.map((p) => el("div", { className: "flink " + (p.connected ? p.path : "off") }, el("span", { className: "line" }), p.connected && p.path === "relay" ? el("span", { className: "relaybox" }, el("b", { textContent: t("Relay server") }), el("small", { textContent: p.relay || t("content not visible") })) : el("span", { className: "label", textContent: p.connected ? `${t("Direct")} · ${t("encrypted")} · ${p.rtt_ms} ms` : t("Offline") }), node(p.id, "", p.connected ? "" : "dim")));
   const diagram = el("div", { className: "flowmap" }, node(st.id, t("This PC")), el("div", { className: "links" }, ...(links.length ? links : [el("div", { className: "none", textContent: t("No other members") })])));

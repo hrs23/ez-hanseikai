@@ -167,14 +167,33 @@ test("a download shows its percent, speed and time left", () => {
   assert.equal(ui$.downloadStats({ done: 2000, total: 1000, speed: 0, left_s: 0 }).n, 100);
 });
 
-test("everyone is told who started or ended a session", () => {
+test("everyone is told who started or stopped recording", () => {
   ui$.setLanguage("en");
-  assert.equal(ui$.sessionNotice("start", "Aki"), "Aki started a session");
-  assert.equal(ui$.sessionNotice("end", "Ren"), "Ren ended the session");
-  assert.equal(ui$.sessionNotice("end", ""), "The session ended");
+  assert.equal(ui$.sessionNotice("start", "Aki"), "Aki started recording");
+  assert.equal(ui$.sessionNotice("end", "Ren"), "Ren stopped recording");
+  assert.equal(ui$.sessionNotice("end", ""), "Recording stopped");
   ui$.setLanguage("ja");
-  assert.equal(ui$.sessionNotice("start", "Aki"), "Aki がセッションを開始しました");
+  assert.equal(ui$.sessionNotice("start", "Aki"), "Aki が録画を開始しました");
+  assert.equal(ui$.sessionNotice("end", ""), "録画が終わりました");
   ui$.setLanguage("en");
+});
+
+test("the pages call a recording a recording, never a session", () => {
+  const texts = [...Object.keys(ui$.JA), ...Object.values(ui$.JA)];
+  assert.deepEqual(texts.filter((x) => /session|セッション/i.test(x)), []);
+  for (const f of ["app.js", "side.js", "pages.js", "review.js", "events.js", "util.js", "plugins.js", "index.html"]) {
+    const shown = [...read(f).matchAll(/\bt\(\s*"((?:[^"\\]|\\.)*)"|data-t(?:-title|-placeholder|-label)?="([^"]*)"/g)].map((m) => m[1] || m[2]);
+    assert.deepEqual(shown.filter((x) => /session/i.test(x)), [], f);
+  }
+  for (const [en, ja] of [["Start recording", "録画開始"], ["Stop recording", "録画終了"], ["Recordings", "録画一覧"], ["Recording", "録画中"], ["Standby", "待機中"], ["Jump to latest", "最新に戻る"]]) assert.equal(ui$.JA[en], ja);
+});
+
+test("the sidebar has a Room button and no Game plan entry", () => {
+  const html = read("index.html");
+  assert.match(html, /<button id="roomname"[^>]*>[^]*?data-t="Room"/);
+  assert.doesNotMatch(html, /navboard|id="roomtitle"|id="boardpage"/);
+  assert.match(html, /data-tab="board"/);
+  assert.equal(ui$.JA["Room"], "ルーム");
 });
 
 test("every English phrase in the pages has a Japanese one", () => {

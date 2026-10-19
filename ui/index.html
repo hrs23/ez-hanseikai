@@ -25,13 +25,12 @@
 <div id="app" class="app" hidden>
   <aside id="side" class="side">
     <div class="roomhead">
-      <button id="roomname" class="roomname"><span id="roomtitle" class="nm"></span><span data-icon="chevron-right" data-icon-class="sm"></span></button>
+      <button id="roomname" class="roomname"><span data-icon="home"></span><span data-t="Room">Room</span></button>
       <button id="faces" class="faces"></button>
     </div>
-    <button id="navboard" class="nav"><span data-icon="board"></span><span data-t="Game plan">Game plan</span></button>
     <button id="startbtn" class="startbtn go"></button>
-    <div class="sechead"><span data-t="Sessions">Sessions</span><button id="sessmore" class="icon sm" data-icon="more" data-t-label="More" data-t-title="More" aria-haspopup="menu"></button></div>
-    <div id="sessions" class="sessions" role="listbox" data-t-label="Sessions"></div>
+    <div class="sechead"><span data-t="Recordings">Recordings</span><button id="sessmore" class="icon sm" data-icon="more" data-t-label="More" data-t-title="More" aria-haspopup="menu"></button></div>
+    <div id="sessions" class="sessions" role="listbox" data-t-label="Recordings"></div>
     <div id="diskbanner" class="sidebanner" role="button" tabindex="0" hidden></div>
     <div class="dock">
       <div class="caps">
@@ -61,33 +60,32 @@
       </div>
       <div class="ptabs" role="tablist">
         <button data-tab="members" role="tab"><span data-icon="users" data-icon-class="sm"></span><span data-t="Members">Members</span></button>
+        <button data-tab="board" role="tab"><span data-icon="board" data-icon-class="sm"></span><span data-t="Game plan">Game plan</span></button>
         <button data-tab="plugins" role="tab"><span data-icon="puzzle" data-icon-class="sm"></span><span data-t="Plugins">Plugins</span></button>
         <button data-tab="jobs" role="tab"><span data-icon="cpu" data-icon-class="sm"></span><span data-t="Jobs">Jobs</span><span id="jobcount" class="count" hidden></span></button>
+      </div>
+      <div id="boardpane" class="boardpane" hidden>
+        <div class="bbar">
+          <span id="boardbadge" class="pill accent" data-t="Editing" hidden>Editing</span>
+          <span id="boardsub" class="sub"></span>
+          <span class="sp"></span>
+          <span id="boardview" class="row">
+            <span class="zoom"><button id="zoomout" data-icon="minus" data-t-label="Zoom out" data-t-title="Zoom out"></button><button id="zoomfit" class="zv"></button><button id="zoomin" data-icon="plus" data-t-label="Zoom in" data-t-title="Zoom in"></button></span>
+            <button id="boardfull" class="icon" data-icon="maximize" data-t-label="Full screen" data-t-title="Full screen (F)"></button>
+            <button id="boardedit"><span data-icon="edit" data-icon-class="sm"></span><span data-t="Edit">Edit</span></button>
+          </span>
+          <span id="boardedits" class="row" hidden>
+            <button id="boardcancel" data-t="Cancel">Cancel</button>
+            <button id="boardsave" class="primary"><span data-t="Save">Save</span><kbd>Ctrl+Enter</kbd></button>
+          </span>
+        </div>
+        <div id="boardwrap" class="boardwrap"><div id="canvas" class="canvas"></div></div>
+        <div id="editor" class="editor" hidden><textarea id="boardtext" spellcheck="false" data-t-label="Game plan"></textarea><div class="preview"><div id="minicanvas" class="canvas mini"></div></div></div>
       </div>
       <div class="roombody">
         <div id="roomtab" class="roomtab"></div>
         <aside id="drawer" class="drawer" hidden></aside>
       </div>
-    </div>
-
-    <div id="boardpage" class="page board" hidden>
-      <div class="mhead">
-        <h1 data-t="Game plan">Game plan</h1>
-        <span id="boardbadge" class="pill accent" data-t="Editing" hidden>Editing</span>
-        <span id="boardsub" class="sub"></span>
-        <span class="sp"></span>
-        <span id="boardview" class="row">
-          <span class="zoom"><button id="zoomout" data-icon="minus" data-t-label="Zoom out" data-t-title="Zoom out"></button><button id="zoomfit" class="zv"></button><button id="zoomin" data-icon="plus" data-t-label="Zoom in" data-t-title="Zoom in"></button></span>
-          <button id="boardfull" class="icon" data-icon="maximize" data-t-label="Full screen" data-t-title="Full screen (F)"></button>
-          <button id="boardedit"><span data-icon="edit" data-icon-class="sm"></span><span data-t="Edit">Edit</span></button>
-        </span>
-        <span id="boardedits" class="row" hidden>
-          <button id="boardcancel" data-t="Cancel">Cancel</button>
-          <button id="boardsave" class="primary"><span data-t="Save">Save</span><kbd>Ctrl+Enter</kbd></button>
-        </span>
-      </div>
-      <div id="boardwrap" class="boardwrap"><div id="canvas" class="canvas"></div></div>
-      <div id="editor" class="editor" hidden><textarea id="boardtext" spellcheck="false" data-t-label="Game plan"></textarea><div class="preview"><div id="minicanvas" class="canvas mini"></div></div></div>
     </div>
 
     <div id="playerpage" class="player" hidden>
@@ -152,7 +150,7 @@
       <aside id="panel" class="panel">
         <div id="paneltabs" class="tabs" role="tablist"></div>
         <div id="panelhint" class="phint"></div>
-        <div id="filterrow" class="search"><div class="selbox"><span class="lead" data-icon="search" data-icon-class="sm"></span><input id="filter" type="search" autocomplete="off" data-t-placeholder="Filter" data-t-label="Filter"><span class="selbox chipsel"><select id="scope" data-t-label="Scope"><option value="session" data-t="This session">This session</option><option value="all" data-t="All sessions">All sessions</option></select></span></div></div>
+        <div id="filterrow" class="search"><div class="selbox"><span class="lead" data-icon="search" data-icon-class="sm"></span><input id="filter" type="search" autocomplete="off" data-t-placeholder="Filter" data-t-label="Filter"><span class="selbox chipsel"><select id="scope" data-t-label="Scope"><option value="session" data-t="This recording">This recording</option><option value="all" data-t="All recordings">All recordings</option></select></span></div></div>
         <div id="reviewlist" class="list review"></div>
         <div id="notelist" class="list"></div>
         <div id="convolist" class="list convo"></div>
@@ -178,7 +176,7 @@
       <div class="srow2"><span class="lab" data-t="Name">Name</span><input id="name" maxlength="24" class="w240"></div>
       <div class="srow2"><span class="lab">ID</span><span id="myid" class="mono"></span><button id="copyid" class="icon sm" data-icon="copy" data-t-label="Copy ID" data-t-title="Copy ID"></button></div>
       <div class="srow2"><span class="lab" data-t="Language">Language</span><select id="language" class="w240"><option value="" data-t="Automatic">Automatic</option><option value="en">English</option><option value="ja">日本語</option></select></div>
-      <div class="srow2"><span class="lab" data-t="Session sounds">Session sounds</span><input id="sessionsound" type="checkbox" class="switch" role="switch"></div>
+      <div class="srow2"><span class="lab" data-t="Recording sounds">Recording sounds</span><input id="sessionsound" type="checkbox" class="switch" role="switch"></div>
       <div class="srow2"><span class="lab" data-t="ID key">ID key</span><button id="exportid"><span data-icon="upload" data-icon-class="sm"></span><span data-t="Export…">Export…</span></button><button id="importid"><span data-icon="download" data-icon-class="sm"></span><span data-t="Import…">Import…</span></button></div>
       <div class="srow2"><span class="lab" data-t="Data folder">Data folder</span><span id="datadir" class="mono ellip"></span><button id="opendata" class="sm"><span data-icon="folder" data-icon-class="sm"></span><span data-t="Open">Open</span></button></div>
     </section>
@@ -197,7 +195,7 @@
       <div id="usage" class="usage"></div>
       <div id="legend" class="legend"></div>
       <div class="warnbox"><span data-icon="alert" data-icon-class="sm"></span><span data-t="Warn when free space is below">Warn when free space is below</span><select id="warnhours"></select><span class="sp"></span><span class="muted small" data-t="Recording stops when the disk is nearly full">Recording stops when the disk is nearly full</span></div>
-      <div class="row"><span class="h3" data-t="Sessions">Sessions</span><span class="sp"></span><span class="muted small" data-t="Select">Select</span><div class="seg"><button id="selnone" data-t="None">None</button><button id="selold"></button></div></div>
+      <div class="row"><span class="h3" data-t="Recordings">Recordings</span><span class="sp"></span><span class="muted small" data-t="Select">Select</span><div class="seg"><button id="selnone" data-t="None">None</button><button id="selold"></button></div></div>
       <div id="storetable" class="tablebox"></div>
       <div class="row"><span id="selsum" class="muted"></span><span class="sp"></span><button id="deletesel" class="danger"><span data-icon="trash" data-icon-class="sm"></span><span data-t="Delete videos…">Delete videos…</span></button></div>
     </section>

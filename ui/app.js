@@ -277,7 +277,6 @@ function renderShell() {
   $("start").hidden = room;
   $("app").hidden = !room;
   $("roompage").hidden = page !== "room";
-  $("boardpage").hidden = page !== "board";
   $("playerpage").hidden = page !== "player";
   document.body.classList.toggle("noside", !sidebar);
   document.body.classList.toggle("nopanel", !panel || (page === "player" && !playSet() && !review));
@@ -431,7 +430,7 @@ function renderTransport(set, idle) {
   $("live").hidden = !(idle || liveSetShown);
   const atLive = idle || live;
   $("live").className = "livebtn " + (atLive ? "at" : "behind");
-  if (changed("livebtn", [atLive, idle ? 0 : Math.round(edge.behind), lang])) $("live").replaceChildren(el("i"), atLive ? t("Live") : t("Go live"), atLive ? "" : el("span", { className: "lagt", textContent: "−" + fmt(edge.behind) }));
+  if (changed("livebtn", [idle, atLive, idle ? 0 : Math.round(edge.behind), lang])) $("live").replaceChildren(el("i"), idle ? t("Live") : atLive ? t("Latest") : t("Jump to latest"), atLive ? "" : el("span", { className: "lagt", textContent: "−" + fmt(edge.behind) }));
   $("seek").classList.toggle("onlive", liveSetShown && atLive);
   $("seek").querySelector(".grow").hidden = !(liveSetShown || (review && reviewSet() && reviewSet().live));
   press($("cc"), subtitles);
@@ -447,7 +446,7 @@ function headerChips(set) {
   if (!set) return [];
   if (set.live) {
     const edge = liveEdge(total(), nowM());
-    return [pill("rec", "rec", t("Recording {time}", { time: fmt((nowUs() - a.start_us) / 1e6) })), live ? null : pill("gray", null, t("Playing back · {time} behind live", { time: fmt(edge.behind) }))];
+    return [pill("rec", "rec", t("Recording {time}", { time: fmt((nowUs() - a.start_us) / 1e6) })), live ? null : pill("gray", null, t("Playing back · {time} behind the latest", { time: fmt(edge.behind) }))];
   }
   return [isReview(set) ? pill("accent", "mic", t("Debrief")) : pill("gray", "film", t("Recorded"))];
 }
@@ -461,7 +460,7 @@ function headerSub(set) {
     return t("{n} online", { n: online });
   }
   const matches = matchEnds(items).length;
-  if (set.live) return [t("This session"), matchNow(nowM())].filter(Boolean).join(" · ");
+  if (set.live) return [t("This recording"), matchNow(nowM())].filter(Boolean).join(" · ");
   return [setLength(set), matches ? t(matches === 1 ? "{n} match" : "{n} matches", { n: matches }) : null].filter(Boolean).join(" · ");
 }
 function fitSub() {
@@ -471,7 +470,7 @@ function fitSub() {
 }
 new ResizeObserver(fitSub).observe($("playerpage"));
 function renderHeader(set) {
-  const title = review ? sessionName(review.id) : !set || set.live ? t("Live") : sessionName(set.id);
+  const title = review ? sessionName(review.id) : !set ? t("Standby") : set.live ? t("Recording") : sessionName(set.id);
   $("ptitle").textContent = title;
   const chips = headerChips(set);
   const csig = chips.map((c) => c && c.outerHTML);
@@ -919,12 +918,12 @@ function renderReviewTab() {
     const row = el("div", { className: "ev" }, el("button", { className: "at", textContent: fmt(n.m), onclick: () => seekTo(n.m) }), el("span", { className: "tx" }, ...inline(n.body), el("span", { className: "by" }, el("i", { className: "dt", style: `background:${colorOf(colorIndex(n.author))}` }), n.who)));
     return row;
   };
-  const groups = list.length ? list.map((c) => ({ title: t("Match {n}", { n: c.n }), range: `${fmt(c.m)}–${fmt(c.end)}`, m: c.m, cur: cur === c, rows: [...notes.filter((n) => n.m >= c.m && n.m < c.end).map(noteRow), ...ends.filter((e) => Math.abs(e.m - c.end) < JUMP_MIN).map((e) => el("div", { className: "ev sys" }, el("button", { className: "at", textContent: fmt(e.m), onclick: () => seekTo(e.m) }), el("span", { className: "tx" }, icon("flag", "sm"), t("Match end"))))] })) : [{ title: t("Whole session"), range: fmt(tot), m: 0, cur: true, rows: notes.map(noteRow) }];
+  const groups = list.length ? list.map((c) => ({ title: t("Match {n}", { n: c.n }), range: `${fmt(c.m)}–${fmt(c.end)}`, m: c.m, cur: cur === c, rows: [...notes.filter((n) => n.m >= c.m && n.m < c.end).map(noteRow), ...ends.filter((e) => Math.abs(e.m - c.end) < JUMP_MIN).map((e) => el("div", { className: "ev sys" }, el("button", { className: "at", textContent: fmt(e.m), onclick: () => seekTo(e.m) }), el("span", { className: "tx" }, icon("flag", "sm"), t("Match end"))))] })) : [{ title: t("Whole recording"), range: fmt(tot), m: 0, cur: true, rows: notes.map(noteRow) }];
   const out = groups.map((g) => el("div", { className: "match" + (g.cur ? " cur" : "") },
     el("div", { className: "mh" }, el("b", { textContent: g.title }), el("small", { textContent: g.range }), el("button", { className: "sm", onclick: () => { seekTo(g.m); if (!clock.playing) act("play", g.m); } }, icon("play", "sm"), t("Watch"))),
     ...(g.rows.length ? g.rows : [el("div", { className: "none", textContent: t("No notes") })])));
   if (debriefs.length) {
-    out.push(el("div", { className: "h3", textContent: t("Debriefs of this session") }));
+    out.push(el("div", { className: "h3", textContent: t("Debriefs of this recording") }));
     out.push(...debriefs.map((d) => el("button", { className: "debrief", onclick: () => openSession(d.id) }, icon("mic", "sm"), el("span", { textContent: sessionName(d.id) }), pill("accent", null, t("Debrief")), el("span", { className: "sp" }), el("span", { className: "muted", textContent: setLength(d) }), icon("play", "sm"))));
   }
   out.push(el("button", { className: "ghost tolink", onclick: () => editBoard() }, icon("board", "sm"), t("Write to the game plan")));
@@ -975,7 +974,7 @@ function renderBands(tot) {
   $("bandlabels").replaceChildren(...ids.map((id) => el("span", {}, el("i", { style: `background:${colorFor(id)}` }), t("Watching {set}", { set: sessionName(id) }))), el("span", { className: "sp" }), set ? el("span", { className: "muted", textContent: t("Voices: {names}", { names: set.players.map((p) => nameOf(p.owner)).join(" · ") }) }) : "");
 }
 function timeText(n) {
-  if (n.m === null) return t("Session");
+  if (n.m === null) return t("Whole recording");
   return n.end !== null && n.role === "chapter" ? `${fmt(n.m)}–${fmt(n.end)}` : fmt(n.m);
 }
 function goTo(n) {
@@ -1077,7 +1076,7 @@ function filterTag(tag) {
   renderEvents();
 }
 function openLink(link) {
-  if (!setById(link.set)) { flash(t("That session is not on this PC.")); return; }
+  if (!setById(link.set)) { flash(t("That recording is not on this PC.")); return; }
   openSession(link.set);
   openSet(link.set, link.m);
   if (link.view) setTimeout(() => setView(play, play.keys.indexOf(link.view) + 1), TICK_MS);
@@ -1135,7 +1134,7 @@ function openQuick() {
   quiet("party_typing", { on: true });
 }
 function renderQuick() {
-  $("quicktime").textContent = quick.timed ? fmt(quick.m) : t("Whole session");
+  $("quicktime").textContent = quick.timed ? fmt(quick.m) : t("Whole recording");
   const word = ($("quicktext").value.slice(0, $("quicktext").selectionStart).match(/#([\p{L}\p{N}_-]*)$/u) || [])[1];
   const known = [...new Set(st.events.flatMap((e) => e.tags || []))];
   const hints = word === undefined ? [] : known.filter((tg) => tg.toLowerCase().startsWith(word.toLowerCase()) && tg.toLowerCase() !== word.toLowerCase()).slice(0, TAG_HINTS);
@@ -1276,8 +1275,8 @@ function notices() {
   if (st.ffmpeg === "failed") list.push({ key: "ffmpegfail", level: "error", icon: "fail", text: t("Couldn't download the video tools. Check your connection."), action: { label: t("Retry"), run: () => run("retry_ffmpeg", null) } });
   if (st.notice) list.push({ key: "n:" + st.notice, level: "warn", icon: "alert", text: t(st.notice) });
   for (const p of st.peers.filter((x) => x.connected && x.other_version)) list.push({ key: "v:" + p.id, level: "warn", icon: "alert", text: t("{name} is on a different version. Both of you need the latest one.", { name: nameOf(p.id) }) });
-  if (available && installAfter) list.push({ key: "after", level: "info", icon: "download", text: t("Version {version} installs after the session", { version: available.version }), action: { label: t("Cancel"), run: () => { installAfter = false; renderNotices(); } }, sticky: true });
-  else if (available) list.push({ key: "update", level: "info", icon: "download", text: t("Version {version} is available", { version: available.version }), action: st.recording ? { label: t("Install after the session"), run: () => { installAfter = true; renderNotices(); } } : { label: t("Install"), primary: true, run: installUpdate } });
+  if (available && installAfter) list.push({ key: "after", level: "info", icon: "download", text: t("Version {version} installs after recording", { version: available.version }), action: { label: t("Cancel"), run: () => { installAfter = false; renderNotices(); } }, sticky: true });
+  else if (available) list.push({ key: "update", level: "info", icon: "download", text: t("Version {version} is available", { version: available.version }), action: st.recording ? { label: t("Install after recording"), run: () => { installAfter = true; renderNotices(); } } : { label: t("Install"), primary: true, run: installUpdate } });
   if (updateText) list.push({ key: "updating", level: "info", icon: "spinner", spin: true, text: updateText, sticky: true });
   return list.filter((n) => !dismissed.has(n.key));
 }
@@ -1290,7 +1289,7 @@ function renderNotices() {
     n.sticky ? null : iconButton("x", t("Close"), () => { dismissed.add(n.key); delete sigs.notices; renderNotices(); }))));
 }
 function exportSet(set) {
-  if (!set) { flash(t("Open a session first")); return; }
+  if (!set) { flash(t("Open a recording first")); return; }
   invoke("export_set", { room: set.room, set: set.id }).then((r) => {
     if (r) { exporting = { set: set.id, percent: 0 }; if (r.skipped.length) flash(t("Exporting without {names}: not on this PC yet", { names: r.skipped.map(nameOf).join(", ") })); refresh(); }
   }).catch(fail);
@@ -1372,7 +1371,7 @@ function renderRecovery() {
 }
 
 function toggleFull() {
-  if (page === "board") { toggleBoardFull(); return; }
+  if (onBoard()) { toggleBoardFull(); return; }
   if (page !== "player" && !full) go("player");
   full = !full;
   $("playerpage").classList.toggle("full", full);
@@ -1390,7 +1389,7 @@ document.addEventListener("mousemove", wake);
 function go(p) {
   if (p !== page) closeQuick(false);
   if (p !== "player" && full) toggleFull();
-  if (page === "board" && p !== "board" && boardFull) toggleBoardFull();
+  if (boardFull && !(p === "room" && roomTab === "board")) toggleBoardFull();
   page = p;
   if (p !== "player") nowView = false;
   closeMenu();
@@ -1400,7 +1399,7 @@ function go(p) {
 function goPage(name) {
   if (name === "room") go("room");
   else if (name === "now") openNow();
-  else go("board");
+  else showBoard();
 }
 function showPanel(on) {
   if (innerWidth > WIDE_PANEL) { panel = on; store("panel", panel); } else panelOpen = on;
@@ -1472,8 +1471,8 @@ async function toggleRecording() {
   if (!st) return;
   const ending = !!st.active_set;
   const review = !ending && reviewing();
-  const title = ending ? t("End the session for everyone?") : review ? t("Start recording the debrief for everyone?") : t("Start a session for everyone?");
-  const action = ending ? t("End session") : review ? t("Record review") : t("Start session");
+  const title = ending ? t("Stop recording for everyone?") : review ? t("Start recording the debrief for everyone?") : t("Start recording for everyone?");
+  const action = ending ? t("Stop recording") : review ? t("Record review") : t("Start recording");
   const text = ending ? t("Recording stops for everyone.") : t("Everyone in the room starts recording.");
   if (await ask(title, action, ending, text)) run(ending ? "stop_recording" : "start_recording");
 }
@@ -1607,7 +1606,7 @@ document.addEventListener("keydown", (e) => {
   if (document.querySelector("dialog[open]")) return;
   if (!inRoom()) return;
   if (ctrl && ["1", "2", "3", "b", "r"].includes(e.key.toLowerCase())) { e.preventDefault(); return; }
-  if (ctrl && e.key === "Enter" && page === "board" && boardEditing) { e.preventDefault(); saveBoard(); return; }
+  if (ctrl && e.key === "Enter" && onBoard() && boardEditing) { e.preventDefault(); saveBoard(); return; }
   if (ctrl && e.key.toLowerCase() === "z" && !typing()) { e.preventDefault(); runUndo(); return; }
   if (e.key === "Escape") { escapeKey(); return; }
   if (typing() || nativeKey(e) || e.metaKey || e.altKey) return;
@@ -1617,7 +1616,7 @@ document.addEventListener("keydown", (e) => {
   let action = null;
   if (e.ctrlKey) action = player && (key === "ArrowLeft" || key === "ArrowRight") ? () => jump(key === "ArrowLeft" ? -STEP.huge : STEP.huge) : null;
   else if (key === "?") action = () => openSettings("shortcuts");
-  else if (page === "board" && !boardEditing && k === "f") action = toggleBoardFull;
+  else if (onBoard() && !boardEditing && k === "f") action = toggleBoardFull;
   else if (page === "player") action = stageKey(e, key) || (player && (PLAYER_KEYS[(e.shiftKey ? "Shift+" : "") + k] || PLAYER_KEYS[k])) || null;
   if (!action) return;
   e.preventDefault();

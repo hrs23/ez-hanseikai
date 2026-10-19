@@ -74,7 +74,7 @@ fn run(job: &Job, progress: &mut dyn FnMut(f64)) -> Result<Output, String> {
         }
     })?;
     let events = match_ends(&frames).into_iter().map(|t| Found { kind: "match_end".into(), at_s: Some(t), text: "Match end".into(), tags: vec!["match".into()], ..Default::default() }).collect();
-    Ok(Output { events, tags: BTreeMap::from([("match".to_string(), "Match".to_string())]) })
+    Ok(Output { events, tags: BTreeMap::from([("match".to_string(), "Match".to_string())]), ..Default::default() })
 }
 
 #[cfg(test)]

@@ -36,7 +36,9 @@ const EXTRACT_SHARE: f64 = 0.1;
 const SILENCE: &str = "silencedetect=noise=-45dB:d=1";
 const LEVEL: &str = "speechnorm=e=6.25:r=0.00001:l=1";
 const SOUND_MIN_S: f64 = 0.25;
-const REPEAT_LOOKBACK: usize = 3;
+const REPEAT_LOOKBACK: usize = 8;
+const REPEAT_MAX: usize = 3;
+const PREFIX_MIN_CHARS: usize = 8;
 
 fn model(settings: &Value) -> (&'static str, &'static str, &'static str, u64) {
     let name = settings["model"].as_str().unwrap_or_default();
@@ -50,6 +52,14 @@ fn needs(settings: &Value) -> Vec<Download> {
         Download { url: TOOL_URL.into(), sha256: TOOL_SHA256, size: TOOL_SIZE, dest: TOOL_DIR.into(), pick: &["whisper-cli.exe", "*.dll"] },
         Download { url: format!("{MODELS}/{file}"), sha256, size, dest: file.into(), pick: &[] },
     ]
+}
+
+fn filters() -> String {
+    format!("{LEVEL},{SILENCE}")
+}
+
+pub fn drop_note(raw: usize, kept: usize) -> String {
+    if kept > 0 { String::new() } else { format!("raw {raw}, dropped {}", raw - kept) }
 }
 
 pub fn noise(text: &str) -> bool {
@@ -80,9 +90,14 @@ fn sound(from: f64, to: f64, silences: &[(f64, f64)]) -> f64 {
     to - from - quiet
 }
 
-fn same_text(a: &str, b: &str) -> bool {
-    let plain = |t: &str| t.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect::<String>();
-    plain(a) == plain(b)
+fn plain(t: &str) -> String {
+    t.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
+}
+
+fn similar(a: &str, b: &str) -> bool {
+    let (a, b) = (plain(a), plain(b));
+    let (short, long) = if a.len() <= b.len() { (&a, &b) } else { (&b, &a) };
+    a == b || (short.chars().count() >= PREFIX_MIN_CHARS && long.starts_with(short.as_str()))
 }
 
 pub fn segments(json: &Value, silences: &[(f64, f64)]) -> Vec<Found> {
@@ -93,7 +108,7 @@ pub fn segments(json: &Value, silences: &[(f64, f64)]) -> Vec<Found> {
         if noise(text) || to <= from || sound(from, to, silences) < SOUND_MIN_S {
             continue;
         }
-        if out.iter().rev().take(REPEAT_LOOKBACK).any(|f| same_text(&f.text, text)) {
+        if out.iter().rev().take(REPEAT_LOOKBACK).any(|f| similar(&f.text, text)) || out.iter().filter(|f| plain(&f.text) == plain(text)).count() >= REPEAT_MAX {
             continue;
         }
         out.push(Found { kind: "speech".into(), from_s: Some(from), to_s: Some(to), text: text.to_string(), ..Default::default() });
@@ -116,7 +131,7 @@ fn run(job: &Job, progress: &mut dyn FnMut(f64)) -> Result<Output, String> {
     }
     std::fs::create_dir_all(&job.work).map_err(|e| e.to_string())?;
     let wav = job.work.join("voice.wav");
-    let filters = format!("{SILENCE},{LEVEL}");
+    let filters = filters();
     let after = ["-vn", "-af", &filters, "-ac", "1", "-ar", RATE, "-c:a", "pcm_s16le"].iter().map(|s| s.to_string()).chain([wav.display().to_string()]).collect::<Vec<_>>();
     let out = ffmpeg(job, &job.voice, &["-v", "info", "-nostats"], &after, Stdio::null(), Stdio::piped()).and_then(|c| c.wait_with_output()).map_err(|e| e.to_string())?;
     let log = String::from_utf8_lossy(&out.stderr);
@@ -133,7 +148,7 @@ fn run(job: &Job, progress: &mut dyn FnMut(f64)) -> Result<Output, String> {
         .arg(job.dir.join(file))
         .arg("-f")
         .arg(&wav)
-        .args(["-l", job.settings["language"].as_str().unwrap_or("auto"), "-t", &threads, "-mc", "0", "-oj", "-pp", "-of"])
+        .args(["-l", job.settings["language"].as_str().unwrap_or("auto"), "-t", &threads, "-mc", "0", "--suppress-nst", "-oj", "-pp", "-of"])
         .arg(&base)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -152,7 +167,9 @@ fn run(job: &Job, progress: &mut dyn FnMut(f64)) -> Result<Output, String> {
     }
     let bytes = std::fs::read(base.with_extension("json")).map_err(|e| e.to_string())?;
     let json: Value = serde_json::from_str(&String::from_utf8_lossy(&bytes)).map_err(|e| e.to_string())?;
-    Ok(Output { events: segments(&json, &silences), tags: BTreeMap::new() })
+    let events = segments(&json, &silences);
+    let note = drop_note(json["transcription"].as_array().map_or(0, Vec::len), events.len());
+    Ok(Output { events, tags: BTreeMap::new(), note })
 }
 
 #[cfg(test)]
@@ -195,7 +212,51 @@ mod tests {
             line(60000, 68000, "Hold."),
         ]});
         let texts: Vec<String> = segments(&out, &[(9.0, 30.5), (61.0, 70.0)]).into_iter().map(|f| f.text).collect();
-        assert_eq!(texts, ["Push left now.", "Rotate.", "Thanks for watching.", "Go.", "Back.", "Push left now.", "Hold."]);
+        assert_eq!(texts, ["Push left now.", "Rotate.", "Thanks for watching.", "Go.", "Back.", "Hold."]);
+    }
+
+    #[test]
+    fn a_looping_line_is_kept_three_times_at_most() {
+        let line = |at: i64, text: &str| json!({"offsets": {"from": at * 1000, "to": at * 1000 + 3000}, "text": text});
+        let others = ["Rotate east", "Smoke the door", "Reload quickly", "Watch the flank", "Take the ridge", "Heal behind me", "Ping the squad", "Drop to the left", "Check the roof", "Cover my back", "Swap to the rifle", "Wait for the ring", "Third party coming", "Pick up the shield", "Fall back now"];
+        let mut all = Vec::new();
+        for i in 0..30usize {
+            all.push(line(i as i64 * 10, "Hold the high ground now."));
+            if i % 2 == 1 {
+                all.push(line(i as i64 * 10 + 5, others[i / 2]));
+            }
+        }
+        let texts: Vec<String> = segments(&json!({"transcription": all}), &[]).into_iter().map(|f| f.text).collect();
+        let held = texts.iter().filter(|t| t.starts_with("Hold")).count();
+        assert!((1..=3).contains(&held), "{held} copies");
+        assert_eq!(texts.len(), held + others.len());
+    }
+
+    #[test]
+    fn a_trailing_particle_is_a_repeat() {
+        assert!(similar("Hold the high ground.", "Hold the high ground now"));
+        assert!(!similar("Go.", "Go ahead."));
+        assert!(!similar("Push left.", "Push right."));
+    }
+
+    #[test]
+    fn the_level_is_raised_before_silence_is_detected() {
+        let filters = filters();
+        assert!(filters.find("speechnorm").unwrap() < filters.find("silencedetect").unwrap());
+    }
+
+    #[test]
+    fn an_empty_result_says_how_much_was_dropped() {
+        assert_eq!(drop_note(12, 0), "raw 12, dropped 12");
+        assert_eq!(drop_note(0, 0), "raw 0, dropped 0");
+        assert_eq!(drop_note(12, 3), "");
+    }
+
+    #[test]
+    fn a_quiet_voice_survives_when_silence_is_measured_after_the_boost() {
+        let line = json!({"transcription": [{"offsets": {"from": 0, "to": 2000}, "text": "Push left now."}]});
+        assert!(segments(&line, &[(0.0, f64::INFINITY)]).is_empty());
+        assert_eq!(segments(&line, &[]).len(), 1);
     }
 
     #[test]

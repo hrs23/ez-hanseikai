@@ -58,7 +58,7 @@ function pluginWorkers(p) {
 function pluginProgressBox(p) {
   const { done, total } = pluginProgress(jobInfo ? jobInfo.jobs : [], p.id);
   if (!total) return null;
-  return el("div", { className: "psec" }, el("div", { className: "h3", textContent: t("Progress") }), el("div", { className: "row" }, el("span", { textContent: t("{done} of {total} sessions", { done, total }) }), el("span", { className: "sp" }), el("span", { className: "muted", textContent: `${Math.floor((done / total) * 100)}%` })), el("div", { className: "bar" }, el("i", { style: `width:${(done / total) * 100}%` })));
+  return el("div", { className: "psec" }, el("div", { className: "h3", textContent: t("Progress") }), el("div", { className: "row" }, el("span", { textContent: t("{done} of {total} recordings", { done, total }) }), el("span", { className: "sp" }), el("span", { className: "muted", textContent: `${Math.floor((done / total) * 100)}%` })), el("div", { className: "bar" }, el("i", { style: `width:${(done / total) * 100}%` })));
 }
 function pluginHere(p) {
   let body;

@@ -73,6 +73,8 @@ pub struct Output {
     pub events: Vec<Found>,
     #[serde(default)]
     pub tags: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
 }
 
 #[derive(Debug, PartialEq)]
@@ -283,7 +285,7 @@ mod tests {
         assert_eq!(reply(r#"{"progress": 1.5}"#), Some(Reply::Progress(1.0)));
         assert_eq!(reply(r#"{"error": "no"}"#), Some(Reply::Failed("no".into())));
         let done = reply(r#"{"output": {"events": [{"kind": "x", "at_s": 2.0}]}}"#);
-        assert_eq!(done, Some(Reply::Done(Output { events: vec![Found { kind: "x".into(), at_s: Some(2.0), ..Default::default() }], tags: BTreeMap::new() })));
+        assert_eq!(done, Some(Reply::Done(Output { events: vec![Found { kind: "x".into(), at_s: Some(2.0), ..Default::default() }], tags: BTreeMap::new(), note: String::new() })));
         assert_eq!(reply("noise"), None);
     }
 
