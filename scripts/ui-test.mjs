@@ -707,10 +707,10 @@ test("the personal game plan stays on this PC and the room's goes to the log", (
   assert.match(personal, /store\(personalKey\(\)/);
   assert.doesNotMatch(personal, /invoke|add_event/);
   assert.match(write, /invoke\("add_event", \{ kind: "board", text, target: \{\}, values: \{ card: "team" \} \}\)/);
-  assert.match(pages, /const planKey = \(id\) => `board\/\$\{id\}`;\nconst personalKey = \(\) => planKey\(st\.room \? st\.room\.id : ""\);/);
+  assert.match(pages, /const planKey = \(id\) => `board\/\$\{id\}`;\s*const personalKey = \(\) => planKey\(st\.room \? st\.room\.id : ""\);/);
   assert.match(pages, /run\("remove_room", \{ id: r\.id \}, \(\) => \{ forgetPlan\(r\.id\);/);
   assert.match(pages, /run\("remove_room", \{ id \}, \(\) => \{ forgetPlan\(id\);/);
-  assert.match(pages, /if \(!keepRooms\) unstore\(\(k\) => k\.startsWith\(planKey\(""\)\)\);\n  run\("reset"/);
+  assert.match(pages, /if \(!keepRooms\) unstore\(\(k\) => k\.startsWith\(planKey\(""\)\)\);\s*run\("reset"/);
   assert.match(pages, /onTask: \(n\) => \{ boardDraft = toggleTask\(boardDraft, n\); writeBoard\(boardDraft\); \}/);
   assert.match(pages, /b\.disabled = boardEditing;/);
   assert.doesNotMatch(pages, /\$\("boardscope"\)\.hidden/);
