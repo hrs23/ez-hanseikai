@@ -168,6 +168,7 @@ async function pressAndConfirm(app, call, yes = true) {
 
 const invoke = (app, cmd, args = {}) => evaluate(app, `window.__TAURI__.core.invoke(${JSON.stringify(cmd)}, ${JSON.stringify(args)})`);
 const state = (app) => invoke(app, "state");
+const onLive = (app) => evaluate(app, `page === "player" && navActive() === "live" && $("sidenav").querySelector("[aria-current=page]").dataset.nav === "live"`);
 
 async function invokeLong(app, cmd, args, seconds, label) {
   await evaluate(app, `window.e2eLong = null; window.__TAURI__.core.invoke(${JSON.stringify(cmd)}, ${JSON.stringify(args)}).then((r) => { window.e2eLong = { ok: r }; }, (e) => { window.e2eLong = { error: String(e) }; }); true`);
@@ -502,6 +503,7 @@ async function scenario(ctx) {
 
   await step("recording alone, the player follows the picture as it grows", async () => {
     ctx.room = await invoke(a, "create_room", { name: "Practice" });
+    await waitFor("A opens the room on Live", within(UI_REFRESH_S * 5), () => onLive(a));
     await allSee([a], "encoding its test source", within(COLD_START_S), (st) => st.capture.live);
     await evaluate(a, "openNow(); true");
     await pressAndConfirm(a, "toggleRecording()");
@@ -513,7 +515,8 @@ async function scenario(ctx) {
     await waitFor("A offers to discard", within(UI_REFRESH_S * 5), () => evaluate(a, `$("confirm").open && $("confirmtitle").textContent === t("Discard this recording?")`));
     await evaluate(a, `$("confirmyes").click(); true`);
     await waitFor("A dropped the recording", within(UI_REFRESH_S * 5), async () => { const st = await state(a); return !st.active_set && !setOf(st, alone); });
-    await evaluate(a, "openNow(); share(); true");
+    await waitFor("A is back on Live", within(UI_REFRESH_S * 5), () => onLive(a));
+    await evaluate(a, "openLive(); true");
     await waitFor("A shares no recording", within(UI_REFRESH_S * 5), async () => !(await state(a)).party.shared.set);
   });
 
@@ -590,7 +593,6 @@ async function scenario(ctx) {
   });
 
   await step("Live shows a tile for everyone who shares a screen, also while recording", async () => {
-    check(await evaluate(a, `page === "player" && navActive() === "live" && $("sidenav").querySelector("[aria-current=page]").dataset.nav === "live"`), "A did not open on Live after creating the room");
     for (const app of [a, b, c]) {
       await evaluate(app, `openLive(); true`);
       await waitFor(`${app.key} shows three live tiles`, within(UI_REFRESH_S * 10), () => evaluate(app, `!$("livetiles").hidden && Object.keys(rec.tiles).length === 3 && $("ptitle").textContent === t("Live")`));
