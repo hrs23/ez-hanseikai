@@ -28,8 +28,12 @@ pub fn seg_number(name: &str) -> Option<u32> {
     name.strip_suffix(".part").unwrap_or(name).strip_suffix(".m4s")?.parse().ok()
 }
 
+pub fn recording_dir(room_dir: &Path, set: &str) -> PathBuf {
+    room_dir.join(RECORDINGS).join(set)
+}
+
 pub fn series_dir(room_dir: &Path, set: Option<&str>, owner: &str, capture: &str, series: &str) -> PathBuf {
-    set.map_or_else(|| room_dir.join(STANDBY), |set| room_dir.join(RECORDINGS).join(set)).join(owner).join(capture).join(series)
+    set.map_or_else(|| room_dir.join(STANDBY), |set| recording_dir(room_dir, set)).join(owner).join(capture).join(series)
 }
 
 pub fn part_of(path: &Path) -> PathBuf {
@@ -155,7 +159,7 @@ impl Core {
     }
 
     pub fn recording_dir(&self, room: &str, set: &str) -> PathBuf {
-        self.room_dir(room).join(RECORDINGS).join(set)
+        recording_dir(&self.room_dir(room), set)
     }
 
     pub fn series_dir(&self, room: &str, set: Option<&str>, owner: &str, capture: &str, series: &str) -> PathBuf {
@@ -594,7 +598,7 @@ pub fn log_set_layout(core: &Core) {
 
 pub fn unused_set(logs: &[Log], room_dir: &Path, start_us: i64, tz_offset_s: i64) -> String {
     let taken: HashSet<&str> = logs.iter().flat_map(|l| l.records.iter()).filter(|r| r["k"] == "rec" || r["k"] == "set_del").filter_map(|r| r["set"].as_str()).collect();
-    (0..).map(|i| set_id_for(start_us + i * 1_000_000, tz_offset_s)).find(|id| !taken.contains(id.as_str()) && !room_dir.join(RECORDINGS).join(id).exists()).unwrap_or_default()
+    (0..).map(|i| set_id_for(start_us + i * 1_000_000, tz_offset_s)).find(|id| !taken.contains(id.as_str()) && !recording_dir(room_dir, id).exists()).unwrap_or_default()
 }
 
 pub fn start_set(core: &Arc<Core>, debrief: Option<bool>) -> Result<(), String> {
@@ -944,14 +948,14 @@ pub fn discard_set(core: &Core, room: &str, set: &str) -> Result<bool, String> {
 }
 
 fn remove_recording(room_dir: &Path, set: &str) {
-    let _ = std::fs::remove_dir_all(room_dir.join(RECORDINGS).join(set));
+    let _ = std::fs::remove_dir_all(recording_dir(room_dir, set));
     let _ = std::fs::remove_file(crate::thumbs::path(room_dir, set));
 }
 
 pub fn sweep(room_dir: &Path, gone: &HashSet<String>, recording: Option<&str>) -> Vec<String> {
     let mut out = Vec::new();
     for set in gone.iter().filter(|set| valid_id(set) && Some(set.as_str()) != recording) {
-        if room_dir.join(RECORDINGS).join(set).exists() || crate::thumbs::path(room_dir, set).exists() {
+        if recording_dir(room_dir, set).exists() || crate::thumbs::path(room_dir, set).exists() {
             remove_recording(room_dir, set);
             out.push(set.clone());
         }
@@ -1345,7 +1349,7 @@ pub mod tests {
         let start = 1_760_000_000_000_000;
         let id = |i: i64| set_id_for(start + i * 1_000_000, 0);
         let logs = [log("a", 0, vec![json!({"k": "rec", "set": id(0)})]), log("b", 0, vec![json!({"k": "set_del", "set": id(1)})])];
-        std::fs::create_dir_all(dir.join(RECORDINGS).join(id(2))).unwrap();
+        std::fs::create_dir_all(recording_dir(&dir, &id(2))).unwrap();
         assert_eq!((unused_set(&logs, &dir, start, 0), unused_set(&[], &dir, start, 0), unused_set(&[], &dir, start + 2_000_000, 0)), (id(3), id(0), id(3)));
         let _ = std::fs::remove_dir_all(dir);
     }
