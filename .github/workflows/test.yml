@@ -45,7 +45,7 @@ jobs:
           New-Item -ItemType Directory ffmpeg | Out-Null
           Get-ChildItem unpacked -Recurse -Include ffmpeg.exe, ffprobe.exe | Move-Item -Destination ffmpeg
       - run: npm ci
-      - run: npx tauri build
+      - run: npx tauri build ${{ secrets.TAURI_SIGNING_PRIVATE_KEY == '' && '--no-sign' || '' }}
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -84,28 +84,21 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - name: Find the version to release
-        id: version
-        run: |
-          tag="v$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml)"
-          gh release view "$tag" >/dev/null 2>&1 || echo "tag=$tag" >> "$GITHUB_OUTPUT"
-      - if: steps.version.outputs.tag
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: installer
           path: nsis
       - name: Publish the release and the update manifests
-        if: steps.version.outputs.tag
-        env:
-          TAG: ${{ steps.version.outputs.tag }}
         run: |
+          tag="v$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml)"
           notes="The installer is unsigned, so Windows SmartScreen warns: choose More info, then Run anyway. It installs for the current user only. ffmpeg is not included; the app downloads it on first run."
-          case "$TAG" in *-*) pre=--prerelease ;; *) pre= ;; esac
+          case "$tag" in *-*) pre=--prerelease ;; *) pre= ;; esac
           exe=$(ls nsis/*-setup.exe)
           name=$(basename "$exe")
-          jq -n --arg version "${TAG#v}" --arg notes "$notes" --arg pub_date "$(date -u +%FT%TZ)" --arg signature "$(cat "$exe.sig")" --arg url "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/${name// /.}" \
+          jq -n --arg version "${tag#v}" --arg notes "$notes" --arg pub_date "$(date -u +%FT%TZ)" --arg signature "$(cat "$exe.sig")" --arg url "https://github.com/$GITHUB_REPOSITORY/releases/download/$tag/${name// /.}" \
             '{version: $version, notes: $notes, pub_date: $pub_date, platforms: {"windows-x86_64": {signature: $signature, url: $url}}}' > latest.json
-          gh release create "$TAG" "$exe" "$exe.sig" latest.json --target "$GITHUB_SHA" --title "EZ Hanseikai $TAG" --notes "$notes" $pre
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" "$exe" "$exe.sig" latest.json --target "$GITHUB_SHA" --title "EZ Hanseikai $tag" --notes "$notes" $pre
+          gh release download "$tag" -p latest.json --clobber
           gh release view updater >/dev/null 2>&1 || gh release create updater --prerelease --title "Update manifests" --notes "Rolling manifests read by the in-app updater: latest.json for the stable channel, latest-beta.json for the beta channel."
           cp latest.json latest-beta.json
           gh release upload updater latest-beta.json --clobber
