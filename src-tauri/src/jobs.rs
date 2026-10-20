@@ -84,7 +84,7 @@ static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
 static FIRST: Mutex<String> = Mutex::new(String::new());
 static CANCEL: AtomicBool = AtomicBool::new(false);
 static STOP: AtomicBool = AtomicBool::new(false);
-static WORKING: AtomicBool = AtomicBool::new(false);
+static WORK: Mutex<Option<String>> = Mutex::new(None);
 
 fn capped<'a>(logs: &'a [Log], caps: Option<&'a HashMap<String, u64>>) -> impl Iterator<Item = (&'a Log, &'a [Value])> {
     logs.iter().map(move |log| {
@@ -475,15 +475,21 @@ fn emit(core: &Core) {
 pub fn worker(core: Arc<Core>) {
     let _ = std::fs::remove_dir_all(work_root(&core));
     loop {
-        tick(&core);
+        let room = {
+            let mut work = WORK.lock().unwrap();
+            let room = core.active_room_id();
+            *work = Some(room.clone());
+            room
+        };
+        tick(&core, &room);
+        *WORK.lock().unwrap() = None;
         std::thread::sleep(CHECK);
     }
 }
 
-fn tick(core: &Arc<Core>) {
-    let room = core.active_room_id();
-    let (logs, configs, tracks) = snapshot(core, &room);
-    publish(core, &room, &logs, &configs);
+fn tick(core: &Arc<Core>, room: &str) {
+    let (logs, configs, tracks) = snapshot(core, room);
+    publish(core, room, &logs, &configs);
     let prefixes = current(&logs, None);
     if prefixes.is_empty() || STOP.load(Ordering::Relaxed) {
         return;
@@ -492,22 +498,20 @@ fn tick(core: &Arc<Core>) {
     let failed = unfinished(&me, &tracks);
     for (key, run) in &failed {
         tracing::warn!("job {key} stopped twice without finishing, marking it failed");
-        core.append_log(&room, &job_record("fail", key, *run, json!({"error": "Stopped twice without finishing."})));
+        core.append_log(room, &job_record("fail", key, *run, json!({"error": "Stopped twice without finishing."})));
     }
     for (key, run, plugin) in released(&me, |id, s| ready(core, id, s), &configs, &tracks) {
         if !failed.iter().any(|(k, _)| *k == key) {
             tracing::info!("job {key} is no longer run here, releasing it");
-            core.append_log(&room, &job_record("stop", &key, run, json!({"plugin": plugin})));
+            core.append_log(room, &job_record("stop", &key, run, json!({"plugin": plugin})));
         }
     }
-    let inputs = inputs(core, &room, &logs, |file| open(file, &me, &prefixes, &tracks));
+    let inputs = inputs(core, room, &logs, |file| open(file, &me, &prefixes, &tracks));
     let first = FIRST.lock().unwrap().clone();
     let pick = next(&me, &online(core), recording(core), &bundled(), |id, s| ready(core, id, s), &configs, &tracks, &chosen(&logs, None), &inputs, &first);
     let Some(pick) = pick else { return };
     let (Some(plugin), Some(config)) = (plugins::find(&pick.plugin), configs.get(&pick.plugin)) else { return };
-    WORKING.store(true, Ordering::Relaxed);
-    work(core, &room, plugin, config, &pick.key, &inputs[pick.input]);
-    WORKING.store(false, Ordering::Relaxed);
+    work(core, room, plugin, config, &pick.key, &inputs[pick.input]);
 }
 
 fn work(core: &Arc<Core>, room: &str, plugin: &'static Plugin, config: &Config, key: &str, input: &Input) {
@@ -810,7 +814,7 @@ pub fn stop_now(core: &Core) {
 
 pub fn release_room(room: &str) {
     let started = Instant::now();
-    while RUNNING.lock().unwrap().as_ref().is_some_and(|r| r.room == room) && started.elapsed() < STOP_WAIT {
+    while WORK.lock().unwrap().as_deref() == Some(room) && started.elapsed() < STOP_WAIT {
         std::thread::sleep(EMIT_EVERY);
     }
 }
@@ -818,7 +822,7 @@ pub fn release_room(room: &str) {
 pub fn stop_and_wait(core: &Core) {
     stop_now(core);
     let started = Instant::now();
-    while WORKING.load(Ordering::Relaxed) && started.elapsed() < STOP_WAIT {
+    while WORK.lock().unwrap().is_some() && started.elapsed() < STOP_WAIT {
         std::thread::sleep(EMIT_EVERY);
     }
 }
