@@ -328,9 +328,9 @@ pub fn check_capture() -> Vec<Value> {
     lines.push(match control {
         Err(e) => line("fail", "Screen capture could not start: {error}", json!({"error": e})),
         Ok(control) => {
-            let arrived = proc::wait_until(PROBE_WAIT, POLL, || got.load(Ordering::Relaxed));
+            proc::wait_until(PROBE_WAIT, POLL, || got.load(Ordering::Relaxed));
             let _ = control.stop();
-            if arrived {
+            if got.load(Ordering::Relaxed) {
                 line("ok", "Screen capture started and a frame arrived", json!({}))
             } else {
                 line("warn", "Screen capture started but no frame arrived in {seconds} s (idle or locked screen)", json!({"seconds": PROBE_WAIT.as_secs()}))

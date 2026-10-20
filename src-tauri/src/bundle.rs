@@ -161,7 +161,7 @@ fn run_job(core: &Arc<Core>, set: &(String, String), job: Job, work: &Path, done
     command.current_dir(work);
     let feeds = export::listen(&mut command, job.feeds)?;
     command.args(&job.args).args(["-movflags", "+faststart", "-f", "mp4"]).arg(&job.partial);
-    let (stdout, stderr) = export::begin(core, set.clone(), &mut command)?;
+    let (stdout, stderr) = export::begin(core, set.clone(), &mut command, done > 0)?;
     export::serve(core, feeds);
     let tail = export::stderr_tail(stderr, ERROR_LINES);
     export::read_progress(stdout, |s| export::emit(core, ((done as f64 + (s / job.total.max(1.0)).clamp(0.0, 1.0)) / jobs as f64) * 100.0, false, None));

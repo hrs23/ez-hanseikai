@@ -279,7 +279,7 @@ pub fn start(core: &Arc<Core>, room_id: &str, set_id: &str, mut path: PathBuf) -
             [format!("-metadata:s:a:{i}"), format!("title={n}"), format!("-metadata:s:a:{i}"), format!("handler_name={n}")]
         }))
         .args(["-t", &format!("{total:.3}"), "-movflags", FRAGMENTED, "-f", "mp4", PARTIAL]);
-    let (stdout, stderr) = begin(core, (room_id.to_string(), set_id.to_string()), &mut command)?;
+    let (stdout, stderr) = begin(core, (room_id.to_string(), set_id.to_string()), &mut command, false)?;
     serve(core, feeds);
     let core = core.clone();
     std::thread::spawn(move || watch(&core, stdout, stderr, &work.join(PARTIAL), &path, total));
@@ -346,12 +346,12 @@ pub fn outcome(core: &Core, tail: JoinHandle<String>, partial: &Path, path: &Pat
     result
 }
 
-pub fn begin(core: &Core, set: (String, String), command: &mut Command) -> Result<(ChildStdout, ChildStderr), String> {
+pub fn begin(core: &Core, set: (String, String), command: &mut Command, replace: bool) -> Result<(ChildStdout, ChildStderr), String> {
     let mut child = proc::spawn(command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()), BELOW_NORMAL).map_err(|e| e.to_string())?;
     let pipes = (child.child.stdout.take().unwrap(), child.child.stderr.take().unwrap());
     let mut slot = core.export.lock().unwrap();
     match slot.as_mut() {
-        Some(running) if running.set == set => running.child = child,
+        Some(running) if replace => running.child = child,
         Some(_) => {
             child.kill();
             return Err("An export is already running.".into());
