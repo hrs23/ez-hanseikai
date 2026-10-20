@@ -619,7 +619,7 @@ function renderDiagnostics() {
 async function diagnosticsText() {
   const failed = jobInfo ? jobInfo.jobs.filter((j) => j.state === "failed").length : 0;
   const head = summaryLines(st, failed).map((l) => `[${l.level}] ${l.key}: ${l.text}`).join("\n");
-  return invoke("debug_report", { includeAddresses: false, everyone: false, audioProcess: st.audio_process, save: false, head });
+  return invoke("debug_report", { audioProcess: st.audio_process, save: false, head });
 }
 
 function openReset() {
@@ -705,7 +705,7 @@ $("hotkey").onkeydown = (e) => {
   invoke("set_hotkey", { keys }).then(() => { $("hotkeyerr").hidden = true; refresh(); }).catch((err) => { $("hotkeyerr").textContent = t(String(err)); $("hotkeyerr").hidden = false; $("hotkey").textContent = st.hotkey; });
 };
 $("rfolder").onclick = () => run("open_data_folder", null, null);
-$("rreport").onclick = () => run("save_report", { includeAddresses: false, audioProcess: "" }, (p) => { $("rinfo").textContent = p; });
+$("rreport").onclick = () => run("debug_report", { audioProcess: "", save: true }, (p) => { $("rinfo").textContent = p; });
 $("rreset").onclick = openReset;
 $("rcontinue").onclick = () => run("dismiss_recovery");
 for (const d of document.querySelectorAll("dialog")) {

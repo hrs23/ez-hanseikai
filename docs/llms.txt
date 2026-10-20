@@ -12,7 +12,7 @@ The API is off by default. A person turns it on in the app: Settings > API > Loc
 
 - Every request except GET /llms.txt needs the header `Authorization: Bearer <token>`.
 - The Host header must be 127.0.0.1:47625 or localhost:47625. With Settings > API > Other devices, the PC's own addresses and name with the same port work too. There is no CORS.
-- JSON in, JSON out (UTF-8). Errors are `{"error": "..."}` with the status 400, 401, 403, 404, 405, 409 or 413.
+- JSON in, JSON out (UTF-8). Errors are `{"error": "..."}` with the status 400, 401, 403, 404, 405, 409, 413, 500 or 503.
 - Times in a recording are seconds from its start (`at_s`, `from_s`, `to_s`, rounded to 0.1). Clock times are milliseconds since 1970 (`start_ms`, `end_ms`).
 - Reads work for every room on this PC. Writes work only for the room that is open in the app (409 otherwise); ask the person to open it.
 - Notes are at most 500 characters and the game plan at most 4000. Write `#tag` in a note text to tag it, or send `tags`.

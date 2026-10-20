@@ -305,7 +305,7 @@ pub trait Backend {
     fn add(&self, room: &str, record: Value) -> Result<(), String>;
     fn import(&self, room: &str, spec: &Value) -> Result<Value, (u16, String)>;
     fn export(&self, room: &str, set: &str, folder: &str, aligned: bool) -> Result<Value, (u16, String)>;
-    fn diagnostics(&self, everyone: bool) -> String;
+    fn diagnostics(&self, everyone: bool) -> Result<String, String>;
 }
 
 struct Loaded {
@@ -660,7 +660,10 @@ fn route(req: &Request, be: &dyn Backend, parts: &[&str]) -> Response {
         return match parts {
             ["v1", "rooms"] => reply(200, json!({"rooms": rooms_json(&be.heads())})),
             ["v1", "status"] => status_reply(be),
-            ["v1", "diagnostics"] => reply(200, json!({"text": be.diagnostics(matches!(req.query("everyone"), Some("true" | "1")))})),
+            ["v1", "diagnostics"] => match be.diagnostics(matches!(req.query("everyone"), Some("true" | "1"))) {
+                Ok(text) => reply(200, json!({"text": text})),
+                Err(e) => error(500, &e),
+            },
             _ => reply(200, be.app()),
         };
     };
@@ -811,9 +814,9 @@ impl Backend for Live {
         crate::bundle::run(&self.0, room, set, std::path::Path::new(folder), aligned).map_err(|e| (if e.contains("already running") || e.contains("Stop recording") { 409 } else { 400 }, e))
     }
 
-    fn diagnostics(&self, everyone: bool) -> String {
+    fn diagnostics(&self, everyone: bool) -> Result<String, String> {
         let audio_process = self.0.audio_process.lock().unwrap().clone();
-        tauri::async_runtime::block_on(crate::debug::diagnostics(self.0.clone(), false, everyone, audio_process, None)).unwrap_or_else(|e| format!("no report: {e}"))
+        tauri::async_runtime::block_on(crate::debug::diagnostics(self.0.clone(), everyone, audio_process, None))
     }
 }
 
@@ -930,12 +933,13 @@ mod tests {
         logs: Mutex<Vec<Log>>,
         clock: std::sync::atomic::AtomicI64,
         calls: Mutex<Vec<String>>,
+        report_fails: AtomicBool,
     }
 
     impl Fake {
         fn new(records_a: Vec<Value>, records_b: Vec<Value>) -> Self {
             let log = |owner: &str, offset_us: i64, records: Vec<Value>| Log { owner: owner.into(), offset_us, records: Arc::new(records) };
-            Self { heads: vec![("r1".into(), true), ("r2".into(), false)], logs: Mutex::new(vec![log("a", 0, records_a), log("b", 0, records_b)]), clock: std::sync::atomic::AtomicI64::new(START + 100 * S), calls: Mutex::new(Vec::new()) }
+            Self { heads: vec![("r1".into(), true), ("r2".into(), false)], logs: Mutex::new(vec![log("a", 0, records_a), log("b", 0, records_b)]), clock: std::sync::atomic::AtomicI64::new(START + 100 * S), calls: Mutex::new(Vec::new()), report_fails: Default::default() }
         }
     }
 
@@ -994,8 +998,11 @@ mod tests {
             self.calls.lock().unwrap().push(format!("export {room} {set} {folder} {aligned}"));
             Ok(json!({"folder": folder, "files": 2, "skipped": []}))
         }
-        fn diagnostics(&self, everyone: bool) -> String {
-            format!("report everyone={everyone}")
+        fn diagnostics(&self, everyone: bool) -> Result<String, String> {
+            if self.report_fails.load(Ordering::Relaxed) {
+                return Err("task panicked".into());
+            }
+            Ok(format!("report everyone={everyone}"))
         }
     }
 
@@ -1391,6 +1398,8 @@ mod tests {
         assert_eq!(get(&fake, "/v1/diagnostics?everyone=1").1["text"], "report everyone=true");
         assert_eq!(get(&fake, "/v1/diagnostics?everyone=no").1["text"], "report everyone=false");
         assert_eq!(call(&fake, "POST", "/v1/diagnostics", "").0, 405);
+        fake.report_fails.store(true, Ordering::Relaxed);
+        assert_eq!(get(&fake, "/v1/diagnostics"), (500, json!({"error": "task panicked"})));
     }
 
     #[test]

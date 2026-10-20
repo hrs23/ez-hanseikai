@@ -449,18 +449,6 @@ async fn check(core: State<'_, Arc<Core>>, audio_process: String) -> Result<Vec<
 }
 
 #[tauri::command]
-async fn save_report(core: State<'_, Arc<Core>>, include_addresses: bool, audio_process: String) -> Result<String, String> {
-    let core = core.inner().clone();
-    warm(&core).await;
-    tauri::async_runtime::spawn_blocking(move || {
-        let lines = check::run(&core, sources::pid_of(&audio_process));
-        debug::report(&core, include_addresses, &check::text(&lines)).map(|p| p.display().to_string()).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-#[tauri::command]
 async fn start_recording(core: State<'_, Arc<Core>>, debrief: Option<bool>) -> Result<(), String> {
     room::start_set(&core, debrief)
 }
@@ -1127,7 +1115,7 @@ fn main() {
             std::thread::spawn(move || thumbs::keeper(c));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug::debug_view, debug::debug_report, debug::set_report_sharing, save_report, start_recording, stop_recording, delete_set, discard_set, download_set, identity, open_set_folder, export_set, cancel_export, pick_import, import_plan, import_recording, cancel_import, export_folder, set_layout, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, remove_room, check_peer, set_limit, set_codecs, cancel_invites, list_sources, set_source, use_display, list_mics, set_mic, set_mix, set_audio_process, set_warn_hours, set_channel, event_action, log_layout, set_name, open_data_folder, data_info, reset, dismiss_recovery, add_event, answer_ask, focus_set, party_on, party_act, jobs::room_plugins, jobs::set_room_plugin, jobs::set_process_plugin, jobs::prepare_plugin, jobs::jobs, jobs::retry_job, jobs::cancel_job, install_update, check_update, save_text, jobs::run_job_next, set_quality, set_language, rename_room, draw, party_typing, mark, set_hotkey, retry_ffmpeg, set_api, set_api_lan, new_api_token, api_info, api_reference, open_llms])
+        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug::debug_view, debug::debug_report, start_recording, stop_recording, delete_set, discard_set, download_set, identity, open_set_folder, export_set, cancel_export, pick_import, import_plan, import_recording, cancel_import, export_folder, set_layout, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, remove_room, check_peer, set_limit, set_codecs, cancel_invites, list_sources, set_source, use_display, list_mics, set_mic, set_mix, set_audio_process, set_warn_hours, set_channel, event_action, log_layout, set_name, open_data_folder, data_info, reset, dismiss_recovery, add_event, answer_ask, focus_set, party_on, party_act, jobs::room_plugins, jobs::set_room_plugin, jobs::set_process_plugin, jobs::prepare_plugin, jobs::jobs, jobs::retry_job, jobs::cancel_job, install_update, check_update, save_text, jobs::run_job_next, set_quality, set_language, rename_room, draw, party_typing, mark, set_hotkey, retry_ffmpeg, set_api, set_api_lan, new_api_token, api_info, api_reference, open_llms])
         .build(tauri::generate_context!())
         .expect("failed to start");
     app.run(|app, event| {

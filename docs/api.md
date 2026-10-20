@@ -22,7 +22,7 @@ The traffic is plain HTTP, not encrypted: use it on networks you trust only. Win
 
 - It listens on `127.0.0.1` only, unless Other devices is on. A request whose `Host` header is not `127.0.0.1:<port>` or `localhost:<port>` gets 403, which stops DNS rebinding; with Other devices on, this PC's own IPv4 addresses and its computer name (with the port) are accepted too, and anything else still gets 403. There are no CORS headers.
 - Every request except `GET /llms.txt` needs `Authorization: Bearer <token>`; otherwise 401. The token is 48 random hex characters.
-- JSON in and out, UTF-8, one request per connection. Errors are `{"error": "..."}` with 400, 401, 403, 404, 405, 409, 413 or 503.
+- JSON in and out, UTF-8, one request per connection. Errors are `{"error": "..."}` with 400, 401, 403, 404, 405, 409, 413, 500 or 503.
 - Times inside a recording are seconds from its start, rounded to 0.1 (`at_s`, `from_s`, `to_s`). Clock times are milliseconds since 1970 (`start_ms`, `end_ms`, `updated_ms`).
 - Reads work for every room on this PC. Writes work only for the room that is open in the app, because only that room is shared with the others; otherwise 409.
 - Ids with spaces (a recording id looks like `2026-10-19 21-30-00`) are written percent-encoded in the path.

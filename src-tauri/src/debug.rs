@@ -4,7 +4,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -41,7 +41,6 @@ pub const REPEATED: usize = 3;
 pub const DROPPED: usize = 4;
 pub static FRAMES: [AtomicU64; 5] = [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
 
-static SHARE_ADDRESSES: AtomicBool = AtomicBool::new(false);
 static TRANSFERS: Mutex<Ring> = Mutex::new(Ring::new(TRANSFERS_KEPT));
 static CUTS: Mutex<Ring> = Mutex::new(Ring::new(CUTS_KEPT));
 static FFMPEG: Mutex<Ring> = Mutex::new(Ring::new(FFMPEG_KEPT));
@@ -517,12 +516,8 @@ fn flow_json(core: &Core) -> Value {
     })
 }
 
-pub fn flow_text(flow: &Value, addresses: bool) -> String {
-    let host = |h: &Value| match h.as_str() {
-        Some(h) if addresses => h.to_string(),
-        Some(_) => "<host>".to_string(),
-        None => "none".to_string(),
-    };
+pub fn flow_text(flow: &Value) -> String {
+    let host = |h: &Value| if h.is_string() { "<host>" } else { "none" };
     let mut out = String::from("where data goes\n");
     for m in flow["members"].as_array().into_iter().flatten() {
         let how = match m["path"].as_str() {
@@ -667,14 +662,9 @@ pub async fn debug_view(core: State<'_, Arc<Core>>, tab: String, since: u64, set
 }
 
 #[tauri::command]
-pub fn set_report_sharing(on: bool) {
-    SHARE_ADDRESSES.store(on, Ordering::Relaxed);
-}
-
-#[tauri::command]
-pub async fn debug_report(core: State<'_, Arc<Core>>, include_addresses: bool, everyone: bool, audio_process: String, save: bool, head: Option<String>) -> Result<String, String> {
+pub async fn debug_report(core: State<'_, Arc<Core>>, audio_process: String, save: bool, head: Option<String>) -> Result<String, String> {
     let core = core.inner().clone();
-    let text = diagnostics(core.clone(), include_addresses, everyone, audio_process, head).await?;
+    let text = diagnostics(core.clone(), false, audio_process, head).await?;
     if !save {
         return Ok(text);
     }
@@ -683,14 +673,13 @@ pub async fn debug_report(core: State<'_, Arc<Core>>, include_addresses: bool, e
     Ok(path.display().to_string())
 }
 
-pub async fn diagnostics(core: Arc<Core>, include_addresses: bool, everyone: bool, audio_process: String, head: Option<String>) -> Result<String, String> {
+pub async fn diagnostics(core: Arc<Core>, everyone: bool, audio_process: String, head: Option<String>) -> Result<String, String> {
     crate::warm(&core).await;
     let c = core.clone();
     let own = tauri::async_runtime::spawn_blocking(move || {
         let lines = check::run(&c, sources::pid_of(&audio_process));
-        let text = report_text(&c, include_addresses, !everyone && include_addresses, Some(&check::text(&lines)));
+        let text = report_text(&c, Some(&check::text(&lines)));
         match head.filter(|h| !h.is_empty()) {
-            Some(h) if include_addresses => format!("{h}\n\n{text}"),
             Some(h) => format!("{}\n\n{text}", redact(&h, &home(), &known_names(&c))),
             None => text,
         }
@@ -732,12 +721,12 @@ pub fn combine(own: String, others: Vec<(String, String)>) -> String {
 }
 
 pub fn shared_report(core: &Core) -> String {
-    report_text(core, SHARE_ADDRESSES.load(Ordering::Relaxed), false, None)
+    report_text(core, None)
 }
 
-fn describe(conn: &Connection, addresses: bool, out: &mut String) {
+fn describe(conn: &Connection, out: &mut String) {
     out.push_str(&format!("connection to {}\n", conn.remote_id().fmt_short()));
-    for p in path_json(conn, addresses) {
+    for p in path_json(conn, false) {
         out.push_str(&format!(
             "  path {}{} {}rtt {:.1} ms sent {} B received {} B mtu {}\n",
             p["kind"].as_str().unwrap_or_default(),
@@ -753,7 +742,7 @@ fn describe(conn: &Connection, addresses: bool, out: &mut String) {
     out.push_str(&format!("  total sent {} B received {} B lost packets {}\n", stats.udp_tx.bytes, stats.udp_rx.bytes, stats.lost_packets));
 }
 
-pub fn text(core: &Core, peer_addresses: bool) -> String {
+pub fn text(core: &Core) -> String {
     let mut out = String::new();
     out.push_str(&format!("encoder {} ({})\n", ffmpeg::encoder(), ffmpeg::path().display()));
     out.push_str(&format!("encoder probe {:?}\n", ffmpeg::encoder_results()));
@@ -762,7 +751,7 @@ pub fn text(core: &Core, peer_addresses: bool) -> String {
     for (id, conn, offset) in peers {
         out.push_str(&format!("peer {id} clock offset {offset:?} us\n"));
         match conn {
-            Some(conn) => describe(&conn, peer_addresses, &mut out),
+            Some(conn) => describe(&conn, &mut out),
             None => out.push_str("connection: none\n"),
         }
     }
@@ -884,22 +873,18 @@ fn jobs_text(core: &Core) -> String {
     if lines.is_empty() { "  none".into() } else { lines.join("\n") }
 }
 
-pub fn report_text(core: &Core, include_addresses: bool, peer_addresses: bool, check: Option<&str>) -> String {
+pub fn report_text(core: &Core, check: Option<&str>) -> String {
     let log = fs::read_to_string(core.dir.join("log.txt")).unwrap_or_default();
     let recent: Vec<&str> = log.lines().rev().take(REPORT_LINES).collect();
     let recent: Vec<&str> = recent.into_iter().rev().collect();
     let mut out = String::new();
     out.push_str(&format!("ez-hanseikai {} on {} {}\n", crate::VERSION, std::env::consts::OS, command_line("cmd", &["/c", "ver"])));
     out.push_str(&format!("previous version {}\n", if core.previous_version.is_empty() { "none" } else { &core.previous_version }));
-    out.push_str(&format!("addresses and name {}\n", if include_addresses { "included" } else { "removed" }));
-    if include_addresses {
-        out.push_str(&format!("name {}\n", core.name.lock().unwrap()));
-    }
     out.push_str(&format!("ffmpeg {}\n\n", command_line(&ffmpeg::path().to_string_lossy(), &["-version"]).lines().next().unwrap_or("")));
     let infos: Vec<String> = core.peers.lock().unwrap().iter().map(|p| format!("{} {:?}", short(p.id), p.info)).collect();
     out.push_str(&format!("peers {}\n\nenvironment check\n{}\n\n", infos.join(", "), check.unwrap_or("not run")));
-    out.push_str(&text(core, peer_addresses));
-    out.push_str(&format!("\n{}\n{}", hardware_text(core), flow_text(&flow_json(core), include_addresses)));
+    out.push_str(&text(core));
+    out.push_str(&format!("\n{}\n{}", hardware_text(core), flow_text(&flow_json(core))));
     out.push_str("\nrecent errors\n");
     out.push_str(&errors(&log).join("\n"));
     out.push_str("\n\njobs\n");
@@ -908,13 +893,7 @@ pub fn report_text(core: &Core, include_addresses: bool, peer_addresses: bool, c
     out.push_str(&tail(&core.dir.join(CRASH), 0, LOG_TAIL).0);
     out.push_str("\n\nrecent log\n");
     out.push_str(&recent.join("\n"));
-    if include_addresses { out } else { redact(&out, &home(), &known_names(core)) }
-}
-
-pub fn report(core: &Core, include_addresses: bool, check: &str) -> std::io::Result<PathBuf> {
-    let path = core.dir.join("report.txt");
-    fs::write(&path, report_text(core, include_addresses, include_addresses, Some(check)))?;
-    Ok(path)
+    redact(&out, &home(), &known_names(core))
 }
 
 #[cfg(test)]
@@ -1069,7 +1048,7 @@ mod tests {
     }
 
     #[test]
-    fn the_flow_text_names_each_route_and_hides_hosts_unless_asked() {
+    fn the_flow_text_names_each_route_and_hides_hosts() {
         let flow = json!({
             "members": [{"id": "abcdefghijklmnop", "path": "direct", "relay": null}, {"id": "qrstuvwxyz012345", "path": "relay", "relay": "relay.example.net"}, {"id": "0123456789abcdef", "path": null, "relay": null}],
             "relay": "relay.example.net",
@@ -1077,12 +1056,12 @@ mod tests {
             "update": {"host": "github.com", "channel": "beta"},
             "api": {"on": true, "lan": false},
         });
-        let hidden = flow_text(&flow, false);
+        let hidden = flow_text(&flow);
         assert!(!hidden.contains("relay.example.net"), "{hidden}");
         assert!(hidden.contains("member abcdefghij: direct") && hidden.contains("member qrstuvwxyz: through the relay <host>") && hidden.contains("member 0123456789: offline"), "{hidden}");
         assert!(hidden.contains("update check: github.com, beta channel") && hidden.contains("downloads: ffmpeg from github.com") && hidden.contains("local API: on, this PC only"), "{hidden}");
-        assert!(flow_text(&flow, true).contains("address lookup: relay relay.example.net"));
-        let quiet = flow_text(&json!({"members": [], "relay": null, "downloads": [], "update": {"host": "github.com", "channel": "stable"}, "api": {"on": false}}), true);
+        assert!(hidden.contains("address lookup: relay <host>"), "{hidden}");
+        let quiet = flow_text(&json!({"members": [], "relay": null, "downloads": [], "update": {"host": "github.com", "channel": "stable"}, "api": {"on": false}}));
         assert!(quiet.contains("address lookup: relay none") && quiet.contains("downloads: none now") && quiet.contains("local API: off"), "{quiet}");
     }
 
