@@ -87,7 +87,7 @@ pub fn clean_name(raw: &str) -> String {
 }
 
 fn clean_note(raw: &str, max: usize) -> String {
-    raw.chars().filter(|c| !c.is_control() || *c == '\n').take(max).collect()
+    raw.chars().filter(|c| !c.is_control() || matches!(c, '\n' | '\t')).take(max).collect()
 }
 
 pub fn hex(bytes: &[u8]) -> String {
@@ -1152,6 +1152,12 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn notes_keep_line_breaks_and_tabs_and_drop_other_control_characters() {
+        assert_eq!(clean_note("- a\n\t- [ ] b\r\u{7}\u{1b}[0m", BOARD_MAX), "- a\n\t- [ ] b[0m");
+        assert_eq!(clean_note("abcdef", 3), "abc");
+    }
 
     #[test]
     fn each_update_channel_reads_its_own_manifest() {

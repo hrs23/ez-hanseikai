@@ -4,10 +4,6 @@ const LAYOUTS = [
   { id: "bottom", name: "Spotlight + bottom", min: 2, max: 6 },
   { id: "row", name: "Row", min: 2, max: 4 },
 ];
-const SIDE_MIN = 220;
-const SIDE_MAX = 420;
-const SIDE_DEFAULT = 264;
-const SIDE_KEY_STEP = 16;
 const MAX_SLOTS = 6;
 const SPOTLIGHT_SPAN = 3;
 const ASPECT = 9 / 16;
@@ -45,30 +41,4 @@ function rects(n, id, width, height, gap, slots = n) {
 function soundKey(view, keys, me) {
   if (view > 0) return keys[view - 1] || null;
   return keys.includes(me) ? me : keys[0] || null;
-}
-
-function clampSide(px) {
-  const n = Number(px);
-  return Number.isFinite(n) ? Math.max(SIDE_MIN, Math.min(SIDE_MAX, Math.round(n))) : SIDE_DEFAULT;
-}
-
-const METER_MIN_DB = -60;
-const METER_YELLOW_DB = -20;
-const METER_RED_DB = -9;
-
-function meterPos(db) {
-  return Math.max(0, Math.min(1, (db - METER_MIN_DB) / -METER_MIN_DB));
-}
-
-const toDb = (v) => (v > 0 ? 20 * Math.log10(v) : -Infinity);
-
-function micLevel(v, muted) {
-  return muted ? 0 : Math.round(meterPos(toDb(v)) * 100) / 100;
-}
-
-function captureStates(c, recording, problem) {
-  return {
-    screen: !c.source ? "off" : problem ? "warn" : recording && c.working ? "recording" : "on",
-    mic: c.mix.mic.muted ? "off" : recording ? "recording" : "on",
-  };
 }

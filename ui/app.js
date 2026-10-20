@@ -1457,7 +1457,7 @@ async function update() {
   const l = liveSet();
   const voice = st.active_set && st.active_set.voice;
   if (nowView && l && !voice && selected !== l.id) { selectSet(l.id); nowSet = l.id; live = true; share(); }
-  if (nowView && !l && nowSet && selected === nowSet) { nowView = false; nowSet = null; }
+  if (nowView && !l && nowSet) { nowView = false; nowSet = null; }
   const roomId = st.room ? st.room.id : "";
   if (partyRoom !== roomId) { partyRoom = roomId; cancelBoard(); await joinParty(); st = await invoke("state"); idx = indexOf(st); }
   if (!drag && watchParty && st.party.on && newer(st.party.shared, partyLast)) applyParty(st.party.shared);

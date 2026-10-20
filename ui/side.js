@@ -1,4 +1,3 @@
-const METER_TICKS = [-60, -40, -20, -10, 0];
 const PEAK_HOLD_MS = 1500;
 const CLIP_HOLD_MS = 3000;
 
@@ -262,7 +261,6 @@ function renderDock() {
     $("micbtn").firstElementChild.replaceChildren(icon(mute ? "mic-off" : "mic"));
     $("micbtn").title = mute ? t("Unmute microphone") : t("Mute microphone");
     $("micbtn").setAttribute("aria-pressed", String(!mute));
-    if (mute) $("miclvl").style.setProperty("--lvl", "0");
   }
   if (changed("me", [st.name, st.id, st.colors, lang])) {
     $("meav").replaceChildren(avatar(st.id, "lg", "on"));

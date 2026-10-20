@@ -33,9 +33,13 @@ function mdHosts(label) {
   });
 }
 
-async function openWeb(url, label) {
+function mdVouched(url, label) {
   const host = new URL(url).host;
-  if (!mdHosts(label).includes(host.replace(/^www\./, "")) && !(await ask(t("Open {host}?", { host }), t("Open"), false, url))) return;
+  return !/(^|\.)xn--/i.test(host) && mdHosts(label).includes(host.replace(/^www\./, ""));
+}
+
+async function openWeb(url, label) {
+  if (!mdVouched(url, label) && !(await ask(t("Open {host}?", { host: new URL(url).host }), t("Open"), false, url))) return;
   invoke("open_link", { url }).catch(warn);
 }
 const mdHooks = (over = {}) => ({ onTag: filterTag, onLink: openLink, onOpen: openWeb, onTask: null, ...over });
@@ -137,7 +141,7 @@ function mdBlocks(lines, depth = 0) {
         i += 2;
         const rows = [];
         while (i < lines.length && lines[i].s.trim() && MD_TABLE_ROW.test(lines[i].s)) rows.push(mdCells(lines[i++].s));
-        blocks.push({ type: "table", align: rule.map(mdAlign), head: head.map(mdInline), rows: rows.map((r) => head.map((_, c) => mdInline(r[c] || ""))) });
+        blocks.push({ type: "table", align: rule.map(mdAlign), head: head.map(mdInline), rows: rows.map((r) => r.slice(0, head.length).map(mdInline)) });
         continue;
       }
     }

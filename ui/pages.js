@@ -67,15 +67,15 @@ function renderStart() {
   $("roomlist").replaceChildren(...others.map((r, i) => {
     const face = (id) => { const a = el("span", { className: "av sm", textContent: initial(id === st.id ? st.name : r.names[id]) }); a.style.background = colorOf(r.colors[id]); return a; };
     const enter = () => run("enter_room", { id: r.id }, openLive);
-    const more = iconButton("more", t("More"), (e) => { e.stopPropagation(); openMenu([{ label: t("Remove from this PC…"), icon: "trash", danger: true, run: () => removeRoom(r) }], e.currentTarget); }, "icon sm more");
+    const more = iconButton("more", t("More"), (e) => { e.stopPropagation(); openMenu([{ label: t("Remove from this PC…"), icon: "trash", danger: true, run: () => removeRoom(r, t("Remove {room} from this PC?", { room: r.name }), t("Remove"), refresh) }], e.currentTarget); }, "icon sm more");
     const row = el("div", { className: "rrow", tabIndex: 0, role: "button" }, el("b", { textContent: r.name }), el("span", { className: "avs" }, ...r.members.slice(0, AVATARS_SHOWN).map(face)), el("span", { className: "sp" }), r.used_us ? el("span", { className: "muted small", textContent: dayLabel(dayOf(new Date(r.used_us / 1000)), new Date(), lang) }) : null, el("button", { className: "sm" + (i ? "" : " primary"), textContent: t("Enter"), onclick: (e) => { e.stopPropagation(); enter(); } }), more);
     row.onclick = enter;
     row.onkeydown = (e) => { if (e.key === "Enter") enter(); };
     return row;
   }));
 }
-async function removeRoom(r) {
-  if (await ask(t("Remove {room} from this PC?", { room: r.name }), t("Remove"), true, t("Its recordings and notes on this PC are deleted. Other members keep theirs."))) run("remove_room", { id: r.id }, () => { forgetPlan(r.id); refresh(); });
+async function removeRoom(room, question, button, then) {
+  if (await ask(question, button, true, t("Its recordings and notes on this PC are deleted. Other members keep theirs."))) run("remove_room", { id: room.id }, () => { forgetPlan(room.id); then(); });
 }
 function joinWith(input) {
   if (joining) return;
@@ -88,13 +88,10 @@ const createRoom = () => invoke("create_room", { name: "" }).then(() => { openLi
 async function switchRoom() {
   if (!st.room) return;
   if (st.recording && !(await ask(t("Stop recording and leave {room}?", { room: st.room.name }), t("Switch room"), true))) return;
-  run("close_room", { id: st.room.id }, () => { endReview(); selectSet(null); openLive(); });
+  run("close_room", { id: st.room.id }, openLive);
 }
-async function leaveRoom() {
-  if (!st.room) return;
-  const { id, name: room } = st.room;
-  if (!(await ask(t(st.recording ? "Stop recording and leave {room}?" : "Leave {room}?", { room }), t("Leave room"), true, t("Its recordings and notes on this PC are deleted. Other members keep theirs.")))) return;
-  run("remove_room", { id }, () => { forgetPlan(id); endReview(); selectSet(null); openLive(); });
+function leaveRoom() {
+  if (st.room) removeRoom(st.room, t(st.recording ? "Stop recording and leave {room}?" : "Leave {room}?", { room: st.room.name }), t("Leave room"), openLive);
 }
 async function removeMember(id) {
   if (await ask(t("Remove {name} from the room?", { name: nameOf(id) }), t("Remove from room"), true, t("Everyone stops sending to them. What they already have stays with them."))) { drawerFor = null; run("remove_peer", { id }); }
@@ -364,10 +361,8 @@ function tickTask(n) {
   writeBoard(next);
 }
 const boardHooks = () => mdHooks({ onTask: tickTask });
-function fitZoom() {
-  const w = $("boardwrap").clientWidth - 2 * BOARD_PAD;
-  return Math.max(ZOOM_MIN, Math.min(1, w / BOARD_WIDTH));
-}
+const fitScale = (box, pad, min) => Math.max(min, Math.min(1, (box.clientWidth - 2 * pad) / BOARD_WIDTH));
+const fitZoom = () => fitScale($("boardwrap"), BOARD_PAD, ZOOM_MIN);
 function placeBoard() {
   const z = zoom || fitZoom();
   $("canvas").style.zoom = String(z);
@@ -407,8 +402,7 @@ async function editBoard(scope) {
 }
 function renderMini() {
   $("minicanvas").replaceChildren(boardDom($("boardtext").value, mdHooks({ onTask: null })));
-  const w = $("editor").querySelector(".preview").clientWidth - 2 * PREVIEW_PAD;
-  $("minicanvas").style.transform = `scale(${Math.max(PREVIEW_MIN, w / BOARD_WIDTH)})`;
+  $("minicanvas").style.zoom = String(fitScale($("editor").querySelector(".preview"), PREVIEW_PAD, PREVIEW_MIN));
 }
 function saveBoard() {
   const text = $("boardtext").value;

@@ -7,9 +7,9 @@ import { fileURLToPath } from "node:url";
 
 const ui = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "ui");
 const read = (f) => fs.readFileSync(path.join(ui, f), "utf8");
-const source = ["util.js", "i18n.js", "layout.js", "events.js", "markdown.js", "review.js", "members.js", "recordings.js", "plugins.js", "ai.js", "diag.js"].map(read).join("\n");
+const source = ["util.js", "i18n.js", "layout.js", "dock.js", "events.js", "markdown.js", "review.js", "members.js", "recordings.js", "plugins.js", "ai.js", "diag.js"].map(read).join("\n");
 const context = vm.createContext({ window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id });
-const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, flowAt, flowBands, flowSteps, isReview, voiceOnly, BOARD_TEMPLATE, memberStatus, receivingPercent, recordingRows, recordingMatches, recordingWords, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, discardable, DISCARD_MAX_S, soundKey, pluginProgress, isBusy, workerState, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, aiPreview, apiUrl, apiBadge, apiReferenceBlocks, rateOf, liveEdge, netState, summaryLines, leftText, pcCards, clockPairs, clockSummary, flowRows, timeRow, skewText, agoText, JA, t, sessionName, mdParse, mdInline, mdHosts, toggleTask, boardParts, boardDom, markdownDom, mdHooks, runBy, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, flowAt, flowBands, flowSteps, isReview, voiceOnly, BOARD_TEMPLATE, memberStatus, receivingPercent, recordingRows, recordingMatches, recordingWords, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, discardable, DISCARD_MAX_S, soundKey, pluginProgress, isBusy, workerState, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, aiPreview, apiUrl, apiBadge, apiReferenceBlocks, rateOf, liveEdge, netState, summaryLines, leftText, pcCards, clockPairs, clockSummary, flowRows, timeRow, skewText, agoText, JA, t, sessionName, mdParse, mdInline, mdVouched, toggleTask, boardParts, boardDom, markdownDom, mdHooks, runBy, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 const plain = (v) => JSON.parse(JSON.stringify(v));
 
 const moment = (m, extra = {}) => ({ role: "moment", m, plugin: { id: "apex-matches" }, tags: ["match"], ...extra });
@@ -532,6 +532,10 @@ test("markdown reads headings, lists, task lists, tables, code, quotes and rules
   assert.deepEqual(table.align, ["", "right"]);
   assert.equal(table.rows.length, 2);
   assert.equal(table.rows[1][1][0].text, "5 | 6");
+  assert.deepEqual(table.rows.map((r) => r.length), [2, 2]);
+  assert.deepEqual(blocks("| a | b |\n|---|---|\n| 1 |\n| 1 | 2 | 3 |")[0].rows.map((r) => r.length), [1, 2]);
+  const wide = `${"|".repeat(501)}\n${"-|".repeat(500)}\n${"|\n".repeat(990)}`;
+  assert.equal(blocks(wide)[0].rows.flat().length, 990);
   assert.deepEqual(kinds("a | b\nnot a table"), ["paragraph"]);
   assert.equal(blocks("```\n## not a heading\n```")[0].text, "## not a heading");
   assert.deepEqual(kinds("- a\n1. b"), ["list", "list"]);
@@ -660,8 +664,8 @@ test("a moment link keeps a formatted label, and deep quotes and lists render wi
 });
 
 test("a link's text vouches only for the host it names, and the jobs list names whose PC runs a job", () => {
-  const hides = (label, url) => !plain(ui$.mdHosts(label)).includes(new URL(url).host.replace(/^www\./, ""));
-  for (const [label, url] of [["dropbox.com", "https://x.com/a"], ["paypal.com", "https://l.com"], ["google.com/search?q=evil.io", "https://evil.io/x"], ["https://www.google.com/search?q=evil.io", "https://evil.io/x"], ["google.com@evil.io", "https://evil.io"], ["Open the plan", "https://example.com"]]) assert.ok(hides(label, url), label);
+  const hides = (label, url) => !ui$.mdVouched(new URL(url).href, label);
+  for (const [label, url] of [["g\u043e\u043egle.com", "https://g\u043e\u043egle.com/login"], ["https://g\u043e\u043egle.com/login", "https://g\u043e\u043egle.com/login"], ["xn--ggle-55da.com", "https://xn--ggle-55da.com"], ["dropbox.com", "https://x.com/a"], ["paypal.com", "https://l.com"], ["google.com/search?q=evil.io", "https://evil.io/x"], ["https://www.google.com/search?q=evil.io", "https://evil.io/x"], ["google.com@evil.io", "https://evil.io"], ["Open the plan", "https://example.com"]]) assert.ok(hides(label, url), label);
   for (const [label, url] of [["example.com", "https://example.com/p"], ["https://www.example.com/a", "https://example.com/b"], ["the example.com page", "https://www.example.com"]]) assert.ok(!hides(label, url), label);
   assert.ok("Open {host}?" in ui$.JA);
   ui$.setLanguage("en");

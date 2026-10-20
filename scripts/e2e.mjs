@@ -782,7 +782,7 @@ async function scenario(ctx) {
     await waitFor("B asks before changing who runs it", within(UI_REFRESH_S * 5), () => evaluate(b, `$("confirm").open`));
     await evaluate(b, `$("confirmyes").click(); true`);
     for (const app of [a, b, c]) await waitFor(`${app.key} sees C as the runner`, within(LOG_SYNC_S * 3), async () => (await invoke(app, "room_plugins")).find((x) => x.id === "transcribe").runner === c.id && (await invoke(app, "jobs")).jobs.filter((j) => j.plugin === "transcribe").every((j) => j.runner === c.id));
-    await evaluate(b, `roomTab = "jobs"; delete sigs.roomtab; go("room"); true`);
+    await evaluate(b, `[...$("roomtab").querySelectorAll(".seg button")].find((x) => x.firstChild.textContent === t("Jobs")).click(); true`);
     await waitFor("B names C's PC in the jobs list", within(UI_REFRESH_S * 5), () => evaluate(b, `[...$("roomtab").querySelectorAll("tbody tr:not(.err)")].filter((r) => r.children[0].textContent.includes(t("Transcription"))).length > 0 && [...$("roomtab").querySelectorAll("tbody tr:not(.err)")].filter((r) => r.children[0].textContent.includes(t("Transcription"))).every((r) => r.children[4].textContent === t("{name}'s PC", { name: ${JSON.stringify(c.name)} }))`));
     await screenshot(b, "jobs");
     await invoke(b, "set_plugin_runner", { id: "transcribe", runner: null });

@@ -148,10 +148,15 @@ pub fn link_ok(url: &str) -> bool {
 
 pub fn open_link(url: &str) {
     use windows::core::{w, HSTRING, PCWSTR};
+    use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE};
     use windows::Win32::UI::Shell::ShellExecuteW;
     use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
     if link_ok(url) {
-        unsafe { ShellExecuteW(None, w!("open"), &HSTRING::from(url), PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL) };
+        let url = HSTRING::from(url);
+        std::thread::spawn(move || unsafe {
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+            ShellExecuteW(None, w!("open"), &url, PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL);
+        });
     }
 }
 
