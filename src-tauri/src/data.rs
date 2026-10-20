@@ -386,6 +386,7 @@ pub fn keeper(core: Arc<Core>) {
         }
         let room = core.active_room_id();
         room::sweep_dropped(&core, &room, &room::logs(&core, &room));
+        room::sweep_removed(&core);
         std::thread::sleep(KEEP_EVERY);
     }
 }

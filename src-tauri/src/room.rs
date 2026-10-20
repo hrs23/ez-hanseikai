@@ -978,6 +978,26 @@ pub fn sweep_dropped(core: &Core, room: &str, logs: &[Log]) {
     }
 }
 
+pub fn sweep_rooms(rooms_dir: &Path, removed: &HashSet<String>, listed: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for id in removed.iter().filter(|id| valid_id(id) && !listed.contains(id)) {
+        let dir = rooms_dir.join(id);
+        if dir.exists() {
+            let _ = std::fs::remove_dir_all(&dir);
+            out.push(id.clone());
+        }
+    }
+    out
+}
+
+pub fn sweep_removed(core: &Core) {
+    let listed: Vec<String> = core.rooms.lock().unwrap().list.iter().map(|r| r.id.clone()).collect();
+    let removed = core.removed_rooms.lock().unwrap().clone();
+    for id in sweep_rooms(&core.dir.join("rooms"), &removed, &listed) {
+        data::forget(&core.files, &core.room_dir(&id));
+    }
+}
+
 struct Holder<'a> {
     id: &'a str,
     have: &'a HashMap<String, u64>,
@@ -1339,6 +1359,29 @@ mod tests {
         put("recordings/s2/b/2/v/000001.m4s");
         assert_eq!(sweep(&dir, &gone, None), ["s2"]);
         assert_eq!(left(), ["recordings/s3/a/1/v/000001.m4s", "standby/a/1/v/000002.m4s", "a/1/v/000001.m4s", "a/1/verified.json", "sets/s1/a.mp4", "logs/a.bin"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_room_removed_from_this_pc_goes_whole_and_again_after_a_late_write() {
+        let dir = crate::log::tests::temp("rooms");
+        let names = ["r/standby/a/1/v/000001.m4s.part", "r/recordings/s1/a/1/v/000001.m4s", "r/logs/a.bin", "back/logs/a.bin", "kept/logs/a.bin", "0ld0r00m/a/1/v/000001.m4s"];
+        let put = |name: &str| {
+            let path = dir.join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"x").unwrap();
+        };
+        for name in names {
+            put(name);
+        }
+        let removed: HashSet<String> = ["r", "back", "kept ", "gone", "../x"].map(String::from).into();
+        let listed = ["back".to_string(), "kept".to_string()];
+        assert_eq!(sweep_rooms(&dir, &removed, &listed), ["r"]);
+        put("r/standby/a/1/v/000002.m4s.part");
+        assert_eq!(sweep_rooms(&dir, &removed, &listed), ["r"]);
+        assert!(sweep_rooms(&dir, &removed, &listed).is_empty());
+        assert!(!dir.join("r").exists());
+        assert_eq!(names.iter().copied().filter(|n| dir.join(n).exists()).collect::<Vec<_>>(), &names[3..]);
         let _ = std::fs::remove_dir_all(dir);
     }
 

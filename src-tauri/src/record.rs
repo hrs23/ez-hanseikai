@@ -50,7 +50,7 @@ const DROP_AFTER: u32 = 3;
 const FINISH_WAIT: Duration = Duration::from_secs(10);
 const CUT_WAIT: Duration = Duration::from_secs(3);
 const POLL: Duration = Duration::from_millis(20);
-const RENAME_TRIES: u32 = 10;
+const RENAME_WAIT: Duration = Duration::from_millis(500);
 const RENAME_GAP: Duration = Duration::from_millis(50);
 pub const APP: usize = 0;
 pub const MIC: usize = 1;
@@ -151,7 +151,6 @@ pub struct Sink {
     pub room: String,
     pub capture: String,
     pub voice: bool,
-    dir: PathBuf,
     size: (u32, u32),
     out: (u32, u32),
     quality: String,
@@ -464,13 +463,15 @@ fn cap_record(room: &str, capture: &str, start_us: Option<i64>, inits: &[Value; 
 }
 
 fn finish_part(path: &Path) -> bool {
-    for _ in 0..RENAME_TRIES {
-        if std::fs::rename(part_of(path), path).is_ok() {
-            return true;
-        }
-        thread::sleep(RENAME_GAP);
+    proc::wait_until(RENAME_WAIT, RENAME_GAP, || std::fs::rename(part_of(path), path).is_ok())
+}
+
+fn open_part(dir: &Path, n: u32, init: Option<&[u8]>) -> Option<std::fs::File> {
+    let path = dir.join(INIT);
+    if !path.exists() && !init.is_some_and(|bytes| proc::wait_until(RENAME_WAIT, RENAME_GAP, || write_whole(&path, bytes).is_ok())) {
+        return None;
     }
-    false
+    std::fs::File::create(part_of(&dir.join(seg_name(n)))).ok()
 }
 
 fn seg_record(capture: &str, series: &str, n: u32, set: &str, t_us: i64, d_us: i64, size: u64, sha256: &str) -> Value {
@@ -529,7 +530,6 @@ impl Sink {
             room,
             capture,
             voice,
-            dir,
             size,
             out,
             quality,
@@ -608,10 +608,6 @@ impl Sink {
     }
 
     fn take_init(&self, which: usize, bytes: &[u8]) {
-        if write_whole(&self.dir.join(SERIES[which]).join(INIT), bytes).is_err() {
-            self.dead.store(true, Ordering::Relaxed);
-            return;
-        }
         self.outputs[which].lock().unwrap().scales = media::timescales(bytes);
         self.inits.lock().unwrap()[which] = json!({"size": bytes.len(), "sha256": hex(&Sha256::digest(bytes))});
         self.init.lock().unwrap()[which] = Some(bytes.to_vec());
@@ -669,17 +665,13 @@ impl Sink {
         if let Some(set) = &set {
             ensure_rec(core, &self.room, set, t_us, &self.meta);
             self.log_cap(core);
-            if !dir.join(INIT).exists() {
-                if let Some(bytes) = self.init.lock().unwrap()[which].clone() {
-                    let _ = write_whole(&dir.join(INIT), &bytes);
-                    data::forget(&core.files, &dir);
-                }
-            }
         }
-        let Ok(file) = std::fs::File::create(part_of(&dir.join(seg_name(n)))) else {
+        let init = self.init.lock().unwrap()[which].clone();
+        let Some(file) = open_part(&dir, n, init.as_deref()) else {
             self.dead.store(true, Ordering::Relaxed);
             return;
         };
+        data::forget(&core.files, &dir);
         series.n = n;
         series.recent.push_back((n, set.clone()));
         if series.recent.len() > data::LIVE_KEEP as usize + 1 {
@@ -1372,6 +1364,25 @@ mod tests {
         own_log.extend([record, cap([v, m])]);
         let f = room::derive_sets("r", &[room::Log { owner: me, offset_us: 0, records: Arc::new(own_log) }]).remove(0).files.remove(0);
         assert_eq!((f.init("5000", "v"), f.init("5000", "m")), (Some((9, "v".into())), Some((7, "m".into()))));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_segment_opens_only_beside_its_init() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let dir = crate::log::tests::temp("open");
+        let series = dir.join("rooms/r/recordings/s1/a/5000/v");
+        std::fs::create_dir_all(&series).unwrap();
+        let part = |n: u32| part_of(&series.join(seg_name(n)));
+        assert!(open_part(&series, 1, None).is_none());
+        let held = std::fs::OpenOptions::new().write(true).create(true).share_mode(0).open(part_of(&series.join(INIT))).unwrap();
+        assert!(open_part(&series, 1, Some(b"init")).is_none());
+        assert!(!series.join(INIT).exists() && !part(1).exists());
+        drop(held);
+        assert!(open_part(&series, 1, Some(b"init")).is_some());
+        assert!(open_part(&series, 2, Some(b"other")).is_some() && open_part(&series, 3, None).is_some());
+        assert_eq!(std::fs::read(series.join(INIT)).unwrap(), b"init");
+        assert!(part(1).exists() && part(3).exists());
         let _ = std::fs::remove_dir_all(dir);
     }
 

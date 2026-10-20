@@ -214,6 +214,7 @@ pub struct Core {
     pub files: data::Files,
     pub writing: Mutex<HashSet<PathBuf>>,
     pub bad: Mutex<HashSet<(String, PathBuf)>>,
+    pub removed_rooms: Mutex<HashSet<String>>,
     pub indexes: Mutex<HashMap<PathBuf, (u64, Arc<Vec<media::Time>>)>>,
 }
 
@@ -736,7 +737,8 @@ async fn remove_room(core: State<'_, Arc<Core>>, id: String) -> Result<(), Strin
     tauri::async_runtime::spawn_blocking(move || {
         room::forget_room(&core, &id);
         jobs::release_room(&id);
-        data::remove_room(&core, &id);
+        core.removed_rooms.lock().unwrap().insert(id);
+        room::sweep_removed(&core);
     })
     .await
     .map_err(|e| e.to_string())
@@ -1025,6 +1027,7 @@ async fn init(app: AppHandle, dir: PathBuf, left_lock: bool) -> Result<Arc<Core>
         files: Mutex::new(HashMap::new()),
         writing: Mutex::new(HashSet::new()),
         bad: Mutex::new(HashSet::new()),
+        removed_rooms: Mutex::new(HashSet::new()),
         indexes: Mutex::new(HashMap::new()),
     }))
 }

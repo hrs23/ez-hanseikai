@@ -17,6 +17,8 @@ const DIAL_RETRY_S = 2;
 const CONNECT_TIMEOUT_S = 15;
 const REQUEST_TIMEOUT_S = 10;
 const JOB_CHECK_S = 2;
+const FINISH_WAIT_S = 10;
+const KEEP_EVERY_S = 5;
 const PARTY_REPEAT_S = 4;
 const UI_REFRESH_S = 1;
 const JUMP_MIN_S = 1;
@@ -1433,6 +1435,20 @@ async function scenario(ctx) {
     await waitFor("B shows the start screen", within(UI_REFRESH_S * 5), () => evaluate(b, `!$("start").hidden && $("app").hidden`));
     check((await evaluate(b, `localStorage.getItem(${plan})`)) === null, "B kept the personal plan of the room it left");
     await waitFor("B removes the folder of the room it left", within(UI_REFRESH_S * 5), () => !fs.existsSync(roomDir(b, ctx.room)));
+  });
+
+  await step("C removes the room from this PC while sharing and its folder does not come back", async () => {
+    const dir = roomDir(c, ctx.room);
+    check((await state(c)).capture.sharing && filesUnder(path.join(dir, "standby", c.id)).length > 0, "C shares no live picture before removing the room");
+    await invoke(c, "close_room", { id: ctx.room });
+    await invoke(c, "remove_room", { id: ctx.room });
+    check(!(await state(c)).rooms.some((r) => r.id === ctx.room), "C still lists the room it removed");
+    let since = 0;
+    await waitFor("C's room folder gone for good", within(FINISH_WAIT_S + KEEP_EVERY_S * 3), () => {
+      since = fs.existsSync(dir) ? 0 : since || Date.now();
+      return since > 0 && Date.now() - since > (FINISH_WAIT_S + KEEP_EVERY_S) * 1000;
+    });
+    check(fs.existsSync(path.join(c.data, "rooms", OLD_ROOM)), "removing the room touched a folder of an older version");
   });
 }
 
