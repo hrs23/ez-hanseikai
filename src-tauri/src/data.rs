@@ -330,10 +330,7 @@ pub fn expected(f: &File, run: &Run, series: &str) -> HashMap<u32, (u64, String)
 
 pub fn remove_room(core: &Core, room: &str) {
     let dir = core.room_dir(room);
-    match std::fs::remove_dir_all(&dir) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => tracing::warn!("could not remove a room folder: {e}"),
-        _ => {}
-    }
+    let _ = std::fs::remove_dir_all(&dir);
     forget(&core.files, &dir);
     core.logs.lock().unwrap().retain(|path, _| !path.starts_with(&dir));
 }

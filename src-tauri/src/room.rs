@@ -973,10 +973,8 @@ pub fn sweep_dropped(core: &Core, room: &str, logs: &[Log]) {
 pub fn sweep_removed(core: &Core) {
     let removed = core.removed_rooms.lock().unwrap().clone();
     for id in removed.iter().filter(|id| valid_id(id) && !core.rooms.lock().unwrap().list.iter().any(|r| &r.id == *id)) {
-        let dir = core.room_dir(id);
-        if dir.exists() {
-            let _ = std::fs::remove_dir_all(&dir);
-            data::forget(&core.files, &dir);
+        if core.room_dir(id).exists() {
+            data::remove_room(core, id);
         }
     }
 }

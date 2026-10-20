@@ -924,11 +924,12 @@ pub fn recover_files(dir: &Path, me: &str, skip: impl Fn(&Recovered) -> bool) ->
     let mut out = Vec::new();
     for (room, room_dir) in crate::entries(&dir.join("rooms")) {
         for (set, set_dir) in crate::entries(&room_dir.join(RECORDINGS)) {
-            for (capture, capture_dir) in crate::entries(&set_dir.join(me)).into_iter().filter(|(c, _)| capture_id(c)) {
+            for (capture, _) in crate::entries(&set_dir.join(me)).into_iter().filter(|(c, _)| capture_id(c)) {
                 for series in SERIES {
-                    for (name, _) in crate::entries(&capture_dir.join(series)) {
+                    let series_dir = room::series_dir(&room_dir, Some(&set), me, &capture, series);
+                    for (name, _) in crate::entries(&series_dir) {
                         let Some(n) = room::seg_number(&name) else { continue };
-                        let path = capture_dir.join(series).join(seg_name(n));
+                        let path = series_dir.join(seg_name(n));
                         let (done, open) = (name == seg_name(n), name == format!("{}.part", seg_name(n)) && !path.exists());
                         let found = Recovered { room: room.clone(), set: set.clone(), capture: capture.clone(), series, n, path };
                         if (done || open) && !skip(&found) && (done || cut_back(&found.path)) {
