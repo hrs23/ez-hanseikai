@@ -1027,8 +1027,10 @@ async fn run(core: &Arc<Core>, id: EndpointId, conn: Connection, outgoing: bool)
     core.update_peer(&id, |p| {
         if p.conn.as_ref().is_some_and(|c| c.stable_id() == conn.stable_id()) {
             p.conn = None;
-            p.seen_us = Some(now_us());
             p.live = None;
+            if lived >= STABLE_FOR {
+                p.seen_us = Some(now_us());
+            }
         }
         p.failures = if lived < STABLE_FOR { p.failures + 1 } else { 0 };
     });
