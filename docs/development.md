@@ -24,7 +24,7 @@ A deploy builds without an installer (`tauri build --no-bundle`); set `INSTALLER
 
 Start the app with `--api` or set `EZH_API=1` to turn the local API on at start. Set `EZH_API_PORT=<port>` to move the local API off its default port 47625 (the end-to-end test gives each instance its own). The API's unit tests are in `src-tauri/src/api.rs`; `docs/llms.txt` is embedded in the app and drives the endpoint list in Settings (a test checks it against `docs/api.md`), so edit them together.
 
-The hardware and clock code is in `src-tauri/src/hw.rs`; its tests feed fake PowerShell, `sc` and `w32tm` output, and `scripts/ui-test.mjs` covers the PCs and Where data goes rows with made-up data.
+The hardware and clock code is in `src-tauri/src/hw.rs`; its tests feed fake PowerShell, `sc` and `w32tm` output, and `scripts/ui-test.mjs` covers the PCs and Where data goes rows with made-up data. `node --test scripts/ui-test.mjs` runs the UI's function tests (Markdown and game plan parsing, sidebar width, the plugins page, the capture buttons, the diagnostics rows), as GitHub Actions does.
 
 The import and the folder export need ffmpeg: the app uses the one it downloaded, and the end-to-end test makes its tiny test videos with the ffmpeg in its folder. `docs/session-format.md` is the format; `src-tauri/src/session.rs` holds its parsers and their tests.
 
