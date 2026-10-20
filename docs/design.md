@@ -61,7 +61,7 @@ One key per person, made on first start; its public half is the person's ID ever
 - On connecting, members pull every member's log from any peer that has it, so late or offline members learn every recording (the list), though not its videos.
 - Media moves with one request, follow: from a segment and byte, the sender streams segments in order, waits on the open one and goes on into new ones. Live follows each member's current segment; missing segments come the same way from the owner or any member with verified copies, resuming where they stopped. Only the recording in progress is received on its own (live sharing and gap repair), and a recording this PC already holds some of keeps being completed. A finished recording that is not on this PC, including one made while this PC was offline or imported by someone else, is fetched only when its Download button is pressed.
 - Order of importance: logs, voice, live picture, then history (voice before picture). The speed limit caps the upload; history always keeps a quarter of it, so live streams cannot stop it.
-- The player and Now read media through the app's `ezh://` scheme, which joins the init and segments into one growing file with byte ranges.
+- The player and Live read media through the app's `ezh://` scheme, which joins the init and segments into one growing file with byte ranges.
 
 ## Verification
 
@@ -204,7 +204,7 @@ Two channels: Stable reads `latest.json` and Beta reads `latest-beta.json` on th
 - Choosing which plugin results to show, per person.
 - Opening a moment link from outside the app (a registered `ezh:` link).
 - Keeping only the parts of old sets around notes and events instead of deleting them whole.
-- Thin connections: members who already have a segment pass it on, so a slow uploader sends each piece once; history slows down by itself when round trips grow; the room menu shows each member's speed and time left. Optional later: receiving only the sets one opens.
+- Thin connections: members who already have a segment pass it on, so a slow uploader sends each piece once; history slows down by itself when round trips grow; the Members page shows each member's speed and time left. Optional later: receiving only the sets one opens.
 - Sending quality: besides the presets, choosing the resolution and frame rate (30, 60) yourself, with the room's total bandwidth shown next to it.
 - Receiving quality: each member can ask for a light live picture from a member; that member then also encodes a smaller live copy while anyone asks for it. Saved sets keep the sender's quality.
 - Health check: a transfer test between every pair of members, free space, and what to do for each problem.
