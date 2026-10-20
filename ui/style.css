@@ -149,7 +149,7 @@ mark { background: rgba(251, 191, 36, .2); color: #fde68a; border-radius: 3px; p
 .start { flex: 1; display: grid; place-items: center; overflow-y: auto; background: radial-gradient(800px 500px at 50% 30%, rgba(61, 214, 198, .06), transparent 70%), var(--bg); padding: var(--s5) var(--s4); }
 .scard { width: 460px; max-width: 100%; display: flex; flex-direction: column; gap: var(--s4); }
 .brand { display: flex; flex-direction: column; align-items: center; gap: var(--s3); }
-.brand .logo { width: 56px; height: 56px; }
+.brand .logo { width: 56px; height: 56px; fill: var(--accent); }
 .brand b { font-size: var(--t-xl); font-weight: var(--w-bold); }
 .nameshow { display: flex; align-items: center; justify-content: center; gap: var(--s2); }
 .nameshow b { font-size: var(--t-lg); }

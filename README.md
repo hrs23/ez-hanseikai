@@ -1,4 +1,6 @@
-# EZ Hanseikai
+![GGI Hanseikai](docs/logo.svg)
+
+# GGI Hanseikai
 
 Record your team's games and review them together.
 

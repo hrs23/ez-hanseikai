@@ -491,7 +491,7 @@ function renderStorage() {
   const seg = (cls, n) => { const i = el("i", { className: cls }); i.style.width = (n / totalBytes) * 100 + "%"; return i; };
   $("usage").replaceChildren(seg("app", used), seg("other", other));
   const rate = d.per_hour ? t("About {size} per hour · room for about {h} h", { size: bytes(d.per_hour), h: Math.floor(d.hours_left) }) : "";
-  $("legend").replaceChildren(el("span", {}, el("i", { className: "app" }), t("EZ Hanseikai {size}", { size: bytes(used) })), el("span", {}, el("i", { className: "other" }), t("Other files {size}", { size: bytes(other) })), el("span", {}, el("i", { className: "free" }), t("Free {free} / {total}", { free: bytes(d.free), total: bytes(d.total) })), el("span", { className: "sp" }), el("span", { textContent: rate }));
+  $("legend").replaceChildren(el("span", {}, el("i", { className: "app" }), t("GGI Hanseikai {size}", { size: bytes(used) })), el("span", {}, el("i", { className: "other" }), t("Other files {size}", { size: bytes(other) })), el("span", {}, el("i", { className: "free" }), t("Free {free} / {total}", { free: bytes(d.free), total: bytes(d.total) })), el("span", { className: "sp" }), el("span", { textContent: rate }));
   if (changed("warnopts", [lang])) $("warnhours").replaceChildren(...[2, 5, 10, 20, 50].map((h) => el("option", { value: h, textContent: t("{n} h of recording", { n: h }) })));
   $("warnhours").value = st.warn_hours;
   $("selold").textContent = t("All but newest {n}", { n: KEEP_NEWEST });

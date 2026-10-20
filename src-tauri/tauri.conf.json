@@ -9,7 +9,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "EZ Hanseikai",
+        "title": "GGI Hanseikai",
         "create": false,
         "width": 1280,
         "height": 800,

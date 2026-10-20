@@ -97,7 +97,7 @@ jobs:
           name=$(basename "$exe")
           jq -n --arg version "${tag#v}" --arg notes "$notes" --arg pub_date "$(date -u +%FT%TZ)" --arg signature "$(cat "$exe.sig")" --arg url "https://github.com/$GITHUB_REPOSITORY/releases/download/$tag/${name// /.}" \
             '{version: $version, notes: $notes, pub_date: $pub_date, platforms: {"windows-x86_64": {signature: $signature, url: $url}}}' > latest.json
-          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" "$exe" "$exe.sig" latest.json --target "$GITHUB_SHA" --title "EZ Hanseikai $tag" --notes "$notes" $pre
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" "$exe" "$exe.sig" latest.json --target "$GITHUB_SHA" --title "GGI Hanseikai $tag" --notes "$notes" $pre
           gh release download "$tag" -p latest.json --clobber
           gh release view updater >/dev/null 2>&1 || gh release create updater --prerelease --title "Update manifests" --notes "Rolling manifests read by the in-app updater: latest.json for the stable channel, latest-beta.json for the beta channel."
           cp latest.json latest-beta.json

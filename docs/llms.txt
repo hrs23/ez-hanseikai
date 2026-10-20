@@ -1,6 +1,6 @@
-# EZ Hanseikai
+# GGI Hanseikai
 
-EZ Hanseikai is a Windows app where a team records its games and reviews them together. A room holds the team's recordings. Each recording has events (notes, marks, analysis results such as match ends and spoken lines), and the room has one game plan: a Markdown page.
+GGI Hanseikai is a Windows app where a team records its games and reviews them together. A room holds the team's recordings. Each recording has events (notes, marks, analysis results such as match ends and spoken lines), and the room has one game plan: a Markdown page.
 
 This file describes the app's local HTTP API. An AI agent or a program can read recordings and write notes and the game plan. Whatever you write is shared with the whole room, like what people write in the app.
 

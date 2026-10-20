@@ -15,8 +15,9 @@ use crate::{room, Core, VERSION};
 pub const DEFAULT_HOTKEY: &str = "Ctrl+Alt+M";
 const REPO: &str = "https://github.com/hrs23/ez-hanseikai";
 const STATUS_POLL: Duration = Duration::from_secs(1);
-const JA: [(&str, &str); 55] = [
-    ("EZ Hanseikai is already running with this data folder.", "EZ Hanseikai はこのデータフォルダですでに動いています。"),
+const JA: [(&str, &str); 56] = [
+    ("GGI Hanseikai is already running with this data folder.", "GGI反省会はこのデータフォルダですでに動いています。"),
+    ("GGI Hanseikai", "GGI反省会"),
     ("File", "ファイル"),
     ("Room", "ルーム"),
     ("Recording", "録画"),
@@ -92,12 +93,12 @@ fn lang(core: &Core) -> String {
     crate::language(core)
 }
 
-pub fn ask(app: &AppHandle, text: &str, ok: &str, cancel: &str) -> bool {
-    app.dialog().message(text).title("EZ Hanseikai").kind(MessageDialogKind::Warning).buttons(MessageDialogButtons::OkCancelCustom(ok.into(), cancel.into())).blocking_show()
+pub fn ask(app: &AppHandle, lang: &str, text: &str, ok: &str, cancel: &str) -> bool {
+    app.dialog().message(text).title(tr(lang, "GGI Hanseikai")).kind(MessageDialogKind::Warning).buttons(MessageDialogButtons::OkCancelCustom(ok.into(), cancel.into())).blocking_show()
 }
 
-pub fn tell(app: &AppHandle, text: &str) {
-    app.dialog().message(text).title("EZ Hanseikai").kind(MessageDialogKind::Info).buttons(MessageDialogButtons::Ok).blocking_show();
+pub fn tell(app: &AppHandle, lang: &str, text: &str) {
+    app.dialog().message(text).title(tr(lang, "GGI Hanseikai")).kind(MessageDialogKind::Info).buttons(MessageDialogButtons::Ok).blocking_show();
 }
 
 fn documents(app: &AppHandle) -> Option<PathBuf> {
@@ -163,8 +164,8 @@ pub fn open_link(url: &str) {
 pub fn already_running() {
     use windows::core::HSTRING;
     use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONINFORMATION, MB_OK};
-    let text = tr(crate::os_language(), "EZ Hanseikai is already running with this data folder.");
-    unsafe { MessageBoxW(None, &HSTRING::from(text), &HSTRING::from("EZ Hanseikai"), MB_OK | MB_ICONINFORMATION) };
+    let text = tr(crate::os_language(), "GGI Hanseikai is already running with this data folder.");
+    unsafe { MessageBoxW(None, &HSTRING::from(text), &HSTRING::from(tr(crate::os_language(), "GGI Hanseikai")), MB_OK | MB_ICONINFORMATION) };
 }
 
 pub fn show_window(app: &AppHandle) {
@@ -226,7 +227,7 @@ pub fn exit_app(app: &AppHandle, core: &Arc<Core>) {
     if let Some((question, ok)) = exit_question(recording, exporting, crate::net::receiving(core)) {
         show_window(app);
         let lang = lang(core);
-        if !ask(app, tr(&lang, question), tr(&lang, ok), tr(&lang, "Cancel")) {
+        if !ask(app, &lang, tr(&lang, question), tr(&lang, ok), tr(&lang, "Cancel")) {
             return;
         }
         if recording {
@@ -240,7 +241,7 @@ pub fn exit_app(app: &AppHandle, core: &Arc<Core>) {
 pub fn export_identity(app: &AppHandle, core: &Arc<Core>) {
     let Some(path) = save_file(app, "ez-hanseikai-identity.key", "Key", "key") else { return };
     if std::fs::copy(core.dir.join("key.bin"), &path).is_ok() {
-        tell(app, tr(&lang(core), "Identity saved. Keep this file private: anyone with it can act as you."));
+        tell(app, &lang(core), tr(&lang(core), "Identity saved. Keep this file private: anyone with it can act as you."));
     }
 }
 
@@ -248,10 +249,10 @@ pub fn import_identity(app: &AppHandle, core: &Arc<Core>) {
     let Some(path) = open_file(app, "Key", "key") else { return };
     let lang = lang(core);
     if !std::fs::read(&path).is_ok_and(|b| b.len() == 32) {
-        tell(app, tr(&lang, "That file is not an identity key."));
+        tell(app, &lang, tr(&lang, "That file is not an identity key."));
         return;
     }
-    if !ask(app, tr(&lang, "Importing replaces your identity, so your ID changes. Your current key is kept as key.bin.old."), tr(&lang, "Import"), tr(&lang, "Cancel")) {
+    if !ask(app, &lang, tr(&lang, "Importing replaces your identity, so your ID changes. Your current key is kept as key.bin.old."), tr(&lang, "Import"), tr(&lang, "Cancel")) {
         return;
     }
     let _ = std::fs::copy(core.dir.join("key.bin"), core.dir.join("key.bin.old"));
@@ -398,13 +399,13 @@ pub fn clock(seconds: i64) -> String {
     }
 }
 
-fn status_text(core: &Core) -> String {
+fn status_text(core: &Core, lang: &str) -> String {
     let room = core.active_room().filter(|r| r.invite.is_none()).map(|r| r.name);
     let timer = core.active_set.lock().unwrap().as_ref().map(|s| clock((crate::now_us() - s.start_us) / 1_000_000));
     match (room, timer) {
         (Some(room), Some(timer)) => format!("{room} · {timer}"),
         (Some(room), None) => room,
-        _ => "EZ Hanseikai".into(),
+        _ => tr(lang, "GGI Hanseikai").into(),
     }
 }
 
@@ -439,7 +440,7 @@ pub fn setup(app: &tauri::App, core: Arc<Core>) -> tauri::Result<()> {
             "github" => open_link(REPO),
             "issues" => open_link(&format!("{REPO}/issues/new")),
             "releases" => open_link(&format!("{REPO}/releases")),
-            "about" => dialog(|app, core| tell(app, &format!("EZ Hanseikai\n{} {VERSION}\nMIT or Apache-2.0\n{REPO}", tr(&lang(core), "Version")))),
+            "about" => dialog(|app, core| { let lang = lang(core); tell(app, &lang, &format!("{}\n{} {VERSION}\nMIT or Apache-2.0\n{REPO}", tr(&lang, "GGI Hanseikai"), tr(&lang, "Version"))) }),
             other => {
                 show_window(app);
                 let _ = app.emit("menu", other.to_string());
@@ -467,7 +468,7 @@ pub fn setup(app: &tauri::App, core: Arc<Core>) -> tauri::Result<()> {
                     let _ = mark.set_enabled(recording);
                 }
             }
-            let status = status_text(&core);
+            let status = status_text(&core, &lang);
             let asks = ask_names(&core);
             let hidden = !window_shown(&app);
             for (id, name) in &asks {
