@@ -5,7 +5,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde_json::{json, Value};
 
 pub const HOST: &str = "time.cloudflare.com";
-pub const CLOCK_STEP_US: i64 = 500_000;
+const CLOCK_STEP_US: i64 = 500_000;
 const PORT: u16 = 123;
 const SAMPLES: usize = 3;
 const TIMEOUT: Duration = Duration::from_secs(3);
@@ -16,11 +16,11 @@ const NTP_EPOCH_S: i64 = 2_208_988_800;
 const PACKET: usize = 48;
 
 #[derive(Clone, Copy)]
-pub struct Measured {
-    pub offset_us: i64,
-    pub rtt_us: i64,
-    pub at_us: i64,
-    pub at: Instant,
+struct Measured {
+    offset_us: i64,
+    rtt_us: i64,
+    at_us: i64,
+    at: Instant,
 }
 
 static STATE: Mutex<(Option<Measured>, Option<Instant>)> = Mutex::new((None, None));
@@ -29,7 +29,7 @@ pub fn pc_us() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros() as i64
 }
 
-pub fn moved(at_us: i64, now_us: i64, elapsed: Duration) -> i64 {
+fn moved(at_us: i64, now_us: i64, elapsed: Duration) -> i64 {
     now_us - at_us - elapsed.as_micros() as i64
 }
 
@@ -46,14 +46,14 @@ fn from_ntp(v: u64) -> i64 {
     ((v >> 32) as i64 - NTP_EPOCH_S) * 1_000_000 + (((v & 0xffff_ffff) * 1_000_000) >> 32) as i64
 }
 
-pub fn request(t0_us: i64) -> [u8; PACKET] {
+fn request(t0_us: i64) -> [u8; PACKET] {
     let mut out = [0u8; PACKET];
     out[0] = (4 << 3) | 3;
     out[40..].copy_from_slice(&to_ntp(t0_us).to_be_bytes());
     out
 }
 
-pub fn reply_times(bytes: &[u8], t0_us: i64) -> Option<(i64, i64)> {
+fn reply_times(bytes: &[u8], t0_us: i64) -> Option<(i64, i64)> {
     let word = |at: usize| Some(u64::from_be_bytes(bytes.get(at..at + 8)?.try_into().ok()?));
     if bytes.len() < PACKET || bytes[0] & 7 != 4 || !(1..=15).contains(&bytes[1]) || word(24)? != to_ntp(t0_us) {
         return None;
@@ -61,7 +61,7 @@ pub fn reply_times(bytes: &[u8], t0_us: i64) -> Option<(i64, i64)> {
     Some((from_ntp(word(32)?), from_ntp(word(40)?)))
 }
 
-pub fn offset_and_rtt(t0: i64, t1: i64, t2: i64, t3: i64) -> (i64, i64) {
+fn offset_and_rtt(t0: i64, t1: i64, t2: i64, t3: i64) -> (i64, i64) {
     (((t1 - t0) + (t2 - t3)) / 2, (t3 - t0) - (t2 - t1))
 }
 
@@ -80,7 +80,7 @@ fn sample(socket: &UdpSocket) -> Result<Measured, String> {
     Ok(Measured { offset_us, rtt_us, at_us: t3, at })
 }
 
-pub fn measure(server: &str) -> Result<Measured, String> {
+fn measure(server: &str) -> Result<Measured, String> {
     let addr = server.to_socket_addrs().map_err(|e| e.to_string())?.next().ok_or("no address")?;
     let socket = UdpSocket::bind(if addr.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" }).map_err(|e| e.to_string())?;
     socket.set_read_timeout(Some(TIMEOUT)).and_then(|_| socket.connect(addr)).map_err(|e| e.to_string())?;
@@ -94,11 +94,11 @@ pub fn measure(server: &str) -> Result<Measured, String> {
     best.ok_or_else(|| "no answer".into())
 }
 
-pub fn corrected(m: &Measured, now_pc_us: i64) -> i64 {
+fn corrected(m: &Measured, now_pc_us: i64) -> i64 {
     m.offset_us - moved(m.at_us, now_pc_us, m.at.elapsed())
 }
 
-pub fn due(last: Option<&Measured>, failed: Option<Instant>, now_pc_us: i64) -> bool {
+fn due(last: Option<&Measured>, failed: Option<Instant>, now_pc_us: i64) -> bool {
     match (failed, last) {
         (Some(f), _) => f.elapsed() >= RETRY,
         (None, None) => true,

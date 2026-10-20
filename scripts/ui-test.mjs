@@ -9,7 +9,7 @@ const ui = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "ui");
 const read = (f) => fs.readFileSync(path.join(ui, f), "utf8");
 const source = ["util.js", "i18n.js", "live.js", "layout.js", "dock.js", "events.js", "markdown.js", "review.js", "members.js", "recordings.js", "plugins.js", "ai.js", "diag.js"].map(read).join("\n");
 const context = vm.createContext({ window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id });
-const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, flowAt, flowBands, flowSteps, isReview, voiceOnly, BOARD_TEMPLATE, memberStatus, receivingPercent, recordingRows, recordingMatches, recordingWords, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, discardable, DISCARD_MAX_S, soundKey, pluginProgress, isBusy, workerState, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, aiPreview, apiUrl, apiBadge, apiReferenceBlocks, rateOf, liveEdge, netState, summaryLines, leftText, pcCards, clockSummary, flowRows, skewText, liveStep, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, toggleTask, boardParts, boardDom, mdHooks, runBy, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, flowAt, flowBands, flowSteps, isReview, voiceOnly, BOARD_TEMPLATE, memberStatus, receivingPercent, recordingRows, recordingMatches, recordingWords, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, discardable, DISCARD_MAX_S, soundKey, pluginProgress, isBusy, workerState, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, aiPreview, apiUrl, apiBadge, apiReferenceBlocks, rateOf, liveEdge, netState, summaryLines, leftText, pcCards, clockSummary, flowRows, skewText, liveStep, liveFollow, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, toggleTask, boardParts, boardDom, mdHooks, runBy, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 const plain = (v) => JSON.parse(JSON.stringify(v));
 
 const moment = (m, extra = {}) => ({ role: "moment", m, plugin: { id: "apex-matches" }, tags: ["match"], ...extra });
@@ -242,7 +242,7 @@ test("live tiles wait for the slowest member, never go back, and stop waiting fo
   assert.equal(s.rate, UP);
 });
 
-test("the live delay shrinks slowly only while the slack is above the gap", () => {
+test("the live delay shrinks slowly only while the slack is above the gap, and a tile with no start follows its own edge", () => {
   const { liveStep, LIVE_HEADROOM_S: ROOM, LIVE_SHRINK_GAP_S: GAP, LIVE_CATCH_UP: UP } = ui$;
   const now = 1000;
   const far = liveStep({ pos: now - ROOM - GAP - 2 }, [{ key: "a", avail: now, ended: false }], now, 1);
@@ -255,6 +255,7 @@ test("the live delay shrinks slowly only while the slack is above the gap", () =
   const others = liveStep({ pos: 900 }, [{ key: "a", avail: now, ended: false }, { key: "gone", avail: 100, ended: true }, { key: "none", avail: null, ended: false }], now, 1);
   assert.deepEqual(plain(others.late), []);
   assert.deepEqual(plain(liveStep({ pos: 5 }, [{ key: "none", avail: null, ended: false }], now, 1)), { pos: 5, rate: 1, held: false, late: [] });
+  assert.deepEqual([ui$.liveFollow(20, 19.5), ui$.liveFollow(20, 16), ui$.liveFollow(20, 10), ui$.liveFollow(20, 20).playing].map(plain), [{ target: 19.5, playing: true }, { target: 16, playing: true }, { target: 18, playing: true }, false]);
 });
 
 test("where data goes says when a relay or a server is involved", () => {

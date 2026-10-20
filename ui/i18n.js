@@ -431,6 +431,7 @@ const JA = {
   "Stop your recording?": "自分の録画を終了しますか?",
   "Leave the room before entering another.": "別のルームに入る前に今のルームを出てください。",
   "Time check": "時刻の確認",
+  "The disk is almost full.": "ディスクがほぼいっぱいです。",
   "{host} · at start and every hour": "{host} · 起動時と1時間ごと",
   "Unreachable": "つながりません",
   "Updated by {name} · {time}": "{name} が更新 · {time}",

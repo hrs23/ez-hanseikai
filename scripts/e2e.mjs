@@ -362,7 +362,7 @@ async function watchLive(app, b, seconds, until = () => false) {
     const x = await evaluate(app, LIVE_PROBE);
     check(!x.wait, "a live tile with a picture hid it");
     check(x.at.length < 2 || Math.max(...x.at) - Math.min(...x.at) < 1, `live tiles are apart: ${brief(x)}`);
-    check(x.pos === null || x.avail[b.id] === null || x.pos <= x.avail[b.id], `the live position ${x.pos} passed B's media ${x.avail[b.id]}`);
+    check(x.pos === null || x.avail[b.id] === null || x.late.includes(b.id) || x.pos <= x.avail[b.id], `the live position passed B's media: ${brief(x)}`);
     check(!last || (x.pos >= last.pos && x.now === last.now), `the live position went back or the view changed: ${brief([last, x])}`);
     if (until(x)) return x;
     last = x;
@@ -820,7 +820,8 @@ async function scenario(ctx) {
     await waitFor("B holds A's voice-only part", within(SEGMENT_S + LOG_SYNC_S * 2), () => !badCopies(b, ctx.room, a.id, pieces(logOf(a, ctx.room, a.id), ctx.set).filter((p) => p.capture === voice)).length);
   });
 
-  await step("B leaving ends only its part, and B rejoins the recording when it comes back", async () => {
+  await step("B leaving ends only its part and rejoins, a crashed C does not keep the stopped set open, and everyone has it", async () => {
+    const all = [a, b, c];
     const before = segsOf(logOf(b, ctx.room, b.id), ctx.set).map((s) => s.capture);
     await invoke(b, "close_room", { id: ctx.room });
     check(lastJoin(b, ctx.room, ctx.set)?.stop === false, "B did not end only its own part");
@@ -830,10 +831,6 @@ async function scenario(ctx) {
     await invoke(b, "enter_room", { id: ctx.room });
     await recordsAgain(b, ctx.room, ctx.set, before);
     await allSee([a], "B recording again", within(SEGMENT_S + LOG_SYNC_S * 2), (st) => setOf(st, ctx.set).players.find((p) => p.owner === b.id).recording);
-  });
-
-  await step("C crashes, Stop on A ends the set at once, C ends its part on restart, and everyone has it", async () => {
-    const all = [a, b, c];
     kill(c);
     await stopped(c);
     await invoke(a, "stop_recording");

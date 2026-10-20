@@ -188,7 +188,6 @@ impl Core {
         self.is_recording(room, set) || self.export.lock().unwrap().as_ref().is_some_and(|e| e.set.0 == room && e.set.1 == set)
     }
 
-
     pub fn present(&self, owner: &str) -> bool {
         if owner == self.me() {
             return true;
@@ -563,6 +562,9 @@ pub fn adopt_room(core: &Arc<Core>, pending: &str, id: &str, name: &str, members
 
 pub fn begin_set(core: &Arc<Core>, set: &str, by: &str, start_us: i64, voice: bool) -> Result<(), String> {
     ffmpeg::ready()?;
+    if core.disk_full() {
+        return Err("The disk is almost full.".into());
+    }
     let room = core.active_room_id();
     let active = ActiveSet { id: set.to_string(), room, by: by.to_string(), start_us, voice };
     {

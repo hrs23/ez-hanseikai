@@ -14,7 +14,6 @@ const UPDATE_EVERY_MS = 4 * 3600 * 1000;
 const UPDATE_RECHECK_MS = 10 * 60 * 1000;
 const DOUBLE_CLICK_MS = 250;
 const JUMP_MIN = 1;
-const OFFLINE_FAILURES = 2;
 const NOTE_STEP_GAP = 0.5;
 const JOBS_MS = 5000;
 const DOWNLOAD_POLL_MS = 1000;
@@ -290,7 +289,7 @@ function liveMembers() {
       return { key: p.key, avail: liveAvail(slots), ended: !p.recording };
     });
   }
-  return Object.values(rec.tiles).map((tl) => ({ key: tl.key, start: liveStart(tl.key, tl.media.part), video: tl.media.video })).filter((x) => x.start !== null).map((x) => ({ key: x.key, avail: liveAvail([[x.start, x.video]]), ended: false }));
+  return Object.values(rec.tiles).map((tl) => ({ key: tl.key, avail: liveAvail([[liveStart(tl.key, tl.media.part), tl.media.video]]), ended: false }));
 }
 function goLive() {
   live = true;
@@ -312,10 +311,12 @@ function tickLive() {
     const v = tl.media.video;
     const start = liveStart(p.key, tl.media.part);
     const edge = start === null || liveClock.pos === null;
-    sync(v, edge ? (isFinite(v.duration) ? v.duration - LIVE_HEADROOM_S : 0) : liveClock.pos - start, edge || !liveClock.held);
+    const step = edge ? liveFollow(v.duration, v.currentTime) : { target: liveClock.pos - start, playing: !liveClock.held };
+    sync(v, step.target, step.playing);
     v.playbackRate = edge ? 1 : liveClock.rate;
   }
 }
+const waitingFor = (key) => t("Waiting for {name}…", { name: nameOf(key) });
 function liveWhat(p) {
   if (p.key === st.id) {
     if (!st.capture.source) return [el("div", { className: "big" }, icon("monitor-off")), el("b", { textContent: t("{name} · Screen off", { name: nameOf(st.id) }) }), el("button", { className: "sm choose", textContent: t("Choose screen"), onclick: (e) => { e.stopPropagation(); openSource($("screenmore")); } })];
@@ -336,11 +337,11 @@ function renderLive() {
   for (const p of list) {
     const tl = tile(rec, p.key);
     nameTile(tl, p.key, p.recording);
-    if (changed("livewhat/" + p.key, [!!p.file, p.sharing, st.capture.source, captureProblem(st.capture), nameOf(p.key), lang])) tl.what.replaceChildren(...(p.file ? [t("Waiting for {name}…", { name: nameOf(p.key) })] : liveWhat(p)));
+    if (changed("livewhat/" + p.key, [!!p.file, p.sharing, st.capture.source, captureProblem(st.capture), nameOf(p.key), lang])) tl.what.replaceChildren(...(p.file ? [waitingFor(p.key)] : liveWhat(p)));
     tl.box.classList.toggle("wait", !p.file);
     tl.box.classList.toggle("mine", p.key === st.id && !st.capture.source);
-    const start = p.file && liveStart(p.key, p.file);
-    if (!p.file || (start === null && liveStart(p.key, tl.media.part) !== null)) continue;
+    if (!p.file) continue;
+    const start = liveStart(p.key, p.file);
     if (tl.media.src === srcOf(p.file)) tl.media.part = p.file;
     feed(tl.media, p.file, true, p.file, () => (start !== null && liveClock.pos !== null ? liveClock.pos - start : undefined));
   }
@@ -727,7 +728,7 @@ function tick() {
     tl.box.classList.toggle("late", late);
     const n = p.file.total ? Math.floor((p.file.have / p.file.total) * 100) : 0;
     const what = p.file.stuck ? ["stuck", n] : tl.media.part || p.file.parts.some((x) => x.v) ? ["wait"] : ["voice"];
-    if (changed("what/" + p.key, [...what, nameOf(p.key), lang])) tl.what.replaceChildren(...(what[0] === "stuck" ? [icon("alert", "sm"), t("{name} stopped at {n}%", { name: nameOf(p.key), n })] : what[0] === "voice" ? [icon("mic", "sm"), t("Voice only")] : [t("Waiting for {name}…", { name: nameOf(p.key) })]));
+    if (changed("what/" + p.key, [...what, nameOf(p.key), lang])) tl.what.replaceChildren(...(what[0] === "stuck" ? [icon("alert", "sm"), t("{name} stopped at {n}%", { name: nameOf(p.key), n })] : what[0] === "voice" ? [icon("mic", "sm"), t("Voice only")] : [waitingFor(p.key)]));
     for (const s of [tl.media, tl.mic]) if (s && s.part && !switching(s)) sync(s.video, m + shiftOf(p, s.part, b), clock.playing && !away && !(livePinned() && liveClock.held));
   }
   if (review) syncVoices();

@@ -114,10 +114,9 @@ fn learn_hello(core: &Arc<Core>, id: &EndpointId, message: &Value) -> u32 {
     }
     let codecs = codec_list(&message["codecs"]);
     let hw = hw::sanitize(&message["hw"]);
-    let here = message["room"]["id"].as_str() == Some(core.active_room_id().as_str());
     core.update_peer(id, |p| {
         p.info = Some((version, proto));
-        p.seen_us = if here { Some(now_us()) } else { p.seen_us };
+        p.seen_us = Some(now_us());
         p.codecs = codecs;
         p.hw = hw;
     });
@@ -128,7 +127,7 @@ fn learn_hello(core: &Arc<Core>, id: &EndpointId, message: &Value) -> u32 {
     learn_members(core, &message["room"]);
     learn_holdings(core, id, message);
     react_to_set(core, &message["set"]);
-    if here {
+    if message["room"]["id"].as_str() == Some(core.active_room_id().as_str()) {
         let asks = message["asks"].as_array().cloned().unwrap_or_default();
         core.update_peer(id, |p| p.asks = asks);
     }
@@ -424,7 +423,7 @@ async fn handle(core: Arc<Core>, from: EndpointId, mut send: SendStream, mut rec
             let reply = match core.engine.live().filter(|l| sharing && l.room == core.active_room_id()) {
                 Some(l) => {
                     let newest = l.recent.map(|r| r.last().cloned().unwrap_or_default());
-                    json!({"sharing": true, "capture": l.capture, "n": newest.clone().map(|(n, _)| n), "set": newest.map(|(_, set)| set)})
+                    json!({"sharing": true, "capture": l.capture, "start_us": l.start_us, "n": newest.clone().map(|(n, _)| n), "set": newest.map(|(_, set)| set)})
                 }
                 None => json!({"sharing": false}),
             };
@@ -752,6 +751,7 @@ async fn receive(core: &Arc<Core>, conn: &Connection, req: Value, expect: HashMa
 #[derive(Clone, Default, PartialEq)]
 pub struct PeerLive {
     pub capture: String,
+    pub start_us: Option<i64>,
     pub n: [u32; 2],
     pub set: [Option<String>; 2],
 }
@@ -760,7 +760,7 @@ fn peer_live(info: &Value) -> Option<PeerLive> {
     let capture = info["capture"].as_str().filter(|c| info["sharing"] == true && capture_id(c))?;
     let n = [0, 1].map(|i| info["n"][i].as_u64().and_then(|n| u32::try_from(n).ok()).unwrap_or(0));
     let set = [0, 1].map(|i| info["set"][i].as_str().filter(|s| valid_id(s)).map(String::from));
-    Some(PeerLive { capture: capture.to_string(), n, set })
+    Some(PeerLive { capture: capture.to_string(), start_us: info["start_us"].as_i64(), n, set })
 }
 
 async fn live_info(core: &Core, id: &EndpointId, conn: &Connection) -> Option<PeerLive> {

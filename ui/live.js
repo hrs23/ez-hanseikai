@@ -4,8 +4,13 @@ const LIVE_SHRINK_GAP_S = 3;
 const LIVE_CATCH_UP = 1.05;
 
 function liveAvail(slots) {
-  const ends = slots.filter(([, v]) => v && v.readyState > 0 && isFinite(v.duration)).map(([start, v]) => start + v.duration);
+  const ends = slots.filter(([start, v]) => start !== null && v && v.readyState > 0 && isFinite(v.duration)).map(([start, v]) => start + v.duration);
   return ends.length ? Math.min(...ends) : null;
+}
+
+function liveFollow(duration, at) {
+  const lag = duration - at;
+  return { target: lag > LIVE_HEADROOM_S + LIVE_SHRINK_GAP_S ? duration - LIVE_HEADROOM_S : at, playing: lag > 0 };
 }
 
 function liveStep(state, members, now, dt) {

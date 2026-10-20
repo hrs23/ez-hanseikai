@@ -198,6 +198,7 @@ impl Video {
 pub struct Live {
     pub room: String,
     pub capture: String,
+    pub start_us: Option<i64>,
     pub recent: [Vec<(u32, Option<String>)>; 2],
 }
 
@@ -276,7 +277,7 @@ impl Engine {
     pub fn live(&self) -> Option<Live> {
         let sink = self.sink.lock().unwrap().clone()?;
         let recent = [0, 1].map(|i| sink.outputs[i].lock().unwrap().recent.iter().cloned().collect());
-        Some(Live { room: sink.room.clone(), capture: sink.capture.clone(), recent })
+        Some(Live { room: sink.room.clone(), capture: sink.capture.clone(), start_us: sink.start.get().map(|s| s.1), recent })
     }
 
     pub fn working(&self) -> bool {
@@ -667,8 +668,8 @@ impl Sink {
         }
         if let Some(set) = &set {
             ensure_rec(core, &self.room, set, t_us, &self.meta);
+            self.log_cap(core);
         }
-        self.log_cap(core);
         let init = self.init.lock().unwrap()[which].clone();
         let Some(file) = open_part(&dir, n, init.as_deref()) else {
             self.dead.store(true, Ordering::Relaxed);
@@ -951,12 +952,8 @@ pub fn recover_files(dir: &Path, me: &str, skip: impl Fn(&Recovered) -> bool) ->
     out
 }
 
-pub fn cap_start(log: &[Value], capture: &str) -> Option<i64> {
-    log.iter().filter(|x| x["k"] == "cap" && x["capture"] == capture).find_map(|x| x["start_us"].as_i64())
-}
-
 fn recovered_seg(own: &[Value], r: &Recovered) -> Option<Value> {
-    let start_us = cap_start(own, &r.capture)?;
+    let start_us = own.iter().filter(|x| x["k"] == "cap" && x["capture"] == r.capture.as_str()).find_map(|x| x["start_us"].as_i64())?;
     let (size, sha) = data::sha256(&r.path).ok()?;
     let scales = media::timescales(&std::fs::read(r.path.with_file_name(INIT)).unwrap_or_default());
     let times = media::scan(&r.path).ok()?.0;
