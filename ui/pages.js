@@ -67,16 +67,18 @@ function renderStart() {
   $("roomlist").replaceChildren(...others.map((r, i) => {
     const face = (id) => { const a = el("span", { className: "av sm", textContent: initial(id === st.id ? st.name : r.names[id]) }); a.style.background = colorOf(r.colors[id]); return a; };
     const enter = () => run("enter_room", { id: r.id }, openLive);
-    const more = iconButton("more", t("More"), (e) => { e.stopPropagation(); openMenu([{ label: t("Remove from this PC…"), icon: "trash", danger: true, run: () => removeRoom(r, t("Remove {room} from this PC?", { room: r.name }), t("Remove"), refresh) }], e.currentTarget); }, "icon sm more");
+    const more = iconButton("more", t("More"), (e) => { e.stopPropagation(); openMenu([{ label: t("Leave room…"), icon: "logout", danger: true, run: () => leaveRoom(r, refresh) }], e.currentTarget); }, "icon sm more");
     const row = el("div", { className: "rrow", tabIndex: 0, role: "button" }, el("b", { textContent: r.name }), el("span", { className: "avs" }, ...r.members.slice(0, AVATARS_SHOWN).map(face)), el("span", { className: "sp" }), r.used_us ? el("span", { className: "muted small", textContent: dayLabel(dayOf(new Date(r.used_us / 1000)), new Date(), lang) }) : null, el("button", { className: "sm" + (i ? "" : " primary"), textContent: t("Enter"), onclick: (e) => { e.stopPropagation(); enter(); } }), more);
     row.onclick = enter;
     row.onkeydown = (e) => { if (e.key === "Enter") enter(); };
     return row;
   }));
 }
-async function removeRoom(room, question, button, then) {
-  if (await ask(question, button, true, t("Its recordings and notes on this PC are deleted. Other members keep theirs."))) run("remove_room", { id: room.id }, () => { forgetPlan(room.id); then(); });
+async function leaveRoom(room, then) {
+  const question = st.recording && st.room && st.room.id === room.id ? "Stop recording and leave {room}?" : "Leave {room}?";
+  if (await ask(t(question, { room: room.name }), t("Leave room"), true, t("Its recordings and notes on this PC are deleted. Other members keep theirs."))) run("remove_room", { id: room.id }, () => { forgetPlan(room.id); then(); });
 }
+const leaveThisRoom = () => st.room && leaveRoom(st.room, openLive);
 function joinWith(input) {
   if (joining) return;
   joining = true;
@@ -87,11 +89,8 @@ const cancelInvite = () => run("cancel_invites", null, () => { flash(t("Invite c
 const createRoom = () => invoke("create_room", { name: "" }).then(() => { openLive(); return refresh().then(copyInvite); }).catch(fail);
 async function switchRoom() {
   if (!st.room) return;
-  if (st.recording && !(await ask(t("Stop recording and leave {room}?", { room: st.room.name }), t("Switch room"), true))) return;
+  if (st.recording && !(await ask(t("Stop recording and switch rooms?"), t("Switch room")))) return;
   run("close_room", { id: st.room.id }, openLive);
-}
-function leaveRoom() {
-  if (st.room) removeRoom(st.room, t(st.recording ? "Stop recording and leave {room}?" : "Leave {room}?", { room: st.room.name }), t("Leave room"), openLive);
 }
 async function removeMember(id) {
   if (await ask(t("Remove {name} from the room?", { name: nameOf(id) }), t("Remove from room"), true, t("Everyone stops sending to them. What they already have stays with them."))) { drawerFor = null; run("remove_peer", { id }); }
@@ -326,7 +325,7 @@ function boardEvent() {
   const at = (e) => e.id - ((peerOf(e.author) || {}).offset_us || 0);
   let out = null;
   for (const e of st.events) if (e.kind === "board" && (!e.values || !e.values.card || e.values.card === "team") && (!out || at(e) >= at(out))) out = e;
-  return out;
+  return out && out.text.trim() ? out : null;
 }
 const onBoard = () => page === "room" && roomTab === "board";
 const personal = () => boardScope === "personal";
@@ -584,7 +583,7 @@ function renderDiagnostics() {
   if (!$("diagdlg").open) return;
   for (const b of $("diagdlg").querySelectorAll("[data-dtab]")) b.classList.toggle("on", b.dataset.dtab === diagTab);
   pullDiag();
-  const failed = jobInfo ? jobInfo.jobs.filter((j) => j.state === "failed").length : 0;
+  const failed = failedJobs();
   const lines = summaryLines(st, failed);
   const fed = diagFeed && diagFeed.tab === diagTab ? diagFeed.data : null;
   if (!changed("diag", [diagTab, lines, st.peers, st.hw, st.time_sync, st.api, st.channel, fed, jobInfo && jobInfo.jobs, lang])) return;
@@ -617,8 +616,7 @@ function renderDiagnostics() {
   $("diagbody").replaceChildren(el("div", { className: "okbox" }, ...sent.map(okLine)), diagram, el("div", { className: "tablebox" }, el("table", { className: "table" }, el("thead", {}, head), el("tbody", {}, ...rows))));
 }
 async function diagnosticsText() {
-  const failed = jobInfo ? jobInfo.jobs.filter((j) => j.state === "failed").length : 0;
-  const head = summaryLines(st, failed).map((l) => `[${l.level}] ${l.key}: ${l.text}`).join("\n");
+  const head = summaryLines(st, failedJobs()).map((l) => `[${l.level}] ${l.key}: ${l.text}`).join("\n");
   return invoke("debug_report", { audioProcess: st.audio_process, save: false, head });
 }
 
@@ -744,7 +742,7 @@ const menuActions = {
   "cancel-invite": () => { if (st.invites) cancelInvite(); },
   "rename-room": openRoomSettings,
   "switch-room": switchRoom,
-  "leave-room": leaveRoom,
+  "leave-room": leaveThisRoom,
   "add-note": openQuick,
   "prev-session": () => stepSet(-1),
   "next-session": () => stepSet(1),

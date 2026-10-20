@@ -856,6 +856,8 @@ async function scenario(ctx) {
     }
     await evaluate(a, `setBoardScope("room"); true`);
     await waitFor("A shows the room plan again", within(UI_REFRESH_S * 5), () => evaluate(a, `boardScope === "room" && $("canvas").textContent.includes("Checklist")`));
+    await evaluate(a, `writeBoard(" "); true`);
+    await waitFor("A shows the starter page for a cleared room plan", within(UI_REFRESH_S * 5), () => evaluate(a, `!boardEvent() && boardDraft === boardText() && $("canvas").querySelectorAll(".bsec").length === 3 && !$("homesub").textContent`));
     await evaluate(a, `$("sidenav").querySelector("[data-nav=members]").click(); true`);
   });
 
@@ -1072,6 +1074,8 @@ async function scenario(ctx) {
       check((await api(a, "GET", "/v1", { token: fresh, host: `evil.example:${API_PORTS.a}`, connect: address })).status === 403, "a foreign Host header was not refused for other devices");
     }
     await waitFor("A shows the warning on the badge", within(UI_REFRESH_S * 5), () => evaluate(a, `go("room"), $("apibadge").classList.contains("lan") && $("apibadge").title.includes("Other devices on your network")`));
+    const faces = await evaluate(a, `(() => { const was = sideWidth; setSideWidth(clampSide(0), false); const f = $("roomfaces"); const r = { shown: f.querySelectorAll(".av").length, clipped: f.scrollWidth > f.clientWidth }; setSideWidth(was, false); return r; })()`);
+    check(faces.shown === 3 && !faces.clipped, `the faces beside the badge at the narrowest sidebar: ${brief(faces)}`);
     await evaluate(a, `openSettings("api"); document.querySelector('#apiaccess [data-lan="0"]').click(); true`);
     await waitFor("A limits the API to this PC", within(UI_REFRESH_S * 5), () => evaluate(a, `!st.api.lan && $("apilanbox").hidden`));
     if (own) check(await api(a, "GET", "/v1", { token: fresh, host: own, connect: "127.0.0.1" }).then((r) => r.status === 403), "this PC's own address is accepted again for this PC only");

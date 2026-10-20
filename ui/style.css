@@ -182,7 +182,7 @@ body.noside .side, body.boardfull .side, body.noside .splitter, body.boardfull .
 .roombtn .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 0 1 auto; }
 .roombtn .chev { color: var(--muted); flex: none; }
 .facesrow { display: flex; align-items: center; gap: 8px; padding: 0 10px; min-height: 24px; min-width: 0; }
-.roomfaces { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1; overflow: hidden; padding: 4px 4px 4px 0; }
+.roomfaces { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 0 1 auto; overflow: hidden; padding: 4px 4px 4px 0; }
 .roomfaces .avs { gap: 6px; }
 .roomfaces .avs .av + .av { margin-left: 0; }
 .roomfaces .av > i { width: 7px; height: 7px; right: -1px; bottom: -1px; }
@@ -193,7 +193,6 @@ body.noside .side, body.boardfull .side, body.noside .splitter, body.boardfull .
 .sidenav button.on, .sechead.on { background: var(--raised-2); color: var(--text); }
 .sidenav button.on > [data-icon], .sechead.on > [data-icon] { color: var(--accent); }
 .sidenav .nm { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; }
-.sidenav .count, .count.bad { background: var(--bad-soft); color: var(--bad); }
 .badge { min-width: 16px; height: 16px; border-radius: 8px; background: var(--accent); color: var(--on-accent); font-size: 10px; font-weight: var(--w-bold); display: inline-flex; align-items: center; justify-content: center; padding: 0 4px; }
 .startbox { margin: 12px 8px 4px; flex: none; display: flex; flex-direction: column; gap: 4px; }
 .standby { height: 22px; padding: 0 4px; border: 0; background: transparent; color: var(--muted); font-size: var(--t-sm); justify-content: flex-start; }
@@ -294,12 +293,11 @@ body.noside .side, body.boardfull .side, body.noside .splitter, body.boardfull .
 .mhead .sub { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .mhead .hint { color: var(--muted); font-size: var(--t-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chips { display: flex; gap: 6px; flex: none; }
-.ptabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); padding: 0 20px; flex: none; }
+.ptabs { display: flex; gap: 4px; flex: none; }
 .ptabs button { height: 42px; border: 0; border-radius: 0; background: transparent; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; padding: 0 12px; gap: 8px; font-weight: var(--w-medium); }
 .ptabs button:hover:not(:disabled) { background: transparent; color: var(--text); }
 .ptabs button.on { color: var(--text); border-color: var(--accent); }
-.ptabs.inline { border: 0; padding: 0; }
-.count { min-width: 20px; height: 18px; padding: 0 6px; border-radius: var(--r-full); background: var(--raised-2); color: var(--soft); font-size: var(--t-xs); display: inline-flex; align-items: center; justify-content: center; }
+.count { min-width: 20px; height: 18px; padding: 0 6px; border-radius: var(--r-full); background: var(--bad-soft); color: var(--bad); font-size: var(--t-xs); display: inline-flex; align-items: center; justify-content: center; }
 .roombody { flex: 1; display: flex; min-height: 0; }
 .roomtab { flex: 1; min-width: 0; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 14px; }
 .tablebox { border: 1px solid var(--line); border-radius: var(--r-md); overflow: auto; background: var(--surface); flex: none; }
@@ -385,7 +383,8 @@ body.noside .side, body.boardfull .side, body.noside .splitter, body.boardfull .
 .canvas { width: 1080px; flex: none; }
 .bcard { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 28px 32px 30px; }
 .bcard h2.title { font-size: 28px; margin: 0 0 6px; font-weight: 800; }
-.bcard .lead { font-size: 20px; font-weight: var(--w-bold); margin: 0 0 22px; }
+.bcard .lead { margin: 0 0 22px; }
+.bcard .lead > :first-child { font-size: 20px; font-weight: var(--w-bold); }
 .bgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
 .bsec { background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-md); padding: 14px 16px; border-top: 3px solid var(--accent); min-width: 0; overflow-wrap: anywhere; }
 .bsec h3 { margin: 0 0 8px; font-size: 16px; font-weight: var(--w-bold); color: var(--accent); }
@@ -417,12 +416,12 @@ body.noside .side, body.boardfull .side, body.noside .splitter, body.boardfull .
 .md th, .md td { padding: 6px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
 .md th { color: var(--soft); font-weight: var(--w-semibold); background: var(--raised); }
 .md tr:last-child td { border-bottom: 0; }
-a.ext { color: #38bdf8; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+a.ext { unicode-bidi: isolate; color: #38bdf8; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 a.ext:hover { color: #7dd3fc; }
 .md del { color: var(--muted); }
 .seg > button .count { margin-left: 6px; }
 #roomdlg .field { margin-top: var(--s3); }
-.facesrow .apibadge { height: 20px; margin-left: auto; flex: 0 1 auto; min-width: 0; }
+.facesrow .apibadge { height: 20px; margin-left: auto; }
 .editor { flex: 1; display: grid; grid-template-columns: 1fr 1fr; min-height: 0; }
 .editor textarea { border: 0; border-radius: 0; border-right: 1px solid var(--line); background: var(--deep); padding: 20px 24px; font: 13px/1.7 var(--mono); color: var(--soft); height: 100%; }
 .editor .preview { overflow: auto; padding: 16px; }
@@ -796,7 +795,6 @@ body.full .side, body.full .splitter, body.full .notices { display: none !import
 .apibadge { display: inline-flex; align-items: center; gap: 4px; font-size: var(--t-xs); height: 24px; padding: 0 9px; border-radius: var(--r-full); border: 0; flex: none; color: var(--ok); background: var(--ok-soft); }
 .apibadge.lan { color: var(--warn); background: var(--warn-soft); }
 .apibadge svg { width: 12px; height: 12px; flex: none; }
-.apibadge small { font-size: var(--t-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .apiref { display: flex; flex-direction: column; gap: 4px; }
 .apiep { border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg); }
 .apiep summary { cursor: pointer; padding: 6px 10px; font-family: var(--mono); font-size: var(--t-sm); word-break: break-all; }

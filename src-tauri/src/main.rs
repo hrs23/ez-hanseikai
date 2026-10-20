@@ -78,8 +78,12 @@ pub fn short(id: impl std::fmt::Display) -> String {
     id.to_string().chars().take(10).collect()
 }
 
+fn unwanted(c: char) -> bool {
+    c.is_control() || matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
 pub fn clean_text(raw: &str, max: usize) -> String {
-    raw.chars().filter(|c| !c.is_control()).collect::<String>().trim().chars().take(max).collect::<String>().trim().to_string()
+    raw.chars().filter(|&c| !unwanted(c)).collect::<String>().trim().chars().take(max).collect::<String>().trim().to_string()
 }
 
 pub fn clean_name(raw: &str) -> String {
@@ -87,7 +91,7 @@ pub fn clean_name(raw: &str) -> String {
 }
 
 fn clean_note(raw: &str, max: usize) -> String {
-    raw.chars().filter(|c| !c.is_control() || matches!(c, '\n' | '\t')).take(max).collect()
+    raw.chars().filter(|&c| !unwanted(c) || matches!(c, '\n' | '\t')).take(max).collect()
 }
 
 pub fn hex(bytes: &[u8]) -> String {
@@ -1154,9 +1158,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn notes_keep_line_breaks_and_tabs_and_drop_other_control_characters() {
+    fn notes_keep_line_breaks_and_tabs_and_drop_other_control_and_direction_characters() {
         assert_eq!(clean_note("- a\n\t- [ ] b\r\u{7}\u{1b}[0m", BOARD_MAX), "- a\n\t- [ ] b[0m");
         assert_eq!(clean_note("abcdef", 3), "abc");
+        assert_eq!(clean_note("[\u{202E} moc.elgoog.ac](https://moc.elgoog.ac) \u{2066}x\u{2069}\u{202A}", BOARD_MAX), "[ moc.elgoog.ac](https://moc.elgoog.ac) x");
+        assert_eq!(clean_name("\u{202E}Aki\u{2067}"), "Aki");
     }
 
     #[test]

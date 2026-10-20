@@ -44,7 +44,7 @@ function renderNav() {
   $("apibadge").hidden = !badge;
   if (badge) {
     $("apibadge").className = "apibadge" + (badge.lan ? " lan" : "");
-    $("apibadge").replaceChildren(icon(badge.lan ? "alert" : "terminal", "sm"), "API", ...(badge.lan ? [el("small", { textContent: t("Other devices") })] : []));
+    $("apibadge").replaceChildren(icon(badge.lan ? "alert" : "terminal", "sm"), "API");
     $("apibadge").title = badge.title;
     $("apibadge").setAttribute("aria-label", badge.title);
   }
@@ -82,7 +82,7 @@ function roomMenu(anchor) {
     ...(st.invites ? [{ label: t("Cancel invite"), icon: "x", run: cancelInvite }] : []),
     { separator: true },
     { label: t("Switch room"), icon: "home", run: switchRoom },
-    { label: t("Leave room…"), icon: "logout", danger: true, run: leaveRoom },
+    { label: t("Leave room…"), icon: "logout", danger: true, run: leaveThisRoom },
   ], anchor);
 }
 function navigate(name) {
@@ -111,13 +111,13 @@ function renderFaces() {
   const ids = people();
   const sig = [ids, ids.map(memberDot), st.names, st.colors];
   if (!changed("faces", sig)) return;
-  const faces = ids.slice(0, AVATARS_SHOWN).map((id) => {
+  const faces = ids.slice(0, SIDE_FACES).map((id) => {
     const dot = memberDot(id);
     const a = avatar(id, "sm", dot);
     if (!dot) a.classList.add("dim");
     return a;
   });
-  $("roomfaces").replaceChildren(el("span", { className: "avs" }, ...faces), ids.length > AVATARS_SHOWN ? el("span", { className: "more", textContent: `+${ids.length - AVATARS_SHOWN}` }) : "");
+  $("roomfaces").replaceChildren(el("span", { className: "avs" }, ...faces), ids.length > SIDE_FACES ? el("span", { className: "more", textContent: `+${ids.length - SIDE_FACES}` }) : "");
 }
 
 function startState() {

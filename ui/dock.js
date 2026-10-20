@@ -2,6 +2,7 @@ const SIDE_MIN = 220;
 const SIDE_MAX = 420;
 const SIDE_DEFAULT = 264;
 const SIDE_KEY_STEP = 16;
+const SIDE_FACES = 4;
 
 function clampSide(px) {
   const n = Number(px);

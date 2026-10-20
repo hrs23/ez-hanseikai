@@ -170,7 +170,8 @@ function mdBlocks(lines, depth = 0) {
 function mdList(lines, depth) {
   const base = mdIndent(lines[0].s);
   const first = lines[0].s.match(MD_ITEM);
-  const list = { type: "list", ordered: /\d/.test(first[2]), items: [] };
+  const ordered = /\d/.test(first[2]);
+  const list = { type: "list", ordered, start: ordered ? parseInt(first[2], 10) : null, items: [] };
   let item = null;
   let rest = [];
   const close = () => {
@@ -190,8 +191,8 @@ function mdList(lines, depth) {
   return list;
 }
 
-function mdParse(text, firstLine = 0) {
-  const lines = String(text).replace(/\r\n?/g, "\n").replaceAll("\t", "    ").split("\n").map((s, k) => ({ s, n: firstLine + k }));
+function mdParse(text) {
+  const lines = String(text).replace(/\r\n?/g, "\n").replaceAll("\t", "    ").split("\n").map((s, n) => ({ s, n }));
   return mdBlocks(lines);
 }
 
@@ -242,39 +243,30 @@ function mdNodes(blocks, hooks, base) {
       const box = it.task === null ? null : el("input", { type: "checkbox", checked: it.task, disabled: !hooks.onTask, ariaLabel: t("Done"), onchange: () => hooks.onTask(it.n) });
       return el("li", { className: it.task === null ? "" : "task" + (it.task ? " done" : "") }, box, el("span", {}, ...mdSpans(it.inline, hooks)), ...mdNodes(it.blocks, hooks, base));
     });
-    return el(b.ordered ? "ol" : "ul", {}, ...items);
+    return el(b.ordered ? "ol" : "ul", b.ordered ? { start: b.start } : {}, ...items);
   });
 }
 
-function markdownDom(text, hooks, base, firstLine) {
-  return mdNodes(mdParse(text, firstLine), hooks, base);
-}
+const hasMoment = (x) => x !== null && typeof x === "object" && (x.kind === "moment" || Object.values(x).some(hasMoment));
 
 function boardParts(text) {
-  const lines = String(text).replace(/\r\n?/g, "\n").split("\n");
-  const out = { title: "", lead: { text: "", line: 0 }, sections: [] };
-  let fenced = null;
-  let cur = out.lead;
-  let body = [];
-  const flush = () => { cur.text = body.join("\n"); body = []; };
-  lines.forEach((line, n) => {
-    const fence = line.match(MD_FENCE);
-    if (fence) fenced = fenced && line.trim().startsWith(fenced) ? null : fenced || fence[1][0];
-    const h1 = !fenced && line.match(/^#\s+(.*)$/);
-    const h2 = !fenced && line.match(/^##\s+(.*)$/);
-    if (h1 && !out.title && !out.sections.length) { out.title = h1[1]; body.push(""); return; }
-    if (h2) { flush(); cur = { title: h2[1], text: "", line: n + 1 }; out.sections.push(cur); return; }
-    body.push(line);
-  });
-  flush();
+  const out = { title: null, lead: [], sections: [] };
+  let body = out.lead;
+  for (const b of mdParse(text)) {
+    const level = b.type === "heading" ? b.level : 0;
+    if (level === 1 && !out.title && !out.sections.length) out.title = b.inline;
+    else if (level === 2) out.sections.push({ title: b.inline, blocks: (body = []) });
+    else body.push(b);
+  }
   return out;
 }
 
 function boardDom(text, hooks) {
   const b = boardParts(text);
+  const nodes = (blocks) => mdNodes(blocks, hooks, BOARD_HEADING_BASE);
   const card = el("div", { className: "bcard" });
-  if (b.title) card.append(el("h2", { className: "title" }, ...mdSpans(mdInline(b.title), hooks)));
-  if (b.lead.text.trim()) card.append(el("div", { className: "lead md" }, ...markdownDom(b.lead.text, hooks, BOARD_HEADING_BASE, b.lead.line)));
-  if (b.sections.length) card.append(el("div", { className: "bgrid" }, ...b.sections.map((x) => el("section", { className: "bsec md" + (x.text.includes("ezh://") ? " wide" : "") }, el("h3", {}, ...mdSpans(mdInline(x.title), hooks)), ...markdownDom(x.text, hooks, BOARD_HEADING_BASE, x.line)))));
+  if (b.title) card.append(el("h2", { className: "title" }, ...mdSpans(b.title, hooks)));
+  if (b.lead.length) card.append(el("div", { className: b.sections.length ? "lead md" : "md" }, ...nodes(b.lead)));
+  if (b.sections.length) card.append(el("div", { className: "bgrid" }, ...b.sections.map((x) => el("section", { className: "bsec md" + (hasMoment(x.blocks) ? " wide" : "") }, el("h3", {}, ...mdSpans(x.title, hooks)), ...nodes(x.blocks)))));
   return card;
 }

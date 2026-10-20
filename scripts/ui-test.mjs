@@ -9,7 +9,7 @@ const ui = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "ui");
 const read = (f) => fs.readFileSync(path.join(ui, f), "utf8");
 const source = ["util.js", "i18n.js", "layout.js", "dock.js", "events.js", "markdown.js", "review.js", "members.js", "recordings.js", "plugins.js", "ai.js", "diag.js"].map(read).join("\n");
 const context = vm.createContext({ window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id });
-const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, flowAt, flowBands, flowSteps, isReview, voiceOnly, BOARD_TEMPLATE, memberStatus, receivingPercent, recordingRows, recordingMatches, recordingWords, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, discardable, DISCARD_MAX_S, soundKey, pluginProgress, isBusy, workerState, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, aiPreview, apiUrl, apiBadge, apiReferenceBlocks, rateOf, liveEdge, netState, summaryLines, leftText, pcCards, clockPairs, clockSummary, flowRows, timeRow, skewText, agoText, JA, t, sessionName, mdParse, mdInline, mdVouched, toggleTask, boardParts, boardDom, markdownDom, mdHooks, runBy, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, flowAt, flowBands, flowSteps, isReview, voiceOnly, BOARD_TEMPLATE, memberStatus, receivingPercent, recordingRows, recordingMatches, recordingWords, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, discardable, DISCARD_MAX_S, soundKey, pluginProgress, isBusy, workerState, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, aiPreview, apiUrl, apiBadge, apiReferenceBlocks, rateOf, liveEdge, netState, summaryLines, leftText, pcCards, clockPairs, clockSummary, flowRows, timeRow, skewText, agoText, JA, t, sessionName, mdParse, mdInline, mdVouched, toggleTask, boardParts, boardDom, mdHooks, runBy, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 const plain = (v) => JSON.parse(JSON.stringify(v));
 
 const moment = (m, extra = {}) => ({ role: "moment", m, plugin: { id: "apex-matches" }, tags: ["match"], ...extra });
@@ -527,6 +527,8 @@ test("markdown reads headings, lists, task lists, tables, code, quotes and rules
   assert.equal(list.items[1].blocks[0].type, "list");
   assert.deepEqual(list.items.map((i) => i.n), [0, 1, 3]);
   assert.equal(blocks("1. a\n2. b")[0].ordered, true);
+  assert.deepEqual(blocks("1. Drop\n2. Loot\n\nThen regroup.\n\n3. Rotate\n\nok\n\n0. zero").filter((b) => b.type === "list").map((b) => b.start), [1, 3, 0]);
+  assert.equal(blocks("- a")[0].start, null);
   const table = blocks("| Name | Score |\n|:--|--:|\n| Aki | 3 |\n| Ren | 5 \\| 6 |")[0];
   assert.equal(table.type, "table");
   assert.deepEqual(table.align, ["", "right"]);
@@ -579,19 +581,21 @@ test("a task is ticked by changing only its line", () => {
   assert.equal(blocks(text)[1].items[0].n, 1);
 });
 
-test("a board is a title, a goal line and cards, and a heading inside code does not start one", () => {
+test("a board is a title, a goal and cards, split by the same parser that renders them", () => {
+  const title = (inline) => inline.map((n) => n.text).join("");
   const parts = plain(ui$.boardParts("# Title\n**Goal**\n## One\n- a\n```\n## nope\n```\n## Two\ntext"));
-  assert.equal(parts.title, "Title");
-  assert.equal(parts.lead.text.trim(), "**Goal**");
-  assert.deepEqual(parts.sections.map((s) => s.title), ["One", "Two"]);
-  assert.match(parts.sections[0].text, /## nope/);
-  assert.equal(parts.sections[1].line, 8);
+  assert.equal(title(parts.title), "Title");
+  assert.deepEqual(parts.lead.map((b) => b.type), ["paragraph"]);
+  assert.deepEqual(parts.sections.map((s) => title(s.title)), ["One", "Two"]);
+  assert.equal(parts.sections[0].blocks[1].text, "## nope");
   assert.equal(plain(ui$.boardParts("no title\n## A\nb")).sections.length, 1);
   const early = plain(ui$.boardParts("Warm up together\n# Week 12\n- [ ] Win first fight\n## Rules\n- [ ] x"));
-  assert.equal(early.title, "Week 12");
-  assert.match(early.lead.text, /^Warm up together\n[^]*- \[ \] Win first fight$/);
-  assert.equal(plain(ui$.mdParse(early.lead.text, early.lead.line)).find((b) => b.type === "list").items[0].n, 2);
-  assert.equal(early.sections[0].line, 4);
+  assert.equal(title(early.title), "Week 12");
+  assert.equal(early.lead.find((b) => b.type === "list").items[0].n, 2);
+  assert.equal(early.sections[0].blocks[0].items[0].n, 4);
+  const closed = plain(ui$.boardParts("# Plan #\n## Rules ##\nhold\n   ## Calls\n- b"));
+  assert.equal(title(closed.title), "Plan");
+  assert.deepEqual(closed.sections.map((s) => title(s.title)), ["Rules", "Calls"]);
 });
 
 class Text {
@@ -646,6 +650,11 @@ test("a game plan shows tables, code and tasks, and nothing a note can write run
   assert.deepEqual(labels, ["https://a.example/x", "https://a.example@evil.example/y", "b"]);
   const preview = vm.runInContext(`boardDom(${JSON.stringify("- [ ] a")}, mdHooks({ onTask: null }))`, ctx);
   assert.equal(preview.find("input")[0].disabled, true);
+  const dom = (text) => vm.runInContext(`boardDom(${JSON.stringify(text)}, mdHooks())`, ctx);
+  assert.deepEqual(dom("5. five\n6. six\n\n- x").find("ol").map((o) => o.start), [5]);
+  assert.deepEqual(dom("# Mine\n- a\n- b").children.map((c) => c.className), ["title", "md"]);
+  assert.deepEqual(dom("# Plan\nGoal\n## Calls\n- a\n## Moments\n- [push](ezh://moment/s1/5/all)").find("section").map((x) => x.className), ["bsec md", "bsec md wide"]);
+  assert.equal(dom("# Plan\nGoal\n## Calls\n- a").children[1].className, "lead md");
 });
 
 test("a moment link keeps a formatted label, and deep quotes and lists render without running out of stack", () => {

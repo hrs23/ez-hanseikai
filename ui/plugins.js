@@ -50,7 +50,7 @@ function runBy(j) {
 }
 const failedJobs = () => (jobInfo ? jobInfo.jobs.filter((j) => j.state === "failed").length : 0);
 function pluginTabs() {
-  const tab = (key, label, n) => el("button", { className: roomTab === key ? "on" : "", ariaPressed: roomTab === key, onclick: () => showRoomTab(key) }, label, n ? el("span", { className: "count bad", textContent: String(n) }) : null);
+  const tab = (key, label, n) => el("button", { className: roomTab === key ? "on" : "", ariaPressed: roomTab === key, onclick: () => showRoomTab(key) }, label, n ? el("span", { className: "count", textContent: String(n) }) : null);
   return el("div", { className: "seg" }, tab("plugins", t("Plugins")), tab("jobs", t("Jobs"), failedJobs()));
 }
 function pluginRunner(p) {
