@@ -102,18 +102,12 @@ fn in_standby(dir: &Path, depth: usize) -> bool {
     dir.ancestors().nth(depth).and_then(Path::file_name).is_some_and(|name| name == room::STANDBY)
 }
 
-fn ring_trim(names: &[String], n: u32) -> Vec<String> {
-    let keep = n.saturating_sub(LIVE_KEEP - 1);
-    names.iter().filter(|name| room::seg_number(name).is_some_and(|k| k < keep)).cloned().collect()
-}
-
 pub fn trim_ring(dir: &Path, n: u32) {
-    if !in_standby(dir, 3) {
-        return;
-    }
-    let names: Vec<String> = crate::entries(dir).into_iter().map(|(name, _)| name).collect();
-    for name in ring_trim(&names, n) {
-        let _ = std::fs::remove_file(dir.join(name));
+    let keep = n.saturating_sub(LIVE_KEEP - 1);
+    for (name, path) in crate::entries(dir).into_iter().filter(|_| in_standby(dir, 3)) {
+        if room::seg_number(&name).is_some_and(|k| k < keep) {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
 
@@ -479,17 +473,14 @@ mod tests {
 
     #[test]
     fn the_standby_ring_keeps_the_newest_segments_and_only_standby_is_trimmed() {
-        let names = ["init.mp4", "000001.m4s", "000002.m4s.part", "000003.m4s", "000004.m4s", "000009.m4s", "000010.m4s.part"].map(String::from);
-        assert_eq!(ring_trim(&names, 10), ["000001.m4s", "000002.m4s.part", "000003.m4s"]);
-        assert!(ring_trim(&names, LIVE_KEEP).is_empty());
         let dir = temp("ring");
         let (ring, kept) = ("rooms/r/standby/a/1000/v", "rooms/r/recordings/s1/a/1000/v");
         seed(&dir, ["rooms/r/standby/a/2000/v/init.mp4", "rooms/r/standby/b/1000/v/init.mp4"]);
-        seed(&dir.join(ring), (1..=10).map(seg_name));
+        seed(&dir.join(ring), (1..=10).map(seg_name).chain([INIT.into(), format!("{}.part", seg_name(3))]));
         seed(&dir.join(kept), (1..=10).map(seg_name));
         trim_ring(&dir.join(ring), 10);
         trim_ring(&dir.join(kept), 10);
-        assert_eq!(tree(&dir.join(ring)).into_keys().collect::<Vec<_>>(), (4..=10).map(seg_name).collect::<Vec<_>>());
+        assert_eq!(tree(&dir.join(ring)).into_keys().collect::<Vec<_>>(), (4..=10).map(seg_name).chain([INIT.into()]).collect::<Vec<_>>());
         assert_eq!(tree(&dir.join(kept)).len(), 10);
         keep_capture(&dir.join("rooms/r/standby/a/2000/v"));
         keep_capture(&dir.join("rooms/r/recordings/s1/a/2000/v"));

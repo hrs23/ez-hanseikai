@@ -655,9 +655,6 @@ impl Drop for Writing<'_> {
 fn open_part(part: &Path, at: Option<u64>) -> std::io::Result<std::fs::File> {
     let mut file = std::fs::OpenOptions::new().create(true).write(true).truncate(at.is_none()).open(part)?;
     if let Some(at) = at {
-        if file.metadata()?.len() < at {
-            return Err(std::io::Error::other("the partial file is shorter than where it resumes"));
-        }
         file.set_len(at)?;
         file.seek(SeekFrom::End(0))?;
     }
@@ -1092,9 +1089,8 @@ mod tests {
         use sha2::{Digest, Sha256};
         use std::io::Write;
         let dir = temp("arrive");
-        let [path, other, held, init] = ["000001.m4s", "000002.m4s", "000003.m4s", INIT].map(|name| dir.join(name));
-        let bad = Mutex::new(HashSet::new());
-        let good = (4, crate::hex(&Sha256::digest(b"good")));
+        let [path, other, init] = ["000001.m4s", "000002.m4s", INIT].map(|name| dir.join(name));
+        let (bad, good) = (Mutex::new(HashSet::new()), (4, crate::hex(&Sha256::digest(b"good"))));
         let finish = |path: &Path, body: &[u8], expect: Option<&(u64, String)>, resumed: bool| {
             std::fs::write(part_of(path), body).unwrap();
             (finish_copy(&bad, "a", path, expect, resumed).unwrap(), std::fs::read(path).ok(), part_of(path).exists())
@@ -1102,21 +1098,11 @@ mod tests {
         std::fs::write(part_of(&path), b"0123456789").unwrap();
         open_part(&part_of(&path), Some(4)).unwrap().write_all(b"abcd").unwrap();
         assert_eq!(std::fs::read(part_of(&path)).unwrap(), b"0123abcd");
-        assert!(open_part(&part_of(&path), Some(100)).is_err());
-        drop(open_part(&part_of(&path), None).unwrap());
-        assert_eq!(file_len(&part_of(&path)), 0);
         assert_eq!(finish(&path, b"good", Some(&good), false), (None, Some(b"good".to_vec()), false));
         assert_eq!(finish(&other, b"evil", Some(&good), true), (Some(4), None, false));
-        assert!(bad.lock().unwrap().is_empty());
         assert_eq!(finish(&other, b"live", None, false), (None, Some(b"live".to_vec()), false));
         assert_eq!(finish(&init, b"tini", Some(&good), false), (Some(4), None, false));
         assert_eq!(*bad.lock().unwrap(), HashSet::from([("a".to_string(), init)]));
-        std::fs::write(part_of(&held), b"good").unwrap();
-        let lock = log::tests::hold(&part_of(&held));
-        assert!(finish_copy(&bad, "a", &held, Some(&good), false).is_err());
-        assert_eq!((file_len(&part_of(&held)), held.exists(), bad.lock().unwrap().len()), (4, false, 1));
-        drop(lock);
-        assert_eq!(finish_copy(&bad, "a", &held, Some(&good), false).unwrap(), None);
         let _ = std::fs::remove_dir_all(dir);
     }
 

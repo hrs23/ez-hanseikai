@@ -20,16 +20,8 @@ enum Pick {
     Use(usize, String, usize),
 }
 
-pub fn file(room_dir: &Path, set: &str) -> PathBuf {
+pub fn path(room_dir: &Path, set: &str) -> PathBuf {
     room_dir.join(DIR).join(format!("{set}.jpg"))
-}
-
-pub fn path(core: &Core, room: &str, set: &str) -> PathBuf {
-    file(&core.room_dir(room), set)
-}
-
-pub fn exists(core: &Core, room: &str, set: &str) -> bool {
-    path(core, room, set).exists()
 }
 
 pub fn middle(durations: &[i64]) -> Option<usize> {
@@ -79,7 +71,7 @@ fn make(core: &Core, room: &str, set: &Set, f: &File, capture: &str, index: usiz
     let (Some(init), Some(seg)) = (init, seg) else { return Err("the video is not all here".into()) };
     let both = [init, seg];
     let bytes = stream::read(core, &both, 0, stream::size(&both)).map_err(|e| e.to_string())?;
-    let out = path(core, room, &set.id);
+    let out = path(&core.room_dir(room), &set.id);
     let dir = out.parent().ok_or("no folder")?.to_path_buf();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let source = dir.join(format!("{}.tmp.mp4", set.id));
@@ -106,7 +98,7 @@ fn make_missing(core: &Core) {
     let room = core.active_room_id();
     for set in room::sets(core, &room, &room::logs(core, &room)) {
         let key = format!("{room}/{}", set.id);
-        if set.end().is_none() || exists(core, &room, &set.id) || given_up(&key) {
+        if set.end().is_none() || path(&core.room_dir(&room), &set.id).exists() || given_up(&key) {
             continue;
         }
         match pick(core, &room, &set) {

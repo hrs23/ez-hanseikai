@@ -77,17 +77,15 @@ fn live_from(numbers: &[u32]) -> Option<u32> {
     Some(from)
 }
 
-fn live_folder(core: &Core, room: &str, owner: &str) -> Option<(String, PathBuf)> {
+fn live_folder(core: &Core, room: &str, owner: &str) -> Option<(PathBuf, String)> {
     let (capture, set) = if owner == core.me() {
         let live = core.engine.live().filter(|l| l.room == room)?;
-        let set = live.recent[0].last().and_then(|(_, set)| set.clone());
-        (live.capture, set)
+        (live.capture, live.recent[0].last().and_then(|(_, set)| set.clone()))
     } else {
-        let live = core.peers.lock().unwrap().iter().find(|p| p.id.to_string() == owner).and_then(|p| p.live.clone())?;
+        let live = core.peers.lock().unwrap().iter().find(|p| p.id.to_string() == owner)?.live.clone()?;
         (live.capture, live.set[0].clone())
     };
-    let dir = core.series_dir(room, set.as_deref(), owner, &capture, SERIES[0]);
-    Some((capture, dir))
+    Some((core.series_dir(room, set.as_deref(), owner, &capture, SERIES[0]), capture))
 }
 
 fn pieces_from(dir: &Path, from: u32) -> Vec<Piece> {
@@ -100,13 +98,6 @@ fn pieces_from(dir: &Path, from: u32) -> Vec<Piece> {
     out
 }
 
-fn live_pieces(core: &Core, room: &str, owner: &str, capture: &str, from: u32) -> Vec<Piece> {
-    match live_folder(core, room, owner) {
-        Some((current, dir)) if current == capture => pieces_from(&dir, from),
-        _ => Vec::new(),
-    }
-}
-
 fn live_start(dir: &Path) -> Option<(u32, u64)> {
     let numbers: Vec<u32> = crate::entries(dir).iter().filter_map(|(name, _)| room::seg_number(name)).collect();
     let from = live_from(&numbers)?;
@@ -115,7 +106,7 @@ fn live_start(dir: &Path) -> Option<(u32, u64)> {
 }
 
 pub fn live_json(core: &Core, room: &str, owner: &str) -> Option<Value> {
-    let (capture, dir) = live_folder(core, room, owner)?;
+    let (dir, capture) = live_folder(core, room, owner)?;
     let (from, bytes) = live_start(&dir)?;
     Some(json!({"path": format!("live/{room}/{owner}/{capture}/{from}"), "size": bytes}))
 }
@@ -148,7 +139,10 @@ pub fn pieces_for(core: &Core, path: &str) -> Option<(Vec<Piece>, &'static str)>
     let path = decode(path.trim_start_matches('/'));
     let parts: Vec<&str> = path.split('/').collect();
     match parts.as_slice() {
-        ["live", room, owner, capture, from] if valid_id(room) && member(owner) && capture_id(capture) => Some((live_pieces(core, room, owner, capture, from.parse().ok()?), "video/mp4")),
+        ["live", room, owner, capture, from] if valid_id(room) && member(owner) && capture_id(capture) => {
+            let (dir, _) = live_folder(core, room, owner).filter(|(_, current)| current == capture)?;
+            Some((pieces_from(&dir, from.parse().ok()?), "video/mp4"))
+        }
         ["set", room, set, owner, series, capture] if valid_id(room) && valid_id(set) && member(owner) && SERIES.contains(series) && capture_id(capture) => {
             let found = room::sets(core, room, &room::logs(core, room)).into_iter().find(|s| s.id == *set)?;
             let f = found.files.iter().find(|f| f.owner == *owner)?;
@@ -210,7 +204,7 @@ fn thumb(core: &Core, path: &str) -> Option<Vec<u8>> {
     let path = decode(path.trim_start_matches('/'));
     let parts: Vec<&str> = path.split('/').collect();
     match parts.as_slice() {
-        ["thumb", room, set] if valid_id(room) && valid_id(set) => std::fs::read(crate::thumbs::path(core, room, set)).ok(),
+        ["thumb", room, set] if valid_id(room) && valid_id(set) => std::fs::read(crate::thumbs::path(&core.room_dir(room), set)).ok(),
         _ => None,
     }
 }

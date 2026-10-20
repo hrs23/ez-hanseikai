@@ -95,9 +95,7 @@ pub mod tests {
     }
 
     pub fn seed(dir: &Path, names: impl IntoIterator<Item = impl AsRef<str>>) {
-        for name in names {
-            put(dir, name.as_ref(), b"x");
-        }
+        names.into_iter().for_each(|name| put(dir, name.as_ref(), b"x"));
     }
 
     pub fn present<'a>(dir: &Path, names: &[&'a str]) -> Vec<&'a str> {
@@ -105,16 +103,11 @@ pub mod tests {
     }
 
     pub fn tree(dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
-        let mut out = std::collections::BTreeMap::new();
-        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                out.extend(tree(&path).into_iter().map(|(name, body)| (format!("{}/{name}", entry.file_name().to_string_lossy()), body)));
-            } else {
-                out.insert(entry.file_name().to_string_lossy().to_string(), std::fs::read(&path).unwrap());
-            }
-        }
-        out
+        let inside = |(name, path): (String, std::path::PathBuf)| match std::fs::read(&path) {
+            Ok(body) => vec![(name, body)],
+            Err(_) => tree(&path).into_iter().map(|(sub, body)| (format!("{name}/{sub}"), body)).collect(),
+        };
+        crate::entries(dir).into_iter().flat_map(inside).collect()
     }
 
     pub fn hold(path: &Path) -> std::fs::File {

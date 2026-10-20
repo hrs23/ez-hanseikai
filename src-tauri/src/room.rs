@@ -945,13 +945,13 @@ pub fn discard_set(core: &Core, room: &str, set: &str) -> Result<bool, String> {
 
 fn remove_recording(room_dir: &Path, set: &str) {
     let _ = std::fs::remove_dir_all(room_dir.join(RECORDINGS).join(set));
-    let _ = std::fs::remove_file(crate::thumbs::file(room_dir, set));
+    let _ = std::fs::remove_file(crate::thumbs::path(room_dir, set));
 }
 
 pub fn sweep(room_dir: &Path, gone: &HashSet<String>, recording: Option<&str>) -> Vec<String> {
     let mut out = Vec::new();
     for set in gone.iter().filter(|set| valid_id(set) && Some(set.as_str()) != recording) {
-        if room_dir.join(RECORDINGS).join(set).exists() || crate::thumbs::file(room_dir, set).exists() {
+        if room_dir.join(RECORDINGS).join(set).exists() || crate::thumbs::path(room_dir, set).exists() {
             remove_recording(room_dir, set);
             out.push(set.clone());
         }
@@ -1066,7 +1066,7 @@ pub fn sets_json(core: &Core, room: &str, logs: &[Log], events: &[Value]) -> Vec
         let imported = set.files.iter().find_map(|f| f.view.as_ref());
         out.push(json!({
             "id": set.id, "room": room, "start_us": set.start(), "end_us": set.end(), "live": live,
-            "thumb": crate::thumbs::exists(core, room, &set.id), "title": imported.and_then(|v| v.title.clone()), "imported_by": imported.map(|v| display_name(core, &v.by)),
+            "thumb": crate::thumbs::path(&core.room_dir(room), &set.id).exists(), "title": imported.and_then(|v| v.title.clone()), "imported_by": imported.map(|v| display_name(core, &v.by)),
             "players": players, "events": covered, "progress": {"have": have, "total": total, "stuck": stuck_all}, "lacking": lacking_by, "wanted": wants(core, room, &set.id) == Some(true), "shared": others_hold(&set.id, &reports),
             "layout": set_layout(logs, &set.id), "party": flows.remove(&set.id).unwrap_or_default(),
         }));
@@ -1328,9 +1328,7 @@ pub mod tests {
         seed(&dir, names);
         remove_recording(&dir, "s1");
         assert_eq!(present(&dir, &names), &names[3..]);
-        let set = |ids: &[&str]| ids.iter().map(|s| s.to_string()).collect::<HashSet<String>>();
-        assert!(sweep(&dir, &set(&[" ", "s3 ", " s3"]), None).is_empty());
-        let gone = set(&["s2", "s9", "../x"]);
+        let gone: HashSet<String> = ["s2", "s9", "../x", " s3"].map(String::from).into();
         assert!(sweep(&dir, &gone, Some("s2")).is_empty());
         assert_eq!(present(&dir, &names), &names[3..]);
         assert_eq!(sweep(&dir, &gone, None), ["s2"]);

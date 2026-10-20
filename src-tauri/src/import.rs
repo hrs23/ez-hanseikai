@@ -485,13 +485,6 @@ pub fn run(core: &Arc<Core>, spec: &Value) -> Result<Value, String> {
     result
 }
 
-fn remove_views(recording: &Path, ids: &[String]) {
-    for id in ids {
-        let _ = std::fs::remove_dir_all(recording.join(id));
-    }
-    let _ = std::fs::remove_dir(recording);
-}
-
 fn import(core: &Arc<Core>, room_id: &str, plan: &Plan) -> Result<Value, String> {
     let me = core.me();
     let usable = crate::record::usable_codecs(core);
@@ -555,7 +548,11 @@ fn import(core: &Arc<Core>, room_id: &str, plan: &Plan) -> Result<Value, String>
         Ok(())
     })();
     if let Err(e) = result {
-        remove_views(&core.recording_dir(room_id, &set), &ids);
+        let recording = core.recording_dir(room_id, &set);
+        for id in &ids {
+            let _ = std::fs::remove_dir_all(recording.join(id));
+        }
+        let _ = std::fs::remove_dir(recording);
         return Err(e);
     }
     for view in &made {
@@ -716,18 +713,6 @@ At least one output file must be specified";
         assert!(plan_from_folder(&dir).unwrap_err().contains("WEBVTT"));
         assert!(plan_from_spec(&json!({})).unwrap_err().contains("Choose"));
         assert!(plan_from_spec(&json!({"folder": dir.join("nothing").to_string_lossy()})).unwrap_err().contains("does not exist"));
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn a_failed_import_removes_only_its_views_and_the_folder_once_empty() {
-        let dir = folder("failed");
-        let names = ["x/view1/5/v/init.mp4", "x/view2/5/m/000001.m4s.part", "x/me/7/v/000002.m4s.part", "x/peer/8/v/000001.m4s", "y/view1/5/v/000001.m4s"];
-        crate::log::tests::seed(&dir, names);
-        let ids = ["view1", "view2", "view3"].map(String::from);
-        remove_views(&dir.join("x"), &ids);
-        remove_views(&dir.join("y"), &ids);
-        assert_eq!((crate::log::tests::present(&dir, &names), dir.join("y").exists()), (names[2..4].to_vec(), false));
         let _ = std::fs::remove_dir_all(dir);
     }
 

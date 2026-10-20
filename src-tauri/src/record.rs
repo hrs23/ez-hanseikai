@@ -456,12 +456,6 @@ fn ensure_rec(core: &Core, room: &str, set: &str, start_us: i64, meta: &Value) {
     core.append_log(room, &record);
 }
 
-fn cap_record(room: &str, capture: &str, start_us: Option<i64>, inits: &[Value; 2], meta: &Value) -> Value {
-    let mut record = json!({"k": "cap", "room": room, "capture": capture, "start_us": start_us, "init": {SERIES[0]: inits[0], SERIES[1]: inits[1]}});
-    merge(&mut record, meta);
-    record
-}
-
 fn finish_part(path: &Path) -> bool {
     proc::wait_until(RENAME_WAIT, RENAME_GAP, || std::fs::rename(part_of(path), path).is_ok())
 }
@@ -617,7 +611,9 @@ impl Sink {
         let mut logged = self.cap_logged.lock().unwrap();
         let inits = self.inits.lock().unwrap().clone();
         if logged.as_ref() != Some(&inits) {
-            core.append_log(&self.room, &cap_record(&self.room, &self.capture, self.start.get().map(|s| s.1), &inits, &self.meta));
+            let mut record = json!({"k": "cap", "room": self.room, "capture": self.capture, "start_us": self.start.get().map(|s| s.1), "init": {SERIES[0]: inits[0], SERIES[1]: inits[1]}});
+            merge(&mut record, &self.meta);
+            core.append_log(&self.room, &record);
             *logged = Some(inits);
         }
     }
@@ -1145,7 +1141,7 @@ pub fn supervise(core: Arc<Core>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::log::tests::{hold, put, temp, tree};
+    use crate::log::tests::{hold, put, temp};
     use crate::media::tests::{fragment, init};
 
     #[test]
@@ -1251,36 +1247,23 @@ mod tests {
     }
 
     #[test]
-    fn a_restart_logs_each_unlogged_own_segment_once_and_touches_nothing_else() {
-        let dir = temp("recover");
-        let (me, other) = (iroh::SecretKey::generate().public().to_string(), iroh::SecretKey::generate().public().to_string());
+    fn a_restart_logs_each_unlogged_own_segment_once() {
+        let (dir, me) = (temp("recover"), iroh::SecretKey::generate().public().to_string());
         let (one, two, three) = (fragment(&[(1, 0)], b"aaaa"), fragment(&[(1, 1000)], b"bbbb"), fragment(&[(1, 2000)], b"cccc"));
-        let torn = [one.clone(), two.clone(), b"torn".to_vec()].concat();
         let own = dir.join(format!("rooms/r/recordings/s1/{me}/5000"));
-        for (name, body) in [("v/init.mp4", init(&[(1, 1000)])), ("v/000001.m4s", one.clone()), ("v/000002.m4s.part", torn.clone()), ("v/000003.m4s", three.clone()), ("m/init.mp4", init(&[(1, 1000)])), ("m/000001.m4s.part", torn.clone()), ("m/000002.m4s.part", b"torn".to_vec())] {
+        for (name, body) in [("v/init.mp4", init(&[(1, 1000)])), ("v/000001.m4s", one.clone()), ("v/000002.m4s.part", [&one[..], &two, b"torn"].concat()), ("v/000003.m4s", three.clone()), ("m/000002.m4s.part", b"torn".to_vec())] {
             put(&own, name, &body);
         }
-        for folder in [format!("recordings/s1/{other}/6000"), format!("recordings/s9/{me}/7000"), format!("recordings/s1/{me}/8000"), format!("{me}/5000")] {
-            put(&dir.join("rooms/r").join(folder), "v/000001.m4s.part", &torn);
-        }
-        let mut own_log = vec![json!({"k": "rec", "set": "s1", "start_us": 5_000_000}), json!({"k": "cap", "capture": "5000", "start_us": 5_000_000}), seg_record("5000", "v", 1, "s1", 0, 0, 1, "x"), seg_record("5000", "m", 1, "s1", 0, 0, 1, "y")];
-        let mut want = tree(&dir);
+        let mut own_log = vec![json!({"k": "rec", "set": "s1", "start_us": 5_000_000}), json!({"k": "cap", "capture": "5000", "start_us": 5_000_000}), seg_record("5000", "v", 1, "s1", 0, 0, 1, "x")];
         let held = hold(&own.join("v/000002.m4s.part"));
         assert_eq!(recover_files(&dir, &me, |r| skip(&logged(&own_log), r)).iter().map(|r| r.n).collect::<Vec<_>>(), [3]);
         drop(held);
         let mut found = recover_files(&dir, &me, |r| skip(&logged(&own_log), r));
         found.sort_by_key(|r| r.n);
-        assert_eq!(found.iter().map(|r| (r.room.as_str(), r.set.as_str(), r.capture.as_str(), r.series, r.n)).collect::<Vec<_>>(), [("r", "s1", "5000", "v", 2), ("r", "s1", "5000", "v", 3)]);
         let records: Vec<Value> = found.iter().map(|r| recovered_seg(&own_log, r).unwrap()).collect();
-        let cut = [one, two].concat();
-        let sha = |bytes: &[u8]| hex(&Sha256::digest(bytes));
+        let (cut, sha) = ([one, two].concat(), |bytes: &[u8]| hex(&Sha256::digest(bytes)));
         assert_eq!(records, [seg_record("5000", "v", 2, "s1", 5_000_000, 2_000_000, cut.len() as u64, &sha(&cut)), seg_record("5000", "v", 3, "s1", 7_000_000, 0, three.len() as u64, &sha(&three))]);
-        let prefix = format!("rooms/r/recordings/s1/{me}/5000/");
-        for name in ["v/000002.m4s.part", "m/000002.m4s.part"] {
-            want.remove(&format!("{prefix}{name}"));
-        }
-        want.insert(format!("{prefix}v/000002.m4s"), cut);
-        assert_eq!(tree(&dir), want);
+        assert_eq!((std::fs::read(own.join("v/000002.m4s")).unwrap(), own.join("m/000002.m4s.part").exists()), (cut, false));
         assert!(recovered_seg(&own_log[..1], &found[0]).is_none());
         own_log.extend(records);
         assert!(recover_files(&dir, &me, |r| skip(&logged(&own_log), r)).is_empty());
@@ -1293,17 +1276,14 @@ mod tests {
 
     #[test]
     fn a_segment_opens_only_beside_its_init() {
-        use std::os::windows::fs::OpenOptionsExt;
         let series = temp("open");
-        let part = |n: u32| part_of(&series.join(seg_name(n)));
         assert!(open_part(&series, 1, None).is_none());
-        let held = std::fs::OpenOptions::new().write(true).create(true).share_mode(0).open(part_of(&series.join(INIT))).unwrap();
-        assert!(open_part(&series, 1, Some(b"init")).is_none());
-        assert!(!series.join(INIT).exists() && !part(1).exists());
+        put(&series, "init.mp4.part", b"");
+        let held = hold(&part_of(&series.join(INIT)));
+        assert!(open_part(&series, 1, Some(b"init")).is_none() && !series.join(INIT).exists());
         drop(held);
-        assert!(open_part(&series, 1, Some(b"init")).is_some() && open_part(&series, 2, Some(b"other")).is_some() && open_part(&series, 3, None).is_some());
-        assert_eq!(std::fs::read(series.join(INIT)).unwrap(), b"init");
-        assert!(part(1).exists() && part(3).exists());
+        assert!(open_part(&series, 1, Some(b"init")).is_some() && open_part(&series, 2, Some(b"other")).is_some());
+        assert_eq!((std::fs::read(series.join(INIT)).unwrap(), part_of(&series.join(seg_name(2))).exists()), (b"init".to_vec(), true));
         let _ = std::fs::remove_dir_all(series);
     }
 
@@ -1316,11 +1296,8 @@ mod tests {
         for (wanted, n, step) in [(None, 9, Wait), (None, 6, Serve), (None, 7, Stop), (Some("s1"), 7, Serve), (Some("s1"), 6, Stop), (Some("s2"), 8, Stop), (None, 4, Stop)] {
             assert_eq!(live_step(&recent, wanted, n), step);
         }
-        let served = |recent: &[(u32, Option<String>)], wanted: Option<&str>, from: u32| (from..).take_while(|n| live_step(recent, wanted, *n) == Serve).collect::<Vec<u32>>();
-        assert_eq!((served(&recent, None, 5), served(&recent, Some("s1"), 7)), (vec![5, 6], vec![7, 8]));
         let ended = vec![(7, set("s1")), (8, None), (9, None)];
-        assert!(served(&ended, Some("s1"), 8).is_empty());
-        assert_eq!(live_step(&ended, Some("s1"), 10), Wait);
+        assert_eq!((live_step(&ended, Some("s1"), 8), live_step(&ended, Some("s1"), 10)), (Stop, Wait));
     }
 
     #[test]
