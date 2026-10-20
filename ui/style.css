@@ -748,7 +748,7 @@ dialog.diag .dlghead { padding: 6px 12px 0 16px; margin: 0; border-bottom: 1px s
 .player.full .stage { margin: 0; }
 .player.full.idle { cursor: none; }
 .player.full.idle .toolsov, .player.full.idle .transport { opacity: 0; pointer-events: none; }
-body.full .side, body.full .notices { display: none !important; }
+body.full .side, body.full .splitter, body.full .notices { display: none !important; }
 
 @media (max-width: 1240px) {
   .panel { position: absolute; right: 0; top: 56px; bottom: 0; z-index: 12; box-shadow: -8px 0 24px rgba(0, 0, 0, .4); }
@@ -796,7 +796,6 @@ body.full .side, body.full .notices { display: none !important; }
 .logview { margin: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); font: var(--t-sm)/1.5 var(--mono); color: var(--soft); white-space: pre-wrap; overflow-wrap: anywhere; }
 .apibadge { display: inline-flex; align-items: center; gap: 4px; font-size: var(--t-xs); height: 24px; padding: 0 9px; border-radius: var(--r-full); border: 0; flex: none; color: var(--ok); background: var(--ok-soft); }
 .apibadge.lan { color: var(--warn); background: var(--warn-soft); }
-.apibadge small { font-size: var(--t-xs); }
 .apibadge svg { width: 12px; height: 12px; }
 .apiref { display: flex; flex-direction: column; gap: 4px; }
 .apiep { border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg); }

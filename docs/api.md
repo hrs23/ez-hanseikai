@@ -4,7 +4,7 @@ A local HTTP API lets a person, an AI agent or another program read a room's rec
 
 ## Turn it on
 
-Off by default. Settings > API > Local API starts it. The page shows the address, `http://127.0.0.1:47625`, and Copy token puts the token on the clipboard; New token replaces it (programs using the old one stop working). Below them the page lists the endpoints with an example each, and opens `/llms.txt`. The switch, the token and the exposure are kept in `settings.json` (`api`, `api_token`, `api_lan`). An API badge in the room header shows while the API runs; it opens this page. The AI button in a room, and in the player, copies a ready prompt with the address, the token and a pointer to `/llms.txt`, or turns the API on.
+Off by default. Settings > API > Local API starts it. The page shows the address, `http://127.0.0.1:47625`, and Copy token puts the token on the clipboard; New token replaces it (programs using the old one stop working). Below them the page lists the endpoints with an example each, and opens `/llms.txt`. The switch, the token and the exposure are kept in `settings.json` (`api`, `api_token`, `api_lan`). An API badge in the sidebar, under the room name, shows while the API runs; it opens this page. The AI button in a room, and in the player, copies a ready prompt with the address, the token and a pointer to `/llms.txt`, or turns the API on.
 
 Starting the app with `--api`, or with `EZH_API=1`, turns the API on at start (and keeps the switch on). `"api": true` in `settings.json` does the same.
 

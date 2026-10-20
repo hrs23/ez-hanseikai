@@ -274,6 +274,17 @@ pub fn unfinished(me: &str, tracks: &HashMap<String, Track>) -> Vec<(String, i64
         .collect()
 }
 
+pub fn released(me: &str, ready: impl Fn(&str, &Value) -> bool, configs: &BTreeMap<String, Config>, tracks: &HashMap<String, Track>) -> Vec<(String, i64, String)> {
+    let elsewhere: Vec<(String, &String)> = configs.iter().filter(|(id, c)| c.on && (c.runner.as_deref().is_some_and(|runner| runner != me) || !ready(id, &c.settings))).map(|(id, c)| (prefix(id, c), id)).collect();
+    tracks
+        .iter()
+        .filter_map(|(key, t)| match t.last.get(me) {
+            Some(Status::Claimed(run)) if t.done.is_empty() => elsewhere.iter().find(|(p, _)| key.starts_with(p.as_str())).map(|(_, id)| (key.clone(), *run, (*id).clone())),
+            _ => None,
+        })
+        .collect()
+}
+
 pub fn state(track: Option<&Track>, me: &str, online: &HashSet<String>) -> (String, Value, Value) {
     let Some(t) = track else { return ("waiting".into(), Value::Null, Value::Null) };
     if let Some((owner, _)) = t.done.iter().min() {
@@ -478,9 +489,16 @@ fn tick(core: &Arc<Core>) {
         return;
     }
     let me = core.me();
-    for (key, run) in unfinished(&me, &tracks) {
+    let failed = unfinished(&me, &tracks);
+    for (key, run) in &failed {
         tracing::warn!("job {key} stopped twice without finishing, marking it failed");
-        core.append_log(&room, &job_record("fail", &key, run, json!({"error": "Stopped twice without finishing."})));
+        core.append_log(&room, &job_record("fail", key, *run, json!({"error": "Stopped twice without finishing."})));
+    }
+    for (key, run, plugin) in released(&me, |id, s| ready(core, id, s), &configs, &tracks) {
+        if !failed.iter().any(|(k, _)| *k == key) {
+            tracing::info!("job {key} is no longer run here, releasing it");
+            core.append_log(&room, &job_record("stop", &key, run, json!({"plugin": plugin})));
+        }
     }
     let inputs = inputs(core, &room, &logs, |file| open(file, &me, &prefixes, &tracks));
     let first = FIRST.lock().unwrap().clone();
@@ -862,6 +880,24 @@ mod tests {
         assert_eq!(pick("a", &["b"], false, &auto, &inputs), Some("s1/a".to_string()));
         let cleared = base_logs(vec![with_runner("b"), json!({"k": "plugin", "plugin": "transcribe", "on": true, "version": "1.0.0", "settings": {"model": "small"}, "runner": "", "t_us": 3})], vec![]);
         assert_eq!(configs(&cleared, None)["transcribe"].runner, None);
+    }
+
+    #[test]
+    fn a_dead_claim_is_released_when_the_job_is_no_longer_run_here() {
+        let with_runner = json!({"k": "plugin", "plugin": "transcribe", "on": true, "version": "1.0.0", "settings": {"model": "small"}, "runner": "b", "t_us": 2});
+        let mut logs = base_logs(vec![job_record("claim", &key("s1/a"), 5, Value::Null), with_runner], vec![]);
+        let inputs = [input("s1", "a", 10, true)];
+        assert_eq!(pick("b", &["a"], false, &logs, &inputs), None);
+        let all_ready = |_: &str, _: &Value| true;
+        assert!(released("b", all_ready, &configs(&logs, None), &tracks(&logs, None)).is_empty());
+        let stops = released("a", all_ready, &configs(&logs, None), &tracks(&logs, None));
+        assert_eq!(stops, vec![(key("s1/a"), 5, "transcribe".to_string())]);
+        Arc::make_mut(&mut logs[0].records).push(job_record("stop", &stops[0].0, stops[0].1, Value::Null));
+        assert_eq!(pick("b", &["a"], false, &logs, &inputs).as_deref(), Some("s1/a"));
+        assert!(released("a", all_ready, &configs(&logs, None), &tracks(&logs, None)).is_empty());
+        let auto = base_logs(vec![job_record("claim", &key("s1/a"), 5, Value::Null)], vec![]);
+        assert!(released("a", all_ready, &configs(&auto, None), &tracks(&auto, None)).is_empty());
+        assert_eq!(released("a", |_, _| false, &configs(&auto, None), &tracks(&auto, None)).len(), 1);
     }
 
     #[test]

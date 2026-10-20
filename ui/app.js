@@ -65,6 +65,7 @@ let askingUpdate = false;
 let checkedAt = 0;
 let updateText = "";
 let menuReturn = null;
+let menuAnchor = null;
 let exporting = null;
 let importing = null;
 let importedIds = new Set();
@@ -1242,7 +1243,11 @@ function pickLayout(s, anchor) {
 
 function openMenu(list, at, keepFocus) {
   const m = $("menu");
-  if (!keepFocus || m.hidden) menuReturn = document.activeElement;
+  if (!keepFocus || m.hidden) {
+    menuReturn = document.activeElement;
+    const t = at instanceof Event ? at.currentTarget : at;
+    anchorMenu(t instanceof Element && t.hasAttribute("aria-haspopup") ? t : null);
+  }
   m.replaceChildren(...list.map((it) => {
     if (it.separator) return el("hr");
     if (it.heading) return el("div", { className: "heading", textContent: it.heading });
@@ -1261,9 +1266,15 @@ function openMenu(list, at, keepFocus) {
   const first = m.querySelector("button:not(:disabled)");
   if (first && !keepFocus) first.focus();
 }
+function anchorMenu(a) {
+  if (menuAnchor) menuAnchor.removeAttribute("aria-expanded");
+  menuAnchor = a;
+  if (a) a.setAttribute("aria-expanded", "true");
+}
 function closeMenu() {
   if ($("menu").hidden) return;
   $("menu").hidden = true;
+  anchorMenu(null);
   if (menuReturn && menuReturn.isConnected) menuReturn.focus();
 }
 document.addEventListener("mousedown", (e) => {
@@ -1447,7 +1458,7 @@ async function update() {
   if (nowView && l && !voice && selected !== l.id) { selectSet(l.id); nowSet = l.id; live = true; share(); }
   if (nowView && !l && nowSet && selected === nowSet) { nowView = false; nowSet = null; }
   const roomId = st.room ? st.room.id : "";
-  if (partyRoom !== roomId) { partyRoom = roomId; await joinParty(); st = await invoke("state"); idx = indexOf(st); }
+  if (partyRoom !== roomId) { partyRoom = roomId; cancelBoard(); await joinParty(); st = await invoke("state"); idx = indexOf(st); }
   if (!drag && watchParty && st.party.on && newer(st.party.shared, partyLast)) applyParty(st.party.shared);
   for (const step of steps()) try { step(); } catch (e) { console.error(e); }
 }

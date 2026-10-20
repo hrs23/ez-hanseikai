@@ -42,7 +42,7 @@ const composing = (e) => e.isComposing || e.keyCode === 229;
 function nativeKey(e) {
   const a = document.activeElement;
   if (!a) return false;
-  if (a.type === "range") return /^(Arrow|Home$|End$|Page)/.test(e.key);
+  if (a.type === "range" || a.getAttribute("role") === "separator") return /^(Arrow|Home$|End$|Page)/.test(e.key);
   return (e.key === " " || e.key === "Enter") && (a.tagName === "BUTTON" || a.type === "checkbox" || a.tagName === "SUMMARY");
 }
 const typing = () => { const a = document.activeElement; return a && (a.tagName === "SELECT" || a.tagName === "TEXTAREA" || (a.tagName === "INPUT" && a.type !== "range" && a.type !== "checkbox") || a.isContentEditable); };

@@ -842,7 +842,9 @@ async function scenario(ctx) {
     for (const app of [a, b, c]) await waitFor(`${app.key} sees both quick ticks`, within(LOG_SYNC_S * 2 + UI_REFRESH_S * 2), async () => (await evaluate(app, `boardEvent() && boardEvent().text`)) === ticked);
     const boards = async (app) => (await state(app)).events.filter((e) => e.kind === "board").length;
     const before = { a: await boards(a), b: await boards(b), c: await boards(c) };
-    await evaluate(a, `setBoardScope("personal"); editBoard("personal"); $("boardtext").value = "# Mine\\n- [ ] only me"; renderMini(); saveBoard(); true`);
+    await evaluate(a, `setBoardScope("personal"); $("boardedit").click(); true`);
+    await waitFor("A's Edit button opens the personal plan", within(UI_REFRESH_S * 3), () => evaluate(a, `boardEditing && boardScope === "personal" && $("boardtext").value === boardText() && $("boardtext").value !== boardEvent().text && $("boardscope").querySelector("[data-scope=personal]").getAttribute("aria-pressed") === "true"`));
+    await evaluate(a, `$("boardtext").value = "# Mine\\n- [ ] only me"; renderMini(); saveBoard(); true`);
     await waitFor("A shows the personal plan", within(UI_REFRESH_S * 5), () => evaluate(a, `boardScope === "personal" && $("canvas").textContent.includes("only me") && $("homesub").textContent === t("Only on this PC")`));
     await screenshot(a, "board-personal");
     await sleep(within(LOG_SYNC_S * 2) * 1000);
@@ -1364,13 +1366,24 @@ async function scenario(ctx) {
     check(!st.events.some((e) => e.key === key), "C shows a note written after its removal");
   });
 
-  await step("B leaves the room, keeps it and enters it again", async () => {
+  await step("B switches away from the room, keeps it and enters it again", async () => {
     await invoke(b, "leave_room", { id: ctx.room });
     const left = await state(b);
     check(!left.room && left.rooms.some((r) => r.id === ctx.room), `B's rooms after leaving: ${brief(left.rooms)}`);
     check(fs.existsSync(logFile(b, ctx.room, b.id)), "B lost its log by leaving");
     await invoke(b, "switch_room", { id: ctx.room });
     await allSee([a, b], "A and B connected again", within(DIAL_S * 2), (st, app) => st.room?.id === ctx.room && connected(st, [a, b].filter((x) => x !== app).map((x) => x.id)));
+  });
+
+  await step("B leaves the room from its menu, which removes it here and forgets B's personal plan", async () => {
+    const plan = JSON.stringify(`board/${ctx.room}`);
+    await evaluate(b, `localStorage.setItem(${plan}, JSON.stringify("# Mine")); true`);
+    await waitFor("B shows the room header", within(UI_REFRESH_S * 5), () => evaluate(b, `!$("app").hidden && !!st.room`));
+    await pressAndConfirm(b, `$("roomname").click(); [...$("menu").querySelectorAll("button")].find((x) => x.textContent === t("Leave room…")).click()`);
+    await waitFor("B no longer lists the room", within(UI_REFRESH_S * 5), async () => { const st = await state(b); return !st.room && !st.rooms.some((r) => r.id === ctx.room); });
+    await waitFor("B shows the start screen", within(UI_REFRESH_S * 5), () => evaluate(b, `!$("start").hidden && $("app").hidden`));
+    check((await evaluate(b, `localStorage.getItem(${plan})`)) === null, "B kept the personal plan of the room it left");
+    check(fs.existsSync(logFile(b, ctx.room, b.id)), "B's log of the room it left is gone");
   });
 }
 

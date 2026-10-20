@@ -517,6 +517,8 @@ test("the sidebar is a room header with a menu, four items, the record box and t
   const labels = [...menu.matchAll(/label: t\("([^"]+)"\)/g)].map((m) => m[1]);
   assert.deepEqual(labels, ["Room settings…", "Copy invite code", "Cancel invite", "Switch room", "Leave room…"]);
   assert.match(sidejs, /\$\("roomname"\)\.onclick = \(e\) => roomMenu\(e\.currentTarget\)/);
+  assert.match(read("app.js"), /anchorMenu\(t instanceof Element && t\.hasAttribute\("aria-haspopup"\) \? t : null\);/);
+  assert.match(read("style.css"), /\.roombtn\[aria-expanded=true\] \{ background/);
   assert.match(sidejs, /t\("Standby"\)\} · \$\{t\("\{n\} online"/);
   assert.match(sidejs, /id: "livetimer"/);
   assert.match(sidejs, /const rows = recordingRows\(\);/);
@@ -526,7 +528,6 @@ test("the sidebar is a room header with a menu, four items, the record box and t
   const pages = read("pages.js");
   assert.match(pages, /"page-live": openLive/);
   assert.match(pages, /"switch-room": switchRoom/);
-  assert.match(pages, /run\("remove_room", \{ id: st\.room\.id \}/);
   assert.match(pages, /run\("leave_room", \{ id: st\.room\.id \}/);
 });
 
@@ -578,6 +579,12 @@ test("the sidebar width is dragged, kept between limits and never scrolls sidewa
   assert.match(css, /\.roombtn \.nm \{[^}]*text-overflow: ellipsis/);
   assert.match(css, /\.splitter \{[^}]*left: calc\(var\(--side\) - 3px\); width: 7px/);
   assert.match(css, /body\.noside \.splitter, body\.boardfull \.splitter \{ display: none/);
+  assert.match(css, /body\.full \.side, body\.full \.splitter, body\.full \.notices \{ display: none !important; \}/);
+  const focused = (a) => { context.document.activeElement = a; return vm.runInContext("nativeKey", context); };
+  const key = (k) => ({ key: k });
+  for (const k of ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"]) assert.equal(focused({ getAttribute: (n) => (n === "role" ? "separator" : null) })(key(k)), true, k);
+  assert.equal(focused({ getAttribute: () => null, tagName: "DIV" })(key("ArrowLeft")), false);
+  delete context.document.activeElement;
 });
 
 const blocks = (text) => plain(ui$.mdParse(text));
@@ -611,11 +618,21 @@ test("markdown inline reads emphasis, code, links and tags, and only safe links 
   assert.equal(node("https://例え.jp/a?q=作戦")[0].link.url, "https://xn--r8jz45g.jp/a?q=%E4%BD%9C%E6%88%A6");
   assert.equal(node("<https://www.google.com/maps/@48.85,2.35,15z>")[0].link.url, "https://www.google.com/maps/@48.85,2.35,15z");
   assert.equal(node("see https://example.com/a_b_c.")[1].link.url, "https://example.com/a_b_c");
+  const wiki = "https://en.wikipedia.org/wiki/Apex_(video_game)";
+  assert.equal(node(`see ${wiki} now`)[1].link.url, wiki);
+  assert.deepEqual(node(`(${wiki}).`).map((n) => n.text ?? n.link.url), ["(", wiki, ")."]);
+  assert.deepEqual(node(`[wiki](${wiki})`).map((n) => n.link.url), [wiki]);
+  assert.deepEqual(node("https://example.com/a)").map((n) => n.text ?? n.link.url), ["https://example.com/a", ")"]);
   assert.equal(node("[x](ezh://moment/s1/12.5/all)")[0].link.link.m, 12.5);
   for (const bad of ["[x](javascript:alert(1))", "[x](file:///C:/Windows/notepad.exe)", "[x](data:text/html;base64,AAAA)", "![img](https://example.com/a.png)", "[x](ezh://moment/s1/-3/all)", "[x](//evil.example/a)"]) assert.ok(node(bad).every((n) => !n.link), bad);
   assert.equal(node("#plan and C#")[0].tag, "plan");
   assert.equal(node("\\#plan")[0].text, "#");
   assert.deepEqual(node("a <b>x</b> & <script>"), [{ text: "a <b>x</b> & <script>" }]);
+  assert.deepEqual(node("```a``"), [{ text: "```a``" }]);
+  assert.deepEqual(node("``a `b` c``"), [{ code: "a `b` c" }]);
+  const started = performance.now();
+  assert.deepEqual(node("ok " + "`".repeat(3990)), [{ text: "ok " + "`".repeat(3990) }]);
+  assert.ok(performance.now() - started < 100);
 });
 
 test("a task is ticked by changing only its line", () => {
@@ -625,6 +642,8 @@ test("a task is ticked by changing only its line", () => {
   assert.equal(ui$.toggleTask(text, 3), "# Plan\n- [ ] a\n- [x] b\n  - [x] c\nplain [ ] d");
   assert.equal(ui$.toggleTask(text, 4), text);
   assert.equal(ui$.toggleTask(text, 99), text);
+  assert.equal(ui$.toggleTask("> - [ ] rotate\n> > 1. [x] hold", 0), "> - [x] rotate\n> > 1. [x] hold");
+  assert.equal(ui$.toggleTask("> - [ ] rotate\n> > 1. [x] hold", 1), "> - [ ] rotate\n> > 1. [ ] hold");
   assert.equal(blocks(text)[1].items[0].n, 1);
 });
 
@@ -711,12 +730,19 @@ test("the personal game plan stays on this PC and the room's goes to the log", (
   assert.match(pages, /run\("remove_room", \{ id: r\.id \}, \(\) => \{ forgetPlan\(r\.id\);/);
   assert.match(pages, /run\("remove_room", \{ id \}, \(\) => \{ forgetPlan\(id\);/);
   assert.match(pages, /if \(!keepRooms\) unstore\(\(k\) => k\.startsWith\(planKey\(""\)\)\);\s*run\("reset"/);
-  assert.match(pages, /onTask: \(n\) => \{ boardDraft = toggleTask\(boardDraft, n\); writeBoard\(boardDraft\); \}/);
+  const tick = pages.slice(pages.indexOf("function tickTask"), pages.indexOf("const boardHooks"));
+  assert.match(tick, /const next = toggleTask\(boardDraft, n\);\s*if \(next === boardDraft\) \{ delete sigs\.board; renderBoard\(\); return; \}/);
+  assert.match(pages, /mdHooks\(\{ onTask: tickTask \}\)/);
+  assert.match(pages, /\$\("boardedit"\)\.onclick = \(\) => editBoard\(\);/);
+  assert.match(pages, /const want = scope === "room" \|\| scope === "personal" \? scope : boardScope;/);
+  assert.match(pages, /\$\("boardtext"\)\.value !== boardText\(\) && !\(await ask\(t\("Discard your changes\?"\)/);
+  assert.match(pages, /const text = stored\(personalKey\(\), null\);\s*return typeof text === "string" \? text : starterOf\(PERSONAL_TEMPLATE\);/);
+  assert.match(read("app.js"), /if \(partyRoom !== roomId\) \{ partyRoom = roomId; cancelBoard\(\);/);
   assert.match(pages, /b\.disabled = boardEditing;/);
   assert.doesNotMatch(pages, /\$\("boardscope"\)\.hidden/);
   assert.match(pages, /editBoard\(scope\)/);
   assert.match(read("app.js"), /editBoard\("room"\)/);
-  for (const word of ["Personal", "Only on this PC"]) assert.ok(word in ui$.JA, word);
+  for (const word of ["Personal", "Only on this PC", "Discard your changes?"]) assert.ok(word in ui$.JA, word);
 });
 
 test("web links open in the browser through the app, and the plugin runner is named in the jobs list", () => {

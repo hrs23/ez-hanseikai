@@ -9,10 +9,10 @@ const MD_TABLE_RULE = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
 const MD_WEB = /^https?:\/\/[^\s"<>]+$/i;
 const MD_INLINE = new RegExp([
   "\\\\([\\\\`*_{}\\[\\]()#+\\-.!~=|<>])",
-  "(`+)([^]*?[^`])\\2(?!`)",
-  "!?\\[([^\\]]*)\\]\\(([^)\\s]+)(?:\\s+\"[^\"]*\")?\\)",
+  "(?<!`)(`+)(?!`)([^]*?[^`])\\2(?!`)",
+  "!?\\[([^\\]]*)\\]\\(((?:[^()\\s]|\\([^()\\s]*\\))+)(?:\\s+\"[^\"]*\")?\\)",
   "<(https?:\\/\\/[^>\\s]+)>",
-  "(https?:\\/\\/[^\\s<>]*[^\\s<>).,;:!?'\"])",
+  "(https?:\\/\\/[^\\s<>]+)",
   "(ezh:\\/\\/moment\\/[^\\s)]+)",
   "\\*\\*(.+?)\\*\\*",
   "__(.+?)__",
@@ -44,6 +44,13 @@ function mdLink(url, label, raw, masked = false) {
   return href ? { link: href, children: label, masked } : { text: raw };
 }
 
+function urlEnd(url) {
+  let end = url.length;
+  const count = (c) => url.slice(0, end).split(c).length - 1;
+  while (end > 0 && (".,;:!?'\"".includes(url[end - 1]) || (url[end - 1] === ")" && count(")") > count("(")))) end--;
+  return url.slice(0, end);
+}
+
 function mdInline(text) {
   const out = [];
   let last = 0;
@@ -54,7 +61,11 @@ function mdInline(text) {
     else if (m[3] !== undefined) out.push({ code: m[3].trim() });
     else if (m[5] !== undefined) out.push(m[0].startsWith("!") ? { text: m[0] } : mdLink(m[5], mdInline(m[4]), m[0], true));
     else if (m[6] !== undefined) out.push(mdLink(m[6], [{ text: m[6] }], m[0]));
-    else if (m[7] !== undefined) out.push(mdLink(m[7], [{ text: m[7] }], m[0]));
+    else if (m[7] !== undefined) {
+      const url = urlEnd(m[7]);
+      last = m.index + url.length;
+      out.push(mdLink(url, [{ text: url }], url));
+    }
     else if (m[8] !== undefined) out.push(mdLink(m[8], [], m[0]));
     else if (m[9] !== undefined) out.push({ strong: mdInline(m[9]) });
     else if (m[10] !== undefined) out.push({ strong: mdInline(m[10]) });
@@ -170,7 +181,7 @@ function mdParse(text, firstLine = 0) {
 function toggleTask(text, n) {
   const lines = text.split("\n");
   if (n < 0 || n >= lines.length) return text;
-  lines[n] = lines[n].replace(/^(\s*(?:[-*+]|\d{1,9}[.)])\s+)\[( |x|X)\]/, (all, lead, mark) => `${lead}[${mark === " " ? "x" : " "}]`);
+  lines[n] = lines[n].replace(/^((?:\s*>\s?)*\s*(?:[-*+]|\d{1,9}[.)])\s+)\[( |x|X)\]/, (all, lead, mark) => `${lead}[${mark === " " ? "x" : " "}]`);
   return lines.join("\n");
 }
 

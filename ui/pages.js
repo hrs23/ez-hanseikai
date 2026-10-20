@@ -282,7 +282,7 @@ function renderJobs() {
   const jobs = jobInfo ? jobInfo.jobs : [];
   const running = jobInfo && jobInfo.running;
   const shown = jobs.filter((j) => jobFilter === "all" || (jobFilter === "failed" ? j.state === "failed" : j.state === "claimed" || j.state === "waiting"));
-  if (!changed("roomtab", ["jobs", shown, running && [running.job, Math.floor((running.progress || 0) * 100)], jobFilter, st.names, lang])) return;
+  if (!changed("roomtab", ["jobs", shown, jobs.map((j) => j.state), running && [running.job, Math.floor((running.progress || 0) * 100)], jobFilter, st.names, lang])) return;
   const seg = el("div", { className: "seg" }, ...[["all", t("All jobs")], ["active", t("Active")], ["failed", t("Failed")]].map(([k, label]) => el("button", { className: jobFilter === k ? "on" : "", textContent: label, onclick: () => { jobFilter = k; renderRoom(); } })));
   const state = (j) => {
     if (running && running.job === j.job) { const n = Math.floor((running.progress || 0) * 100); return el("div", { className: "jobrun" }, el("span", { textContent: t("Running {n}%", { n }) }), el("div", { className: "bar" }, el("i", { style: `width:${n}%` }))); }
@@ -341,7 +341,10 @@ function showBoard() {
   renderRoom();
 }
 function boardText() {
-  if (personal()) return stored(personalKey(), "") || starterOf(PERSONAL_TEMPLATE);
+  if (personal()) {
+    const text = stored(personalKey(), null);
+    return typeof text === "string" ? text : starterOf(PERSONAL_TEMPLATE);
+  }
   const e = boardEvent();
   return e ? e.text : starterOf(BOARD_TEMPLATE);
 }
@@ -361,7 +364,13 @@ function writeBoard(text) {
   }
   return invoke("add_event", { kind: "board", text, target: {}, values: { card: "team" } }).then(() => refresh()).catch(fail);
 }
-const boardHooks = () => mdHooks({ onTask: (n) => { boardDraft = toggleTask(boardDraft, n); writeBoard(boardDraft); } });
+function tickTask(n) {
+  const next = toggleTask(boardDraft, n);
+  if (next === boardDraft) { delete sigs.board; renderBoard(); return; }
+  boardDraft = next;
+  writeBoard(next);
+}
+const boardHooks = () => mdHooks({ onTask: tickTask });
 function fitZoom() {
   const w = $("boardwrap").clientWidth - 2 * BOARD_PAD;
   return Math.max(ZOOM_MIN, Math.min(1, w / BOARD_WIDTH));
@@ -390,8 +399,12 @@ function renderBoard() {
   }
   placeBoard();
 }
-function editBoard(scope) {
-  if (scope) { boardScope = scope; store("boardScope", scope); }
+async function editBoard(scope) {
+  const want = scope === "room" || scope === "personal" ? scope : boardScope;
+  if (boardEditing && want === boardScope) { showBoard(); $("boardtext").focus(); return; }
+  if (boardEditing && $("boardtext").value !== boardText() && !(await ask(t("Discard your changes?"), t("Discard"), true))) return;
+  boardScope = want;
+  store("boardScope", want);
   showBoard();
   boardEditing = true;
   $("boardtext").value = boardText();
@@ -648,7 +661,7 @@ $("zoomin").onclick = () => setZoom((zoom || fitZoom()) + ZOOM_STEP);
 $("zoomout").onclick = () => setZoom((zoom || fitZoom()) - ZOOM_STEP);
 $("zoomfit").onclick = () => setZoom(0);
 $("boardfull").onclick = toggleBoardFull;
-$("boardedit").onclick = editBoard;
+$("boardedit").onclick = () => editBoard();
 $("boardsave").onclick = saveBoard;
 $("boardcancel").onclick = cancelBoard;
 $("boardtext").oninput = renderMini;
