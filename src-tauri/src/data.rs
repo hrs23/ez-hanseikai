@@ -155,7 +155,7 @@ pub fn reset(dir: &Path, keep_rooms: bool) {
     let rooms = ["key.bin", "rooms.json", "rooms"];
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
-        if name == "EBWebView" || name == "webview" || name == "running.marker" || name == LOCK || (keep_rooms && rooms.contains(&name.as_str())) {
+        if name == "EBWebView" || name == "webview" || name == LOCK || (keep_rooms && rooms.contains(&name.as_str())) {
             continue;
         }
         let path: PathBuf = entry.path();

@@ -810,11 +810,6 @@ async fn reset(core: State<'_, Arc<Core>>, keep_rooms: bool) -> Result<(), Strin
 }
 
 #[tauri::command]
-fn ui_ready(core: State<Arc<Core>>) {
-    let _ = std::fs::remove_file(core.dir.join("running.marker"));
-}
-
-#[tauri::command]
 fn dismiss_recovery(core: State<Arc<Core>>) {
     *core.recovery.lock().unwrap() = None;
 }
@@ -939,16 +934,10 @@ async fn init(app: AppHandle, dir: PathBuf, left_lock: bool) -> Result<Arc<Core>
     debug::init(&dir);
     tracing::info!("EZ Hanseikai {VERSION} started, process {}, data folder {}", std::process::id(), dir.display());
     ffmpeg::set_data_dir(dir.clone());
-    let marker = dir.join("running.marker");
-    let mut recovery = if marker.exists() {
-        Some("The app did not start properly last time.".to_string())
-    } else {
-        left_lock.then(|| "The app restarted after a problem.".to_string())
-    };
+    let mut recovery = None;
     if left_lock {
         tracing::warn!("the app did not exit cleanly last time");
     }
-    let _ = std::fs::write(&marker, VERSION);
     let previous_version = std::fs::read_to_string(dir.join("version.txt")).unwrap_or_default().trim().to_string();
     let _ = std::fs::write(dir.join("version.txt"), VERSION);
     let key_path = dir.join("key.bin");
@@ -1138,7 +1127,7 @@ fn main() {
             std::thread::spawn(move || thumbs::keeper(c));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug::debug_view, debug::debug_report, debug::set_report_sharing, save_report, start_recording, stop_recording, delete_set, discard_set, download_set, identity, open_set_folder, export_set, cancel_export, pick_import, import_plan, import_recording, cancel_import, export_folder, set_layout, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, remove_room, check_peer, set_limit, set_codecs, cancel_invites, list_sources, set_source, use_display, list_mics, set_mic, set_mix, set_audio_process, set_warn_hours, set_channel, event_action, log_layout, set_name, open_data_folder, data_info, reset, ui_ready, dismiss_recovery, add_event, answer_ask, focus_set, party_on, party_act, jobs::room_plugins, jobs::set_room_plugin, jobs::set_process_plugin, jobs::prepare_plugin, jobs::jobs, jobs::retry_job, jobs::cancel_job, install_update, check_update, save_text, jobs::run_job_next, set_quality, set_language, rename_room, draw, party_typing, mark, set_hotkey, retry_ffmpeg, set_api, set_api_lan, new_api_token, api_info, api_reference, open_llms])
+        .invoke_handler(tauri::generate_handler![state, check, list_processes, debug::debug_view, debug::debug_report, debug::set_report_sharing, save_report, start_recording, stop_recording, delete_set, discard_set, download_set, identity, open_set_folder, export_set, cancel_export, pick_import, import_plan, import_recording, cancel_import, export_folder, set_layout, remove_peer, create_invite, create_room, join_room, switch_room, leave_room, remove_room, check_peer, set_limit, set_codecs, cancel_invites, list_sources, set_source, use_display, list_mics, set_mic, set_mix, set_audio_process, set_warn_hours, set_channel, event_action, log_layout, set_name, open_data_folder, data_info, reset, dismiss_recovery, add_event, answer_ask, focus_set, party_on, party_act, jobs::room_plugins, jobs::set_room_plugin, jobs::set_process_plugin, jobs::prepare_plugin, jobs::jobs, jobs::retry_job, jobs::cancel_job, install_update, check_update, save_text, jobs::run_job_next, set_quality, set_language, rename_room, draw, party_typing, mark, set_hotkey, retry_ffmpeg, set_api, set_api_lan, new_api_token, api_info, api_reference, open_llms])
         .build(tauri::generate_context!())
         .expect("failed to start");
     app.run(|app, event| {

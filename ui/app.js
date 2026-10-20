@@ -1441,7 +1441,7 @@ async function update() {
   titles = Object.fromEntries(st.sets.filter((x) => x.title).map((x) => [x.id, x.title]));
   importedIds = new Set(st.sets.flatMap((x) => x.players.filter((p) => p.imported).map((p) => p.owner)));
   if (lang !== st.lang) { lang = st.lang; setLanguage(lang); for (const k of Object.keys(sigs)) delete sigs[k]; }
-  if (!ready) { ready = true; invoke("ui_ready"); pollPlugins(); }
+  if (!ready) { ready = true; pollPlugins(); }
   if (installAfter && available && !busy() && !askingUpdate) askUpdate();
   if (selected && !setById(selected)) selected = null;
   if (review && !reviewSet()) endReview();

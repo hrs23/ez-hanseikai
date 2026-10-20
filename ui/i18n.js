@@ -402,8 +402,6 @@ const JA = {
   "That recording is not on this PC.": "その録画はこのPCにありません。",
   "That recording was deleted on this PC.": "その録画はこのPCで削除されています。",
   "That room is not in your list.": "そのルームは一覧にありません。",
-  "The app did not start properly last time.": "前回、アプリが正しく起動しませんでした。",
-  "The app restarted after a problem.": "前回、アプリは問題が起きて終了しました。",
   "The identity key file could not be read. It was left untouched; continuing uses a temporary ID.": "IDの鍵ファイルを読めませんでした。ファイルはそのままです。続けると一時的なIDを使います。",
   "The plugin stopped without a result.": "プラグインが結果を出さずに止まりました。",
   "The selected app's sound can be captured": "選んだアプリの音をキャプチャできます",

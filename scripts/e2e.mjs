@@ -619,7 +619,7 @@ async function scenario(ctx) {
     start("b");
     await attach(b);
     const recovery = (await state(b)).recovery;
-    check(recovery === "The app restarted after a problem.", `B says ${brief(recovery)} after the crash`);
+    check(!recovery, `B says ${brief(recovery)} after the crash`);
     await share(b);
     await waitFor("B logged its recovered segments and ended its part", within(COLD_START_S), () => {
       const own = logOf(b, ctx.room, b.id);
