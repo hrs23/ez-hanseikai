@@ -16,6 +16,7 @@ pub const SOLO: &str = "solo";
 pub const SERIES: [&str; 2] = ["v", "m"];
 pub const INIT: &str = "init.mp4";
 pub const RECORDINGS: &str = "recordings";
+pub const STANDBY: &str = "standby";
 pub const TOKEN_BYTES: usize = 8;
 const ROOM_ID_BYTES: usize = 4;
 
@@ -145,38 +146,31 @@ impl Core {
         self.room_id().unwrap_or_else(|| SOLO.to_string())
     }
 
-    pub fn capture_dir(&self, room: &str, owner: &str, capture: &str) -> PathBuf {
-        self.dir.join("rooms").join(room).join(owner).join(capture)
+    pub fn room_dir(&self, room: &str) -> PathBuf {
+        self.dir.join("rooms").join(room)
     }
 
     pub fn recording_dir(&self, room: &str, set: &str) -> PathBuf {
-        self.dir.join("rooms").join(room).join(RECORDINGS).join(set)
+        self.room_dir(room).join(RECORDINGS).join(set)
     }
 
     pub fn set_dir(&self, room: &str, set: &str, owner: &str, capture: &str) -> PathBuf {
         self.recording_dir(room, set).join(owner).join(capture)
     }
 
-    pub fn dirs(&self, room: &str, set: &str, owner: &str, capture: &str) -> [PathBuf; 2] {
-        [self.set_dir(room, set, owner, capture), self.capture_dir(room, owner, capture)]
+    pub fn standby_dir(&self, room: &str, owner: &str, capture: &str) -> PathBuf {
+        self.room_dir(room).join(STANDBY).join(owner).join(capture)
     }
 
-    pub fn seg_paths(&self, room: &str, owner: &str, seg: &Seg) -> [PathBuf; 2] {
-        self.dirs(room, &seg.set, owner, &seg.capture).map(|d| d.join(&seg.series).join(seg_name(seg.n)))
+    pub fn media_dir(&self, room: &str, set: Option<&str>, owner: &str, capture: &str) -> PathBuf {
+        match set {
+            Some(set) => self.set_dir(room, set, owner, capture),
+            None => self.standby_dir(room, owner, capture),
+        }
     }
 
     pub fn seg_path(&self, room: &str, owner: &str, seg: &Seg) -> PathBuf {
-        let [kept, live] = self.seg_paths(room, owner, seg);
-        if kept.exists() || part_of(&kept).exists() { kept } else { live }
-    }
-
-    pub fn init_paths(&self, room: &str, set: &str, owner: &str, capture: &str, series: &str) -> [PathBuf; 2] {
-        self.dirs(room, set, owner, capture).map(|d| d.join(series).join(INIT))
-    }
-
-    pub fn init_path(&self, room: &str, set: &str, owner: &str, capture: &str, series: &str) -> PathBuf {
-        let [kept, live] = self.init_paths(room, set, owner, capture, series);
-        if kept.exists() { kept } else { live }
+        self.set_dir(room, &seg.set, owner, &seg.capture).join(&seg.series).join(seg_name(seg.n))
     }
 
     pub fn save_rooms(&self) {
@@ -609,15 +603,21 @@ pub fn log_set_layout(core: &Core) {
     }
 }
 
+pub fn unused_set(logs: &[Log], room_dir: &Path, start_us: i64, tz_offset_s: i64) -> String {
+    let taken: HashSet<&str> = logs.iter().flat_map(|l| l.records.iter()).filter(|r| r["k"] == "rec" || r["k"] == "set_del").filter_map(|r| r["set"].as_str()).collect();
+    (0..).map(|i| set_id_for(start_us + i * 1_000_000, tz_offset_s)).find(|id| !taken.contains(id.as_str()) && !room_dir.join(RECORDINGS).join(id).exists()).unwrap_or_default()
+}
+
 pub fn start_set(core: &Arc<Core>, debrief: Option<bool>) -> Result<(), String> {
     let start_us = now_us();
-    let set = set_id_for(start_us, core.tz_offset_s);
+    let room = core.active_room_id();
+    let set = unused_set(&logs(core, &room), &core.room_dir(&room), start_us, core.tz_offset_s);
     let by = core.name.lock().unwrap().clone();
     let voice = debrief.unwrap_or_else(|| core.party.lock().unwrap().reviewing());
     begin_set(core, &set, &by, start_us, voice)?;
     log_set_layout(core);
     party::log(core);
-    net::broadcast(core, json!({"t": "rec", "action": "start", "set": set, "room": core.active_room_id(), "by": by, "start_us": start_us, "voice": voice}));
+    net::broadcast(core, json!({"t": "rec", "action": "start", "set": set, "room": room, "by": by, "start_us": start_us, "voice": voice}));
     announce(core, "start", &by);
     Ok(())
 }
@@ -938,15 +938,11 @@ fn remove_set(core: &Core, room: &str, set: &str, complete: bool) -> Result<bool
     }
     core.want.lock().unwrap().insert(want_key(room, set), false);
     crate::jobs::cancel_set(room, set);
-    let found = sets(core, room, &logs(core, room)).into_iter().find(|s| s.id == set);
     if complete {
         core.append_log(room, &json!({"k": "set_del", "room": room, "set": set, "t_us": now_us()}));
     }
-    if let Some(found) = found {
-        data::remove_media(core, &found);
-    }
-    let _ = std::fs::remove_dir_all(core.recording_dir(room, set));
-    crate::thumbs::remove(core, room, set);
+    remove_recording(&core.room_dir(room), set);
+    data::forget(&core.files, &core.recording_dir(room, set));
     Ok(complete)
 }
 
@@ -959,27 +955,26 @@ pub fn discard_set(core: &Core, room: &str, set: &str) -> Result<bool, String> {
     remove_set(core, room, set, true)
 }
 
-pub fn someone_else_has(core: &Core, key: &str, index: u64) -> bool {
-    core.peers.lock().unwrap().iter().any(|p| p.have.get(key).is_some_and(|n| *n > index))
+fn remove_recording(room_dir: &Path, set: &str) {
+    let _ = std::fs::remove_dir_all(room_dir.join(RECORDINGS).join(set));
+    let _ = std::fs::remove_file(crate::thumbs::file(room_dir, set));
+}
+
+pub fn sweep(room_dir: &Path, gone: &HashSet<String>, recording: Option<&str>) -> Vec<String> {
+    let mut out = Vec::new();
+    for set in gone.iter().filter(|set| valid_id(set) && Some(set.as_str()) != recording) {
+        if room_dir.join(RECORDINGS).join(set).exists() || crate::thumbs::file(room_dir, set).exists() {
+            remove_recording(room_dir, set);
+            out.push(set.clone());
+        }
+    }
+    out
 }
 
 pub fn sweep_dropped(core: &Core, room: &str, logs: &[Log]) {
-    let gone = dropped(logs);
-    for set in gone.iter().filter(|set| valid_id(set)) {
-        if core.recording_dir(room, set).exists() || crate::thumbs::exists(core, room, set) {
-            let _ = std::fs::remove_dir_all(core.recording_dir(room, set));
-            crate::thumbs::remove(core, room, set);
-        }
-    }
-    for log in logs {
-        for r in log.records.iter().filter(|r| r["k"] == "seg") {
-            let Some(seg) = r["set"].as_str().filter(|set| gone.contains(*set)).and_then(|set| seg_from(r, set)) else { continue };
-            let path = core.capture_dir(room, &log.owner, &seg.capture).join(&seg.series).join(seg_name(seg.n));
-            if path.exists() || part_of(&path).exists() {
-                let _ = std::fs::remove_file(part_of(&path));
-                let _ = std::fs::remove_file(&path);
-            }
-        }
+    let recording = core.active_set.lock().unwrap().as_ref().filter(|a| a.room == room).map(|a| a.id.clone());
+    for set in sweep(&core.room_dir(room), &dropped(logs), recording.as_deref()) {
+        data::forget(&core.files, &core.recording_dir(room, &set));
     }
 }
 
@@ -1119,7 +1114,7 @@ fn peer_json(core: &Core, room: &str, p: &Peer) -> Value {
         "version": p.info.as_ref().map(|(version, _)| version),
         "other_version": other_version,
         "sharing": sharing,
-        "live": if sharing { stream::live_json(core, room, &p.id.to_string()) } else { None },
+        "live": p.live.as_ref().filter(|_| sharing).and_then(|l| stream::live_json(core, room, &p.id.to_string(), &l.capture, l.set[0].as_deref())),
     })
 }
 
@@ -1197,7 +1192,7 @@ pub fn state_json(core: &Core) -> Value {
         "previous_version": core.previous_version,
         "codec": ffmpeg::pick(&core.codecs.lock().unwrap()).1,
         "recording": core.active_set.lock().unwrap().is_some(),
-        "capture": record::capture_json(core, stream::live_json(core, &room_id, &my_id)),
+        "capture": record::capture_json(core, stream::own_live(core, &room_id).and_then(|(capture, set)| stream::live_json(core, &room_id, &my_id, &capture, set.as_deref()))),
         "active_set": core.active_set_json(),
         "room": active.map(|r| json!({"id": r.id, "name": r.name, "pending": r.invite.is_some(), "waiting": r.waiting})),
         "rooms": room_list,
@@ -1314,6 +1309,45 @@ mod tests {
         assert!(!others_hold("s1", &[&nothing, &other_set, &zero]));
         assert!(others_hold("s1", &[&nothing, &holds]));
         assert!(others_hold("s10", &[&other_set]));
+    }
+
+    #[test]
+    fn deleting_a_recording_removes_only_its_folder_and_thumbnail() {
+        let dir = crate::log::tests::temp("sweep");
+        let names = ["recordings/s1/a/1/v/000001.m4s", "recordings/s1/b/2/m/init.mp4", "thumbs/s1.jpg", "recordings/s2/a/1/v/000001.m4s", "thumbs/s2.jpg", "recordings/s3/a/1/v/000001.m4s", "standby/a/1/v/000002.m4s", "a/1/v/000001.m4s", "a/1/verified.json", "sets/s1/a.mp4", "logs/a.bin"];
+        let put = |name: &str| {
+            let path = dir.join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"x").unwrap();
+        };
+        for name in names {
+            put(name);
+        }
+        let left = || names.iter().copied().filter(|n| dir.join(n).exists()).collect::<Vec<_>>();
+        remove_recording(&dir, "s1");
+        assert_eq!(left(), &names[3..]);
+        let gone: HashSet<String> = ["s2".to_string(), "s9".to_string(), "../x".to_string()].into();
+        assert!(sweep(&dir, &gone, Some("s2")).is_empty());
+        assert_eq!(left(), &names[3..]);
+        assert_eq!(sweep(&dir, &gone, None), ["s2"]);
+        assert!(sweep(&dir, &gone, None).is_empty());
+        put("recordings/s2/b/2/v/000001.m4s");
+        assert_eq!(sweep(&dir, &gone, None), ["s2"]);
+        assert_eq!(left(), ["recordings/s3/a/1/v/000001.m4s", "standby/a/1/v/000002.m4s", "a/1/v/000001.m4s", "a/1/verified.json", "sets/s1/a.mp4", "logs/a.bin"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_new_recording_never_takes_an_id_in_use() {
+        let dir = crate::log::tests::temp("unused");
+        let start = 1_760_000_000_000_000;
+        let id = |i: i64| set_id_for(start + i * 1_000_000, 0);
+        let logs = [log("a", 0, vec![json!({"k": "rec", "set": id(0)})]), log("b", 0, vec![json!({"k": "set_del", "set": id(1)})])];
+        std::fs::create_dir_all(dir.join(RECORDINGS).join(id(2))).unwrap();
+        assert_eq!(unused_set(&logs, &dir, start, 0), id(3));
+        assert_eq!(unused_set(&[], &dir, start, 0), id(0));
+        assert_eq!(unused_set(&[], &dir, start + 2_000_000, 0), id(3));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

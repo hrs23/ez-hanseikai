@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::io::{Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -11,6 +12,7 @@ use tauri::Emitter;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::time::{sleep, timeout};
 
+use crate::record::{self, LiveStep};
 use crate::room::{self, capture_id, part_of, seg_name, valid_id, INIT, SERIES};
 use crate::{data, debug, default_codecs, file_len, hw, log, merge, now_us, party, short, strings, Core, ALPN, PROTOCOL, VERSION};
 
@@ -283,36 +285,47 @@ async fn send_file(core: &Core, send: &mut SendStream, n: u32, path: &Path, at: 
 async fn follow(core: &Core, from: EndpointId, send: &mut SendStream, req: &Value) -> Result<()> {
     let text = |k: &str| req[k].as_str().unwrap_or_default().to_string();
     let (room, owner, capture, series) = (text("room"), text("owner"), text("capture"), text("series"));
+    let set = Some(text("set")).filter(|s| valid_id(s));
     let own = owner == core.me();
     let live = req["live"] == true;
     let valid = in_active_room(core, &room) && owner.parse::<EndpointId>().is_ok() && SERIES.contains(&series.as_str()) && capture_id(&capture);
-    if !valid || (live && !own) {
+    if !valid || (live && !own) || (!own && set.is_none()) {
         return Ok(());
     }
     let _ = send.set_priority(priority(live, &series));
     let what = debug::what(from, req, priority(live, &series));
+    let dir = core.media_dir(&room, set.as_deref(), &owner, &capture).join(&series);
+    let which = if series == SERIES[0] { 0 } else { 1 };
+    let current = || core.engine.live().filter(|l| l.room == room && l.capture == capture);
+    let tail = || own && current().is_some();
     let sets = if own { Vec::new() } else { room::sets(core, &room, &room::logs(core, &room)) };
-    let files: Vec<&room::File> = sets.iter().flat_map(|s| s.files.iter().filter(|f| f.owner == owner)).collect();
-    let verified = |n: u32| files.iter().any(|f| f.segs.iter().any(|g| g.capture == capture && g.series == series && g.n == n && data::seg_check(core, &room, &f.owner, g) == Some(true)));
-    let set = text("set");
-    let dirs = if valid_id(&set) { core.dirs(&room, &set, &owner, &capture) } else { [core.capture_dir(&room, &owner, &capture), core.capture_dir(&room, &owner, &capture)] };
-    let dirs = dirs.map(|d| d.join(&series));
-    let place = |name: &str| {
-        let kept = dirs[0].join(name);
-        if kept.exists() || part_of(&kept).exists() { kept } else { dirs[1].join(name) }
-    };
-    let tail = || own && core.engine.live().is_some_and(|(r, c, _)| r == room && c == capture);
-    let history = !live;
+    let file = sets.iter().filter(|s| set.as_ref() == Some(&s.id)).flat_map(|s| s.files.iter()).find(|f| f.owner == owner);
+    let logged = |n: u32| file.and_then(|f| f.segs.iter().find(|g| g.capture == capture && g.series == series && g.n == n)).map(|g| g.size);
     if req["init"] == true {
-        let ok = own || files.iter().any(|f| f.segs.iter().any(|g| g.capture == capture) && data::init_check(core, &room, f, &capture, &series) == Some(true));
-        if !ok || !send_file(core, send, 0, &place(INIT), 0, history, &|| false, &what).await? {
+        let path = dir.join(INIT);
+        let ok = own || file.is_some_and(|f| path.exists() && f.init(&capture, &series).is_none_or(|(size, _)| file_len(&path) == size));
+        if !ok || !send_file(core, send, 0, &path, 0, !live, &|| false, &what).await? {
             return Ok(());
         }
     }
     let to = req["to"].as_u64().map(|t| t as u32);
     let (mut n, mut at) = (req["from"].as_u64().unwrap_or(1) as u32, req["at"].as_u64().unwrap_or(0));
     while to.is_none_or(|to| n <= to) {
-        if !(own || verified(n)) || !send_file(core, send, n, &place(&seg_name(n)), at, history, &tail, &what).await? {
+        let path = dir.join(seg_name(n));
+        let sent = if own && live {
+            match current().map(|l| record::live_step(&l.recent[which], set.as_deref(), n)) {
+                Some(LiveStep::Wait) => {
+                    sleep(FILE_WATCH).await;
+                    continue;
+                }
+                Some(LiveStep::Serve) => send_file(core, send, n, &path, at, false, &tail, &what).await?,
+                _ => false,
+            }
+        } else {
+            let ready = if own { path.exists() } else { logged(n).is_some_and(|size| file_len(&path) == size) };
+            ready && send_file(core, send, n, &path, at, true, &|| false, &what).await?
+        };
+        if !sent {
             break;
         }
         n += 1;
@@ -405,9 +418,11 @@ async fn handle(core: Arc<Core>, from: EndpointId, mut send: SendStream, mut rec
         }
         Some("live") => {
             let sharing = core.sharing_live();
-            let live = core.engine.live().filter(|(room, _, _)| sharing && *room == core.active_room_id());
-            let reply = match live {
-                Some((_, capture, n)) => json!({"sharing": true, "capture": capture, "n": n}),
+            let reply = match core.engine.live().filter(|l| sharing && l.room == core.active_room_id()) {
+                Some(l) => {
+                    let newest = l.recent.map(|r| r.last().cloned().unwrap_or_default());
+                    json!({"sharing": true, "capture": l.capture, "n": newest.clone().map(|(n, _)| n), "set": newest.map(|(_, set)| set)})
+                }
                 None => json!({"sharing": false}),
             };
             send.write_all(&serde_json::to_vec(&reply)?).await?;
@@ -628,11 +643,6 @@ async fn pull_log(core: &Core, room: &str, of: &str, conn: &Connection) -> Resul
     }
 }
 
-fn target(core: &Core, room: &str, set: &str, owner: &str, capture: &str, series: &str, n: u32) -> PathBuf {
-    let dir = if valid_id(set) { core.set_dir(room, set, owner, capture) } else { core.capture_dir(room, owner, capture) }.join(series);
-    if n == 0 { dir.join(INIT) } else { dir.join(seg_name(n)) }
-}
-
 struct Writing<'a> {
     core: &'a Core,
     path: PathBuf,
@@ -644,9 +654,34 @@ impl Drop for Writing<'_> {
     }
 }
 
-async fn receive(core: &Core, conn: &Connection, req: Value) -> Result<u64> {
+fn open_part(part: &Path, at: Option<u64>) -> std::io::Result<std::fs::File> {
+    let mut file = std::fs::OpenOptions::new().create(true).write(true).truncate(at.is_none()).open(part)?;
+    if let Some(at) = at {
+        if file.metadata()?.len() < at {
+            return Err(std::io::Error::other("the partial file is shorter than where it resumes"));
+        }
+        file.set_len(at)?;
+        file.seek(SeekFrom::End(0))?;
+    }
+    Ok(file)
+}
+
+fn finish_copy(path: &Path, expect: Option<&(u64, String)>) -> std::io::Result<Option<u64>> {
+    let part = part_of(path);
+    if expect.is_some_and(|(size, sha)| !data::matches(&part, *size, sha)) {
+        let len = file_len(&part);
+        let _ = std::fs::remove_file(&part);
+        return Ok(Some(len));
+    }
+    std::fs::rename(&part, path)?;
+    Ok(None)
+}
+
+async fn receive(core: &Core, conn: &Connection, req: Value, expect: HashMap<u32, (u64, String)>) -> Result<u64> {
     let text = |k: &str| req[k].as_str().unwrap_or_default().to_string();
-    let (room, set, owner, capture, series) = (text("room"), text("set"), text("owner"), text("capture"), text("series"));
+    let (room, owner, capture, series) = (text("room"), text("owner"), text("capture"), text("series"));
+    let set = Some(text("set")).filter(|s| valid_id(s));
+    let dir = core.media_dir(&room, set.as_deref(), &owner, &capture).join(&series);
     let (from, at) = (req["from"].as_u64().unwrap_or(1) as u32, req["at"].as_u64().unwrap_or(0));
     let what = debug::what(conn.remote_id(), &req, priority(req["live"] == true, &series));
     let (mut send, mut recv) = conn.open_bi().await?;
@@ -660,29 +695,41 @@ async fn receive(core: &Core, conn: &Connection, req: Value) -> Result<u64> {
     while recv.read_exact(&mut head).await.is_ok() {
         let n = u32::from_le_bytes(head[..4].try_into()?);
         let len = u32::from_le_bytes(head[4..].try_into()?) as usize;
-        if len > CHUNK || core.disk_full() || (!set.is_empty() && room::wants(core, &room, &set) == Some(false)) {
+        if len > CHUNK || core.disk_full() || set.as_ref().is_some_and(|set| room::wants(core, &room, set) == Some(false)) {
             break;
         }
-        if current.as_ref().is_none_or(|(k, _, _, _)| *k != n) {
-            let path = target(core, &room, &set, &owner, &capture, &series, n);
-            if let Some(dir) = path.parent() {
-                tokio::fs::create_dir_all(dir).await?;
-            }
+        if current.as_ref().is_none_or(|(k, ..)| *k != n) {
+            let path = if n == 0 { dir.join(INIT) } else { dir.join(seg_name(n)) };
+            tokio::fs::create_dir_all(&dir).await?;
             if !core.writing.lock().unwrap().insert(path.clone()) {
                 break;
             }
-            let part = part_of(&path);
             let guard = Writing { core, path };
             let resume = n == from && n > 0 && at > 0 && !resumed;
             resumed |= n > 0;
-            let file = tokio::fs::OpenOptions::new().create(true).append(resume).write(!resume).truncate(!resume).open(&part).await?;
-            current = Some((n, file, guard, debug::start("in", &what, n)));
+            let file = open_part(&part_of(&guard.path), resume.then_some(at))?;
+            current = Some((n, tokio::fs::File::from_std(file), guard, debug::start("in", &what, n)));
         }
         if len == 0 {
-            if let Some((_, file, guard, row)) = current.take() {
+            if let Some((k, file, guard, row)) = current.take() {
                 drop(file);
-                tokio::fs::rename(part_of(&guard.path), &guard.path).await?;
-                row.finish();
+                let (path, want) = (guard.path.clone(), expect.get(&k).cloned());
+                let Some(bad) = tokio::task::spawn_blocking(move || finish_copy(&path, want.as_ref())).await?? else {
+                    row.finish();
+                    data::forget(&core.files, &dir);
+                    if set.is_none() && k > 0 {
+                        data::trim_ring(&dir, k);
+                    }
+                    continue;
+                };
+                drop(row);
+                let name = format!("{series}/{}", if k == 0 { INIT.to_string() } else { seg_name(k) });
+                debug::hash_fail(&owner, &capture, &series, k, bad);
+                if let Some(set) = &set {
+                    core.append_log(&room, &json!({"k": "file_bad", "room": room, "set": set, "file": format!("{owner}/{capture}/{name}"), "size": bad, "t_us": now_us()}));
+                }
+                core.bad.lock().unwrap().insert((conn.remote_id().to_string(), guard.path.clone()));
+                anyhow::bail!("{name} does not match its size and SHA-256");
             }
             continue;
         }
@@ -697,23 +744,47 @@ async fn receive(core: &Core, conn: &Connection, req: Value) -> Result<u64> {
     Ok(got)
 }
 
-async fn live_info(core: &Core, id: &EndpointId, conn: &Connection) -> Option<Value> {
+#[derive(Clone, Default, PartialEq)]
+pub struct PeerLive {
+    pub capture: String,
+    pub n: [u32; 2],
+    pub set: [Option<String>; 2],
+}
+
+fn peer_live(info: &Value) -> Option<PeerLive> {
+    let capture = info["capture"].as_str().filter(|c| info["sharing"] == true && capture_id(c))?;
+    let n = [0, 1].map(|i| info["n"][i].as_u64().and_then(|n| u32::try_from(n).ok()).unwrap_or(0));
+    let set = [0, 1].map(|i| info["set"][i].as_str().filter(|s| valid_id(s)).map(String::from));
+    Some(PeerLive { capture: capture.to_string(), n, set })
+}
+
+async fn live_info(core: &Core, id: &EndpointId, conn: &Connection) -> Option<PeerLive> {
     let info: Value = request(conn, &json!({"t": "live"})).await.ok().and_then(|r| serde_json::from_slice(&r).ok()).unwrap_or_default();
-    let sharing = info["sharing"] == true && info["capture"].as_str().is_some_and(capture_id);
-    core.update_peer(id, |p| p.sharing = sharing);
-    sharing.then_some(info)
+    let live = peer_live(&info);
+    core.update_peer(id, |p| {
+        p.sharing = live.is_some();
+        p.live = live.clone();
+    });
+    live
 }
 
 async fn follow_live(core: Arc<Core>, id: EndpointId, conn: Connection, room: String, which: usize, key: String) {
-    let series = SERIES[which];
+    let (series, owner) = (SERIES[which], id.to_string());
+    let mut capture = String::new();
     while core.active_room_id() == room && conn.close_reason().is_none() && core.has_peer(&id) {
         let Some(info) = live_info(&core, &id, &conn).await else { break };
-        let capture = info["capture"].as_str().unwrap_or_default().to_string();
-        let n = info["n"][which].as_u64().unwrap_or(0);
+        if info.capture != capture {
+            capture = info.capture.clone();
+            data::keep_capture(&core.standby_dir(&room, &owner, &capture));
+        }
+        let (n, set) = (info.n[which], info.set[which].clone());
         if n > 0 {
-            let init = !core.capture_dir(&room, &id.to_string(), &capture).join(series).join(INIT).exists();
-            let req = json!({"t": "follow", "room": room, "owner": id.to_string(), "capture": capture, "series": series, "from": n, "at": 0, "init": init, "live": true});
-            if receive(&core, &conn, req).await.is_err() {
+            let dir = core.media_dir(&room, set.as_deref(), &owner, &capture).join(series);
+            let mut req = json!({"t": "follow", "room": room, "owner": owner, "capture": capture, "series": series, "from": n, "at": 0, "init": !dir.join(INIT).exists(), "live": true});
+            if let Some(set) = set {
+                req["set"] = json!(set);
+            }
+            if receive(&core, &conn, req, HashMap::new()).await.is_err() {
                 break;
             }
         }
@@ -722,10 +793,10 @@ async fn follow_live(core: Arc<Core>, id: EndpointId, conn: Connection, room: St
     core.following.lock().unwrap().remove(&key);
 }
 
-async fn fetch(core: Arc<Core>, conn: Connection, req: Value, key: String) {
+async fn fetch(core: Arc<Core>, conn: Connection, req: Value, expect: HashMap<u32, (u64, String)>, key: String) {
     let started = Instant::now();
     let what = format!("{} {} {} from {}", req["set"].as_str().unwrap_or_default(), short(req["owner"].as_str().unwrap_or_default()), req["series"], req["from"]);
-    match receive(&core, &conn, req).await {
+    match receive(&core, &conn, req, expect).await {
         Ok(got) => debug::event(&core, started, format!("{what}: fetched {got} B from {}", short(conn.remote_id()))),
         Err(e) => debug::event(&core, started, format!("{what}: fetch from {} stopped: {e}", short(conn.remote_id()))),
     }
@@ -756,11 +827,15 @@ fn fetch_history(core: &Arc<Core>, peer: &EndpointId, conn: &Connection, room: &
         if !room::auto_receive(set.end().is_none(), here, room::wants(core, room, &set.id)) {
             continue;
         }
-        data::adopt(core, set);
         let focused = Some(&set.id) == focus.as_ref();
         for f in &set.files {
             for series in [SERIES[1], SERIES[0]] {
                 let Some(run) = data::missing(core, room, f, series) else { continue };
+                let dir = core.set_dir(room, &set.id, &f.owner, &run.capture).join(series);
+                let bad = |path: PathBuf| core.bad.lock().unwrap().contains(&(via.clone(), path));
+                if bad(dir.join(seg_name(run.from))) || (run.init && bad(dir.join(INIT))) {
+                    continue;
+                }
                 let key = room::have_key(&set.id, &f.owner, series);
                 let busy = format!("{HISTORY_KEY}{room}/{}/{}/{}/{series}", set.id, f.owner, run.capture);
                 if focused && core.following.lock().unwrap().contains(&busy) {
@@ -776,7 +851,7 @@ fn fetch_history(core: &Arc<Core>, peer: &EndpointId, conn: &Connection, room: &
                 if here && core.following.lock().unwrap().insert(busy.clone()) {
                     waiting |= focused;
                     let req = json!({"t": "follow", "room": room, "set": set.id, "owner": f.owner, "capture": run.capture, "series": series, "from": run.from, "at": run.at, "to": run.to, "init": run.init});
-                    tokio::spawn(fetch(core.clone(), conn.clone(), req, busy));
+                    tokio::spawn(fetch(core.clone(), conn.clone(), req, data::expected(f, &run, series), busy));
                 }
             }
         }
@@ -951,6 +1026,7 @@ async fn run(core: &Arc<Core>, id: EndpointId, conn: Connection, outgoing: bool)
         if p.conn.as_ref().is_some_and(|c| c.stable_id() == conn.stable_id()) {
             p.conn = None;
             p.sharing = false;
+            p.live = None;
         }
         p.failures = if lived < STABLE_FOR { p.failures + 1 } else { 0 };
     });
@@ -1009,6 +1085,43 @@ pub async fn peer_loop(core: Arc<Core>, id: EndpointId) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_fetched_copy_is_kept_only_when_it_matches_its_record() {
+        use std::io::Write;
+        let dir = log::tests::temp("arrive");
+        let (path, other, init) = (dir.join("000001.m4s"), dir.join("000002.m4s"), dir.join(INIT));
+        std::fs::write(part_of(&path), b"0123456789").unwrap();
+        open_part(&part_of(&path), Some(4)).unwrap().write_all(b"abcd").unwrap();
+        assert_eq!(std::fs::read(part_of(&path)).unwrap(), b"0123abcd");
+        assert!(open_part(&part_of(&path), Some(100)).is_err());
+        drop(open_part(&part_of(&path), None).unwrap());
+        assert_eq!(file_len(&part_of(&path)), 0);
+        std::fs::write(part_of(&path), b"good").unwrap();
+        let good = data::sha256(&part_of(&path)).unwrap();
+        assert_eq!(finish_copy(&path, Some(&good)).unwrap(), None);
+        assert_eq!((std::fs::read(&path).unwrap(), part_of(&path).exists()), (b"good".to_vec(), false));
+        std::fs::write(part_of(&other), b"evil").unwrap();
+        assert_eq!(finish_copy(&other, Some(&good)).unwrap(), Some(4));
+        assert!(!other.exists() && !part_of(&other).exists());
+        std::fs::write(part_of(&other), b"live").unwrap();
+        assert_eq!(finish_copy(&other, None).unwrap(), None);
+        assert_eq!(std::fs::read(&other).unwrap(), b"live");
+        std::fs::write(part_of(&init), b"tini").unwrap();
+        assert_eq!(finish_copy(&init, Some(&good)).unwrap(), Some(4));
+        assert!(!init.exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_live_reply_names_the_recording_of_each_series() {
+        let live = peer_live(&json!({"sharing": true, "capture": "1700", "n": [7, 5], "set": ["2026-10-20 10-00-00", null]})).unwrap();
+        assert_eq!((live.capture.as_str(), live.n, live.set[0].as_deref(), live.set[1].as_deref()), ("1700", [7, 5], Some("2026-10-20 10-00-00"), None));
+        assert_eq!(peer_live(&json!({"sharing": true, "capture": "1700", "n": [3, 2]})).unwrap().set, [None, None]);
+        assert!(peer_live(&json!({"sharing": true, "capture": "1700", "n": [3, 2], "set": ["../x", 5]})).unwrap().set.iter().all(Option::is_none));
+        assert!(peer_live(&json!({"sharing": false, "capture": "1700"})).is_none());
+        assert!(peer_live(&json!({"sharing": true, "capture": "../x"})).is_none());
+    }
 
     #[test]
     fn only_a_run_of_failed_connects_is_reported_once() {

@@ -16,7 +16,7 @@ use tauri::State;
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::EnvFilter;
 
-use crate::room::{self, SERIES};
+use crate::room::{self, part_of, SERIES};
 use crate::{check, data, download, ffmpeg, hw, net, now_us, party, record, short, sources, Core, NO_WINDOW};
 
 const MAX_LOG: u64 = 10 << 20;
@@ -553,13 +553,15 @@ fn set_detail(core: &Core, room: &str, set: &room::Set) -> Value {
             let mut series = json!({});
             for s in SERIES {
                 let segs = f.series(s);
-                let (mut missing, mut unchecked, mut bad, mut ok) = (Vec::new(), Vec::new(), Vec::new(), 0u64);
-                for seg in &segs {
-                    match data::seg_check(core, room, &f.owner, seg) {
-                        Some(true) => ok += 1,
-                        Some(false) => bad.push(seg.n),
-                        None if core.seg_path(room, &f.owner, seg).exists() => unchecked.push(seg.n),
-                        None => missing.push(seg.n),
+                let (mut missing, mut receiving, mut present) = (Vec::new(), Vec::new(), 0u64);
+                for (seg, (here, _)) in segs.iter().zip(data::presence(&core.files, &data::file_dir(core, room, f), f, s)) {
+                    let path = core.seg_path(room, &f.owner, seg);
+                    if here {
+                        present += 1;
+                    } else if part_of(&path).exists() || core.writing.lock().unwrap().contains(&path) {
+                        receiving.push(seg.n);
+                    } else {
+                        missing.push(seg.n);
                     }
                 }
                 let key = room::have_key(&set.id, &f.owner, s);
@@ -567,7 +569,7 @@ fn set_detail(core: &Core, room: &str, set: &room::Set) -> Value {
                 for (id, h, online) in &peers {
                     have[short(id)] = json!({"n": h.get(&key).copied().unwrap_or(0), "online": online});
                 }
-                series[s] = json!({"total": segs.len(), "verified": ok, "missing": ranges(&missing), "unchecked": ranges(&unchecked), "bad": ranges(&bad), "have": have});
+                series[s] = json!({"total": segs.len(), "present": present, "receiving": ranges(&receiving), "missing": ranges(&missing), "have": have});
             }
             json!({"owner": f.owner, "short": short(&f.owner), "name": room::display_name(core, &f.owner), "start_us": f.start_us, "end_us": f.end_us, "captures": f.captures(), "series": series})
         })

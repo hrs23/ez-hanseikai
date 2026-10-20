@@ -43,61 +43,69 @@ fn growing(dir: &Path, mut n: u32, out: &mut Vec<Piece>) {
     }
 }
 
-pub fn set_pieces(core: &Core, room: &str, f: &File, capture: &str, series: &str) -> Vec<Piece> {
-    let init = core.init_path(room, &f.set, &f.owner, capture, series);
-    if !init.exists() {
-        return Vec::new();
-    }
-    let dir = core.capture_dir(room, &f.owner, capture).join(series);
-    let mut out = vec![piece(init)];
-    let recording = f.end_us.is_none();
-    let own = f.owner == core.me();
+fn pieces_in(files: &data::Files, dir: &Path, f: &File, capture: &str, series: &str) -> Vec<Piece> {
+    let names = data::listing(files, dir);
+    let Some(len) = names.get(INIT).filter(|len| f.init(capture, series).is_none_or(|(size, _)| size == **len)) else { return Vec::new() };
+    let mut out = vec![Piece { path: dir.join(INIT), len: *len }];
     let mut next = None;
     for seg in f.segs.iter().filter(|s| s.capture == capture && s.series == series) {
-        let path = core.seg_path(room, &f.owner, seg);
-        let check = data::seg_check(core, room, &f.owner, seg);
-        if !(check == Some(true) || (own || (recording && check.is_none())) && path.exists()) {
+        if names.get(&seg_name(seg.n)) != Some(&seg.size) {
             return out;
         }
-        out.push(Piece { len: if check == Some(true) { seg.size } else { file_len(&path) }, path });
+        out.push(Piece { path: dir.join(seg_name(seg.n)), len: seg.size });
         next = Some(seg.n + 1);
     }
-    if let Some(n) = next.filter(|_| recording) {
-        growing(&dir, n, &mut out);
+    if let Some(n) = next.filter(|_| f.end_us.is_none()) {
+        growing(dir, n, &mut out);
     }
     out
+}
+
+pub fn set_pieces(core: &Core, room: &str, f: &File, capture: &str, series: &str) -> Vec<Piece> {
+    pieces_in(&core.files, &core.set_dir(room, &f.set, &f.owner, capture).join(series), f, capture, series)
 }
 
 pub fn window(newest: u32) -> u32 {
     if newest < 2 { 1 } else { (newest - 2) / LIVE_WINDOW * LIVE_WINDOW + 1 }
 }
 
-fn newest_capture(core: &Core, room: &str, owner: &str) -> Option<String> {
-    if owner == core.me() {
-        return core.engine.live().filter(|(r, _, _)| r == room).map(|(_, capture, _)| capture);
-    }
-    let names = std::fs::read_dir(core.dir.join("rooms").join(room).join(owner)).ok()?;
-    names.flatten().filter_map(|e| e.file_name().to_string_lossy().parse::<u64>().ok()).max().map(|c| c.to_string())
+pub fn own_live(core: &Core, room: &str) -> Option<(String, Option<String>)> {
+    let live = core.engine.live().filter(|l| l.room == room)?;
+    let set = live.recent[0].last().and_then(|(_, set)| set.clone());
+    Some((live.capture, set))
 }
 
-fn live_pieces(core: &Core, room: &str, owner: &str, capture: &str, from: u32) -> Vec<Piece> {
-    let dir = core.capture_dir(room, owner, capture).join(SERIES[0]);
+fn live_folder(core: &Core, room: &str, owner: &str) -> Option<(String, Option<String>)> {
+    if owner == core.me() {
+        return own_live(core, room);
+    }
+    let live = core.peers.lock().unwrap().iter().find(|p| p.id.to_string() == owner).and_then(|p| p.live.clone())?;
+    Some((live.capture, live.set[0].clone()))
+}
+
+fn pieces_from(dir: &Path, from: u32) -> Vec<Piece> {
     let init = dir.join(INIT);
     if !init.exists() {
         return Vec::new();
     }
     let mut out = vec![piece(init)];
-    growing(&dir, from, &mut out);
+    growing(dir, from, &mut out);
     out
 }
 
-pub fn live_json(core: &Core, room: &str, owner: &str) -> Option<Value> {
-    let capture = newest_capture(core, room, owner)?;
-    let dir = core.capture_dir(room, owner, &capture).join(SERIES[0]);
+fn live_pieces(core: &Core, room: &str, owner: &str, capture: &str, from: u32) -> Vec<Piece> {
+    match live_folder(core, room, owner) {
+        Some((current, set)) if current == capture => pieces_from(&core.media_dir(room, set.as_deref(), owner, capture).join(SERIES[0]), from),
+        _ => Vec::new(),
+    }
+}
+
+pub fn live_json(core: &Core, room: &str, owner: &str, capture: &str, set: Option<&str>) -> Option<Value> {
+    let dir = core.media_dir(room, set, owner, capture).join(SERIES[0]);
     let numbers: Vec<u32> = std::fs::read_dir(&dir).ok()?.flatten().filter_map(|e| room::seg_number(&e.file_name().to_string_lossy())).collect();
     let start = window(*numbers.iter().max()?);
     let from = numbers.iter().copied().filter(|n| *n >= start).min()?;
-    let pieces = live_pieces(core, room, owner, &capture, from);
+    let pieces = pieces_from(&dir, from);
     (pieces.len() > 1).then(|| json!({"path": format!("live/{room}/{owner}/{capture}/{from}"), "size": size(&pieces)}))
 }
 
@@ -230,6 +238,38 @@ mod tests {
         assert_eq!(range(Some("bytes=10-"), 10), None);
         assert_eq!(range(Some("bytes=0-"), RANGE_MAX * 3), Some((0, RANGE_MAX - 1)));
         assert_eq!(range(Some("items=0-"), 10), None);
+    }
+
+    #[test]
+    fn a_recording_plays_from_its_own_folder_up_to_the_first_missing_segment() {
+        let dir = crate::log::tests::temp("pieces");
+        let put = |name: &str, body: &[u8]| std::fs::write(dir.join(name), body).unwrap();
+        let mut records = vec![json!({"k": "cap", "capture": "1000", "start_us": 0, "init": {"v": {"size": 4, "sha256": "i"}}}), json!({"k": "rec", "set": "s1", "start_us": 0})];
+        records.extend((1..=4).map(|n| json!({"k": "seg", "capture": "1000", "series": "v", "n": n, "set": "s1", "t_us": n * 4, "d_us": 4, "size": 4, "sha256": "x"})));
+        let file = |records: Vec<Value>| room::derive_sets("r", &[room::Log { owner: "a".into(), offset_us: 0, records: Arc::new(records) }]).remove(0).files.remove(0);
+        let recording = file(records.clone());
+        records.push(json!({"k": "rec_end", "set": "s1", "t_us": 20}));
+        let ended = file(records);
+        let files = data::Files::default();
+        let lens = |f: &File| pieces_in(&files, &dir, f, "1000", "v").iter().map(|p| (p.path.file_name().unwrap().to_string_lossy().to_string(), p.len)).collect::<Vec<_>>();
+        assert!(lens(&ended).is_empty());
+        put(INIT, b"init");
+        put("000001.m4s", b"seg!");
+        put("000002.m4s", b"seg!");
+        put("000003.m4s", b"bad");
+        put("000004.m4s", b"seg!");
+        data::forget(&files, &dir);
+        assert_eq!(lens(&ended), [(INIT.to_string(), 4), ("000001.m4s".to_string(), 4), ("000002.m4s".to_string(), 4)]);
+        put("000003.m4s", b"seg!");
+        put("000005.m4s", b"next");
+        put("000006.m4s.part", b"open");
+        data::forget(&files, &dir);
+        assert_eq!(lens(&ended).len(), 4 + 1);
+        assert_eq!(lens(&recording)[5..], [("000005.m4s".to_string(), 4), ("000006.m4s.part".to_string(), 4)]);
+        put(INIT, b"other init");
+        data::forget(&files, &dir);
+        assert!(lens(&ended).is_empty());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

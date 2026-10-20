@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -20,16 +20,16 @@ enum Pick {
     Use(usize, String, usize),
 }
 
+pub fn file(room_dir: &Path, set: &str) -> PathBuf {
+    room_dir.join(DIR).join(format!("{set}.jpg"))
+}
+
 pub fn path(core: &Core, room: &str, set: &str) -> PathBuf {
-    core.dir.join("rooms").join(room).join(DIR).join(format!("{set}.jpg"))
+    file(&core.room_dir(room), set)
 }
 
 pub fn exists(core: &Core, room: &str, set: &str) -> bool {
     path(core, room, set).exists()
-}
-
-pub fn remove(core: &Core, room: &str, set: &str) {
-    let _ = std::fs::remove_file(path(core, room, set));
 }
 
 pub fn middle(durations: &[i64]) -> Option<usize> {

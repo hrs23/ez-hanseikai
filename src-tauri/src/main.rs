@@ -152,6 +152,7 @@ pub struct Peer {
     pub info: Option<(String, u32)>,
     pub hw: Value,
     pub sharing: bool,
+    pub live: Option<net::PeerLive>,
     pub seen_us: Option<i64>,
     pub have: HashMap<String, u64>,
     pub logs: HashMap<String, u64>,
@@ -164,7 +165,7 @@ impl Peer {
     }
 
     pub fn new(id: EndpointId, name: String) -> Self {
-        Self { id, name, conn: None, offset_us: None, failures: 0, announce: true, codecs: default_codecs(), info: None, hw: Value::Null, sharing: false, seen_us: None, have: HashMap::new(), logs: HashMap::new(), asks: Vec::new() }
+        Self { id, name, conn: None, offset_us: None, failures: 0, announce: true, codecs: default_codecs(), info: None, hw: Value::Null, sharing: false, live: None, seen_us: None, have: HashMap::new(), logs: HashMap::new(), asks: Vec::new() }
     }
 }
 
@@ -210,8 +211,9 @@ pub struct Core {
     pub api_token: Mutex<String>,
     pub api_error: Mutex<String>,
     logs: Mutex<HashMap<PathBuf, (Arc<Vec<Value>>, u64)>>,
-    pub jsons: Mutex<HashMap<PathBuf, Value>>,
+    pub files: data::Files,
     pub writing: Mutex<HashSet<PathBuf>>,
+    pub bad: Mutex<HashSet<(String, PathBuf)>>,
     pub indexes: Mutex<HashMap<PathBuf, (u64, Arc<Vec<media::Time>>)>>,
 }
 
@@ -809,6 +811,7 @@ async fn reset(core: State<'_, Arc<Core>>, keep_rooms: bool) -> Result<(), Strin
         jobs::stop_and_wait(&core);
         data::unlock(&core.dir);
         data::reset(&core.dir, keep_rooms);
+        data::forget(&core.files, &core.dir);
         core.app.restart()
     })
     .await
@@ -1019,8 +1022,9 @@ async fn init(app: AppHandle, dir: PathBuf, left_lock: bool) -> Result<Arc<Core>
         api_token: Mutex::new(settings["api_token"].as_str().filter(|t| api::token_valid(t)).unwrap_or_default().to_string()),
         api_error: Mutex::new(String::new()),
         logs: Mutex::new(HashMap::new()),
-        jsons: Mutex::new(HashMap::new()),
+        files: Mutex::new(HashMap::new()),
         writing: Mutex::new(HashSet::new()),
+        bad: Mutex::new(HashSet::new()),
         indexes: Mutex::new(HashMap::new()),
     }))
 }
@@ -1112,6 +1116,8 @@ fn main() {
             app.manage(core.clone());
             shell::setup(app, core.clone())?;
             record::recover(&core);
+            data::clear_standby(&core.dir);
+            data::note_old_layout(&core);
             let c = core.clone();
             std::thread::spawn(move || data::keeper(c));
             tauri::async_runtime::spawn(net::accept_loop(core.clone()));

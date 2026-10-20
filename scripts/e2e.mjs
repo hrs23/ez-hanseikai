@@ -57,6 +57,9 @@ const API_PORTS = { a: API_PORT_BASE, b: API_PORT_BASE + 1, c: API_PORT_BASE + 2
 const TOKEN_CHARS = 48;
 const OLD_ROOM = "0ld0r00m";
 const ROOM_NAME_CHARS = 40;
+const OLD_OWNER = "0123456789abcdef".repeat(4);
+const OLD_CAPTURE = "1700000000000";
+const OLD_SET = "2026-01-01 00-00-00";
 const NAMES = { a: "Ann", b: "Ben", c: "Cal" };
 
 const within = (s) => s * RUNNER_SLOWDOWN;
@@ -196,7 +199,18 @@ function crc32(bytes) {
 
 function oldFiles() {
   const room = path.join("rooms", OLD_ROOM);
+  const capture = path.join(room, OLD_OWNER, OLD_CAPTURE);
+  const kept = path.join(room, "recordings", OLD_SET, OLD_OWNER, OLD_CAPTURE);
   return {
+    [path.join(capture, "v", "init.mp4")]: "old init",
+    [path.join(capture, "v", "000001.m4s")]: "old segment",
+    [path.join(capture, "v", "open.json")]: JSON.stringify({ n: 2, set: OLD_SET }),
+    [path.join(capture, "cap.json")]: JSON.stringify({ start_us: 1 }),
+    [path.join(capture, "verified.json")]: JSON.stringify({ "v/000001.m4s": { size: 11, ok: true } }),
+    [path.join(kept, "verified.json")]: JSON.stringify({ "v/000001.m4s": { size: 11, ok: false } }),
+    [path.join(kept, "v", "init.mp4")]: "old init",
+    [path.join(kept, "v", "000001.m4s")]: "old segment",
+    [path.join(room, "recordings", "orphan", OLD_OWNER, OLD_CAPTURE, "v", "000001.m4s")]: "orphan segment",
     "rec-20260101-000000.mp4": "old recording",
     "log.bin": frame({ k: "note", text: "old note", t_us: 1 }),
     "peer.txt": "old peer",
@@ -210,8 +224,10 @@ function oldFiles() {
   };
 }
 
+const oldStandby = () => path.join("rooms", OLD_ROOM, "standby", OLD_OWNER, OLD_CAPTURE, "v", "000001.m4s");
+
 function seedOld(dir) {
-  for (const [name, body] of Object.entries(oldFiles())) {
+  for (const [name, body] of Object.entries({ ...oldFiles(), [oldStandby()]: "live segment" })) {
     fs.mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
     fs.writeFileSync(path.join(dir, name), body);
   }
@@ -364,9 +380,20 @@ function segsOf(owned, set, series) {
 }
 
 function mediaFile(app, room, set, owner, capture, series, name) {
-  const kept = path.join(roomDir(app, room), "recordings", set, owner, capture, series, name);
-  const live = path.join(roomDir(app, room), owner, capture, series, name);
-  return fs.existsSync(kept) || !fs.existsSync(live) ? kept : live;
+  return path.join(roomDir(app, room), "recordings", set, owner, capture, series, name);
+}
+
+function filesUnder(dir) {
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? filesUnder(path.join(dir, e.name)) : [path.join(dir, e.name)]));
+}
+
+function inStandby(holder, room, owners, set) {
+  for (const owner of owners) {
+    const stray = pieces(logOf(owner, room, owner.id), set).filter((p) => p.name !== "init.mp4" && fs.existsSync(path.join(roomDir(holder, room), "standby", owner.id, p.capture, p.series, p.name)));
+    if (stray.length) return `${holder.key} keeps ${owner.key}'s ${stray[0].capture}/${stray[0].series}/${stray[0].name} of the recording in standby`;
+  }
+  return "";
 }
 
 function pieces(owned, set, limit = Infinity) {
@@ -438,6 +465,12 @@ function holdEverything(list, room, set, owners, limits = {}) {
     }
   }
   return "";
+}
+
+function holding(list, room, set, owners, limits = {}) {
+  const missing = holdEverything(list, room, set, owners, limits);
+  if (missing) throw new Error(missing);
+  return true;
 }
 
 function ffmpeg(tool, args) {
@@ -569,8 +602,12 @@ async function scenario(ctx) {
       const limits = Object.fromEntries(all.map((x) => [x.key, segsOf(logOf(x, ctx.room, x.id), ctx.set, "v").length]));
       await waitFor(`everyone holds what was logged by now (${brief(limits)})`, within((SEGMENT_S + LOG_SYNC_S) * 2), async () => {
         check((await state(a)).active_set?.id === ctx.set, "the set stopped early");
-        return !holdEverything(all, ctx.room, ctx.set, all, limits);
+        return holding(all, ctx.room, ctx.set, all, limits);
       });
+    }
+    for (const holder of all) {
+      const stray = inStandby(holder, ctx.room, all, ctx.set);
+      check(!stray, stray);
     }
     await allSee([b, c], "A's live picture available", within(SEGMENT_S + LOG_SYNC_S), (st) => st.peers.find((p) => p.id === a.id)?.live);
   });
@@ -619,22 +656,26 @@ async function scenario(ctx) {
 
   await step("B crashes mid-recording and recovers its open segment", async () => {
     const capture = segsOf(logOf(b, ctx.room, b.id), ctx.set, "v").at(-1).capture;
-    const dir = path.join(roomDir(b, ctx.room), b.id, capture);
+    const dir = path.join(roomDir(b, ctx.room), "recordings", ctx.set, b.id, capture);
     const openPart = (series) => {
-      const open = readJson(path.join(dir, series, "open.json"));
-      return open && { series, n: open.n, set: open.set, whole: wholeFragments(path.join(dir, series, `${segName(open.n)}.part`)) };
+      const name = filesUnder(path.join(dir, series)).map((f) => path.basename(f)).filter((f) => f.endsWith(".m4s.part")).sort().at(-1);
+      return name && { series, n: Number(name.split(".")[0]), whole: wholeFragments(path.join(dir, series, name)) };
     };
     await waitFor(`B's open segment has ${CRASH_AFTER_FRAGMENTS} whole fragments`, within(SEGMENT_S * 2), () => {
       const v = openPart("v");
-      return v && v.set === ctx.set && v.whole >= CRASH_AFTER_FRAGMENTS;
+      return v && v.whole >= CRASH_AFTER_FRAGMENTS;
     });
+    const standby = filesUnder(path.join(roomDir(b, ctx.room), "standby"));
+    check(standby.length > 0, "B holds no live segments before the crash");
     kill(b, false);
     await stopped(b);
-    const open = SERIES.map(openPart).filter((o) => o && o.set === ctx.set && o.whole > 0);
+    const open = SERIES.map(openPart).filter((o) => o && o.whole > 0);
     check(open.some((o) => o.series === "v"), "no open picture segment at the crash");
     ctx.notes.push(`killed B with open segments ${brief(open)}`);
     start("b");
     await attach(b);
+    const kept = standby.filter((f) => fs.existsSync(f));
+    check(!kept.length, `B kept ${kept.length} live files over its restart`);
     const recovery = (await state(b)).recovery;
     check(!recovery, `B says ${brief(recovery)} after the crash`);
     await share(b);
@@ -651,7 +692,7 @@ async function scenario(ctx) {
     const target = logged(a) + SEGMENTS_AFTER_RESTART;
     await waitFor(`A logs ${SEGMENTS_AFTER_RESTART} more segments`, within(SEGMENT_S * (SEGMENTS_AFTER_RESTART + 1)), () => logged(a) >= target);
     const limits = { a: target, c: logged(c) };
-    await waitFor("B holds them after its restart", within((SEGMENT_S + LOG_SYNC_S) * 2), () => !holdEverything([b], ctx.room, ctx.set, [a, c], limits));
+    await waitFor("B holds them after its restart", within((SEGMENT_S + LOG_SYNC_S) * 2), () => holding([b], ctx.room, ctx.set, [a, c], limits));
     await waitFor("B records the set again in a new capture", within(SEGMENT_S * 2), () => {
       const own = logOf(b, ctx.room, b.id);
       const ended = own.findLastIndex((r) => r.k === "rec_end" && r.set === ctx.set);
@@ -673,6 +714,7 @@ async function scenario(ctx) {
     const all = [a, b, c];
     await invoke(c, "stop_recording");
     await allSee(all, "the set ended", within(LOG_SYNC_S * 2), (st) => !st.active_set && setOf(st, ctx.set) && !setOf(st, ctx.set).live);
+    await allSee(all, "every live picture back after the stop", within(SEGMENT_S + DIAL_RETRY_S + LOG_SYNC_S), (st) => st.capture.live && st.peers.length === 2 && st.peers.every((p) => p.live));
     await allSee(all, "Everyone has it", within((SEGMENT_S + SYNC_ROUND_S) * 2), (st) => heldByAll(st, ctx.set, all));
     const st = await state(a);
     const players = setOf(st, ctx.set).players.map((p) => p.owner).sort();
@@ -1310,7 +1352,7 @@ async function scenario(ctx) {
     await onlyOnDownload([b], a, ctx.review);
     await allSee(all, "everyone still lists the review", within(SYNC_ROUND_S), (st) => !!setOf(st, ctx.review));
     for (const app of [a, c]) check(setOf(await state(app), ctx.review).progress.have > 0, `${app.key} lost the review`);
-    await waitFor("B fetches the review on request", within((SEGMENT_S + SYNC_ROUND_S) * 3), async () => heldByAll(await state(b), ctx.review, [b]) && !holdEverything([b], ctx.room, ctx.review, all));
+    await waitFor("B fetches the review on request", within((SEGMENT_S + SYNC_ROUND_S) * 3), async () => heldByAll(await state(b), ctx.review, [b]) && holding([b], ctx.room, ctx.review, all));
   });
 
   await step("deleting a recording nobody else holds removes it, its jobs and its entry everywhere", async () => {
@@ -1356,6 +1398,7 @@ async function scenario(ctx) {
       const file = path.join(apps.c.data, name);
       check(fs.existsSync(file) && fs.readFileSync(file).equals(Buffer.from(body)), `${name} was changed or removed`);
     }
+    check(!fs.existsSync(path.join(apps.c.data, oldStandby())), "C kept a live segment of an earlier run");
   });
 
   await step("removing C for the whole room stops it fetching", async () => {

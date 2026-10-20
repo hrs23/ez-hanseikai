@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -299,7 +298,7 @@ fn seg_record(capture: &str, series: &str, p: &Pending, set: &str, d_us: i64) ->
     json!({"k": "seg", "capture": capture, "series": series, "n": p.n, "set": set, "t_us": p.t_us, "d_us": d_us, "size": p.size, "sha256": p.sha})
 }
 
-fn flush(core: &Core, dir: &Path, series: &str, capture_dir: &Path, n: u32, fragments: &[Vec<u8>], t_us: i64) -> Result<Pending, String> {
+fn flush(dir: &Path, n: u32, fragments: &[Vec<u8>], t_us: i64) -> Result<Pending, String> {
     let path = dir.join(seg_name(n));
     let mut hasher = Sha256::new();
     let mut bytes = Vec::new();
@@ -308,11 +307,10 @@ fn flush(core: &Core, dir: &Path, series: &str, capture_dir: &Path, n: u32, frag
         bytes.extend_from_slice(f);
     }
     write_whole(&path, &bytes).map_err(|e| e.to_string())?;
-    data::mark(core, capture_dir, &format!("{series}/{}", seg_name(n)), bytes.len() as u64, true);
     Ok(Pending { n, t_us, size: bytes.len() as u64, sha: hex(&hasher.finalize()) })
 }
 
-fn convert(core: &Core, input: &Path, probe: &Probe, recipe: &Recipe, series: &str, capture_dir: &Path, set: &str, capture: &str, start_us: i64, progress: &dyn Fn(f64)) -> Result<Made, String> {
+fn convert(input: &Path, probe: &Probe, recipe: &Recipe, series: &str, capture_dir: &Path, set: &str, capture: &str, start_us: i64, progress: &dyn Fn(f64)) -> Result<Made, String> {
     let dir = capture_dir.join(series);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let args = convert_args(&input.to_string_lossy(), probe, recipe, series);
@@ -354,7 +352,6 @@ fn convert(core: &Core, input: &Path, probe: &Probe, recipe: &Recipe, series: &s
             match out {
                 media::Out::Init(bytes) => {
                     write_whole(&dir.join(INIT), &bytes).map_err(|e| e.to_string())?;
-                    data::mark(core, capture_dir, &format!("{series}/{INIT}"), bytes.len() as u64, true);
                     scales = media::timescales(&bytes);
                     init = Some((bytes.len() as u64, hex(&Sha256::digest(&bytes))));
                 }
@@ -367,7 +364,7 @@ fn convert(core: &Core, input: &Path, probe: &Probe, recipe: &Recipe, series: &s
                     last_rel = rel;
                     if current.len() as u32 >= FRAGMENTS_PER_SEGMENT {
                         n += 1;
-                        pendings.push(flush(core, &dir, series, capture_dir, n, &current, start_us + current_t)?);
+                        pendings.push(flush(&dir, n, &current, start_us + current_t)?);
                         current.clear();
                     }
                     if current.is_empty() {
@@ -394,7 +391,7 @@ fn convert(core: &Core, input: &Path, probe: &Probe, recipe: &Recipe, series: &s
     }
     if !current.is_empty() {
         n += 1;
-        pendings.push(flush(core, &dir, series, capture_dir, n, &current, start_us + current_t)?);
+        pendings.push(flush(&dir, n, &current, start_us + current_t)?);
     }
     let Some(init) = init.filter(|_| !pendings.is_empty()) else { return Err("The file has no picture or sound.".to_string()) };
     let mut segs = Vec::new();
@@ -445,11 +442,6 @@ pub fn item_records(items: &[Item], subtitles: &[(String, Vec<Cue>)], set: &str,
         }
     }
     out
-}
-
-fn unused_set(core: &Core, room_id: &str, start_us: i64) -> String {
-    let taken: HashSet<String> = room::sets(core, room_id, &room::logs(core, room_id)).into_iter().map(|s| s.id).chain(room::dropped(&room::logs(core, room_id))).collect();
-    (0..).map(|i| room::set_id_for(start_us + i * 1_000_000, core.tz_offset_s)).find(|id| !taken.contains(id)).unwrap_or_default()
 }
 
 fn emit(core: &Core, percent: f64, done: bool, error: Option<String>, title: &str) {
@@ -511,7 +503,7 @@ fn import(core: &Arc<Core>, room_id: &str, plan: &Plan) -> Result<Value, String>
     }
     let base_ms = plan.start_ms.or_else(|| plan.views.iter().zip(&probes).filter_map(|(v, (p, _))| file_start_ms(&v.file, p)).min()).unwrap_or_else(|| now_us() / 1000);
     let start_us = base_ms * 1000;
-    let set = unused_set(core, room_id, start_us);
+    let set = room::unused_set(&room::logs(core, room_id), &core.room_dir(room_id), start_us, core.tz_offset_s);
     let units = plan.views.iter().zip(&probes).map(|(v, (p, _))| usize::from(p.picture.is_some()) + usize::from(v.voice.is_some() || p.picture.is_none())).sum::<usize>().max(1);
     let done = std::cell::Cell::new(0usize);
     let progress = |frac: f64| emit(core, (done.get() as f64 + frac) / units as f64 * 100.0, false, None, &plan.title);
@@ -529,7 +521,7 @@ fn import(core: &Arc<Core>, room_id: &str, plan: &Plan) -> Result<Value, String>
             let has_picture = info.picture.is_some();
             let recipe = decide(info, &usable);
             if has_picture {
-                let m = convert(core, &view.file, info, &recipe, SERIES[0], &capture_dir, &set, &capture, view_start, &progress)?;
+                let m = convert(&view.file, info, &recipe, SERIES[0], &capture_dir, &set, &capture, view_start, &progress)?;
                 done.set(done.get() + 1);
                 init[SERIES[0]] = json!({"size": m.init.0, "sha256": m.init.1});
                 (width, height, end_us) = (m.width, m.height, end_us.max(m.end_us));
@@ -541,7 +533,7 @@ fn import(core: &Arc<Core>, room_id: &str, plan: &Plan) -> Result<Value, String>
                 (None, true) => None,
             };
             if let Some((path, probe)) = voice_source {
-                let m = convert(core, path, probe, &decide(probe, &usable), SERIES[1], &capture_dir, &set, &capture, view_start, &progress)?;
+                let m = convert(path, probe, &decide(probe, &usable), SERIES[1], &capture_dir, &set, &capture, view_start, &progress)?;
                 done.set(done.get() + 1);
                 init[SERIES[1]] = json!({"size": m.init.0, "sha256": m.init.1});
                 end_us = end_us.max(m.end_us);
@@ -568,6 +560,7 @@ fn import(core: &Arc<Core>, room_id: &str, plan: &Plan) -> Result<Value, String>
         let bytes: Vec<u8> = view.records.iter().flat_map(crate::log::encode).collect();
         crate::log::append_bytes(&core.log_path(room_id, &view.id), &bytes).map_err(|e| e.to_string())?;
     }
+    data::forget(&core.files, &core.recording_dir(room_id, &set));
     {
         let mut rooms = core.rooms.lock().unwrap();
         if let Some(r) = rooms.list.iter_mut().find(|r| r.id == room_id) {
