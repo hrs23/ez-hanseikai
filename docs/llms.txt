@@ -62,7 +62,7 @@ GET /v1/rooms/{room}/jobs
 
 GET /v1/diagnostics[?everyone=true]
   {"text": "ez-hanseikai 0.16.2 on windows ...\n\nrecent errors\n..."}
-  The report that Help > Diagnostics > Copy report gives, without its summary lines and with names and addresses hidden: versions, environment check, connections, hardware and clocks, where data goes, recent errors, jobs, crashes and the recent log. everyone=true adds each connected member's report. Read it when something does not work.
+  The report that Help > Diagnostics > Copy report gives, without its summary lines and with names and addresses hidden: versions, environment check, connections, hardware and clocks, where data goes, recent errors, jobs, crashes and the recent log. everyone=true puts this report under `=== this PC ===` and adds each connected member's under `=== member <first 10 characters of the id> ===`. Read it when something does not work.
 
 ## Write
 

@@ -190,7 +190,7 @@ Writes the recording into a new or empty folder on this PC as a [session folder]
 {"text": "ez-hanseikai 0.16.2 on windows ...\n\nrecent errors\n..."}
 ```
 
-The plain-text report of Help > Diagnostics > Copy report, without its summary lines, with names and addresses hidden. `?everyone=true` (or `1`) adds each connected member's report under `=== member <id> ===`, as they share it. It runs the environment check, so it can take a few seconds.
+The plain-text report of Help > Diagnostics > Copy report, without its summary lines, with names and addresses hidden. `?everyone=true` (or `1`) puts this PC's report under `=== this PC ===` and adds each connected member's report, as they share it, under `=== member <first 10 characters of the id> ===`. It runs the environment check, so it can take a few seconds.
 
 ## Example
 
