@@ -297,14 +297,12 @@ async fn follow(core: &Core, from: EndpointId, send: &mut SendStream, req: &Valu
     let dir = core.media_dir(&room, set.as_deref(), &owner, &capture).join(&series);
     let which = if series == SERIES[0] { 0 } else { 1 };
     let current = || core.engine.live().filter(|l| l.room == room && l.capture == capture);
-    let tail = || own && current().is_some();
     let sets = if own { Vec::new() } else { room::sets(core, &room, &room::logs(core, &room)) };
     let file = sets.iter().filter(|s| set.as_ref() == Some(&s.id)).flat_map(|s| s.files.iter()).find(|f| f.owner == owner);
     let held = |n: u32| file.and_then(|f| f.segs.iter().find(|g| g.capture == capture && g.series == series && g.n == n)).is_some_and(|g| data::has(&core.files, &dir, &seg_name(n), Some(g.size)));
     if req["init"] == true {
-        let path = dir.join(INIT);
         let ok = own || file.is_some_and(|f| data::has(&core.files, &dir, INIT, f.init(&capture, &series).map(|(size, _)| size)));
-        if !ok || !send_file(core, send, 0, &path, 0, !live, &|| false, &what).await? {
+        if !ok || !send_file(core, send, 0, &dir.join(INIT), 0, !live, &|| false, &what).await? {
             return Ok(());
         }
     }
@@ -318,7 +316,7 @@ async fn follow(core: &Core, from: EndpointId, send: &mut SendStream, req: &Valu
                     sleep(FILE_WATCH).await;
                     continue;
                 }
-                Some(LiveStep::Serve) => send_file(core, send, n, &path, at, false, &tail, &what).await?,
+                Some(LiveStep::Serve) => send_file(core, send, n, &path, at, false, &|| current().is_some(), &what).await?,
                 _ => false,
             }
         } else {
@@ -770,10 +768,7 @@ fn peer_live(info: &Value) -> Option<PeerLive> {
 async fn live_info(core: &Core, id: &EndpointId, conn: &Connection) -> Option<PeerLive> {
     let info: Value = request(conn, &json!({"t": "live"})).await.ok().and_then(|r| serde_json::from_slice(&r).ok()).unwrap_or_default();
     let live = peer_live(&info);
-    core.update_peer(id, |p| {
-        p.sharing = live.is_some();
-        p.live = live.clone();
-    });
+    core.update_peer(id, |p| p.live = live.clone());
     live
 }
 
@@ -839,7 +834,7 @@ fn fetch_history(core: &Arc<Core>, peer: &EndpointId, conn: &Connection, room: &
         let focused = Some(&set.id) == focus.as_ref();
         for f in &set.files {
             for series in [SERIES[1], SERIES[0]] {
-                let Some(run) = data::missing(core, room, f, series) else { continue };
+                let Some(run) = data::missing(&core.files, &core.writing, &data::file_dir(core, room, f), f, series) else { continue };
                 let dir = core.set_dir(room, &set.id, &f.owner, &run.capture).join(series);
                 let bad = |path: PathBuf| core.bad.lock().unwrap().contains(&(via.clone(), path));
                 if bad(dir.join(seg_name(run.from))) || (run.init && bad(dir.join(INIT))) {
@@ -1034,7 +1029,6 @@ async fn run(core: &Arc<Core>, id: EndpointId, conn: Connection, outgoing: bool)
     core.update_peer(&id, |p| {
         if p.conn.as_ref().is_some_and(|c| c.stable_id() == conn.stable_id()) {
             p.conn = None;
-            p.sharing = false;
             p.live = None;
         }
         p.failures = if lived < STABLE_FOR { p.failures + 1 } else { 0 };
@@ -1094,72 +1088,44 @@ pub async fn peer_loop(core: Arc<Core>, id: EndpointId) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::log::tests::temp;
 
     #[test]
     fn a_fetched_copy_is_kept_only_when_it_matches_its_record() {
+        use sha2::{Digest, Sha256};
         use std::io::Write;
-        let dir = log::tests::temp("arrive");
-        let (path, other, init) = (dir.join("000001.m4s"), dir.join("000002.m4s"), dir.join(INIT));
+        let dir = temp("arrive");
+        let [path, other, held, init] = ["000001.m4s", "000002.m4s", "000003.m4s", INIT].map(|name| dir.join(name));
         let bad = Mutex::new(HashSet::new());
-        let finish = |path: &Path, expect: Option<&(u64, String)>| finish_copy(&bad, "a", path, expect, false);
+        let good = (4, crate::hex(&Sha256::digest(b"good")));
+        let finish = |path: &Path, body: &[u8], expect: Option<&(u64, String)>, resumed: bool| {
+            std::fs::write(part_of(path), body).unwrap();
+            (finish_copy(&bad, "a", path, expect, resumed).unwrap(), std::fs::read(path).ok(), part_of(path).exists())
+        };
         std::fs::write(part_of(&path), b"0123456789").unwrap();
         open_part(&part_of(&path), Some(4)).unwrap().write_all(b"abcd").unwrap();
         assert_eq!(std::fs::read(part_of(&path)).unwrap(), b"0123abcd");
         assert!(open_part(&part_of(&path), Some(100)).is_err());
         drop(open_part(&part_of(&path), None).unwrap());
         assert_eq!(file_len(&part_of(&path)), 0);
-        std::fs::write(part_of(&path), b"good").unwrap();
-        let good = data::sha256(&part_of(&path)).unwrap();
-        assert_eq!(finish(&path, Some(&good)).unwrap(), None);
-        assert_eq!((std::fs::read(&path).unwrap(), part_of(&path).exists()), (b"good".to_vec(), false));
-        std::fs::write(part_of(&other), b"evil").unwrap();
-        assert_eq!(finish(&other, Some(&good)).unwrap(), Some(4));
-        assert!(!other.exists() && !part_of(&other).exists());
-        std::fs::write(part_of(&other), b"live").unwrap();
-        assert_eq!(finish(&other, None).unwrap(), None);
-        assert_eq!(std::fs::read(&other).unwrap(), b"live");
-        std::fs::write(part_of(&init), b"tini").unwrap();
-        assert_eq!(finish(&init, Some(&good)).unwrap(), Some(4));
-        assert!(!init.exists());
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn a_copy_that_cannot_be_read_is_kept_for_another_try() {
-        use std::os::windows::fs::OpenOptionsExt;
-        use ::windows::Win32::Storage::FileSystem::FILE_SHARE_DELETE;
-        let dir = log::tests::temp("unread");
-        let path = dir.join("000001.m4s");
-        std::fs::write(part_of(&path), b"good").unwrap();
-        let good = data::sha256(&part_of(&path)).unwrap();
-        let bad = Mutex::new(HashSet::new());
-        let held = std::fs::OpenOptions::new().read(true).share_mode(FILE_SHARE_DELETE.0).open(part_of(&path)).unwrap();
-        assert!(finish_copy(&bad, "a", &path, Some(&good), false).is_err());
-        assert_eq!((file_len(&part_of(&path)), path.exists(), bad.lock().unwrap().len()), (4, false, 0));
-        drop(held);
-        assert_eq!(finish_copy(&bad, "a", &path, Some(&good), false).unwrap(), None);
-        assert_eq!(std::fs::read(&path).unwrap(), b"good");
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn a_failed_copy_counts_against_its_sender_only_when_it_came_whole() {
-        let dir = log::tests::temp("blame");
-        let (path, bad) = (dir.join("000001.m4s"), Mutex::new(HashSet::new()));
-        let want = (4, "0".repeat(64));
-        std::fs::write(part_of(&path), b"evil").unwrap();
-        assert_eq!(finish_copy(&bad, "a", &path, Some(&want), true).unwrap(), Some(4));
-        assert!(bad.lock().unwrap().is_empty() && !part_of(&path).exists() && !path.exists());
-        std::fs::write(part_of(&path), b"evil").unwrap();
-        assert_eq!(finish_copy(&bad, "a", &path, Some(&want), false).unwrap(), Some(4));
-        assert_eq!(*bad.lock().unwrap(), HashSet::from([("a".to_string(), path.clone())]));
-        assert!(!part_of(&path).exists() && !path.exists());
+        assert_eq!(finish(&path, b"good", Some(&good), false), (None, Some(b"good".to_vec()), false));
+        assert_eq!(finish(&other, b"evil", Some(&good), true), (Some(4), None, false));
+        assert!(bad.lock().unwrap().is_empty());
+        assert_eq!(finish(&other, b"live", None, false), (None, Some(b"live".to_vec()), false));
+        assert_eq!(finish(&init, b"tini", Some(&good), false), (Some(4), None, false));
+        assert_eq!(*bad.lock().unwrap(), HashSet::from([("a".to_string(), init)]));
+        std::fs::write(part_of(&held), b"good").unwrap();
+        let lock = log::tests::hold(&part_of(&held));
+        assert!(finish_copy(&bad, "a", &held, Some(&good), false).is_err());
+        assert_eq!((file_len(&part_of(&held)), held.exists(), bad.lock().unwrap().len()), (4, false, 1));
+        drop(lock);
+        assert_eq!(finish_copy(&bad, "a", &held, Some(&good), false).unwrap(), None);
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn a_chunk_is_on_disk_before_its_copy_is_checked() {
-        let dir = log::tests::temp("chunk");
+        let dir = temp("chunk");
         let part = part_of(&dir.join(INIT));
         let runtime = tokio::runtime::Builder::new_current_thread().max_blocking_threads(1).build().unwrap();
         runtime.block_on(async {

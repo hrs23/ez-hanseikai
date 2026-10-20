@@ -31,14 +31,11 @@ fn piece(path: PathBuf) -> Piece {
 fn growing(dir: &Path, mut n: u32, out: &mut Vec<Piece>) {
     loop {
         let path = dir.join(seg_name(n));
-        if path.exists() {
-            out.push(piece(path));
-        } else if part_of(&path).exists() {
-            out.push(piece(part_of(&path)));
-            return;
-        } else {
+        if !path.exists() {
+            out.extend(Some(part_of(&path)).filter(|part| part.exists()).map(piece));
             return;
         }
+        out.push(piece(path));
         n += 1;
     }
 }
@@ -111,7 +108,7 @@ fn live_pieces(core: &Core, room: &str, owner: &str, capture: &str, from: u32) -
 }
 
 fn live_start(dir: &Path) -> Option<(u32, u64)> {
-    let numbers: Vec<u32> = std::fs::read_dir(dir).ok()?.flatten().filter_map(|e| room::seg_number(&e.file_name().to_string_lossy())).collect();
+    let numbers: Vec<u32> = crate::entries(dir).iter().filter_map(|(name, _)| room::seg_number(name)).collect();
     let from = live_from(&numbers)?;
     let pieces = pieces_from(dir, from);
     (pieces.len() > 1).then(|| (from, size(&pieces)))
@@ -243,6 +240,8 @@ pub fn respond(core: &Core, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::log::tests::{put, temp};
+    use crate::room::tests::small_file;
 
     #[test]
     fn ranges_are_capped_and_checked() {
@@ -257,32 +256,20 @@ mod tests {
 
     #[test]
     fn a_recording_plays_from_its_own_folder_up_to_the_first_missing_segment() {
-        let dir = crate::log::tests::temp("pieces");
-        let put = |name: &str, body: &[u8]| std::fs::write(dir.join(name), body).unwrap();
-        let mut records = vec![json!({"k": "cap", "capture": "1000", "start_us": 0, "init": {"v": {"size": 4, "sha256": "i"}}}), json!({"k": "rec", "set": "s1", "start_us": 0})];
-        records.extend((1..=4).map(|n| json!({"k": "seg", "capture": "1000", "series": "v", "n": n, "set": "s1", "t_us": n * 4, "d_us": 4, "size": 4, "sha256": "x"})));
-        let file = |records: Vec<Value>| room::derive_sets("r", &[room::Log { owner: "a".into(), offset_us: 0, records: Arc::new(records) }]).remove(0).files.remove(0);
-        let recording = file(records.clone());
-        records.push(json!({"k": "rec_end", "set": "s1", "t_us": 20}));
-        let ended = file(records);
-        let files = data::Files::default();
-        let lens = |f: &File| pieces_in(&files, &dir, f, "1000", "v").iter().map(|p| (p.path.file_name().unwrap().to_string_lossy().to_string(), p.len)).collect::<Vec<_>>();
+        let dir = temp("pieces");
+        let (recording, ended, files) = (small_file(4, false), small_file(4, true), data::Files::default());
+        let lens = |f: &File| {
+            data::forget(&files, &dir);
+            pieces_in(&files, &dir, f, "1000", "v").iter().map(|p| (p.path.file_name().unwrap().to_string_lossy().to_string(), p.len)).collect::<Vec<_>>()
+        };
+        let write = |all: &[(&str, &str)]| all.iter().for_each(|(name, body)| put(&dir, name, body.as_bytes()));
         assert!(lens(&ended).is_empty());
-        put(INIT, b"init");
-        put("000001.m4s", b"seg!");
-        put("000002.m4s", b"seg!");
-        put("000003.m4s", b"bad");
-        put("000004.m4s", b"seg!");
-        data::forget(&files, &dir);
+        write(&[(INIT, "init"), ("000001.m4s", "seg!"), ("000002.m4s", "seg!"), ("000003.m4s", "bad"), ("000004.m4s", "seg!")]);
         assert_eq!(lens(&ended), [(INIT.to_string(), 4), ("000001.m4s".to_string(), 4), ("000002.m4s".to_string(), 4)]);
-        put("000003.m4s", b"seg!");
-        put("000005.m4s", b"next");
-        put("000006.m4s.part", b"open");
-        data::forget(&files, &dir);
+        write(&[("000003.m4s", "seg!"), ("000005.m4s", "next"), ("000006.m4s.part", "open")]);
         assert_eq!(lens(&ended).len(), 4 + 1);
         assert_eq!(lens(&recording)[5..], [("000005.m4s".to_string(), 4), ("000006.m4s.part".to_string(), 4)]);
-        put(INIT, b"other init");
-        data::forget(&files, &dir);
+        write(&[(INIT, "other init")]);
         assert!(lens(&ended).is_empty());
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -290,32 +277,23 @@ mod tests {
     #[test]
     fn live_window_moves_in_steps_and_keeps_a_whole_segment() {
         assert_eq!([1, 2, 3, 4, 5, 6, 7, 8].map(window), [1, 1, 1, 1, 4, 4, 4, 7]);
-        assert_eq!(live_from(&(1..=8).collect::<Vec<_>>()), Some(7));
+        let standby = |after: &[u32]| [(4..=10).collect::<Vec<u32>>(), after.to_vec()].concat();
+        assert_eq!([&[][..], &[12], &[12, 13], &[12, 13, 14]].map(|after| live_from(&standby(after))), [Some(7), Some(12), Some(12), Some(13)]);
         assert_eq!(live_from(&[]), None);
     }
 
     #[test]
     fn a_live_tile_starts_where_its_folder_serves_it() {
-        let dir = crate::log::tests::temp("live");
+        let dir = temp("live");
         for n in 4..=10 {
-            std::fs::write(dir.join(seg_name(n)), b"seg!").unwrap();
+            put(&dir, &seg_name(n), b"seg!");
         }
-        std::fs::write(part_of(&dir.join(seg_name(11))), b"op").unwrap();
+        put(&dir, &format!("{}.part", seg_name(11)), b"op");
         assert_eq!(live_start(&dir), None);
-        std::fs::write(dir.join(INIT), b"init").unwrap();
-        assert_eq!(live_start(&dir), Some((10, 4 + 4 + 2)));
-        assert_eq!(size(&pieces_from(&dir, 10)), 4 + 4 + 2);
+        put(&dir, INIT, b"init");
+        assert_eq!((live_start(&dir), size(&pieces_from(&dir, 10))), (Some((10, 4 + 4 + 2)), 4 + 4 + 2));
         assert_eq!(live_start(&dir.join("missing")), None);
         let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn the_live_picture_starts_after_the_numbers_a_recording_took() {
-        let standby = |after: &[u32]| [(4..=10).collect::<Vec<u32>>(), after.to_vec()].concat();
-        assert_eq!(live_from(&standby(&[])), Some(7));
-        assert_eq!(live_from(&standby(&[12])), Some(12));
-        assert_eq!(live_from(&standby(&[12, 13])), Some(12));
-        assert_eq!(live_from(&standby(&[12, 13, 14])), Some(13));
     }
 
     #[test]

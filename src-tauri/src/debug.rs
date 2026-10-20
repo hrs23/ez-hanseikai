@@ -443,7 +443,7 @@ fn connections_json(core: &Core, since: u64, addresses: bool) -> Value {
             let conns: Vec<Value> = p.conn.iter().map(|c| conn_json("connection", c, addresses)).collect();
             json!({
                 "id": p.id.to_string(), "short": short(p.id), "name": p.name, "failures": p.failures, "offset_us": p.offset_us,
-                "version": p.info.as_ref().map(|i| &i.0), "proto": p.info.as_ref().map(|i| i.1), "codecs": p.codecs, "sharing": p.sharing, "conns": conns,
+                "version": p.info.as_ref().map(|i| &i.0), "proto": p.info.as_ref().map(|i| i.1), "codecs": p.codecs, "sharing": p.live.is_some(), "conns": conns,
             })
         })
         .collect();
@@ -554,8 +554,9 @@ fn set_detail(core: &Core, room: &str, set: &room::Set) -> Value {
             for s in SERIES {
                 let segs = f.series(s);
                 let (mut missing, mut receiving, mut present) = (Vec::new(), Vec::new(), 0u64);
-                for (seg, (here, _)) in segs.iter().zip(data::presence(&core.files, &data::file_dir(core, room, f), f, s)) {
-                    let path = core.seg_path(room, &f.owner, seg);
+                let base = data::file_dir(core, room, f);
+                for (seg, (here, _)) in segs.iter().zip(data::presence(&core.files, &base, f, s)) {
+                    let path = base.join(&seg.capture).join(s).join(room::seg_name(seg.n));
                     if here {
                         present += 1;
                     } else if part_of(&path).exists() || core.writing.lock().unwrap().contains(&path) {

@@ -1185,7 +1185,7 @@ mod tests {
 
     #[test]
     fn a_capture_spans_its_segments_on_the_local_clock() {
-        let seg = |n, t_us| Seg { set: "s1".into(), capture: "1".into(), series: "v".into(), n, t_us, d_us: 4, size: 1, sha256: String::new() };
+        let seg = |n, t_us| Seg { capture: "1".into(), series: "v".into(), n, t_us, d_us: 4, size: 1, sha256: String::new() };
         let (a, b) = (seg(1, 100), seg(2, 104));
         assert_eq!(span(&[&a, &b], 10), Some((90, 98)));
         assert_eq!(span(&[], 0), None);

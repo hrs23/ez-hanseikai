@@ -88,6 +88,40 @@ pub mod tests {
         dir
     }
 
+    pub fn put(dir: &Path, name: &str, body: &[u8]) {
+        let path = dir.join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, body).unwrap();
+    }
+
+    pub fn seed<'a>(dir: &Path, names: impl IntoIterator<Item = &'a str>) {
+        for name in names {
+            put(dir, name, b"x");
+        }
+    }
+
+    pub fn present<'a>(dir: &Path, names: &[&'a str]) -> Vec<&'a str> {
+        names.iter().copied().filter(|name| dir.join(name).exists()).collect()
+    }
+
+    pub fn tree(dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+        let mut out = std::collections::BTreeMap::new();
+        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                out.extend(tree(&path).into_iter().map(|(name, body)| (format!("{}/{name}", entry.file_name().to_string_lossy()), body)));
+            } else {
+                out.insert(entry.file_name().to_string_lossy().to_string(), std::fs::read(&path).unwrap());
+            }
+        }
+        out
+    }
+
+    pub fn hold(path: &Path) -> std::fs::File {
+        use std::os::windows::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new().read(true).share_mode(::windows::Win32::Storage::FileSystem::FILE_SHARE_DELETE.0).open(path).unwrap()
+    }
+
     #[test]
     fn append_scan_and_repair_a_torn_tail() {
         let dir = temp("log");

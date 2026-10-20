@@ -737,7 +737,7 @@ impl Backend for Live {
                     return Row { id: id.clone(), online: true, sharing: !core.engine.source.lock().unwrap().is_null(), recording: recording.contains(id.as_str()) && core.engine.working() };
                 }
                 let peer = peers.iter().find(|p| p.id.to_string() == *id);
-                Row { id: id.clone(), online: peer.is_some_and(|p| p.alive().is_some()), sharing: peer.is_some_and(|p| p.sharing), recording: recording.contains(id.as_str()) }
+                Row { id: id.clone(), online: peer.is_some_and(|p| p.alive().is_some()), sharing: peer.is_some_and(|p| p.live.is_some()), recording: recording.contains(id.as_str()) }
             })
             .collect()
     }

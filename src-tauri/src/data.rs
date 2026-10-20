@@ -24,10 +24,9 @@ pub type Listing = Arc<HashMap<String, u64>>;
 pub type Files = Mutex<HashMap<PathBuf, Listing>>;
 
 pub fn repair_logs(dir: &Path) {
-    for room in std::fs::read_dir(dir.join("rooms")).into_iter().flatten().flatten() {
-        log::repair(&room.path().join("pending.bin"));
-        for file in std::fs::read_dir(room.path().join("logs")).into_iter().flatten().flatten() {
-            let path = file.path();
+    for (_, room) in crate::entries(&dir.join("rooms")) {
+        log::repair(&room.join("pending.bin"));
+        for (_, path) in crate::entries(&room.join("logs")) {
             if path.extension().is_some_and(|e| e == "bin") && path.file_stem().is_some_and(|s| s.to_string_lossy().parse::<iroh::EndpointId>().is_ok()) {
                 log::repair(&path);
             }
@@ -82,14 +81,14 @@ fn recreate(core: &Core) {
 }
 
 pub fn clear_standby(dir: &Path) {
-    for room in std::fs::read_dir(dir.join("rooms")).into_iter().flatten().flatten() {
-        let _ = std::fs::remove_dir_all(room.path().join(room::STANDBY));
+    for (_, room) in crate::entries(&dir.join("rooms")) {
+        let _ = std::fs::remove_dir_all(room.join(room::STANDBY));
     }
 }
 
 fn old_folders(dir: &Path) -> usize {
-    let rooms = std::fs::read_dir(dir.join("rooms")).into_iter().flatten().flatten();
-    rooms.flat_map(|room| std::fs::read_dir(room.path()).into_iter().flatten().flatten()).filter(|e| e.file_name().to_string_lossy().parse::<iroh::EndpointId>().is_ok() && e.path().is_dir()).count()
+    let rooms = crate::entries(&dir.join("rooms"));
+    rooms.iter().flat_map(|(_, room)| crate::entries(room)).filter(|(name, path)| name.parse::<iroh::EndpointId>().is_ok() && path.is_dir()).count()
 }
 
 pub fn note_old_layout(core: &Core) {
@@ -112,7 +111,7 @@ pub fn trim_ring(dir: &Path, n: u32) {
     if !in_standby(dir, 3) {
         return;
     }
-    let names: Vec<String> = std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+    let names: Vec<String> = crate::entries(dir).into_iter().map(|(name, _)| name).collect();
     for name in ring_trim(&names, n) {
         let _ = std::fs::remove_file(dir.join(name));
     }
@@ -123,9 +122,9 @@ pub fn keep_capture(dir: &Path) {
     if !in_standby(dir, 2) {
         return;
     }
-    for entry in std::fs::read_dir(owner).into_iter().flatten().flatten() {
-        if entry.file_name() != capture && room::capture_id(&entry.file_name().to_string_lossy()) {
-            let _ = std::fs::remove_dir_all(entry.path());
+    for (name, path) in crate::entries(owner) {
+        if name != capture.to_string_lossy() && room::capture_id(&name) {
+            let _ = std::fs::remove_dir_all(path);
         }
     }
 }
@@ -171,14 +170,11 @@ pub fn open_folder(dir: &Path) {
 }
 
 pub fn reset(dir: &Path, keep_rooms: bool) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
     let rooms = ["key.bin", "rooms.json", "rooms"];
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
+    for (name, path) in crate::entries(dir) {
         if name == "EBWebView" || name == "webview" || name == LOCK || (keep_rooms && rooms.contains(&name.as_str())) {
             continue;
         }
-        let path: PathBuf = entry.path();
         let _ = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
     }
 }
@@ -252,31 +248,19 @@ pub fn file_dir(core: &Core, room: &str, f: &File) -> PathBuf {
 }
 
 pub fn presence(files: &Files, base: &Path, f: &File, series: &str) -> Vec<(bool, bool)> {
-    let mut out = Vec::new();
-    let mut at: Option<(&str, PathBuf, bool)> = None;
-    for seg in f.series(series) {
-        if at.as_ref().is_none_or(|(capture, ..)| *capture != seg.capture) {
-            let dir = base.join(&seg.capture).join(series);
-            let init = has(files, &dir, INIT, f.init(&seg.capture, series).map(|(size, _)| size));
-            at = Some((seg.capture.as_str(), dir, init));
-        }
-        if let Some((_, dir, init)) = &at {
-            out.push((has(files, dir, &seg_name(seg.n), Some(seg.size)), *init));
-        }
-    }
-    out
+    let here = |seg: &&room::Seg| {
+        let dir = base.join(&seg.capture).join(series);
+        (has(files, &dir, &seg_name(seg.n), Some(seg.size)), has(files, &dir, INIT, f.init(&seg.capture, series).map(|(size, _)| size)))
+    };
+    f.series(series).iter().map(here).collect()
 }
 
 pub fn prefix(oks: impl IntoIterator<Item = bool>) -> u64 {
     oks.into_iter().take_while(|ok| *ok).count() as u64
 }
 
-fn count_in(files: &Files, base: &Path, f: &File, series: &str) -> u64 {
+fn count(files: &Files, base: &Path, f: &File, series: &str) -> u64 {
     prefix(presence(files, base, f, series).into_iter().map(|(seg, init)| seg && init))
-}
-
-pub fn count(core: &Core, room: &str, f: &File, series: &str) -> u64 {
-    count_in(&core.files, &file_dir(core, room, f), f, series)
 }
 
 pub fn have_counts(core: &Core, room: &str, sets: &[Set]) -> HashMap<String, u64> {
@@ -284,7 +268,7 @@ pub fn have_counts(core: &Core, room: &str, sets: &[Set]) -> HashMap<String, u64
     for set in sets {
         for f in &set.files {
             for series in SERIES {
-                let n = count(core, room, f, series);
+                let n = count(&core.files, &file_dir(core, room, f), f, series);
                 if n > 0 {
                     out.insert(room::have_key(&set.id, &f.owner, series), n);
                 }
@@ -297,14 +281,10 @@ pub fn have_counts(core: &Core, room: &str, sets: &[Set]) -> HashMap<String, u64
 fn held_in(files: &Files, base: &Path, f: &File) -> u64 {
     let mut have = 0;
     for series in SERIES {
-        let mut inits: Vec<&str> = Vec::new();
-        for (seg, (here, init)) in f.series(series).into_iter().zip(presence(files, base, f, series)) {
-            if !here {
-                continue;
-            }
+        let mut inits = HashSet::new();
+        for (seg, (_, init)) in f.series(series).into_iter().zip(presence(files, base, f, series)).filter(|(_, (here, _))| *here) {
             have += seg.size;
-            if init && !inits.contains(&seg.capture.as_str()) {
-                inits.push(&seg.capture);
+            if init && inits.insert(&seg.capture) {
                 have += f.init(&seg.capture, series).map_or(0, |(size, _)| size);
             }
         }
@@ -325,7 +305,7 @@ pub struct Run {
     pub index: u64,
 }
 
-fn missing_in(files: &Files, writing: &Mutex<HashSet<PathBuf>>, base: &Path, f: &File, series: &str) -> Option<Run> {
+pub fn missing(files: &Files, writing: &Mutex<HashSet<PathBuf>>, base: &Path, f: &File, series: &str) -> Option<Run> {
     let segs = f.series(series);
     let found = presence(files, base, f, series);
     let dir = |capture: &str| base.join(capture).join(series);
@@ -348,10 +328,6 @@ fn missing_in(files: &Files, writing: &Mutex<HashSet<PathBuf>>, base: &Path, f: 
         return Some(Run { capture: seg.capture.clone(), init: !init, from: seg.n, at, to, index: i as u64 });
     }
     None
-}
-
-pub fn missing(core: &Core, room: &str, f: &File, series: &str) -> Option<Run> {
-    missing_in(&core.files, &core.writing, &file_dir(core, room, f), f, series)
 }
 
 pub fn expected(f: &File, run: &Run, series: &str) -> HashMap<u32, (u64, String)> {
@@ -394,42 +370,8 @@ pub fn keeper(core: Arc<Core>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::log::tests::{present, put, seed, temp, tree};
     use crate::media::tests::fragment;
-    use std::collections::{BTreeMap, BTreeSet};
-
-    fn temp(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("ezh-test-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    fn put(dir: &Path, name: &str, body: &[u8]) {
-        let path = dir.join(name);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, body).unwrap();
-    }
-
-    fn snapshot(dir: &Path) -> BTreeMap<String, Vec<u8>> {
-        let mut out = BTreeMap::new();
-        let mut stack = vec![dir.to_path_buf()];
-        while let Some(at) = stack.pop() {
-            for entry in std::fs::read_dir(&at).into_iter().flatten().flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    stack.push(path);
-                } else {
-                    out.insert(path.strip_prefix(dir).unwrap().to_string_lossy().replace('\\', "/"), std::fs::read(&path).unwrap());
-                }
-            }
-        }
-        out
-    }
-
-    fn file(records: Vec<Value>) -> File {
-        let logs = [room::Log { owner: "a".into(), offset_us: 0, records: Arc::new(records) }];
-        room::derive_sets("r", &logs).remove(0).files.remove(0)
-    }
 
     #[test]
     fn one_app_holds_a_data_folder_and_a_leftover_lock_is_noticed() {
@@ -447,13 +389,9 @@ mod tests {
     #[test]
     fn cleanup_picks_only_leftovers() {
         let dir = temp("clean");
-        for p in ["rooms/active/logs/a.bin", "rooms/other/b/1/v/000001.m4s", "rooms/gone/b/1/v/verified.json", "rooms/gone/logs/a.bin", "rooms/left/recordings/s1/b/1/v/000001.m4s", "rooms/waiting/pending.bin", "export/label-0.txt", "report.txt", "key.bin", "rooms/solo/b/1/v/verified.json", "rooms/old/sets/s1/set.json", "rooms/old/sets/s1/a.mp4", "rooms/oldlive/live/a.mp4", "rec-1.mp4", "log.bin", "peer.txt", "peers.txt", "peer/a/log.bin", "legacy/x.bin"] {
-            put(&dir, p, b"x");
-        }
+        seed(&dir, ["rooms/r/logs/a.bin", "rooms/r/b/1/v/000001.m4s", "rooms/r/recordings/s1/b/1/v/000001.m4s", "export/label-0.txt", "report.txt", "key.bin", "log.bin"]);
         let later = SystemTime::now() + OLD_AFTER + Duration::from_secs(60);
-        let mut got: Vec<String> = leftovers(&dir, false, later).iter().map(|p| p.strip_prefix(&dir).unwrap().to_string_lossy().replace('\\', "/")).collect();
-        got.sort();
-        assert_eq!(got, ["export", "report.txt"]);
+        assert_eq!(leftovers(&dir, false, later), [dir.join("export"), dir.join("report.txt")]);
         assert!(leftovers(&dir, true, SystemTime::now()).is_empty());
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -463,13 +401,10 @@ mod tests {
         let files = ["key.bin", "rooms.json", "rooms/r/logs/a.bin", "settings.json", "ffmpeg.exe", "plugins/x/m.bin", "EBWebView/x", LOCK];
         for keep in [true, false] {
             let dir = temp(if keep { "resetkeep" } else { "resetall" });
-            for f in files {
-                put(&dir, f, b"x");
-            }
+            seed(&dir, files);
             reset(&dir, keep);
-            let left: Vec<&str> = files.iter().copied().filter(|f| dir.join(f).exists()).collect();
             let kept: &[&str] = if keep { &["key.bin", "rooms.json", "rooms/r/logs/a.bin", "EBWebView/x", LOCK] } else { &["EBWebView/x", LOCK] };
-            assert_eq!(left, kept);
+            assert_eq!(present(&dir, &files), kept);
             let _ = std::fs::remove_dir_all(dir);
         }
     }
@@ -493,78 +428,29 @@ mod tests {
     fn a_restart_removes_nothing_under_recordings_and_never_touches_old_folders() {
         let dir = temp("restart");
         let (me, other) = (iroh::SecretKey::generate().public().to_string(), iroh::SecretKey::generate().public().to_string());
-        let (one, two, three) = (fragment(&[(1, 0)], b"aaaa"), fragment(&[(1, 1000)], b"bbbb"), fragment(&[(1, 2000)], b"cccc"));
-        let torn = [one.clone(), two.clone(), three[..three.len() / 2].to_vec()].concat();
-        let files = [
-            (format!("rooms/r/recordings/s1/{me}/1000/v/init.mp4"), b"init v".to_vec()),
-            (format!("rooms/r/recordings/s1/{me}/1000/v/000001.m4s"), one.clone()),
-            (format!("rooms/r/recordings/s1/{me}/1000/v/000002.m4s"), two.clone()),
-            (format!("rooms/r/recordings/s1/{me}/1000/m/init.mp4"), b"init m".to_vec()),
-            (format!("rooms/r/recordings/s1/{me}/1000/m/000001.m4s"), one.clone()),
-            (format!("rooms/r/recordings/s1/{me}/1000/verified.json"), br#"{"v/000001.m4s": {"size": 1, "ok": false}}"#.to_vec()),
-            (format!("rooms/r/recordings/s1/{other}/2000/v/init.mp4"), b"init".to_vec()),
-            (format!("rooms/r/recordings/s1/{other}/2000/v/000001.m4s"), one.clone()),
-            (format!("rooms/r/recordings/s1/{other}/2000/v/000002.m4s.part"), torn.clone()),
-            (format!("rooms/r/recordings/s2/{me}/3000/v/init.mp4"), b"init v".to_vec()),
-            (format!("rooms/r/recordings/s2/{me}/3000/v/000001.m4s"), one.clone()),
-            (format!("rooms/r/recordings/s2/{me}/3000/v/000002.m4s.part"), torn.clone()),
-            (format!("rooms/r/recordings/s2/{me}/3000/m/init.mp4"), b"init m".to_vec()),
-            (format!("rooms/r/recordings/s2/{me}/3000/m/000001.m4s.part"), two.clone()),
-            (format!("rooms/r/recordings/x9/{other}/7000/v/000001.m4s"), one.clone()),
-            (format!("rooms/r/recordings/s3/{me}/4000/v/init.mp4"), b"init v".to_vec()),
-            (format!("rooms/r/recordings/s3/{me}/4000/v/000001.m4s"), one.clone()),
-            ("rooms/r/thumbs/s1.jpg".to_string(), b"jpg".to_vec()),
-            ("rooms/r/thumbs/s3.jpg".to_string(), b"jpg".to_vec()),
-            (format!("rooms/r/standby/{me}/5000/v/init.mp4"), b"init".to_vec()),
-            (format!("rooms/r/standby/{me}/5000/v/000009.m4s"), one.clone()),
-            (format!("rooms/r/standby/{other}/6000/m/000004.m4s.part"), torn.clone()),
-            (format!("rooms/r/{me}/1000/v/init.mp4"), b"init v".to_vec()),
-            (format!("rooms/r/{me}/1000/v/000001.m4s"), one.clone()),
-            (format!("rooms/r/{me}/1000/v/000003.m4s.part"), torn.clone()),
-            (format!("rooms/r/{me}/1000/v/open.json"), br#"{"n": 3, "set": "s1"}"#.to_vec()),
-            (format!("rooms/r/{me}/1000/cap.json"), br#"{"start_us": 1}"#.to_vec()),
-            (format!("rooms/r/{me}/1000/verified.json"), br#"{"v/000001.m4s": {"size": 1, "ok": true}}"#.to_vec()),
-            (format!("rooms/r/{other}/8000/m/000001.m4s"), one.clone()),
-            ("rooms/r/sets/s1/a.mp4".to_string(), b"old".to_vec()),
-            ("rooms/r/live/someone.mp4".to_string(), b"old".to_vec()),
-            (format!("rooms/r/logs/{me}.bin"), b"log".to_vec()),
-            ("rooms/gone/recordings/s5/x/1/v/000001.m4s".to_string(), one.clone()),
-            ("export/x".to_string(), b"partial".to_vec()),
-            ("report.txt".to_string(), b"report".to_vec()),
-        ];
-        for (name, body) in &files {
-            put(&dir, name, body);
+        let (one, two) = (fragment(&[(1, 0)], b"aaaa"), fragment(&[(1, 1000)], b"bbbb"));
+        let torn = [one.clone(), two.clone(), b"torn".to_vec()].concat();
+        let name = |p: &str| p.replace("ME", &me).replace("OT", &other);
+        let gone = ["rooms/r/recordings/s2/ME/3000/v/000002.m4s.part", "rooms/r/recordings/s3/ME/4000/v/init.mp4", "rooms/r/recordings/s3/ME/4000/v/000001.m4s", "rooms/r/thumbs/s3.jpg", "rooms/r/standby/ME/5000/v/init.mp4", "rooms/r/standby/ME/5000/v/000009.m4s", "rooms/r/standby/OT/6000/m/000004.m4s.part", "export/x", "report.txt"];
+        let kept = ["rooms/r/recordings/s1/ME/1000/v/init.mp4", "rooms/r/recordings/s1/ME/1000/v/000001.m4s", "rooms/r/recordings/s1/ME/1000/v/000002.m4s.part", "rooms/r/recordings/s1/ME/1000/verified.json", "rooms/r/recordings/s1/OT/2000/v/000001.m4s.part", "rooms/r/recordings/s2/ME/3000/v/init.mp4", "rooms/r/recordings/s2/ME/3000/m/000001.m4s.part", "rooms/r/recordings/x9/ME/7000/v/000001.m4s.part", "rooms/r/thumbs/s1.jpg", "rooms/r/ME/1000/v/000003.m4s.part", "rooms/r/ME/1000/v/open.json", "rooms/r/ME/1000/verified.json", "rooms/r/OT/8000/m/000001.m4s", "rooms/r/sets/s1/a.mp4", "rooms/r/live/a.mp4", "rooms/r/logs/ME.bin", "rooms/gone/recordings/s5/OT/1/v/000001.m4s"];
+        for p in gone.iter().chain(&kept) {
+            put(&dir, &name(p), if p.ends_with(".part") { &torn } else { &one });
         }
-        let before = snapshot(&dir);
-        let joined: HashSet<&str> = ["s1", "s2", "s3"].into();
-        let logged: HashSet<(&str, &str, u32)> = [("1000", "v", 1), ("1000", "v", 2), ("1000", "m", 1), ("3000", "v", 1), ("3000", "m", 1), ("4000", "v", 1)].into();
-        let found = crate::record::recover_files(&dir, &me, |r| !joined.contains(r.set.as_str()) || logged.contains(&(r.capture.as_str(), r.series, r.n)));
+        let mut before = tree(&dir);
+        let (joined, logged) = (["s1", "s2", "s3"], [("1000", "v", 1), ("1000", "v", 2), ("3000", "m", 1), ("4000", "v", 1)]);
+        let found = crate::record::recover_files(&dir, &me, |r| !joined.contains(&r.set.as_str()) || logged.contains(&(r.capture.as_str(), r.series, r.n)));
         clear_standby(&dir);
         assert_eq!(old_folders(&dir), 2);
         for path in leftovers(&dir, false, SystemTime::now() + OLD_AFTER + Duration::from_secs(60)) {
             let _ = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
         }
         assert_eq!(room::sweep(&dir.join("rooms/r"), &["s3".to_string()].into(), None), ["s3"]);
-        let after = snapshot(&dir);
         assert_eq!(found.iter().map(|r| (r.room.as_str(), r.set.as_str(), r.capture.as_str(), r.series, r.n)).collect::<Vec<_>>(), [("r", "s2", "3000", "v", 2)]);
-        let recovered = format!("rooms/r/recordings/s2/{me}/3000/v/000002.m4s");
-        let gone: Vec<&str> = before.keys().filter(|k| !after.contains_key(*k)).map(String::as_str).collect();
-        let mut expected = vec![
-            format!("rooms/r/recordings/s2/{me}/3000/v/000002.m4s.part"),
-            format!("rooms/r/recordings/s3/{me}/4000/v/000001.m4s"),
-            format!("rooms/r/recordings/s3/{me}/4000/v/init.mp4"),
-            format!("rooms/r/standby/{me}/5000/v/000009.m4s"),
-            format!("rooms/r/standby/{me}/5000/v/init.mp4"),
-            format!("rooms/r/standby/{other}/6000/m/000004.m4s.part"),
-            "export/x".to_string(),
-            "report.txt".to_string(),
-            "rooms/r/thumbs/s3.jpg".to_string(),
-        ];
-        expected.sort();
-        assert_eq!(gone, expected);
-        assert_eq!(after.keys().filter(|k| !before.contains_key(*k)).collect::<Vec<_>>(), [&recovered]);
-        assert_eq!(after[&recovered], [one, two].concat());
-        assert!(after.iter().filter(|(k, _)| **k != recovered).all(|(k, body)| before[k] == *body));
+        for p in gone {
+            before.remove(&name(p));
+        }
+        before.insert(name("rooms/r/recordings/s2/ME/3000/v/000002.m4s"), [one, two].concat());
+        assert_eq!(tree(&dir), before);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -573,92 +459,68 @@ mod tests {
         let dir = temp("counts");
         let base = dir.join("rooms/r/recordings/s1/a");
         let series = base.join("1000/v");
-        let mut records = vec![json!({"k": "cap", "capture": "1000", "start_us": 0, "init": {"v": {"size": 4, "sha256": "i"}}}), json!({"k": "rec", "set": "s1", "start_us": 0})];
-        records.extend((1..=5).map(|n| json!({"k": "seg", "capture": "1000", "series": "v", "n": n, "set": "s1", "t_us": n * 4, "d_us": 4, "size": 4, "sha256": format!("s{n}")})));
-        let f = file(records);
-        put(&series, INIT, b"init");
-        for n in [1, 2, 3, 5] {
-            put(&series, &seg_name(n), b"seg!");
+        let f = room::tests::small_file(5, false);
+        for name in [INIT, "000001.m4s", "000002.m4s", "000003.m4s", "000005.m4s"] {
+            put(&series, name, b"seg!");
         }
         put(&base, "1000/verified.json", br#"{"v/000004.m4s": {"size": 4, "ok": true}}"#);
         put(&dir, "rooms/r/a/1000/v/000004.m4s", b"seg!");
         let (files, writing) = (Files::default(), Mutex::new(HashSet::new()));
-        let run = |files: &Files| missing_in(files, &writing, &base, &f, "v").map(|r| (r.from, r.to, r.at, r.init, r.index));
-        assert_eq!(count_in(&files, &base, &f, "v"), 3);
-        assert_eq!(held_in(&files, &base, &f), 4 * 4 + 4);
-        assert_eq!(run(&files), Some((4, 4, 0, false, 3)));
+        let run = |files: &Files| missing(files, &writing, &base, &f, "v").map(|r| (r.from, r.to, r.at, r.init, r.index));
+        let state = |files: &Files| (count(files, &base, &f, "v"), held_in(files, &base, &f), run(files));
+        assert_eq!(state(&files), (3, 4 * 4 + 4, Some((4, 4, 0, false, 3))));
         put(&series, "000004.m4s.part", b"se");
         assert_eq!(run(&files), Some((4, 4, 2, false, 3)));
         put(&series, "000004.m4s.part", b"seg!more");
         assert_eq!(run(&files), Some((4, 4, 4, false, 3)));
         writing.lock().unwrap().insert(series.join("000004.m4s"));
         assert_eq!(run(&files), None);
-        assert_eq!(count_in(&files, &base, &f, "v"), 3);
         writing.lock().unwrap().clear();
         put(&series, "000004.m4s", b"seg!");
-        assert_eq!(count_in(&files, &base, &f, "v"), 3);
+        assert_eq!(count(&files, &base, &f, "v"), 3);
         forget(&files, &series);
-        assert_eq!(count_in(&files, &base, &f, "v"), 5);
+        assert_eq!(count(&files, &base, &f, "v"), 5);
         put(&series, "000002.m4s", b"bad");
         forget(&files, &base);
-        assert_eq!(count_in(&files, &base, &f, "v"), 1);
-        assert_eq!(held_in(&files, &base, &f), 4 * 4 + 4);
-        assert_eq!(run(&files), Some((2, 2, 0, false, 1)));
+        assert_eq!(state(&files), (1, 4 * 4 + 4, Some((2, 2, 0, false, 1))));
         std::fs::remove_file(series.join(INIT)).unwrap();
         forget(&files, &dir);
-        assert_eq!(count_in(&files, &base, &f, "v"), 0);
-        assert_eq!(held_in(&files, &base, &f), 4 * 4);
-        assert_eq!(run(&files), Some((1, 0, 0, true, 0)));
-        let fetch = Run { capture: "1000".into(), init: true, from: 2, at: 0, to: 3, index: 1 };
-        let want = expected(&f, &fetch, "v");
-        assert_eq!(want.keys().copied().collect::<BTreeSet<_>>(), [0, 2, 3].into());
-        assert_eq!((want[&0].clone(), want[&3].clone()), ((4, "i".to_string()), (4, "s3".to_string())));
+        assert_eq!(state(&files), (0, 4 * 4, Some((1, 0, 0, true, 0))));
+        let want = expected(&f, &Run { capture: "1000".into(), init: true, from: 2, at: 0, to: 3, index: 1 }, "v");
+        assert_eq!(want, [(0, (4, "i".to_string())), (2, (4, "s2".to_string())), (3, (4, "s3".to_string()))].into());
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn a_file_is_here_under_its_final_name_with_its_logged_size() {
         let dir = temp("has");
-        for (name, body) in [(INIT, b"init".as_slice()), ("000001.m4s", b"seg!"), ("000002.m4s.part", b"seg!"), ("verified.json", b"{}")] {
-            put(&dir, name, body);
-        }
-        let files = Files::default();
-        assert!(has(&files, &dir, INIT, Some(4)) && has(&files, &dir, INIT, None) && !has(&files, &dir, INIT, Some(5)));
-        assert!(has(&files, &dir, "000001.m4s", Some(4)) && !has(&files, &dir, "000001.m4s", Some(3)));
-        assert!(!has(&files, &dir, "000002.m4s", Some(4)) && !has(&files, &dir, "000002.m4s.part", None) && !has(&files, &dir, "verified.json", None));
-        put(&dir, "000002.m4s", b"seg!");
-        assert!(!has(&files, &dir, "000002.m4s", Some(4)));
-        forget(&files, &dir);
-        assert!(has(&files, &dir, "000002.m4s", Some(4)));
+        seed(&dir, [INIT, "000001.m4s", "000002.m4s.part", "verified.json"]);
+        let here = |name: &str, size: Option<u64>| has(&Files::default(), &dir, name, size);
+        let got = [here(INIT, Some(1)), here(INIT, None), here(INIT, Some(2)), here("000001.m4s", Some(1)), here("000001.m4s", Some(0)), here("000002.m4s", Some(1)), here("000002.m4s.part", None), here("verified.json", None)];
+        assert_eq!(got, [true, true, false, true, false, false, false, false]);
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn the_standby_ring_keeps_the_newest_segments_and_only_standby_is_trimmed() {
-        let names: Vec<String> = ["init.mp4", "000001.m4s", "000002.m4s.part", "000003.m4s", "000004.m4s", "000009.m4s", "000010.m4s.part"].map(String::from).to_vec();
+        let names = ["init.mp4", "000001.m4s", "000002.m4s.part", "000003.m4s", "000004.m4s", "000009.m4s", "000010.m4s.part"].map(String::from);
         assert_eq!(ring_trim(&names, 10), ["000001.m4s", "000002.m4s.part", "000003.m4s"]);
         assert!(ring_trim(&names, LIVE_KEEP).is_empty());
         let dir = temp("ring");
-        let ring = dir.join("rooms/r/standby/a/1000/v");
-        let kept = dir.join("rooms/r/recordings/s1/a/1000/v");
-        for d in [&ring, &kept] {
-            put(d, INIT, b"i");
-            for n in 1..=10 {
-                put(d, &seg_name(n), b"x");
-            }
+        let (ring, kept) = ("rooms/r/standby/a/1000/v", "rooms/r/recordings/s1/a/1000/v");
+        seed(&dir, ["rooms/r/standby/a/2000/v/init.mp4", "rooms/r/standby/b/1000/v/init.mp4"]);
+        for n in 1..=10 {
+            seed(&dir.join(ring), [seg_name(n).as_str()]);
+            seed(&dir.join(kept), [seg_name(n).as_str()]);
         }
-        trim_ring(&ring, 10);
-        trim_ring(&kept, 10);
-        let left = |d: &Path| -> BTreeSet<String> { std::fs::read_dir(d).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect() };
-        assert_eq!(left(&ring), [INIT.to_string()].into_iter().chain((4..=10).map(seg_name)).collect());
-        assert_eq!(left(&kept).len(), 11);
-        put(&dir, "rooms/r/standby/a/2000/v/init.mp4", b"i");
-        put(&dir, "rooms/r/standby/b/1000/v/init.mp4", b"i");
+        trim_ring(&dir.join(ring), 10);
+        trim_ring(&dir.join(kept), 10);
+        assert_eq!(tree(&dir.join(ring)).into_keys().collect::<Vec<_>>(), (4..=10).map(seg_name).collect::<Vec<_>>());
+        assert_eq!(tree(&dir.join(kept)).len(), 10);
         keep_capture(&dir.join("rooms/r/standby/a/2000"));
-        assert!(!dir.join("rooms/r/standby/a/1000").exists());
-        assert!(dir.join("rooms/r/standby/a/2000/v/init.mp4").exists() && dir.join("rooms/r/standby/b/1000/v/init.mp4").exists());
         keep_capture(&dir.join("rooms/r/recordings/s1/a/2000"));
-        assert_eq!(left(&kept).len(), 11);
+        let dirs = ["rooms/r/standby/a/1000", "rooms/r/standby/a/2000", "rooms/r/standby/b/1000", kept];
+        assert_eq!(present(&dir, &dirs), &dirs[1..]);
         let _ = std::fs::remove_dir_all(dir);
     }
 

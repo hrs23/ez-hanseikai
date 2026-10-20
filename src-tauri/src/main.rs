@@ -98,6 +98,10 @@ pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+pub fn entries(dir: &Path) -> Vec<(String, PathBuf)> {
+    std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| (e.file_name().to_string_lossy().to_string(), e.path())).collect()
+}
+
 pub fn file_len(path: &Path) -> u64 {
     std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
 }
@@ -151,7 +155,6 @@ pub struct Peer {
     pub codecs: Vec<String>,
     pub info: Option<(String, u32)>,
     pub hw: Value,
-    pub sharing: bool,
     pub live: Option<net::PeerLive>,
     pub seen_us: Option<i64>,
     pub have: HashMap<String, u64>,
@@ -165,7 +168,7 @@ impl Peer {
     }
 
     pub fn new(id: EndpointId, name: String) -> Self {
-        Self { id, name, conn: None, offset_us: None, failures: 0, announce: true, codecs: default_codecs(), info: None, hw: Value::Null, sharing: false, live: None, seen_us: None, have: HashMap::new(), logs: HashMap::new(), asks: Vec::new() }
+        Self { id, name, conn: None, offset_us: None, failures: 0, announce: true, codecs: default_codecs(), info: None, hw: Value::Null, live: None, seen_us: None, have: HashMap::new(), logs: HashMap::new(), asks: Vec::new() }
     }
 }
 

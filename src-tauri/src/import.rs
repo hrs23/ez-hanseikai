@@ -723,17 +723,12 @@ At least one output file must be specified";
     #[test]
     fn a_failed_import_removes_only_its_views_and_the_folder_once_empty() {
         let dir = folder("failed");
-        let names = ["x/view1/5/v/init.mp4", "x/view1/5/v/000001.m4s", "x/view2/5/m/000001.m4s.part", "x/me/7/v/000001.m4s", "x/me/7/v/000002.m4s.part", "x/peer/8/v/000001.m4s", "y/view1/5/v/000001.m4s"];
-        for name in names {
-            let path = dir.join(name);
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(path, b"x").unwrap();
-        }
+        let names = ["x/view1/5/v/init.mp4", "x/view2/5/m/000001.m4s.part", "x/me/7/v/000002.m4s.part", "x/peer/8/v/000001.m4s", "y/view1/5/v/000001.m4s"];
+        crate::log::tests::seed(&dir, names);
         let ids = ["view1", "view2", "view3"].map(String::from);
         remove_views(&dir.join("x"), &ids);
-        assert_eq!(names.iter().copied().filter(|n| dir.join(n).exists()).collect::<Vec<_>>(), &names[3..]);
         remove_views(&dir.join("y"), &ids);
-        assert!(!dir.join("y").exists() && dir.join("x").exists());
+        assert_eq!((crate::log::tests::present(&dir, &names), dir.join("y").exists()), (names[2..4].to_vec(), false));
         let _ = std::fs::remove_dir_all(dir);
     }
 
