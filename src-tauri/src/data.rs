@@ -213,14 +213,14 @@ pub fn tz_offset_seconds() -> i64 {
     -(bias as i64) * 60
 }
 
-pub fn sha256(path: &Path) -> Option<(u64, String)> {
+pub fn sha256(path: &Path) -> std::io::Result<(u64, String)> {
     let mut hasher = Sha256::new();
-    let size = std::io::copy(&mut std::fs::File::open(path).ok()?, &mut hasher).ok()?;
-    Some((size, hex(&hasher.finalize())))
+    let size = std::io::copy(&mut std::fs::File::open(path)?, &mut hasher)?;
+    Ok((size, hex(&hasher.finalize())))
 }
 
-pub fn matches(path: &Path, size: u64, sha: &str) -> bool {
-    sha256(path).is_some_and(|(got_size, got)| got_size == size && got == sha)
+pub fn matches(path: &Path, size: u64, sha: &str) -> std::io::Result<bool> {
+    sha256(path).map(|(got_size, got)| got_size == size && got == sha)
 }
 
 fn names(dir: &Path) -> HashMap<String, u64> {
@@ -646,11 +646,11 @@ mod tests {
         let path = dir.join("000001.m4s");
         std::fs::write(&path, b"fragment").unwrap();
         let (size, sha) = sha256(&path).unwrap();
-        assert!(matches(&path, size, &sha));
-        assert!(!matches(&path, size + 1, &sha));
+        assert!(matches(&path, size, &sha).unwrap());
+        assert!(!matches(&path, size + 1, &sha).unwrap());
         std::fs::write(&path, b"fragmenT").unwrap();
-        assert!(!matches(&path, size, &sha));
-        assert!(!matches(&dir.join("missing.m4s"), size, &sha));
+        assert!(!matches(&path, size, &sha).unwrap());
+        assert!(matches(&dir.join("missing.m4s"), size, &sha).is_err());
         assert_eq!(prefix([true, true, false, true]), 2);
         assert_eq!(prefix([false, true]), 0);
         let _ = std::fs::remove_dir_all(dir);

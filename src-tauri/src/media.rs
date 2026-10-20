@@ -143,26 +143,24 @@ pub fn micros(time: &Time, scales: &HashMap<u32, u32>) -> i64 {
     (time.value as i128 * 1_000_000 / scale) as i64
 }
 
-pub fn scan(path: &Path) -> (Vec<Time>, u64) {
+pub fn scan(path: &Path) -> std::io::Result<(Vec<Time>, u64)> {
     let mut times = Vec::new();
-    let Ok(mut file) = File::open(path) else { return (times, 0) };
-    let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let mut file = File::open(path)?;
+    let len = file.metadata()?.len();
     let (mut at, mut whole, mut moof) = (0u64, 0u64, false);
     let mut head = [0u8; WIDE_HEADER];
     while at + HEADER as u64 <= len {
         let read = (len - at).min(WIDE_HEADER as u64) as usize;
-        if file.seek(SeekFrom::Start(at)).is_err() || file.read_exact(&mut head[..read]).is_err() {
-            break;
-        }
+        file.seek(SeekFrom::Start(at))?;
+        file.read_exact(&mut head[..read])?;
         let Some((kind, size_of_head, size)) = header(&head[..read]) else { break };
         if size < size_of_head as u64 || size > len - at {
             break;
         }
         if &kind == b"moof" {
             let mut body = vec![0u8; size as usize];
-            if file.seek(SeekFrom::Start(at)).is_err() || file.read_exact(&mut body).is_err() {
-                break;
-            }
+            file.seek(SeekFrom::Start(at))?;
+            file.read_exact(&mut body)?;
             times.extend(fragment_times(&body, at));
             moof = true;
         } else if &kind == b"mdat" && moof {
@@ -171,7 +169,7 @@ pub fn scan(path: &Path) -> (Vec<Time>, u64) {
         }
         at += size;
     }
-    (times, whole)
+    Ok((times, whole))
 }
 
 pub fn bases(times: &[Time]) -> HashMap<u32, u64> {
@@ -257,8 +255,9 @@ pub mod tests {
         let (a, b) = (fragment(&[(1, 10), (2, 20)], b"aaaa"), fragment(&[(1, 30), (2, 40)], b"bbbb"));
         let path = dir.join("1.m4s");
         std::fs::write(&path, [a.clone(), b.clone(), b[..b.len() - 2].to_vec()].concat()).unwrap();
-        let (times, whole) = scan(&path);
+        let (times, whole) = scan(&path).unwrap();
         assert_eq!(whole, (a.len() + b.len()) as u64);
+        assert!(scan(&dir.join("2.m4s")).is_err());
         assert_eq!(times.iter().map(|t| (t.track, t.value)).collect::<Vec<_>>(), [(1, 10), (2, 20), (1, 30), (2, 40), (1, 30), (2, 40)]);
         assert_eq!(times[2].at, a.len() as u64 + times[0].at);
         assert_eq!(micros(&times[0], &HashMap::from([(1, 1000)])), 10_000);
@@ -272,7 +271,7 @@ pub mod tests {
         let a = fragment(&[(1, 10)], b"aaaa");
         let huge = [&1u32.to_be_bytes()[..], b"moof", &u64::MAX.to_be_bytes()].concat();
         std::fs::write(&path, [a.clone(), huge.clone()].concat()).unwrap();
-        assert_eq!(scan(&path).1, a.len() as u64);
+        assert_eq!(scan(&path).unwrap().1, a.len() as u64);
         assert!(children(&huge).is_empty());
         assert_eq!(Splitter::default().push(&huge).map(|o| o.len()), Some(0));
         let _ = std::fs::remove_dir_all(dir);

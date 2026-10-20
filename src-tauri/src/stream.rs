@@ -69,6 +69,15 @@ pub fn window(newest: u32) -> u32 {
     if newest < 2 { 1 } else { (newest - 2) / LIVE_WINDOW * LIVE_WINDOW + 1 }
 }
 
+fn live_from(numbers: &[u32]) -> Option<u32> {
+    let newest = *numbers.iter().max()?;
+    let mut from = newest;
+    while from > window(newest) && numbers.contains(&(from - 1)) {
+        from -= 1;
+    }
+    Some(from)
+}
+
 pub fn own_live(core: &Core, room: &str) -> Option<(String, Option<String>)> {
     let live = core.engine.live().filter(|l| l.room == room)?;
     let set = live.recent[0].last().and_then(|(_, set)| set.clone());
@@ -103,8 +112,7 @@ fn live_pieces(core: &Core, room: &str, owner: &str, capture: &str, from: u32) -
 pub fn live_json(core: &Core, room: &str, owner: &str, capture: &str, set: Option<&str>) -> Option<Value> {
     let dir = core.media_dir(room, set, owner, capture).join(SERIES[0]);
     let numbers: Vec<u32> = std::fs::read_dir(&dir).ok()?.flatten().filter_map(|e| room::seg_number(&e.file_name().to_string_lossy())).collect();
-    let start = window(*numbers.iter().max()?);
-    let from = numbers.iter().copied().filter(|n| *n >= start).min()?;
+    let from = live_from(&numbers)?;
     let pieces = pieces_from(&dir, from);
     (pieces.len() > 1).then(|| json!({"path": format!("live/{room}/{owner}/{capture}/{from}"), "size": size(&pieces)}))
 }
@@ -157,7 +165,8 @@ fn index(core: &Core, piece: &Piece) -> Arc<Vec<media::Time>> {
     if cache.len() > INDEX_MAX {
         cache.clear();
     }
-    let times = Arc::new(media::scan(&piece.path).0);
+    let Ok((times, _)) = media::scan(&piece.path) else { return Arc::default() };
+    let times = Arc::new(times);
     cache.insert(piece.path.clone(), (piece.len, times.clone()));
     times
 }
@@ -275,6 +284,17 @@ mod tests {
     #[test]
     fn live_window_moves_in_steps_and_keeps_a_whole_segment() {
         assert_eq!([1, 2, 3, 4, 5, 6, 7, 8].map(window), [1, 1, 1, 1, 4, 4, 4, 7]);
+        assert_eq!(live_from(&(1..=8).collect::<Vec<_>>()), Some(7));
+        assert_eq!(live_from(&[]), None);
+    }
+
+    #[test]
+    fn the_live_picture_starts_after_the_numbers_a_recording_took() {
+        let standby = |after: &[u32]| [(4..=10).collect::<Vec<u32>>(), after.to_vec()].concat();
+        assert_eq!(live_from(&standby(&[])), Some(7));
+        assert_eq!(live_from(&standby(&[12])), Some(12));
+        assert_eq!(live_from(&standby(&[12, 13])), Some(12));
+        assert_eq!(live_from(&standby(&[12, 13, 14])), Some(13));
     }
 
     #[test]

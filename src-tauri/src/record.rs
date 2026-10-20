@@ -170,7 +170,7 @@ pub struct Sink {
     readers: Mutex<Vec<JoinHandle<()>>>,
     closers: Mutex<Vec<TcpStream>>,
     start: OnceLock<(Instant, i64)>,
-    cap_logged: AtomicBool,
+    cap_logged: Mutex<Option<[Value; 2]>>,
     closed: AtomicBool,
     dead: AtomicBool,
     born: Instant,
@@ -457,13 +457,10 @@ fn ensure_rec(core: &Core, room: &str, set: &str, start_us: i64, meta: &Value) {
     core.append_log(room, &record);
 }
 
-fn log_cap(core: &Core, room: &str, capture: &str, cap: &Value) {
-    if core.own_log(room).iter().any(|r| r["k"] == "cap" && r["capture"] == capture) {
-        return;
-    }
-    let mut record = json!({"k": "cap", "room": room, "capture": capture});
-    merge(&mut record, cap);
-    core.append_log(room, &record);
+fn cap_record(room: &str, capture: &str, start_us: Option<i64>, inits: &[Value; 2], meta: &Value) -> Value {
+    let mut record = json!({"k": "cap", "room": room, "capture": capture, "start_us": start_us, "init": {SERIES[0]: inits[0], SERIES[1]: inits[1]}});
+    merge(&mut record, meta);
+    record
 }
 
 fn finish_part(path: &Path) -> bool {
@@ -474,10 +471,6 @@ fn finish_part(path: &Path) -> bool {
         thread::sleep(RENAME_GAP);
     }
     false
-}
-
-fn cap_ready(voice: bool, inits: &[Value; 2]) -> bool {
-    (voice || !inits[0].is_null()) && !inits[1].is_null()
 }
 
 fn seg_record(capture: &str, series: &str, n: u32, set: &str, t_us: i64, d_us: i64, size: u64, sha256: &str) -> Value {
@@ -555,7 +548,7 @@ impl Sink {
             readers: Mutex::new(Vec::new()),
             closers: Mutex::new(Vec::new()),
             start: OnceLock::new(),
-            cap_logged: AtomicBool::new(false),
+            cap_logged: Mutex::new(None),
             closed: AtomicBool::new(false),
             dead: AtomicBool::new(false),
             born: Instant::now(),
@@ -624,12 +617,12 @@ impl Sink {
         self.init.lock().unwrap()[which] = Some(bytes.to_vec());
     }
 
-    fn log_cap_once(&self, core: &Core, closing: bool) {
+    fn log_cap(&self, core: &Core) {
+        let mut logged = self.cap_logged.lock().unwrap();
         let inits = self.inits.lock().unwrap().clone();
-        if (cap_ready(self.voice, &inits) || closing) && !self.cap_logged.swap(true, Ordering::Relaxed) {
-            let mut cap = json!({"start_us": self.start.get().map(|s| s.1), "init": {SERIES[0]: inits[0], SERIES[1]: inits[1]}});
-            merge(&mut cap, &self.meta);
-            log_cap(core, &self.room, &self.capture, &cap);
+        if logged.as_ref() != Some(&inits) {
+            core.append_log(&self.room, &cap_record(&self.room, &self.capture, self.start.get().map(|s| s.1), &inits, &self.meta));
+            *logged = Some(inits);
         }
     }
 
@@ -675,7 +668,7 @@ impl Sink {
         }
         if let Some(set) = &set {
             ensure_rec(core, &self.room, set, t_us, &self.meta);
-            self.log_cap_once(core, false);
+            self.log_cap(core);
             if !dir.join(INIT).exists() {
                 if let Some(bytes) = self.init.lock().unwrap()[which].clone() {
                     let _ = write_whole(&dir.join(INIT), &bytes);
@@ -712,7 +705,6 @@ impl Sink {
         match &open.set {
             Some(set) => {
                 data::forget(&core.files, &open.dir);
-                self.log_cap_once(core, true);
                 let sha = hex(&open.hasher.finalize());
                 core.append_log(&self.room, &seg_record(&self.capture, SERIES[which], open.n, set, open.t_us, d_us, open.size, &sha));
             }
@@ -952,7 +944,7 @@ pub fn recover_files(dir: &Path, me: &str, skip: impl Fn(&Recovered) -> bool) ->
                             }
                         } else if *name == format!("{}.part", seg_name(n)) && !path.exists() && !skip(&found) {
                             let part = part_of(&path);
-                            let whole = media::scan(&part).1;
+                            let Ok((_, whole)) = media::scan(&part) else { continue };
                             if whole == 0 {
                                 let _ = std::fs::remove_file(&part);
                             } else if std::fs::OpenOptions::new().write(true).open(&part).and_then(|f| f.set_len(whole)).is_ok() && std::fs::rename(&part, &path).is_ok() {
@@ -969,9 +961,9 @@ pub fn recover_files(dir: &Path, me: &str, skip: impl Fn(&Recovered) -> bool) ->
 
 fn recovered_seg(own: &[Value], r: &Recovered) -> Option<Value> {
     let start_us = own.iter().filter(|x| x["k"] == "cap" && x["capture"] == r.capture.as_str()).find_map(|x| x["start_us"].as_i64())?;
-    let (size, sha) = data::sha256(&r.path)?;
+    let (size, sha) = data::sha256(&r.path).ok()?;
     let scales = media::timescales(&std::fs::read(r.path.with_file_name(INIT)).unwrap_or_default());
-    let times = media::scan(&r.path).0;
+    let times = media::scan(&r.path).ok()?.0;
     let track = times.first().map(|t| t.track);
     let us: Vec<i64> = times.iter().filter(|t| Some(t.track) == track).map(|t| media::micros(t, &scales)).collect();
     let (Some(first), Some(last)) = (us.first(), us.last()) else { return None };
@@ -1341,13 +1333,46 @@ mod tests {
     }
 
     #[test]
-    fn a_capture_is_logged_once_every_init_it_makes_is_in() {
-        let init = json!({"size": 1, "sha256": "x"});
-        assert!(!cap_ready(false, &[Value::Null, init.clone()]));
-        assert!(!cap_ready(false, &[init.clone(), Value::Null]));
-        assert!(cap_ready(false, &[init.clone(), init.clone()]));
-        assert!(cap_ready(true, &[Value::Null, init.clone()]));
-        assert!(!cap_ready(true, &[Value::Null, Value::Null]));
+    fn a_part_that_cannot_be_read_at_start_is_left_for_the_next_start() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use ::windows::Win32::Storage::FileSystem::FILE_SHARE_DELETE;
+        let dir = crate::log::tests::temp("held");
+        let me = iroh::SecretKey::generate().public().to_string();
+        let path = dir.join(format!("rooms/r/recordings/s1/{me}/5000/v/000001.m4s"));
+        let whole = crate::media::tests::fragment(&[(1, 0)], b"aaaa");
+        let torn = [whole.clone(), b"torn".to_vec()].concat();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(part_of(&path), &torn).unwrap();
+        let held = std::fs::OpenOptions::new().read(true).share_mode(FILE_SHARE_DELETE.0).open(part_of(&path)).unwrap();
+        assert!(recover_files(&dir, &me, |_| false).is_empty());
+        assert_eq!(crate::file_len(&part_of(&path)), torn.len() as u64);
+        drop(held);
+        assert_eq!(recover_files(&dir, &me, |_| false).iter().map(|r| r.n).collect::<Vec<_>>(), [1]);
+        assert_eq!(std::fs::read(&path).unwrap(), whole);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_part_opened_before_the_other_init_is_in_is_recovered_and_a_later_cap_completes_it() {
+        use crate::media::tests::{fragment, init};
+        let dir = crate::log::tests::temp("early");
+        let me = iroh::SecretKey::generate().public().to_string();
+        let own = dir.join(format!("rooms/r/recordings/s1/{me}/5000/v"));
+        let one = fragment(&[(1, 2000)], b"aaaa");
+        std::fs::create_dir_all(&own).unwrap();
+        std::fs::write(own.join(INIT), init(&[(1, 1000)])).unwrap();
+        std::fs::write(part_of(&own.join(seg_name(1))), [one.clone(), b"to".to_vec()].concat()).unwrap();
+        let (v, m) = (json!({"size": 9, "sha256": "v"}), json!({"size": 7, "sha256": "m"}));
+        let cap = |inits: [Value; 2]| cap_record("r", "5000", Some(5_000_000), &inits, &json!({"codec": "h264"}));
+        let mut own_log = vec![json!({"k": "rec", "set": "s1", "start_us": 5_000_000}), cap([v.clone(), Value::Null])];
+        let found = recover_files(&dir, &me, |r| Logged::of(&own_log).skip(r));
+        assert_eq!(found.len(), 1);
+        let record = recovered_seg(&own_log, &found[0]).unwrap();
+        assert_eq!((record["n"].as_u64(), record["t_us"].as_i64(), record["size"].as_u64()), (Some(1), Some(7_000_000), Some(one.len() as u64)));
+        own_log.extend([record, cap([v, m])]);
+        let f = room::derive_sets("r", &[room::Log { owner: me, offset_us: 0, records: Arc::new(own_log) }]).remove(0).files.remove(0);
+        assert_eq!((f.init("5000", "v"), f.init("5000", "m")), (Some((9, "v".into())), Some((7, "m".into()))));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

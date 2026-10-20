@@ -666,12 +666,19 @@ fn open_part(part: &Path, at: Option<u64>) -> std::io::Result<std::fs::File> {
     Ok(file)
 }
 
+async fn write_chunk(file: &mut tokio::fs::File, buf: &[u8]) -> std::io::Result<()> {
+    file.write_all(buf).await?;
+    file.flush().await
+}
+
 fn finish_copy(path: &Path, expect: Option<&(u64, String)>) -> std::io::Result<Option<u64>> {
     let part = part_of(path);
-    if expect.is_some_and(|(size, sha)| !data::matches(&part, *size, sha)) {
-        let len = file_len(&part);
-        let _ = std::fs::remove_file(&part);
-        return Ok(Some(len));
+    if let Some((size, sha)) = expect {
+        if !data::matches(&part, *size, sha)? {
+            let len = file_len(&part);
+            let _ = std::fs::remove_file(&part);
+            return Ok(Some(len));
+        }
     }
     std::fs::rename(&part, path)?;
     Ok(None)
@@ -736,7 +743,7 @@ async fn receive(core: &Core, conn: &Connection, req: Value, expect: HashMap<u32
         buf.resize(len, 0);
         recv.read_exact(&mut buf).await?;
         if let Some((_, file, _, row)) = current.as_mut() {
-            file.write_all(&buf).await?;
+            write_chunk(file, &buf).await?;
             row.add(len);
         }
         got += len as u64;
@@ -1110,6 +1117,43 @@ mod tests {
         std::fs::write(part_of(&init), b"tini").unwrap();
         assert_eq!(finish_copy(&init, Some(&good)).unwrap(), Some(4));
         assert!(!init.exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_copy_that_cannot_be_read_is_kept_for_another_try() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use ::windows::Win32::Storage::FileSystem::FILE_SHARE_DELETE;
+        let dir = log::tests::temp("unread");
+        let path = dir.join("000001.m4s");
+        std::fs::write(part_of(&path), b"good").unwrap();
+        let good = data::sha256(&part_of(&path)).unwrap();
+        let held = std::fs::OpenOptions::new().read(true).share_mode(FILE_SHARE_DELETE.0).open(part_of(&path)).unwrap();
+        assert!(finish_copy(&path, Some(&good)).is_err());
+        assert_eq!((file_len(&part_of(&path)), path.exists()), (4, false));
+        drop(held);
+        assert_eq!(finish_copy(&path, Some(&good)).unwrap(), None);
+        assert_eq!(std::fs::read(&path).unwrap(), b"good");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_chunk_is_on_disk_before_its_copy_is_checked() {
+        let dir = log::tests::temp("chunk");
+        let part = part_of(&dir.join(INIT));
+        let runtime = tokio::runtime::Builder::new_current_thread().max_blocking_threads(1).build().unwrap();
+        runtime.block_on(async {
+            let (open, gate) = std::sync::mpsc::channel::<()>();
+            let busy = tokio::task::spawn_blocking(move || gate.recv());
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(200));
+                open.send(())
+            });
+            let mut file = tokio::fs::File::from_std(open_part(&part, None).unwrap());
+            write_chunk(&mut file, b"init").await.unwrap();
+            assert_eq!(file_len(&part), 4);
+            busy.await.unwrap().unwrap();
+        });
         let _ = std::fs::remove_dir_all(dir);
     }
 

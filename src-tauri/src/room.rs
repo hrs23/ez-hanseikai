@@ -100,7 +100,7 @@ pub fn valid_token(text: &str) -> bool {
 }
 
 pub fn valid_id(text: &str) -> bool {
-    !text.is_empty() && text.len() <= 40 && text.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == ' ')
+    !text.is_empty() && text.len() <= 40 && text.trim() == text && text.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == ' ')
 }
 
 fn civil(days: i64) -> (i64, i64, i64) {
@@ -815,15 +815,15 @@ pub fn derive_sets(room: &str, logs: &[Log]) -> Vec<Set> {
                 }
                 Some("seg") => {
                     if let (Some((i, _)), Some(seg)) = (open.get(id), seg_from(r, id).filter(|s| seen.insert((id, s.capture.clone(), s.series.clone(), s.n)))) {
-                        let f = &mut sets.get_mut(id).unwrap().files[*i];
-                        if let Some(cap) = caps.get(seg.capture.as_str()) {
-                            f.caps.entry(seg.capture.clone()).or_insert_with(|| cap.clone());
-                        }
-                        f.segs.push(seg);
+                        sets.get_mut(id).unwrap().files[*i].segs.push(seg);
                     }
                 }
                 _ => {}
             }
+        }
+        for (id, (i, _)) in &open {
+            let f = &mut sets.get_mut(*id).unwrap().files[*i];
+            f.caps = f.captures().into_iter().filter_map(|c| Some((c.to_string(), caps.get(c)?.clone()))).collect();
         }
     }
     sets.into_values().rev().collect()
@@ -1326,6 +1326,9 @@ mod tests {
         let left = || names.iter().copied().filter(|n| dir.join(n).exists()).collect::<Vec<_>>();
         remove_recording(&dir, "s1");
         assert_eq!(left(), &names[3..]);
+        let padded: HashSet<String> = [" ".to_string(), "s3 ".to_string(), " s3".to_string()].into();
+        assert!(sweep(&dir, &padded, None).is_empty());
+        assert_eq!(left(), &names[3..]);
         let gone: HashSet<String> = ["s2".to_string(), "s9".to_string(), "../x".to_string()].into();
         assert!(sweep(&dir, &gone, Some("s2")).is_empty());
         assert_eq!(left(), &names[3..]);
@@ -1517,7 +1520,9 @@ mod tests {
         assert!(!valid_token("../../../../evil00"));
         assert!(!valid_id("../outside"));
         assert!(!valid_id("a\\b"));
+        assert!(!valid_id(" ") && !valid_id("s1 ") && !valid_id(" s1"));
         assert!(valid_id("1a2b3c4d"));
+        assert!(valid_id(&set_id_for(1_760_000_000_000_000, 0)));
     }
 
     #[test]
