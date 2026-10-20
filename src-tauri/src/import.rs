@@ -486,6 +486,13 @@ pub fn run(core: &Arc<Core>, spec: &Value) -> Result<Value, String> {
     result
 }
 
+fn remove_views(recording: &Path, ids: &[String]) {
+    for id in ids {
+        let _ = std::fs::remove_dir_all(recording.join(id));
+    }
+    let _ = std::fs::remove_dir(recording);
+}
+
 fn import(core: &Arc<Core>, room_id: &str, plan: &Plan) -> Result<Value, String> {
     let me = core.me();
     let usable = crate::record::usable_codecs(core);
@@ -507,15 +514,13 @@ fn import(core: &Arc<Core>, room_id: &str, plan: &Plan) -> Result<Value, String>
     let units = plan.views.iter().zip(&probes).map(|(v, (p, _))| usize::from(p.picture.is_some()) + usize::from(v.voice.is_some() || p.picture.is_none())).sum::<usize>().max(1);
     let done = std::cell::Cell::new(0usize);
     let progress = |frac: f64| emit(core, (done.get() as f64 + frac) / units as f64 * 100.0, false, None, &plan.title);
+    let ids: Vec<String> = plan.views.iter().map(|_| iroh::SecretKey::generate().public().to_string()).collect();
     let mut made: Vec<Imported> = Vec::new();
-    let mut written: Vec<PathBuf> = Vec::new();
     let result = (|| -> Result<(), String> {
-        for (view, (info, voice)) in plan.views.iter().zip(&probes) {
-            let id = iroh::SecretKey::generate().public().to_string();
+        for ((view, (info, voice)), id) in plan.views.iter().zip(&probes).zip(&ids) {
             let view_start = start_us + view.offset_ms * 1000;
             let capture = (view_start / 1000).to_string();
-            let capture_dir = core.set_dir(room_id, &set, &id, &capture);
-            written.push(core.recording_dir(room_id, &set));
+            let capture_dir = core.set_dir(room_id, &set, id, &capture);
             let (mut init, mut segs, mut end_us) = (json!({}), Vec::new(), view_start);
             let (mut width, mut height) = (0, 0);
             let has_picture = info.picture.is_some();
@@ -546,14 +551,12 @@ fn import(core: &Arc<Core>, room_id: &str, plan: &Plan) -> Result<Value, String>
             let mut records = vec![rec, cap];
             records.extend(segs);
             records.push(json!({"k": "rec_end", "room": room_id, "set": set, "t_us": end_us, "stop": false}));
-            made.push(Imported { id, name: view.name.clone(), records });
+            made.push(Imported { id: id.clone(), name: view.name.clone(), records });
         }
         Ok(())
     })();
     if let Err(e) = result {
-        for dir in written {
-            let _ = std::fs::remove_dir_all(dir);
-        }
+        remove_views(&core.recording_dir(room_id, &set), &ids);
         return Err(e);
     }
     for view in &made {
@@ -714,6 +717,23 @@ At least one output file must be specified";
         assert!(plan_from_folder(&dir).unwrap_err().contains("WEBVTT"));
         assert!(plan_from_spec(&json!({})).unwrap_err().contains("Choose"));
         assert!(plan_from_spec(&json!({"folder": dir.join("nothing").to_string_lossy()})).unwrap_err().contains("does not exist"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_failed_import_removes_only_its_views_and_the_folder_once_empty() {
+        let dir = folder("failed");
+        let names = ["x/view1/5/v/init.mp4", "x/view1/5/v/000001.m4s", "x/view2/5/m/000001.m4s.part", "x/me/7/v/000001.m4s", "x/me/7/v/000002.m4s.part", "x/peer/8/v/000001.m4s", "y/view1/5/v/000001.m4s"];
+        for name in names {
+            let path = dir.join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"x").unwrap();
+        }
+        let ids = ["view1", "view2", "view3"].map(String::from);
+        remove_views(&dir.join("x"), &ids);
+        assert_eq!(names.iter().copied().filter(|n| dir.join(n).exists()).collect::<Vec<_>>(), &names[3..]);
+        remove_views(&dir.join("y"), &ids);
+        assert!(!dir.join("y").exists() && dir.join("x").exists());
         let _ = std::fs::remove_dir_all(dir);
     }
 
