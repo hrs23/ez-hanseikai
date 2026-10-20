@@ -554,9 +554,9 @@ fn set_detail(core: &Core, room: &str, set: &room::Set) -> Value {
             for s in SERIES {
                 let segs = f.series(s);
                 let (mut missing, mut receiving, mut present) = (Vec::new(), Vec::new(), 0u64);
-                let base = data::file_dir(core, room, f);
-                for (seg, (here, _)) in segs.iter().zip(data::presence(&core.files, &base, f, s)) {
-                    let path = base.join(&seg.capture).join(s).join(room::seg_name(seg.n));
+                let room_dir = core.room_dir(room);
+                for (seg, (here, _)) in segs.iter().zip(data::presence(&core.files, &room_dir, f, s)) {
+                    let path = data::seg_dir(&room_dir, f, &seg.capture, s).join(room::seg_name(seg.n));
                     if here {
                         present += 1;
                     } else if part_of(&path).exists() || core.writing.lock().unwrap().contains(&path) {

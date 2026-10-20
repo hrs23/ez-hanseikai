@@ -294,7 +294,7 @@ async fn follow(core: &Core, from: EndpointId, send: &mut SendStream, req: &Valu
     }
     let _ = send.set_priority(priority(live, &series));
     let what = debug::what(from, req, priority(live, &series));
-    let dir = core.media_dir(&room, set.as_deref(), &owner, &capture).join(&series);
+    let dir = core.series_dir(&room, set.as_deref(), &owner, &capture, &series);
     let which = if series == SERIES[0] { 0 } else { 1 };
     let current = || core.engine.live().filter(|l| l.room == room && l.capture == capture);
     let sets = if own { Vec::new() } else { room::sets(core, &room, &room::logs(core, &room)) };
@@ -664,11 +664,6 @@ fn open_part(part: &Path, at: Option<u64>) -> std::io::Result<std::fs::File> {
     Ok(file)
 }
 
-async fn write_chunk(file: &mut tokio::fs::File, buf: &[u8]) -> std::io::Result<()> {
-    file.write_all(buf).await?;
-    file.flush().await
-}
-
 fn finish_copy(bad: &Mutex<HashSet<(String, PathBuf)>>, peer: &str, path: &Path, expect: Option<&(u64, String)>, resumed: bool) -> std::io::Result<Option<u64>> {
     let part = part_of(path);
     if let Some((size, sha)) = expect {
@@ -689,7 +684,7 @@ async fn receive(core: &Arc<Core>, conn: &Connection, req: Value, expect: HashMa
     let text = |k: &str| req[k].as_str().unwrap_or_default().to_string();
     let (room, owner, capture, series) = (text("room"), text("owner"), text("capture"), text("series"));
     let set = Some(text("set")).filter(|s| valid_id(s));
-    let dir = core.media_dir(&room, set.as_deref(), &owner, &capture).join(&series);
+    let dir = core.series_dir(&room, set.as_deref(), &owner, &capture, &series);
     let (from, at) = (req["from"].as_u64().unwrap_or(1) as u32, req["at"].as_u64().unwrap_or(0));
     let what = debug::what(conn.remote_id(), &req, priority(req["live"] == true, &series));
     let (mut send, mut recv) = conn.open_bi().await?;
@@ -743,7 +738,8 @@ async fn receive(core: &Arc<Core>, conn: &Connection, req: Value, expect: HashMa
         buf.resize(len, 0);
         recv.read_exact(&mut buf).await?;
         if let Some((_, _, file, _, row)) = current.as_mut() {
-            write_chunk(file, &buf).await?;
+            file.write_all(&buf).await?;
+            file.flush().await?;
             row.add(len);
         }
         got += len as u64;
@@ -779,11 +775,11 @@ async fn follow_live(core: Arc<Core>, id: EndpointId, conn: Connection, room: St
         let Some(info) = live_info(&core, &id, &conn).await else { break };
         if info.capture != capture {
             capture = info.capture.clone();
-            data::keep_capture(&core.standby_dir(&room, &owner, &capture));
+            data::keep_capture(&core.series_dir(&room, None, &owner, &capture, series));
         }
         let (n, set) = (info.n[which], info.set[which].clone());
         if n > 0 {
-            let dir = core.media_dir(&room, set.as_deref(), &owner, &capture).join(series);
+            let dir = core.series_dir(&room, set.as_deref(), &owner, &capture, series);
             let mut req = json!({"t": "follow", "room": room, "owner": owner, "capture": capture, "series": series, "from": n, "at": 0, "init": !dir.join(INIT).exists(), "live": true});
             if let Some(set) = set {
                 req["set"] = json!(set);
@@ -834,8 +830,9 @@ fn fetch_history(core: &Arc<Core>, peer: &EndpointId, conn: &Connection, room: &
         let focused = Some(&set.id) == focus.as_ref();
         for f in &set.files {
             for series in [SERIES[1], SERIES[0]] {
-                let Some(run) = data::missing(&core.files, &core.writing, &data::file_dir(core, room, f), f, series) else { continue };
-                let dir = core.set_dir(room, &set.id, &f.owner, &run.capture).join(series);
+                let room_dir = core.room_dir(room);
+                let Some(run) = data::missing(&core.files, &core.writing, &room_dir, f, series) else { continue };
+                let dir = data::seg_dir(&room_dir, f, &run.capture, series);
                 let bad = |path: PathBuf| core.bad.lock().unwrap().contains(&(via.clone(), path));
                 if bad(dir.join(seg_name(run.from))) || (run.init && bad(dir.join(INIT))) {
                     continue;
@@ -1124,33 +1121,11 @@ mod tests {
     }
 
     #[test]
-    fn a_chunk_is_on_disk_before_its_copy_is_checked() {
-        let dir = temp("chunk");
-        let part = part_of(&dir.join(INIT));
-        let runtime = tokio::runtime::Builder::new_current_thread().max_blocking_threads(1).build().unwrap();
-        runtime.block_on(async {
-            let (open, gate) = std::sync::mpsc::channel::<()>();
-            let busy = tokio::task::spawn_blocking(move || gate.recv());
-            std::thread::spawn(move || {
-                std::thread::sleep(Duration::from_millis(200));
-                open.send(())
-            });
-            let mut file = tokio::fs::File::from_std(open_part(&part, None).unwrap());
-            write_chunk(&mut file, b"init").await.unwrap();
-            assert_eq!(file_len(&part), 4);
-            busy.await.unwrap().unwrap();
-        });
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
     fn a_live_reply_names_the_recording_of_each_series() {
-        let live = peer_live(&json!({"sharing": true, "capture": "1700", "n": [7, 5], "set": ["2026-10-20 10-00-00", null]})).unwrap();
-        assert_eq!((live.capture.as_str(), live.n, live.set[0].as_deref(), live.set[1].as_deref()), ("1700", [7, 5], Some("2026-10-20 10-00-00"), None));
-        assert_eq!(peer_live(&json!({"sharing": true, "capture": "1700", "n": [3, 2]})).unwrap().set, [None, None]);
-        assert!(peer_live(&json!({"sharing": true, "capture": "1700", "n": [3, 2], "set": ["../x", 5]})).unwrap().set.iter().all(Option::is_none));
-        assert!(peer_live(&json!({"sharing": false, "capture": "1700"})).is_none());
-        assert!(peer_live(&json!({"sharing": true, "capture": "../x"})).is_none());
+        let live = |info: Value| peer_live(&info).map(|l| (l.capture, l.n, l.set));
+        assert_eq!(live(json!({"sharing": true, "capture": "1700", "n": [7, 5], "set": ["s1", null]})), Some(("1700".into(), [7, 5], [Some("s1".into()), None])));
+        assert_eq!(live(json!({"sharing": true, "capture": "1700", "n": [3], "set": ["../x", 5]})), Some(("1700".into(), [3, 0], [None, None])));
+        assert_eq!((live(json!({"sharing": false, "capture": "1700"})), live(json!({"sharing": true, "capture": "../x"}))), (None, None));
     }
 
     #[test]

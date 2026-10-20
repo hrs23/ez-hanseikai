@@ -484,11 +484,11 @@ impl Sink {
             return Err("ffmpeg is not installed yet".into());
         }
         let capture = (now_us() / 1000).to_string();
-        let dir = core.standby_dir(&room, &core.me(), &capture);
         for series in SERIES {
-            std::fs::create_dir_all(dir.join(series))?;
+            let dir = core.series_dir(&room, None, &core.me(), &capture, series);
+            std::fs::create_dir_all(&dir)?;
+            data::keep_capture(&dir);
         }
-        data::keep_capture(&dir);
         let chosen = ffmpeg::pick(&usable_codecs(core));
         let quality = core.engine.quality.lock().unwrap().clone();
         let width = quality_width(&quality);
@@ -657,7 +657,7 @@ impl Sink {
 
     fn open(&self, core: &Core, which: usize, series: &mut Series, set: Option<String>, t_us: i64) {
         let n = series.n + 1;
-        let dir = core.media_dir(&self.room, set.as_deref(), &core.me(), &self.capture).join(SERIES[which]);
+        let dir = core.series_dir(&self.room, set.as_deref(), &core.me(), &self.capture, SERIES[which]);
         if std::fs::create_dir_all(&dir).is_err() {
             self.dead.store(true, Ordering::Relaxed);
             return;

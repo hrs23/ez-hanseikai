@@ -94,9 +94,9 @@ pub mod tests {
         std::fs::write(path, body).unwrap();
     }
 
-    pub fn seed<'a>(dir: &Path, names: impl IntoIterator<Item = &'a str>) {
+    pub fn seed(dir: &Path, names: impl IntoIterator<Item = impl AsRef<str>>) {
         for name in names {
-            put(dir, name, b"x");
+            put(dir, name.as_ref(), b"x");
         }
     }
 

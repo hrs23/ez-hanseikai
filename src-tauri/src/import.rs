@@ -310,9 +310,8 @@ fn flush(dir: &Path, n: u32, fragments: &[Vec<u8>], t_us: i64) -> Result<Pending
     Ok(Pending { n, t_us, size: bytes.len() as u64, sha: hex(&hasher.finalize()) })
 }
 
-fn convert(input: &Path, probe: &Probe, recipe: &Recipe, series: &str, capture_dir: &Path, set: &str, capture: &str, start_us: i64, progress: &dyn Fn(f64)) -> Result<Made, String> {
-    let dir = capture_dir.join(series);
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+fn convert(input: &Path, probe: &Probe, recipe: &Recipe, series: &str, dir: &Path, set: &str, capture: &str, start_us: i64, progress: &dyn Fn(f64)) -> Result<Made, String> {
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let args = convert_args(&input.to_string_lossy(), probe, recipe, series);
     let mut command = Command::new(ffmpeg::path());
     command.args(&args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -364,7 +363,7 @@ fn convert(input: &Path, probe: &Probe, recipe: &Recipe, series: &str, capture_d
                     last_rel = rel;
                     if current.len() as u32 >= FRAGMENTS_PER_SEGMENT {
                         n += 1;
-                        pendings.push(flush(&dir, n, &current, start_us + current_t)?);
+                        pendings.push(flush(dir, n, &current, start_us + current_t)?);
                         current.clear();
                     }
                     if current.is_empty() {
@@ -391,7 +390,7 @@ fn convert(input: &Path, probe: &Probe, recipe: &Recipe, series: &str, capture_d
     }
     if !current.is_empty() {
         n += 1;
-        pendings.push(flush(&dir, n, &current, start_us + current_t)?);
+        pendings.push(flush(dir, n, &current, start_us + current_t)?);
     }
     let Some(init) = init.filter(|_| !pendings.is_empty()) else { return Err("The file has no picture or sound.".to_string()) };
     let mut segs = Vec::new();
@@ -520,13 +519,13 @@ fn import(core: &Arc<Core>, room_id: &str, plan: &Plan) -> Result<Value, String>
         for ((view, (info, voice)), id) in plan.views.iter().zip(&probes).zip(&ids) {
             let view_start = start_us + view.offset_ms * 1000;
             let capture = (view_start / 1000).to_string();
-            let capture_dir = core.set_dir(room_id, &set, id, &capture);
+            let dir = |series| core.series_dir(room_id, Some(&set), id, &capture, series);
             let (mut init, mut segs, mut end_us) = (json!({}), Vec::new(), view_start);
             let (mut width, mut height) = (0, 0);
             let has_picture = info.picture.is_some();
             let recipe = decide(info, &usable);
             if has_picture {
-                let m = convert(&view.file, info, &recipe, SERIES[0], &capture_dir, &set, &capture, view_start, &progress)?;
+                let m = convert(&view.file, info, &recipe, SERIES[0], &dir(SERIES[0]), &set, &capture, view_start, &progress)?;
                 done.set(done.get() + 1);
                 init[SERIES[0]] = json!({"size": m.init.0, "sha256": m.init.1});
                 (width, height, end_us) = (m.width, m.height, end_us.max(m.end_us));
@@ -538,7 +537,7 @@ fn import(core: &Arc<Core>, room_id: &str, plan: &Plan) -> Result<Value, String>
                 (None, true) => None,
             };
             if let Some((path, probe)) = voice_source {
-                let m = convert(path, probe, &decide(probe, &usable), SERIES[1], &capture_dir, &set, &capture, view_start, &progress)?;
+                let m = convert(path, probe, &decide(probe, &usable), SERIES[1], &dir(SERIES[1]), &set, &capture, view_start, &progress)?;
                 done.set(done.get() + 1);
                 init[SERIES[1]] = json!({"size": m.init.0, "sha256": m.init.1});
                 end_us = end_us.max(m.end_us);

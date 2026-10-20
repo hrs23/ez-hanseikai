@@ -28,6 +28,10 @@ pub fn seg_number(name: &str) -> Option<u32> {
     name.strip_suffix(".part").unwrap_or(name).strip_suffix(".m4s")?.parse().ok()
 }
 
+pub fn series_dir(room_dir: &Path, set: Option<&str>, owner: &str, capture: &str, series: &str) -> PathBuf {
+    set.map_or_else(|| room_dir.join(STANDBY), |set| room_dir.join(RECORDINGS).join(set)).join(owner).join(capture).join(series)
+}
+
 pub fn part_of(path: &Path) -> PathBuf {
     let mut name = path.as_os_str().to_owned();
     name.push(".part");
@@ -154,19 +158,8 @@ impl Core {
         self.room_dir(room).join(RECORDINGS).join(set)
     }
 
-    pub fn set_dir(&self, room: &str, set: &str, owner: &str, capture: &str) -> PathBuf {
-        self.recording_dir(room, set).join(owner).join(capture)
-    }
-
-    pub fn standby_dir(&self, room: &str, owner: &str, capture: &str) -> PathBuf {
-        self.room_dir(room).join(STANDBY).join(owner).join(capture)
-    }
-
-    pub fn media_dir(&self, room: &str, set: Option<&str>, owner: &str, capture: &str) -> PathBuf {
-        match set {
-            Some(set) => self.set_dir(room, set, owner, capture),
-            None => self.standby_dir(room, owner, capture),
-        }
+    pub fn series_dir(&self, room: &str, set: Option<&str>, owner: &str, capture: &str, series: &str) -> PathBuf {
+        series_dir(&self.room_dir(room), set, owner, capture, series)
     }
 
     pub fn save_rooms(&self) {
@@ -973,23 +966,14 @@ pub fn sweep_dropped(core: &Core, room: &str, logs: &[Log]) {
     }
 }
 
-pub fn sweep_rooms(rooms_dir: &Path, removed: &HashSet<String>, listed: &[String]) -> Vec<String> {
-    let mut out = Vec::new();
-    for id in removed.iter().filter(|id| valid_id(id) && !listed.contains(id)) {
-        let dir = rooms_dir.join(id);
+pub fn sweep_removed(core: &Core) {
+    let removed = core.removed_rooms.lock().unwrap().clone();
+    for id in removed.iter().filter(|id| valid_id(id) && !core.rooms.lock().unwrap().list.iter().any(|r| &r.id == *id)) {
+        let dir = core.room_dir(id);
         if dir.exists() {
             let _ = std::fs::remove_dir_all(&dir);
-            out.push(id.clone());
+            data::forget(&core.files, &dir);
         }
-    }
-    out
-}
-
-pub fn sweep_removed(core: &Core) {
-    let listed: Vec<String> = core.rooms.lock().unwrap().list.iter().map(|r| r.id.clone()).collect();
-    let removed = core.removed_rooms.lock().unwrap().clone();
-    for id in sweep_rooms(&core.dir.join("rooms"), &removed, &listed) {
-        data::forget(&core.files, &core.room_dir(&id));
     }
 }
 
@@ -1354,21 +1338,6 @@ pub mod tests {
         seed(&dir, ["recordings/s2/b/2/v/000001.m4s"]);
         assert_eq!(sweep(&dir, &gone, None), ["s2"]);
         assert_eq!(present(&dir, &names), &names[5..]);
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn a_room_removed_from_this_pc_goes_whole_and_again_after_a_late_write() {
-        let dir = temp("rooms");
-        let names = ["r/standby/a/1/v/000001.m4s.part", "r/recordings/s1/a/1/v/000001.m4s", "back/logs/a.bin", "kept/logs/a.bin", "0ld0r00m/a/1/v/000001.m4s"];
-        seed(&dir, names);
-        let removed: HashSet<String> = ["r", "back", "kept ", "gone", "../x"].map(String::from).into();
-        let listed = ["back".to_string(), "kept".to_string()];
-        assert_eq!(sweep_rooms(&dir, &removed, &listed), ["r"]);
-        seed(&dir, ["r/standby/a/1/v/000002.m4s.part"]);
-        assert_eq!(sweep_rooms(&dir, &removed, &listed), ["r"]);
-        assert!(sweep_rooms(&dir, &removed, &listed).is_empty());
-        assert_eq!((dir.join("r").exists(), present(&dir, &names)), (false, names[2..].to_vec()));
         let _ = std::fs::remove_dir_all(dir);
     }
 

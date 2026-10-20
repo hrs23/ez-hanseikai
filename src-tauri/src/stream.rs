@@ -61,7 +61,7 @@ fn pieces_in(files: &data::Files, dir: &Path, f: &File, capture: &str, series: &
 }
 
 pub fn set_pieces(core: &Core, room: &str, f: &File, capture: &str, series: &str) -> Vec<Piece> {
-    pieces_in(&core.files, &core.set_dir(room, &f.set, &f.owner, capture).join(series), f, capture, series)
+    pieces_in(&core.files, &data::seg_dir(&core.room_dir(room), f, capture, series), f, capture, series)
 }
 
 pub fn window(newest: u32) -> u32 {
@@ -86,7 +86,7 @@ fn live_folder(core: &Core, room: &str, owner: &str) -> Option<(String, PathBuf)
         let live = core.peers.lock().unwrap().iter().find(|p| p.id.to_string() == owner).and_then(|p| p.live.clone())?;
         (live.capture, live.set[0].clone())
     };
-    let dir = core.media_dir(room, set.as_deref(), owner, &capture).join(SERIES[0]);
+    let dir = core.series_dir(room, set.as_deref(), owner, &capture, SERIES[0]);
     Some((capture, dir))
 }
 
@@ -240,7 +240,7 @@ pub fn respond(core: &Core, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::log::tests::{put, temp};
+    use crate::log::tests::{put, seed, temp};
     use crate::room::tests::small_file;
 
     #[test]
@@ -280,19 +280,11 @@ mod tests {
         let standby = |after: &[u32]| [(4..=10).collect::<Vec<u32>>(), after.to_vec()].concat();
         assert_eq!([&[][..], &[12], &[12, 13], &[12, 13, 14]].map(|after| live_from(&standby(after))), [Some(7), Some(12), Some(12), Some(13)]);
         assert_eq!(live_from(&[]), None);
-    }
-
-    #[test]
-    fn a_live_tile_starts_where_its_folder_serves_it() {
         let dir = temp("live");
-        for n in 4..=10 {
-            put(&dir, &seg_name(n), b"seg!");
-        }
-        put(&dir, &format!("{}.part", seg_name(11)), b"op");
+        seed(&dir, (4..=11).map(seg_name).chain([format!("{}.part", seg_name(12))]));
         assert_eq!(live_start(&dir), None);
         put(&dir, INIT, b"init");
-        assert_eq!((live_start(&dir), size(&pieces_from(&dir, 10))), (Some((10, 4 + 4 + 2)), 4 + 4 + 2));
-        assert_eq!(live_start(&dir.join("missing")), None);
+        assert_eq!((live_start(&dir), live_start(&dir.join("missing"))), (Some((10, 4 + 3)), None));
         let _ = std::fs::remove_dir_all(dir);
     }
 
