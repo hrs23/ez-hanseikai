@@ -184,6 +184,14 @@ Writes the recording into a new or empty folder on this PC as a [session folder]
 
 `state` is `waiting`, `claimed`, `done` or `failed`; `by` is the member who runs or ran it; `whole` marks a job for the whole recording rather than one member. `running` is the job this PC runs now, or `null`.
 
+### `GET /v1/diagnostics`
+
+```json
+{"text": "ez-hanseikai 0.16.2 on windows ...\n\nrecent errors\n..."}
+```
+
+The plain-text report of Help > Diagnostics > Copy report, without its summary lines, with names and addresses hidden. `?everyone=true` (or `1`) adds each connected member's report under `=== member <id> ===`, as they share it. It runs the environment check, so it can take a few seconds.
+
 ## Example
 
 ```

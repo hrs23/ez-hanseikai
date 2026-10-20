@@ -674,6 +674,16 @@ pub fn set_report_sharing(on: bool) {
 #[tauri::command]
 pub async fn debug_report(core: State<'_, Arc<Core>>, include_addresses: bool, everyone: bool, audio_process: String, save: bool, head: Option<String>) -> Result<String, String> {
     let core = core.inner().clone();
+    let text = diagnostics(core.clone(), include_addresses, everyone, audio_process, head).await?;
+    if !save {
+        return Ok(text);
+    }
+    let path = core.dir.join("report.txt");
+    fs::write(&path, text).map_err(|e| e.to_string())?;
+    Ok(path.display().to_string())
+}
+
+pub async fn diagnostics(core: Arc<Core>, include_addresses: bool, everyone: bool, audio_process: String, head: Option<String>) -> Result<String, String> {
     crate::warm(&core).await;
     let c = core.clone();
     let own = tauri::async_runtime::spawn_blocking(move || {
@@ -687,13 +697,7 @@ pub async fn debug_report(core: State<'_, Arc<Core>>, include_addresses: bool, e
     })
     .await
     .map_err(|e| e.to_string())?;
-    let text = if everyone { combine(own, team(&core).await) } else { own };
-    if !save {
-        return Ok(text);
-    }
-    let path = core.dir.join("report.txt");
-    fs::write(&path, text).map_err(|e| e.to_string())?;
-    Ok(path.display().to_string())
+    Ok(if everyone { combine(own, team(&core).await) } else { own })
 }
 
 async fn team(core: &Arc<Core>) -> Vec<(String, String)> {

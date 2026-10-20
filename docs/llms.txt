@@ -60,6 +60,10 @@ GET /v1/rooms/{room}/jobs
   {"jobs": [{"job": "...", "plugin": "transcribe", "version": "1.0.0", "set": "<recording id>", "owner": "...", "owner_name": "Ren", "whole": false, "state": "waiting", "by": null, "error": null}], "running": null}
   state is waiting, claimed, done or failed; by is who runs or ran it.
 
+GET /v1/diagnostics[?everyone=true]
+  {"text": "ez-hanseikai 0.16.2 on windows ...\n\nrecent errors\n..."}
+  The report that Help > Diagnostics > Copy report gives, without its summary lines and with names and addresses hidden: versions, environment check, connections, hardware and clocks, where data goes, recent errors, jobs, crashes and the recent log. everyone=true adds each connected member's report. Read it when something does not work.
+
 ## Write
 
 POST /v1/rooms/{room}/recordings/{recording}/events

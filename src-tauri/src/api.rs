@@ -305,6 +305,7 @@ pub trait Backend {
     fn add(&self, room: &str, record: Value) -> Result<(), String>;
     fn import(&self, room: &str, spec: &Value) -> Result<Value, (u16, String)>;
     fn export(&self, room: &str, set: &str, folder: &str, aligned: bool) -> Result<Value, (u16, String)>;
+    fn diagnostics(&self, everyone: bool) -> String;
 }
 
 struct Loaded {
@@ -645,7 +646,7 @@ fn route(req: &Request, be: &dyn Backend, parts: &[&str]) -> Response {
     let allowed: &[&str] = match parts {
         ["v1", "rooms", _, "recordings", "import"] => &["POST"],
         ["v1", "rooms", _, "open"] => &["POST"],
-        ["v1"] | ["v1", "status"] | ["v1", "rooms"] | ["v1", "rooms", _, "recordings"] | ["v1", "rooms", _, "recordings", _] => &["GET"],
+        ["v1"] | ["v1", "status"] | ["v1", "diagnostics"] | ["v1", "rooms"] | ["v1", "rooms", _, "recordings"] | ["v1", "rooms", _, "recordings", _] => &["GET"],
         ["v1", "rooms", _, "recordings", _, "chapters" | "transcript"] | ["v1", "rooms", _, "plugins" | "jobs"] => &["GET"],
         ["v1", "rooms", _, "recordings", _, "events"] => &["GET", "POST"],
         ["v1", "rooms", _, "recordings", _, "export"] => &["POST"],
@@ -659,6 +660,7 @@ fn route(req: &Request, be: &dyn Backend, parts: &[&str]) -> Response {
         return match parts {
             ["v1", "rooms"] => reply(200, json!({"rooms": rooms_json(&be.heads())})),
             ["v1", "status"] => status_reply(be),
+            ["v1", "diagnostics"] => reply(200, json!({"text": be.diagnostics(matches!(req.query("everyone"), Some("true" | "1")))})),
             _ => reply(200, be.app()),
         };
     };
@@ -807,6 +809,11 @@ impl Backend for Live {
 
     fn export(&self, room: &str, set: &str, folder: &str, aligned: bool) -> Result<Value, (u16, String)> {
         crate::bundle::run(&self.0, room, set, std::path::Path::new(folder), aligned).map_err(|e| (if e.contains("already running") || e.contains("Stop recording") { 409 } else { 400 }, e))
+    }
+
+    fn diagnostics(&self, everyone: bool) -> String {
+        let audio_process = self.0.audio_process.lock().unwrap().clone();
+        tauri::async_runtime::block_on(crate::debug::diagnostics(self.0.clone(), false, everyone, audio_process, None)).unwrap_or_else(|e| format!("no report: {e}"))
     }
 }
 
@@ -986,6 +993,9 @@ mod tests {
             }
             self.calls.lock().unwrap().push(format!("export {room} {set} {folder} {aligned}"));
             Ok(json!({"folder": folder, "files": 2, "skipped": []}))
+        }
+        fn diagnostics(&self, everyone: bool) -> String {
+            format!("report everyone={everyone}")
         }
     }
 
@@ -1374,6 +1384,16 @@ mod tests {
     }
 
     #[test]
+    fn diagnostics_give_this_pcs_report_or_everyones() {
+        let fake = fixture();
+        assert_eq!(get(&fake, "/v1/diagnostics"), (200, json!({"text": "report everyone=false"})));
+        assert_eq!(get(&fake, "/v1/diagnostics?everyone=true").1["text"], "report everyone=true");
+        assert_eq!(get(&fake, "/v1/diagnostics?everyone=1").1["text"], "report everyone=true");
+        assert_eq!(get(&fake, "/v1/diagnostics?everyone=no").1["text"], "report everyone=false");
+        assert_eq!(call(&fake, "POST", "/v1/diagnostics", "").0, 405);
+    }
+
+    #[test]
     fn the_reference_lists_every_endpoint_of_the_api_page_with_an_example() {
         let list = reference();
         let titles: Vec<&str> = list.iter().map(|e| e["title"].as_str().unwrap()).collect();
@@ -1407,7 +1427,7 @@ mod tests {
 
     #[test]
     fn llms_txt_describes_every_endpoint() {
-        for path in ["/v1/rooms", "recordings", "events", "chapters", "transcript", "board", "plugins", "jobs", "/v1/status", "/open", "api.json", "--api"] {
+        for path in ["/v1/rooms", "recordings", "events", "chapters", "transcript", "board", "plugins", "jobs", "/v1/status", "/v1/diagnostics", "/open", "api.json", "--api"] {
             assert!(LLMS.contains(path), "{path}");
         }
         assert!(LLMS.contains("Authorization: Bearer") && LLMS.contains("127.0.0.1"));

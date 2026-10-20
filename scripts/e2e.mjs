@@ -926,6 +926,10 @@ async function scenario(ctx) {
     await waitFor("A lists the note in the player", within(UI_REFRESH_S * 5), () => evaluate(a, `$("notelist").textContent.includes("Noted through the API")`));
     const status = await api(a, "GET", "/v1/status", { token });
     check(status.status === 200 && status.json.room === ctx.room && status.json.recording === false && ["idle", "standby"].includes(status.json.state) && status.json.members.length === 3 && status.json.members.some((m) => m.id === a.id && m.state === status.json.state), `status: ${status.status} ${brief(status.json)}`);
+    const diag = await api(a, "GET", "/v1/diagnostics?everyone=true", { token });
+    const diagText = diag.json && diag.json.text || "";
+    check(diag.status === 200 && diagText.includes("=== this PC ===\nez-hanseikai") && diagText.includes("recent log") && diagText.split("=== member ").length === 3, `diagnostics: ${diag.status} ${brief(diagText.slice(0, 200))}`);
+    for (const secret of [NAMES.a, NAMES.b, NAMES.c, a.id, b.id]) check(!diagText.includes(secret), `the API report holds ${secret.slice(0, 4)}`);
     const opened = await api(a, "POST", `${room}/open`, { token });
     check(opened.status === 200 && opened.json.room === ctx.room, `open: ${opened.status} ${brief(opened.text)}`);
     check((await api(a, "POST", "/v1/rooms/nope/open", { token })).status === 404 && (await api(a, "GET", `${room}/open`, { token })).status === 405, "open takes any room or method");
