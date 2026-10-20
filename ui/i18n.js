@@ -517,6 +517,7 @@ const JA = {
   "{n} jobs failed": "{n} 件のジョブが失敗",
   "{n} match": "{n} 試合",
   "{n} matches": "{n} 試合",
+  "{n} member": "メンバー{n}人",
   "{n} members": "メンバー{n}人",
   "{n} min left": "残り {n} 分",
   "{n} note": "メモ{n}件",

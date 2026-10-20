@@ -9,7 +9,7 @@ const ui = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "ui");
 const read = (f) => fs.readFileSync(path.join(ui, f), "utf8");
 const source = ["util.js", "i18n.js", "layout.js", "events.js", "markdown.js", "review.js", "members.js", "recordings.js", "plugins.js", "ai.js", "diag.js"].map(read).join("\n");
 const context = vm.createContext({ window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id });
-const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, flowAt, flowBands, flowSteps, isReview, voiceOnly, BOARD_TEMPLATE, memberStatus, receivingPercent, recordingRows, recordingMatches, recordingWords, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, discardable, DISCARD_MAX_S, soundKey, pluginProgress, isBusy, workerState, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, aiPreview, apiUrl, apiBadge, apiReferenceBlocks, rateOf, liveEdge, netState, summaryLines, leftText, pcCards, clockPairs, clockSummary, flowRows, timeRow, skewText, agoText, JA, t, sessionName, mdParse, mdInline, toggleTask, boardParts, boardDom, markdownDom, mdHooks, runBy, PERSONAL_TEMPLATE, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, flowAt, flowBands, flowSteps, isReview, voiceOnly, BOARD_TEMPLATE, memberStatus, receivingPercent, recordingRows, recordingMatches, recordingWords, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, discardable, DISCARD_MAX_S, soundKey, pluginProgress, isBusy, workerState, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, aiPreview, apiUrl, apiBadge, apiReferenceBlocks, rateOf, liveEdge, netState, summaryLines, leftText, pcCards, clockPairs, clockSummary, flowRows, timeRow, skewText, agoText, JA, t, sessionName, mdParse, mdInline, mdHosts, toggleTask, boardParts, boardDom, markdownDom, mdHooks, runBy, PERSONAL_TEMPLATE, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 const plain = (v) => JSON.parse(JSON.stringify(v));
 
 const moment = (m, extra = {}) => ({ role: "moment", m, plugin: { id: "apex-matches" }, tags: ["match"], ...extra });
@@ -516,6 +516,10 @@ test("the sidebar is a room header with a menu, four items, the record box and t
   const menu = sidejs.slice(sidejs.indexOf("function roomMenu"), sidejs.indexOf("function navigate"));
   const labels = [...menu.matchAll(/label: t\("([^"]+)"\)/g)].map((m) => m[1]);
   assert.deepEqual(labels, ["Room settings…", "Copy invite code", "Cancel invite", "Switch room", "Leave room…"]);
+  const shell = fs.readFileSync(path.join(ui, "..", "src-tauri", "src", "shell.rs"), "utf8");
+  const native = shell.slice(shell.indexOf('tr(lang, "Room")'), shell.indexOf('tr(lang, "Recording")'));
+  assert.deepEqual([...native.matchAll(/it\("[\w-]+", "([^"]+)"/g)].map((m) => m[1]), labels);
+  assert.match(read("pages.js"), /"cancel-invite": \(\) => \{ if \(st\.invites\) cancelInvite\(\); \}/);
   assert.match(sidejs, /\$\("roomname"\)\.onclick = \(e\) => roomMenu\(e\.currentTarget\)/);
   assert.match(read("app.js"), /anchorMenu\(t instanceof Element && t\.hasAttribute\("aria-haspopup"\) \? t : null\);/);
   assert.match(read("style.css"), /\.roombtn\[aria-expanded=true\] \{ background/);
@@ -717,6 +721,21 @@ test("a game plan shows tables, code and tasks, and nothing a note can write run
   assert.equal(preview.find("input")[0].disabled, true);
 });
 
+test("a moment link keeps a formatted label, and deep quotes and lists render without running out of stack", () => {
+  const { ctx } = page(["util.js", "icons.js", "i18n.js", "layout.js", "events.js", "markdown.js"], { st: { palette: [] }, jobInfo: null, filterTag() {}, openLink() {} });
+  const label = (text) => vm.runInContext(`boardDom(${JSON.stringify(text)}, mdHooks())`, ctx).find("button").filter((b) => b.className === "link")[0].textContent;
+  assert.equal(label("[**Opening** push](ezh://moment/s1/5/all)"), "Opening push 0:05");
+  assert.equal(label("[Rotate `B`](ezh://moment/s1/5/all)"), "Rotate B 0:05");
+  assert.equal(label("ezh://moment/s1/5/all"), "Moment 0:05");
+  for (const text of [">".repeat(4000), "- x\n" + Array.from({ length: 80 }, (_, k) => " ".repeat(2 * k + 2) + "- x").join("\n")]) {
+    const card = vm.runInContext(`boardDom(${JSON.stringify(text)}, mdHooks())`, ctx);
+    assert.ok(card.find("blockquote").length + card.find("ul").length <= 9);
+  }
+  const depth = (b) => (b.type === "quote" ? 1 + Math.max(0, ...b.blocks.map(depth)) : 0);
+  assert.equal(depth(blocks("> ".repeat(20) + "x")[0]), 8);
+  assert.equal(depth(blocks("> > a")[0]), 2);
+});
+
 test("the personal game plan stays on this PC and the room's goes to the log", () => {
   const html = read("index.html");
   assert.match(html, /<span id="boardscope" class="seg"[^>]*><button data-scope="room"[^>]*>Room<\/button><button data-scope="personal"[^>]*>Personal<\/button>/);
@@ -749,7 +768,10 @@ test("web links open in the browser through the app, and the plugin runner is na
   const md = read("markdown.js");
   assert.match(md, /invoke\("open_link", \{ url \}\)/);
   assert.match(md, /onauxclick: \(e\) => \{ if \(e\.button === 1\) open\(e\); \}/);
-  assert.match(md, /!label\.toLowerCase\(\)\.includes\(host\) && !\(await ask\(t\("Open \{host\}\?"/);
+  assert.match(md, /!mdHosts\(label\)\.includes\(host\.replace\(\/\^www\\\.\/, ""\)\) && !\(await ask\(t\("Open \{host\}\?"/);
+  const hides = (label, url) => !plain(ui$.mdHosts(label)).includes(new URL(url).host.replace(/^www\./, ""));
+  for (const [label, url] of [["dropbox.com", "https://x.com/a"], ["paypal.com", "https://l.com"], ["google.com/search?q=evil.io", "https://evil.io/x"], ["https://www.google.com/search?q=evil.io", "https://evil.io/x"], ["google.com@evil.io", "https://evil.io"], ["Open the plan", "https://example.com"]]) assert.ok(hides(label, url), label);
+  for (const [label, url] of [["example.com", "https://example.com/p"], ["https://www.example.com/a", "https://example.com/b"], ["the example.com page", "https://www.example.com"]]) assert.ok(!hides(label, url), label);
   assert.ok("Open {host}?" in ui$.JA);
   const pages = read("pages.js");
   assert.match(pages, /disabled: j\.state !== "waiting" \|\| !j\.here \|\| !plugin \|\| !plugin\.process_here \|\| !plugin\.ready \|\| \(plugin\.runner && plugin\.runner !== st\.id\)/);
@@ -797,4 +819,18 @@ test("the microphone button shows a live level that sits flat while muted", () =
   assert.equal(ui$.meterPos(-60), 0);
   assert.match(read("index.html"), /id="micbtn"[^>]*>[^]*?id="miclvl" class="lvl"/);
   assert.match(read("side.js"), /\$\("miclvl"\)\.style\.setProperty\("--lvl", String\(micLevel\(/);
+});
+
+test("one count of failed jobs leads to Jobs, a lone member reads in the singular, and the API badge names other devices", () => {
+  const plugins = read("plugins.js");
+  assert.match(plugins, /const failedJobs = \(\) => \(jobInfo \? jobInfo\.jobs\.filter\(\(j\) => j\.state === "failed"\)\.length : 0\);/);
+  assert.match(plugins, /tab\("jobs", t\("Jobs"\), failedJobs\(\)\)/);
+  assert.match(plugins, /className: "count bad"/);
+  assert.match(read("side.js"), /const failed = failedJobs\(\);/);
+  assert.match(read("pages.js"), /t\(people\(\)\.length === 1 \? "\{n\} member" : "\{n\} members"/);
+  assert.ok("{n} member" in ui$.JA);
+  assert.match(read("side.js"), /"API", \.\.\.\(badge\.lan \? \[el\("small", \{ textContent: t\("Other devices"\) \}\)\] : \[\]\)/);
+  const css = read("style.css");
+  assert.match(css, /\.cap:has\(:focus-visible\) \{ border-color: var\(--accent\); \}/);
+  assert.doesNotMatch(css, /\.cap:focus-within/);
 });

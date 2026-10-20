@@ -36,7 +36,7 @@ function renderNav() {
     if (on) b.setAttribute("aria-current", "page");
     else b.removeAttribute("aria-current");
   }
-  const failed = jobInfo ? jobInfo.jobs.filter((j) => j.state === "failed").length : 0;
+  const failed = failedJobs();
   $("askcount").hidden = !st.asks.length;
   $("askcount").textContent = String(st.asks.length);
   $("jobcount").hidden = !failed;
@@ -46,7 +46,7 @@ function renderNav() {
   $("apibadge").hidden = !badge;
   if (badge) {
     $("apibadge").className = "apibadge" + (badge.lan ? " lan" : "");
-    $("apibadge").replaceChildren(icon(badge.lan ? "alert" : "terminal", "sm"), "API");
+    $("apibadge").replaceChildren(icon(badge.lan ? "alert" : "terminal", "sm"), "API", ...(badge.lan ? [el("small", { textContent: t("Other devices") })] : []));
     $("apibadge").title = badge.title;
     $("apibadge").setAttribute("aria-label", badge.title);
   }

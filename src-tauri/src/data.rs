@@ -436,6 +436,16 @@ pub fn remove_media(core: &Core, set: &Set) {
     core.jsons.lock().unwrap().retain(|path, _| !path.starts_with(&dir));
 }
 
+pub fn remove_room(core: &Core, room: &str) {
+    let dir = core.dir.join("rooms").join(room);
+    match std::fs::remove_dir_all(&dir) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => tracing::warn!("could not remove a room folder: {e}"),
+        _ => {}
+    }
+    core.jsons.lock().unwrap().retain(|path, _| !path.starts_with(&dir));
+    core.logs.lock().unwrap().retain(|path, _| !path.starts_with(&dir));
+}
+
 pub fn doomed(present: &[u32], kept: &HashSet<u32>, live_from: Option<u32>) -> Vec<u32> {
     present.iter().copied().filter(|n| !kept.contains(n) && live_from.is_none_or(|from| *n < from)).collect()
 }

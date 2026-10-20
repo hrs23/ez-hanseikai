@@ -717,9 +717,20 @@ async fn leave_room(core: State<'_, Arc<Core>>, id: String) -> Result<(), String
 #[tauri::command]
 async fn remove_room(core: State<'_, Arc<Core>>, id: String) -> Result<(), String> {
     let core = core.inner().clone();
+    if !core.rooms.lock().unwrap().list.iter().any(|r| r.id == id) {
+        return Err("That room is not in your list.".into());
+    }
+    if core.export.lock().unwrap().as_ref().is_some_and(|e| e.set.0 == id) {
+        return Err("This recording is being exported. Cancel the export first.".into());
+    }
     quit_room(&core, &id).await?;
-    room::leave_room(&core, &id);
-    Ok(())
+    tauri::async_runtime::spawn_blocking(move || {
+        room::leave_room(&core, &id);
+        jobs::release_room(&id);
+        data::remove_room(&core, &id);
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

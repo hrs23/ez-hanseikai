@@ -1,4 +1,5 @@
 const MD_HEADING_MAX = 6;
+const MD_DEPTH_MAX = 8;
 const BOARD_HEADING_BASE = 3;
 const MD_FENCE = /^\s*(```+|~~~+)\s*([\w+-]*)\s*$/;
 const MD_RULE = /^\s*([-*_])(\s*\1){2,}\s*$/;
@@ -23,9 +24,18 @@ const MD_INLINE = new RegExp([
   "(?<![\\p{L}\\p{N}_&])#([\\p{L}\\p{N}_-]+)",
 ].join("|"), "gu");
 
+function mdHosts(label) {
+  return label.split(/\s+/).flatMap((w) => {
+    try {
+      const u = new URL(/^[a-z][\w+.-]*:\/\//i.test(w) ? w : `http://${w}`);
+      return u.username || u.password ? [] : [u.host.replace(/^www\./, "")];
+    } catch { return []; }
+  });
+}
+
 async function openWeb(url, label) {
   const host = new URL(url).host;
-  if (label !== undefined && !label.toLowerCase().includes(host) && !(await ask(t("Open {host}?", { host }), t("Open"), false, url))) return;
+  if (label !== undefined && !mdHosts(label).includes(host.replace(/^www\./, "")) && !(await ask(t("Open {host}?", { host }), t("Open"), false, url))) return;
   invoke("open_link", { url }).catch(warn);
 }
 const mdHooks = (over = {}) => ({ onTag: filterTag, onLink: openLink, onOpen: openWeb, onTask: null, ...over });
@@ -92,10 +102,13 @@ function mdAlign(cell) {
   return c.endsWith(":") ? "right" : "";
 }
 
-function mdBlocks(lines) {
+function mdBlocks(lines, depth = 0) {
   const blocks = [];
   let i = 0;
-  const starts = (line) => MD_FENCE.test(line.s) || /^\s{0,3}#{1,6}\s/.test(line.s) || MD_RULE.test(line.s) || /^\s*>/.test(line.s) || MD_ITEM.test(line.s);
+  const nest = depth < MD_DEPTH_MAX;
+  const quote = (s) => nest && /^\s*>/.test(s);
+  const item = (s) => nest && MD_ITEM.test(s);
+  const starts = (line) => MD_FENCE.test(line.s) || /^\s{0,3}#{1,6}\s/.test(line.s) || MD_RULE.test(line.s) || quote(line.s) || item(line.s);
   while (i < lines.length) {
     const line = lines[i];
     if (!line.s.trim()) { i++; continue; }
@@ -111,10 +124,10 @@ function mdBlocks(lines) {
     const head = line.s.match(/^\s{0,3}(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/);
     if (head) { blocks.push({ type: "heading", level: head[1].length, inline: mdInline(head[2]) }); i++; continue; }
     if (MD_RULE.test(line.s)) { blocks.push({ type: "rule" }); i++; continue; }
-    if (/^\s*>/.test(line.s)) {
+    if (quote(line.s)) {
       const inner = [];
       while (i < lines.length && /^\s*>/.test(lines[i].s)) { inner.push({ s: lines[i].s.replace(/^\s*>\s?/, ""), n: lines[i].n }); i++; }
-      blocks.push({ type: "quote", blocks: mdBlocks(inner) });
+      blocks.push({ type: "quote", blocks: mdBlocks(inner, depth + 1) });
       continue;
     }
     if (MD_TABLE_ROW.test(line.s) && i + 1 < lines.length && MD_TABLE_RULE.test(lines[i + 1].s) && lines[i + 1].s.includes("-")) {
@@ -128,7 +141,7 @@ function mdBlocks(lines) {
         continue;
       }
     }
-    if (MD_ITEM.test(line.s)) {
+    if (item(line.s)) {
       const run = [];
       const kind = (s) => /\d/.test(s.match(MD_ITEM)[2]);
       const base = mdIndent(line.s);
@@ -139,7 +152,7 @@ function mdBlocks(lines) {
         if (!s.trim() && i + 1 < lines.length && (MD_ITEM.test(lines[i + 1].s) || mdIndent(lines[i + 1].s) > 0) && lines[i + 1].s.trim()) { i++; continue; }
         break;
       }
-      blocks.push(mdList(run));
+      blocks.push(mdList(run, depth));
       continue;
     }
     const para = [];
@@ -150,14 +163,14 @@ function mdBlocks(lines) {
   return blocks;
 }
 
-function mdList(lines) {
+function mdList(lines, depth) {
   const base = mdIndent(lines[0].s);
   const first = lines[0].s.match(MD_ITEM);
   const list = { type: "list", ordered: /\d/.test(first[2]), items: [] };
   let item = null;
   let rest = [];
   const close = () => {
-    if (item && rest.length) item.blocks = mdBlocks(rest.map((l) => ({ s: l.s.slice(Math.min(mdIndent(l.s), mdIndent(rest[0].s))), n: l.n })));
+    if (item && rest.length) item.blocks = mdBlocks(rest.map((l) => ({ s: l.s.slice(Math.min(mdIndent(l.s), mdIndent(rest[0].s))), n: l.n })), depth + 1);
     rest = [];
   };
   for (const line of lines) {
@@ -201,7 +214,7 @@ function mdSpans(nodes, hooks) {
     if (n.mark) return [wrap("mark", n.mark)];
     if (n.tag !== undefined) return [el("button", { className: "tag", textContent: tagName(n.tag), onclick: (e) => { e.stopPropagation(); hooks.onTag(n.tag); } })];
     if (n.link.kind === "moment") {
-      const label = n.children.length ? n.children.map((c) => c.text || "").join("") : t("Moment");
+      const label = mdText(n.children) || t("Moment");
       return [el("button", { className: "link", onclick: (e) => { e.stopPropagation(); hooks.onLink(n.link.link); } }, icon("play", "sm"), `${label} ${fmt(n.link.link.m)}`)];
     }
     const open = (e) => { e.preventDefault(); e.stopPropagation(); hooks.onOpen(n.link.url, n.masked ? mdText(n.children) : undefined); };

@@ -1383,7 +1383,7 @@ async function scenario(ctx) {
     await waitFor("B no longer lists the room", within(UI_REFRESH_S * 5), async () => { const st = await state(b); return !st.room && !st.rooms.some((r) => r.id === ctx.room); });
     await waitFor("B shows the start screen", within(UI_REFRESH_S * 5), () => evaluate(b, `!$("start").hidden && $("app").hidden`));
     check((await evaluate(b, `localStorage.getItem(${plan})`)) === null, "B kept the personal plan of the room it left");
-    check(fs.existsSync(logFile(b, ctx.room, b.id)), "B's log of the room it left is gone");
+    await waitFor("B removes the folder of the room it left", within(UI_REFRESH_S * 5), () => !fs.existsSync(roomDir(b, ctx.room)));
   });
 }
 

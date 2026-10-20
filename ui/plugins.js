@@ -48,10 +48,10 @@ function runBy(j) {
   const id = j.by || j.runner;
   return id ? t("{name}'s PC", { name: nameOf(id) }) : t("Auto");
 }
+const failedJobs = () => (jobInfo ? jobInfo.jobs.filter((j) => j.state === "failed").length : 0);
 function pluginTabs() {
-  const active = jobInfo ? jobInfo.jobs.filter((j) => j.state === "claimed" || j.state === "waiting").length : 0;
-  const tab = (key, label, n) => el("button", { className: roomTab === key ? "on" : "", ariaPressed: roomTab === key, onclick: () => showRoomTab(key) }, label, n ? el("em", { textContent: String(n) }) : null);
-  return el("div", { className: "seg" }, tab("plugins", t("Plugins")), tab("jobs", t("Jobs"), active));
+  const tab = (key, label, n) => el("button", { className: roomTab === key ? "on" : "", ariaPressed: roomTab === key, onclick: () => showRoomTab(key) }, label, n ? el("span", { className: "count bad", textContent: String(n) }) : null);
+  return el("div", { className: "seg" }, tab("plugins", t("Plugins")), tab("jobs", t("Jobs"), failedJobs()));
 }
 function pluginRunner(p) {
   const ids = [...new Set([...p.workers.map((w) => w.id), ...(p.runner ? [p.runner] : [])])];

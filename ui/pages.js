@@ -120,7 +120,7 @@ const ROOM_TITLES = { members: "Members", plugins: "Plugins", jobs: "Plugins", b
 function renderRoom() {
   if (page !== "room" || !inRoom()) return;
   $("homename").textContent = t(ROOM_TITLES[roomTab]);
-  if (roomTab !== "board") $("homesub").textContent = roomTab === "members" ? t("{n} members", { n: people().length }) : "";
+  if (roomTab !== "board") $("homesub").textContent = roomTab === "members" ? t(people().length === 1 ? "{n} member" : "{n} members", { n: people().length }) : "";
   $("boardpane").hidden = roomTab !== "board";
   $("roomtab").parentElement.hidden = roomTab === "board";
   if (roomTab === "board") renderBoard();
@@ -754,7 +754,7 @@ const menuActions = {
   "export-folder": () => exportFolder(playSet()),
   "settings": () => openSettings(),
   "copy-invite": copyInvite,
-  "cancel-invite": cancelInvite,
+  "cancel-invite": () => { if (st.invites) cancelInvite(); },
   "rename-room": openRoomSettings,
   "switch-room": switchRoom,
   "leave-room": leaveRoom,

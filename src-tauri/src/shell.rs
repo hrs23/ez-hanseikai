@@ -318,9 +318,9 @@ fn build_menu(app: &AppHandle, lang: &str, toggle: &MenuItem<Wry>, mark: &MenuIt
         .item(&it("exit", "Exit", None)?)
         .build()?;
     let room = SubmenuBuilder::new(app, tr(lang, "Room"))
+        .item(&it("rename-room", "Room settings…", None)?)
         .item(&it("copy-invite", "Copy invite code", None)?)
         .item(&it("cancel-invite", "Cancel invite", None)?)
-        .item(&it("rename-room", "Room settings…", None)?)
         .separator()
         .item(&it("switch-room", "Switch room", None)?)
         .item(&it("leave-room", "Leave room…", None)?)

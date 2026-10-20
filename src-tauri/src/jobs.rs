@@ -692,16 +692,22 @@ pub fn set_room_plugin(core: State<Arc<Core>>, id: String, on: bool, settings: V
     let room = core.active_room_id();
     let logs = room::logs(&core, &room);
     let runner = configs(&logs, None).get(plugin.id).and_then(|c| c.runner.clone());
-    core.append_log(&room, &plugin_record(plugin, on, &settings, runner, &logs));
+    let config = Config { on, version: plugin.version.into(), settings: plugins::normalize(plugin, &settings), runner };
+    core.append_log(&room, &plugin_record(plugin.id, &config, change_time(now_us(), &logs, plugin.id)));
     Ok(())
 }
 
-fn plugin_record(plugin: &Plugin, on: bool, settings: &Value, runner: Option<String>, logs: &[Log]) -> Value {
-    let mut record = json!({"k": "plugin", "plugin": plugin.id, "on": on, "version": plugin.version, "settings": plugins::normalize(plugin, settings), "t_us": change_time(now_us(), logs, plugin.id)});
-    if let Some(runner) = runner {
+fn plugin_record(id: &str, config: &Config, t_us: i64) -> Value {
+    let mut record = json!({"k": "plugin", "plugin": id, "on": config.on, "version": config.version, "settings": config.settings, "t_us": t_us});
+    if let Some(runner) = &config.runner {
         record["runner"] = json!(runner);
     }
     record
+}
+
+fn runner_record(plugin: &Plugin, runner: Option<String>, logs: &[Log], now: i64) -> Value {
+    let config = configs(logs, None).remove(plugin.id).unwrap_or_else(|| Config { on: false, version: plugin.version.into(), settings: plugins::normalize(plugin, &Value::Null), runner: None });
+    plugin_record(plugin.id, &Config { runner, ..config }, change_time(now, logs, plugin.id))
 }
 
 #[tauri::command]
@@ -713,9 +719,7 @@ pub fn set_plugin_runner(core: State<Arc<Core>>, id: String, runner: Option<Stri
     if runner.as_ref().is_some_and(|m| !room_members(&core, &room).contains(m)) {
         return Err("Unknown member.".into());
     }
-    let config = configs(&logs, None).get(plugin.id).cloned();
-    let settings = config.as_ref().map_or_else(|| plugins::normalize(plugin, &Value::Null), |c| c.settings.clone());
-    core.append_log(&room, &plugin_record(plugin, config.is_some_and(|c| c.on), &settings, runner, &logs));
+    core.append_log(&room, &runner_record(plugin, runner, &logs, now_us()));
     Ok(())
 }
 
@@ -804,6 +808,13 @@ pub fn stop_now(core: &Core) {
     core.append_log(&r.room, &job_record("stop", &r.key, r.run, json!({"plugin": r.plugin, "file": r.file})));
 }
 
+pub fn release_room(room: &str) {
+    let started = Instant::now();
+    while RUNNING.lock().unwrap().as_ref().is_some_and(|r| r.room == room) && started.elapsed() < STOP_WAIT {
+        std::thread::sleep(EMIT_EVERY);
+    }
+}
+
 pub fn stop_and_wait(core: &Core) {
     stop_now(core);
     let started = Instant::now();
@@ -880,6 +891,19 @@ mod tests {
         assert_eq!(pick("a", &["b"], false, &auto, &inputs), Some("s1/a".to_string()));
         let cleared = base_logs(vec![with_runner("b"), json!({"k": "plugin", "plugin": "transcribe", "on": true, "version": "1.0.0", "settings": {"model": "small"}, "runner": "", "t_us": 3})], vec![]);
         assert_eq!(configs(&cleared, None)["transcribe"].runner, None);
+    }
+
+    #[test]
+    fn changing_the_runner_keeps_the_rooms_version_and_settings() {
+        let plugin = plugins::find("transcribe").unwrap();
+        let mut logs = base_logs(vec![], vec![]);
+        let record = runner_record(plugin, Some("b".into()), &logs, 100);
+        Arc::make_mut(&mut logs[1].records).push(record);
+        let config = &configs(&logs, None)["transcribe"];
+        assert_eq!(config.runner.as_deref(), Some("b"));
+        assert_eq!(prefix("transcribe", config), prefix("transcribe", &on()["transcribe"]));
+        let fresh = runner_record(plugin, None, &[], 100);
+        assert_eq!((fresh["on"].clone(), fresh["version"].clone()), (json!(false), json!(plugin.version)));
     }
 
     #[test]
