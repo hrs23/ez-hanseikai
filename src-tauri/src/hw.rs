@@ -262,7 +262,7 @@ pub fn report(me: &Value, others: &[(String, Value)], offsets: &[(String, Option
     out.push_str(&match (clock["offset_us"].as_i64(), clock["at_us"].as_i64()) {
         (Some(offset), Some(at)) => format!(
             "  NTP {} offset {}, round trip {} ms, measured {} s ago\n",
-            crate::clock::HOST, offset_text(Some(offset)), clock["rtt_us"].as_i64().unwrap_or(0) / 1000, (now_us() - at).max(0) / 1_000_000
+            crate::clock::HOST, offset_text(Some(offset)), clock["rtt_us"].as_i64().unwrap_or(0) / 1000, (crate::clock::pc_us() - at).max(0) / 1_000_000
         ),
         _ => format!("  NTP {} unreachable\n", crate::clock::HOST),
     });
@@ -415,7 +415,7 @@ mod tests {
     fn the_report_lists_hardware_and_clocks() {
         let hw = Hardware::parse(SAMPLE, (1920, 1080));
         let me = pc(&hw, Some(("libx264", "h264")), None);
-        let measured = json!({"offset_us": 8_200_000, "rtt_us": 23_000, "at_us": now_us() - 120_000_000, "ok": true});
+        let measured = json!({"offset_us": 8_200_000, "rtt_us": 23_000, "at_us": crate::clock::pc_us() - 120_000_000, "ok": true});
         let out = report(&me, &[("abc".into(), Value::Null)], &[("abc".into(), Some(30_000))], &measured);
         assert!(out.contains("this PC: gpu Test Graphics 9000 driver 31.0.15.1234 encoder Software h264 cpu Fake CPU 3.5GHz ram 16384 MB display 1920x1080"), "{out}");
         assert!(out.contains("abc: not shared") && out.contains("abc clock +30 ms from this PC") && out.contains("NTP time.cloudflare.com offset +8.2 s, round trip 23 ms, measured 120 s ago"), "{out}");

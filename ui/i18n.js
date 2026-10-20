@@ -505,6 +505,7 @@ const JA = {
   "{name} paused": "{name} が一時停止",
   "{name} played": "{name} が再生",
   "{name} receiving {n}%": "{name} 受け取り中 {n}%",
+  "{name} {n}% here": "{name}: {n}% 受信済み",
   "{name} stopped at {n}%": "{name}: {n}% で停止",
   "{name} wants to join": "{name} が参加を希望しています",
   "{name} went to Live": "{name} がライブへ",

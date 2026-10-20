@@ -110,6 +110,11 @@ function partFor(p, series, wall) {
   for (const part of p.file.parts) if (part[series] && (!pick || part[series].start_us - p.off <= wall)) pick = part[series];
   return pick;
 }
+function partAt(p, wall) {
+  let pick = null;
+  for (const part of p.file.parts) if (!pick || (part.v || part.m).start_us - p.off <= wall) pick = part;
+  return pick;
+}
 const shiftOf = (p, part, b) => (b + p.off - part.start_us) / 1e6;
 const switching = (s) => !!s.pending && pathOf(s.pending.part) !== pathOf(s.part);
 

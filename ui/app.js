@@ -95,7 +95,8 @@ const fail = (e) => flash(e, "error");
 const run = (cmd, args, then = refresh) => invoke(cmd, args).then(then).catch(fail);
 const quiet = (cmd, args) => invoke(cmd, args).catch(warn);
 const showingNow = () => nowView || (!playSet() && !review);
-const livePinned = () => live && liveClock.pos !== null && !review && !!playSet() && playSet().live;
+const followingLive = () => live && !review && !!playSet() && playSet().live;
+const livePinned = () => followingLive() && liveClock.pos !== null;
 const setById = (id) => (st && st.sets.find((s) => s.id === id)) || null;
 const reviewSet = () => (review ? setById(review.id) : null);
 const reviewing = () => !!(watchParty && st && st.party.on && st.party.shared && typeof st.party.shared.set === "string");
@@ -285,11 +286,12 @@ function liveMembers() {
   if (playSet()) {
     return players().filter((p) => play.tiles[p.key]).map((p) => {
       const tl = play.tiles[p.key];
-      const slots = [tl.media, tl.mic].filter((s) => s && s.part).map((s) => [(s.part.start_us - p.off) / 1e6, s.video]);
+      const last = p.file.parts[p.file.parts.length - 1] || {};
+      const slots = [[tl.media, "v"], [tl.mic, "m"]].filter(([s, k]) => s && s.part && pathOf(s.part) === pathOf(last[k])).map(([s]) => [(s.part.start_us - p.off) / 1e6, s.video]);
       return { key: p.key, avail: liveAvail(slots), ended: !p.recording };
     });
   }
-  return Object.values(rec.tiles).map((tl) => ({ key: tl.key, avail: liveAvail([[liveStart(tl.key, tl.media.part), tl.media.video]]), ended: false }));
+  return livePlayers().filter((p) => rec.tiles[p.key]).map(({ key, file }) => ({ key, avail: file ? liveAvail([[liveStart(key, rec.tiles[key].media.part), rec.tiles[key].media.video]]) : null, ended: false }));
 }
 function goLive() {
   live = true;
@@ -297,7 +299,7 @@ function goLive() {
 }
 function tickLive() {
   const at = performance.now();
-  const on = !review && (playSet() ? live && playSet().live : Object.keys(rec.tiles).length > 0);
+  const on = playSet() ? followingLive() : !review && Object.keys(rec.tiles).length > 0;
   if (!on) { Object.assign(liveClock, { pos: null, rate: 1, held: false, late: [], at }); return; }
   Object.assign(liveClock, liveStep(liveClock, liveMembers(), nowUs() / 1e6, (at - liveClock.at) / 1000), { at });
   if (changed("liverate", liveClock.rate)) applyAudio();
@@ -499,8 +501,8 @@ function renderTransport(set, idle) {
   const tot = shownTotal();
   const edge = liveEdge(total(), nowM());
   if (set && !set.live) live = false;
-  for (const id of ["play", "back", "fwd", "addnote", "mixbtn", "cc", "speed", "seek", "lane", "chapters", "matchchip"]) $(id).classList.toggle("nodisp", idle);
-  $("speed").classList.toggle("nodisp", idle || (liveSetShown && live));
+  for (const id of ["play", "back", "fwd", "addnote", "mixbtn", "cc", "seek", "lane", "chapters", "matchchip"]) $(id).classList.toggle("nodisp", idle);
+  $("speed").classList.toggle("nodisp", idle || followingLive());
   $("addnote").classList.toggle("nodisp", idle || !!review);
   $("transport").classList.toggle("idle", idle);
   $("clocknow").parentElement.hidden = idle;
@@ -723,12 +725,14 @@ function tick() {
     const v = tl.media.video;
     const target = tl.media.part ? m + shiftOf(p, tl.media.part, b) : 0;
     const have = tl.media.part && v.readyState > 0 && isFinite(v.duration) ? v.duration : 0;
-    const late = !!tl.media.part && (livePinned() ? liveClock.late.includes(p.key) : !!p.file.total && p.file.have < p.file.total && target > have);
-    tl.box.classList.toggle("wait", !tl.media.part);
-    tl.box.classList.toggle("late", late);
+    const pinned = livePinned();
+    const pictured = !!(partAt(p, wall) || {}).v;
+    const behind = !pinned && !!p.file.total && p.file.have < p.file.total && target > have;
+    tl.box.classList.toggle("wait", !tl.media.part || !pictured || behind);
+    tl.box.classList.toggle("late", !!tl.media.part && pinned && liveClock.late.includes(p.key));
     const n = p.file.total ? Math.floor((p.file.have / p.file.total) * 100) : 0;
-    const what = p.file.stuck ? ["stuck", n] : tl.media.part || p.file.parts.some((x) => x.v) ? ["wait"] : ["voice"];
-    if (changed("what/" + p.key, [...what, nameOf(p.key), lang])) tl.what.replaceChildren(...(what[0] === "stuck" ? [icon("alert", "sm"), t("{name} stopped at {n}%", { name: nameOf(p.key), n })] : what[0] === "voice" ? [icon("mic", "sm"), t("Voice only")] : [waitingFor(p.key)]));
+    const what = p.file.stuck ? ["stuck", n] : !pictured ? ["voice"] : behind ? ["here", n] : ["wait"];
+    if (changed("what/" + p.key, [...what, nameOf(p.key), lang])) tl.what.replaceChildren(...(what[0] === "stuck" ? [icon("alert", "sm"), t("{name} stopped at {n}%", { name: nameOf(p.key), n })] : what[0] === "here" ? [icon("download", "sm"), t("{name} {n}% here", { name: nameOf(p.key), n })] : what[0] === "voice" ? [icon("mic", "sm"), t("Voice only")] : [waitingFor(p.key)]));
     for (const s of [tl.media, tl.mic]) if (s && s.part && !switching(s)) sync(s.video, m + shiftOf(p, s.part, b), clock.playing && !away && !(livePinned() && liveClock.held));
   }
   if (review) syncVoices();
@@ -809,7 +813,7 @@ function view() {
     const r = reviewSet();
     return { set: review.id, playing: review.playing, wall_us: Math.round((r ? r.start_us : 0) + reviewM() * 1e6), at_us: nowUs(), rate, focus: null, mode: play.mode, slots: play.slots, order: play.keys };
   }
-  return { set: set ? set.id : null, playing: clock.playing, live: live && !!set && set.live, wall_us: wallOf(nowM()), at_us: nowUs(), rate, focus: play.view ? play.keys[play.view - 1] : null, mode: play.mode, slots: play.slots, order: play.keys };
+  return { set: set ? set.id : null, playing: clock.playing, live: followingLive(), wall_us: wallOf(nowM()), at_us: nowUs(), rate, focus: play.view ? play.keys[play.view - 1] : null, mode: play.mode, slots: play.slots, order: play.keys };
 }
 function share() {
   if (watchParty && st && st.party.on) invoke("party_act", { view: view() }).catch(fail);

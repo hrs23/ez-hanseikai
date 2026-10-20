@@ -17,7 +17,7 @@ function liveStep(state, members, now, dt) {
   const loaded = members.filter((m) => m.avail !== null && !m.ended);
   const holding = loaded.filter((m) => m.avail > now - LIVE_LAG_MAX_S);
   const late = loaded.filter((m) => !holding.includes(m)).map((m) => m.key);
-  if (!holding.length) return { pos: state.pos, rate: 1, held: false, late };
+  if (!holding.length) return { pos: state.pos === null ? null : state.pos + dt, rate: 1, held: true, late };
   const limit = Math.min(...holding.map((m) => m.avail)) - LIVE_HEADROOM_S;
   if (state.pos === null) return { pos: limit - LIVE_SHRINK_GAP_S, rate: 1, held: false, late };
   const rate = limit - state.pos > LIVE_SHRINK_GAP_S ? LIVE_CATCH_UP : 1;
