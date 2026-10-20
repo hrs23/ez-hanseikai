@@ -522,7 +522,7 @@ async fn join(core: &Arc<Core>, from: EndpointId, mut send: SendStream, mut recv
         room::Step::Admitted => {
             broadcast(core, asks_message(core));
             room::admit(core, &room_id, &id);
-            tracing::info!("admitted {} ({name}) to room {room_id}", short(&id));
+            tracing::info!("admitted {} to room {room_id}", short(&id));
             json!({"ok": true, "room": room_info(core)})
         }
     };

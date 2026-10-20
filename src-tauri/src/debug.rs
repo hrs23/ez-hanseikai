@@ -691,7 +691,7 @@ pub async fn diagnostics(core: Arc<Core>, include_addresses: bool, everyone: boo
         let text = report_text(&c, include_addresses, !everyone && include_addresses, Some(&check::text(&lines)));
         match head.filter(|h| !h.is_empty()) {
             Some(h) if include_addresses => format!("{h}\n\n{text}"),
-            Some(h) => format!("{}\n\n{text}", redact(&h, &known_names(&c))),
+            Some(h) => format!("{}\n\n{text}", redact(&h, &home(), &known_names(&c))),
             None => text,
         }
     })
@@ -831,8 +831,23 @@ pub fn hide_addresses(text: &str) -> String {
     replace_all(text, &ADDRESSES)
 }
 
-pub fn redact(text: &str, names: &[String]) -> String {
-    let mut text = replace_all(&hide_addresses(&text), &[(r"(?i)\b[a-z]:\\[^\s\x22',;)\]}]+", "<path>"), (r"\b[0-9a-f]{64}\b", "<id>")]);
+const PATH_END: &str = r"[^\s\x22',;)\]}]";
+
+fn hide_home(text: &str, home: &str) -> String {
+    let parts: Vec<String> = home.split(['\\', '/']).filter(|p| !p.is_empty()).map(regex::escape).collect();
+    if parts.is_empty() {
+        return text.to_string();
+    }
+    Regex::new(&format!(r"(?i){}{PATH_END}*", parts.join(r"[\\/]+"))).unwrap().replace_all(text, "<path>").into_owned()
+}
+
+fn home() -> String {
+    std::env::var("USERPROFILE").unwrap_or_default()
+}
+
+pub fn redact(text: &str, home: &str, names: &[String]) -> String {
+    let text = hide_home(&hide_addresses(text), home);
+    let mut text = replace_all(&text, &[(format!(r"(?i)\b[a-z]:\\{PATH_END}+").as_str(), "<path>"), (r"\b[0-9a-f]{64}\b", "<id>")]);
     let mut names: Vec<&String> = names.iter().filter(|n| n.chars().count() >= NAME_MIN_CHARS).collect();
     names.sort_by_key(|n| std::cmp::Reverse(n.len()));
     for name in names {
@@ -893,7 +908,7 @@ pub fn report_text(core: &Core, include_addresses: bool, peer_addresses: bool, c
     out.push_str(&tail(&core.dir.join(CRASH), 0, LOG_TAIL).0);
     out.push_str("\n\nrecent log\n");
     out.push_str(&recent.join("\n"));
-    if include_addresses { out } else { redact(&out, &known_names(core)) }
+    if include_addresses { out } else { redact(&out, &home(), &known_names(core)) }
 }
 
 pub fn report(core: &Core, include_addresses: bool, check: &str) -> std::io::Result<PathBuf> {
@@ -1000,9 +1015,19 @@ mod tests {
     fn reports_hide_addresses_ids_and_names() {
         let id = "a".repeat(64);
         let text = format!("from 203.0.113.20:5000 via https://relay.example.net/x by {id} at C:\\Users\\someone\\data named Ren and Rena");
-        let out = redact(&text, &["Ren".into(), "Rena".into(), "x".into()]);
+        let out = redact(&text, "", &["Ren".into(), "Rena".into(), "x".into()]);
         assert!(!out.contains("203.0") && !out.contains("relay.example") && !out.contains(&id) && !out.contains("someone") && !out.contains("Ren"), "{out}");
         assert!(out.contains("<name> and <name>") && out.contains("<path> named"), "{out}");
+    }
+
+    #[test]
+    fn reports_hide_a_user_folder_with_spaces() {
+        for home in ["C:\\Users\\Taro Yamada", "C:\\Users\\山田\u{3000}太郎"] {
+            let text = format!("data folder {home}\\AppData\\Local\\app ready\nencoder x ({}\\AppData\\ffmpeg.exe)\nopen \"{}\\\\v\"", home.to_lowercase(), home.replace('\\', "\\\\"));
+            let out = redact(&text, home, &[]);
+            assert!(!out.to_lowercase().contains("yamada") && !out.contains("山田") && !out.contains("太郎"), "{out}");
+            assert!(out.contains("data folder <path> ready") && out.contains("(<path>)") && out.contains("open \"<path>\""), "{out}");
+        }
     }
 
     #[test]
