@@ -33,6 +33,7 @@ const tileGrid = (box, kind) => ({ el: box, kind, tiles: {}, keys: [], mode: "gr
 const rec = tileGrid($("livetiles"), "record");
 const play = tileGrid($("playtiles"), "player");
 const clock = { playing: false, m: 0, at: 0 };
+const liveClock = { pos: null, rate: 1, held: false, late: [], at: 0 };
 const voices = {};
 let st = null;
 let idx = null;
@@ -95,6 +96,7 @@ const fail = (e) => flash(e, "error");
 const run = (cmd, args, then = refresh) => invoke(cmd, args).then(then).catch(fail);
 const quiet = (cmd, args) => invoke(cmd, args).catch(warn);
 const showingNow = () => nowView || (!playSet() && !review);
+const livePinned = () => live && liveClock.pos !== null && !review && !!playSet() && playSet().live;
 const setById = (id) => (st && st.sets.find((s) => s.id === id)) || null;
 const reviewSet = () => (review ? setById(review.id) : null);
 const reviewing = () => !!(watchParty && st && st.party.on && st.party.shared && typeof st.party.shared.set === "string");
@@ -129,9 +131,9 @@ function pill(cls, iconName, text) {
 
 function tile(s, key) {
   if (s.tiles[key]) return s.tiles[key];
-  const tl = { key, media: slot(el("video", { muted: true, preload: "auto" })), mic: null, name: el("span", { className: "nm" }), av: el("span"), dot: el("i", { className: "rd", hidden: true }), imp: el("span", { className: "imp", hidden: true }), who: el("div", { className: "who" }), what: el("div", { className: "what" }), sub: el("div", { className: "subt", hidden: true }), lag: el("span", { className: "lag", hidden: true }) };
+  const tl = { key, media: slot(el("video", { muted: true, preload: "auto" })), mic: null, name: el("span", { className: "nm" }), av: el("span"), dot: el("i", { className: "rd", hidden: true }), imp: el("span", { className: "imp", hidden: true }), who: el("div", { className: "who" }), what: el("div", { className: "what" }), sub: el("div", { className: "subt", hidden: true }) };
   tl.lab = el("div", { className: "nl" }, tl.av, tl.name, tl.imp, tl.dot);
-  tl.box = el("div", { className: "tile", tabIndex: 0 }, tl.media.video, el("div", { className: "waitbox" }, tl.who, tl.what), tl.sub, tl.lab, tl.lag);
+  tl.box = el("div", { className: "tile", tabIndex: 0 }, tl.media.video, el("div", { className: "waitbox" }, tl.who, tl.what), tl.sub, tl.lab);
   const focus = () => { const i = s.keys.indexOf(key) + 1; setView(s, s.view === i ? 0 : i); };
   tl.box.onkeydown = (e) => { if (e.key === "Enter") focus(); };
   if (s === play) {
@@ -279,6 +281,41 @@ function livePlayers() {
   const keys = [st.id, ...st.peers.filter((p) => p.connected || files[p.id]).map((p) => p.id)];
   return keys.map((key) => ({ key, file: files[key] && files[key].size > 0 ? files[key] : null, recording: recOf(key) && (key !== st.id || st.capture.working), sharing: key !== st.id && !!(peerOf(key) || {}).sharing }));
 }
+const liveStart = (key, part) => (part && typeof part.start_us === "number" ? (part.start_us - (key === st.id ? 0 : (peerOf(key) || {}).offset_us || 0)) / 1e6 : null);
+function liveMembers() {
+  if (playSet()) {
+    return players().filter((p) => play.tiles[p.key]).map((p) => {
+      const tl = play.tiles[p.key];
+      const slots = [tl.media, tl.mic].filter((s) => s && s.part).map((s) => [(s.part.start_us - p.off) / 1e6, s.video]);
+      return { key: p.key, avail: liveAvail(slots), ended: !p.recording };
+    });
+  }
+  return Object.values(rec.tiles).map((tl) => ({ key: tl.key, start: liveStart(tl.key, tl.media.part), video: tl.media.video })).filter((x) => x.start !== null).map((x) => ({ key: x.key, avail: liveAvail([[x.start, x.video]]), ended: false }));
+}
+function goLive() {
+  live = true;
+  setClock(true, Math.max(0, total() - LIVE_HEADROOM_S - LIVE_SHRINK_GAP_S));
+}
+function tickLive() {
+  const at = performance.now();
+  const on = !review && (playSet() ? live && playSet().live : Object.keys(rec.tiles).length > 0);
+  if (!on) { Object.assign(liveClock, { pos: null, rate: 1, held: false, late: [], at }); return; }
+  Object.assign(liveClock, liveStep(liveClock, liveMembers(), nowUs() / 1e6, (at - liveClock.at) / 1000), { at });
+  if (changed("liverate", liveClock.rate)) applyAudio();
+  if (livePinned()) Object.assign(clock, { playing: true, m: nowM(), at });
+  if (playSet()) return;
+  for (const p of livePlayers()) {
+    const tl = rec.tiles[p.key];
+    if (!tl) continue;
+    tl.box.classList.toggle("late", !!p.file && liveClock.late.includes(p.key));
+    if (!p.file) continue;
+    const v = tl.media.video;
+    const start = liveStart(p.key, tl.media.part);
+    const edge = start === null || liveClock.pos === null;
+    sync(v, edge ? (isFinite(v.duration) ? v.duration - LIVE_HEADROOM_S : 0) : liveClock.pos - start, edge || !liveClock.held);
+    v.playbackRate = edge ? 1 : liveClock.rate;
+  }
+}
 function liveWhat(p) {
   if (p.key === st.id) {
     if (!st.capture.source) return [el("div", { className: "big" }, icon("monitor-off")), el("b", { textContent: t("{name} · Screen off", { name: nameOf(st.id) }) }), el("button", { className: "sm choose", textContent: t("Choose screen"), onclick: (e) => { e.stopPropagation(); openSource($("screenmore")); } })];
@@ -299,10 +336,13 @@ function renderLive() {
   for (const p of list) {
     const tl = tile(rec, p.key);
     nameTile(tl, p.key, p.recording);
-    if (changed("livewhat/" + p.key, [!!p.file, p.sharing, st.capture.source, captureProblem(st.capture), lang])) tl.what.replaceChildren(...liveWhat(p));
+    if (changed("livewhat/" + p.key, [!!p.file, p.sharing, st.capture.source, captureProblem(st.capture), nameOf(p.key), lang])) tl.what.replaceChildren(...(p.file ? [t("Waiting for {name}…", { name: nameOf(p.key) })] : liveWhat(p)));
     tl.box.classList.toggle("wait", !p.file);
     tl.box.classList.toggle("mine", p.key === st.id && !st.capture.source);
-    if (p.file) feed(tl.media, p.file, true);
+    const start = p.file && liveStart(p.key, p.file);
+    if (!p.file || (start === null && liveStart(p.key, tl.media.part) !== null)) continue;
+    if (tl.media.src === srcOf(p.file)) tl.media.part = p.file;
+    feed(tl.media, p.file, true, p.file, () => (start !== null && liveClock.pos !== null ? liveClock.pos - start : undefined));
   }
   place(rec);
 }
@@ -348,7 +388,7 @@ function received(list = players()) {
 function total(list = players()) {
   return Math.max(received(list), list.some((p) => p.recording) ? (nowUs() - base(list)) / 1e6 : 0);
 }
-const nowM = () => (clock.playing ? clock.m + ((performance.now() - clock.at) / 1000) * rate : clock.m);
+const nowM = () => (livePinned() ? liveClock.pos - base() / 1e6 : clock.playing ? clock.m + ((performance.now() - clock.at) / 1000) * rate : clock.m);
 const wallOf = (m) => Math.round(base() + m * 1e6);
 function setClock(playing, m) {
   clock.playing = playing;
@@ -379,7 +419,7 @@ function applyAudio() {
     for (const [s, on, mix] of [[tl.media, heard, mine.app], [tl.mic, true, mine.voice]]) if (s) for (const v of [s.video, s.pending && s.pending.video]) if (v) {
       v.muted = away || muted || !on || mix.muted;
       v.volume = volume * mix.volume;
-      v.playbackRate = rate;
+      v.playbackRate = livePinned() ? liveClock.rate : rate;
     }
   });
   for (const [key, s] of Object.entries(voices)) {
@@ -457,9 +497,9 @@ function renderTransport(set, idle) {
   const liveSetShown = !!(set && set.live && !review);
   const tot = shownTotal();
   const edge = liveEdge(total(), nowM());
-  if (liveSetShown && live && received() - nowM() > 2 * LIVE_LAG) setClock(true, received() - LIVE_LAG);
   if (set && !set.live) live = false;
   for (const id of ["play", "back", "fwd", "addnote", "mixbtn", "cc", "speed", "seek", "lane", "chapters", "matchchip"]) $(id).classList.toggle("nodisp", idle);
+  $("speed").classList.toggle("nodisp", idle || (liveSetShown && live));
   $("addnote").classList.toggle("nodisp", idle || !!review);
   $("transport").classList.toggle("idle", idle);
   $("clocknow").parentElement.hidden = idle;
@@ -573,13 +613,11 @@ function openNow() {
   nowView = true;
   const l = liveSet();
   if (l) {
-    if (selected !== l.id) openSet(l.id);
+    selectSet(l.id);
     nowSet = l.id;
-    live = true;
-  } else if (selected) {
-    selectSet(null);
-    share();
-  }
+    goLive();
+  } else if (selected) selectSet(null);
+  share();
   go("player");
 }
 function openSet(id, m = 0) {
@@ -667,7 +705,7 @@ function stepSet(dir) {
 
 function tick() {
   if (!st) return;
-  for (const tl of Object.values(rec.tiles)) follow(tl.media);
+  tickLive();
   if (review) followFlow();
   const list = players();
   const tot = total(list);
@@ -684,13 +722,13 @@ function tick() {
     const v = tl.media.video;
     const target = tl.media.part ? m + shiftOf(p, tl.media.part, b) : 0;
     const have = tl.media.part && v.readyState > 0 && isFinite(v.duration) ? v.duration : 0;
-    const short = !tl.media.part || (!!p.file.total && p.file.have < p.file.total && target > have);
-    tl.box.classList.toggle("wait", short);
-    if (short && p.file.total) {
-      const n = Math.floor((p.file.have / p.file.total) * 100);
-      if (changed("what/" + p.key, [n, p.file.stuck, lang])) tl.what.replaceChildren(icon(p.file.stuck ? "alert" : "download", "sm"), p.file.stuck ? t("{name} stopped at {n}%", { name: nameOf(p.key), n }) : t("{name} {n}% here", { name: nameOf(p.key), n }));
-    } else if (short && !tl.media.part && changed("what/" + p.key, ["voice", lang])) tl.what.replaceChildren(icon("mic", "sm"), t("Voice only"));
-    for (const s of [tl.media, tl.mic]) if (s && s.part && !switching(s)) sync(s.video, m + shiftOf(p, s.part, b), clock.playing && !away);
+    const late = !!tl.media.part && (livePinned() ? liveClock.late.includes(p.key) : !!p.file.total && p.file.have < p.file.total && target > have);
+    tl.box.classList.toggle("wait", !tl.media.part);
+    tl.box.classList.toggle("late", late);
+    const n = p.file.total ? Math.floor((p.file.have / p.file.total) * 100) : 0;
+    const what = p.file.stuck ? ["stuck", n] : tl.media.part || p.file.parts.some((x) => x.v) ? ["wait"] : ["voice"];
+    if (changed("what/" + p.key, [...what, nameOf(p.key), lang])) tl.what.replaceChildren(...(what[0] === "stuck" ? [icon("alert", "sm"), t("{name} stopped at {n}%", { name: nameOf(p.key), n })] : what[0] === "voice" ? [icon("mic", "sm"), t("Voice only")] : [t("Waiting for {name}…", { name: nameOf(p.key) })]));
+    for (const s of [tl.media, tl.mic]) if (s && s.part && !switching(s)) sync(s.video, m + shiftOf(p, s.part, b), clock.playing && !away && !(livePinned() && liveClock.held));
   }
   if (review) syncVoices();
   if (st.active_set) tickSide();
@@ -770,7 +808,7 @@ function view() {
     const r = reviewSet();
     return { set: review.id, playing: review.playing, wall_us: Math.round((r ? r.start_us : 0) + reviewM() * 1e6), at_us: nowUs(), rate, focus: null, mode: play.mode, slots: play.slots, order: play.keys };
   }
-  return { set: set ? set.id : null, playing: clock.playing, wall_us: wallOf(nowM()), at_us: nowUs(), rate, focus: play.view ? play.keys[play.view - 1] : null, mode: play.mode, slots: play.slots, order: play.keys };
+  return { set: set ? set.id : null, playing: clock.playing, live: live && !!set && set.live, wall_us: wallOf(nowM()), at_us: nowUs(), rate, focus: play.view ? play.keys[play.view - 1] : null, mode: play.mode, slots: play.slots, order: play.keys };
 }
 function share() {
   if (watchParty && st && st.party.on) invoke("party_act", { view: view() }).catch(fail);
@@ -806,6 +844,7 @@ function applyParty(p) {
   if (p.rate && p.rate !== rate) setRate(p.rate);
   const set = playSet();
   if (!set || !p.set || typeof p.wall_us !== "number") return;
+  if (p.live && set.live) { if (!live) goLive(); return; }
   const m = Math.max(0, (p.wall_us - base()) / 1e6 + (p.playing ? ((nowUs() - p.at_us) / 1e6) * rate : 0));
   if (mine || first || p.seq === 0) { if (p.playing !== clock.playing || Math.abs(m - nowM()) > JUMP_MIN) setClock(p.playing, m); }
   else if (p.playing !== clock.playing) apply(p.playing ? "play" : "pause", m, p.origin);
@@ -1446,6 +1485,7 @@ let refreshAgain = false;
 const steps = () => [renderShell, renderStart, renderSide, renderNotices, renderPlayer, renderEvents, renderTools, renderRoom, renderBoard, renderRecovery, renderOpenDialogs];
 async function update() {
   st = await invoke("state");
+  clockShift = st.now_us - Date.now() * 1000;
   idx = indexOf(st);
   titles = Object.fromEntries(st.sets.filter((x) => x.title).map((x) => [x.id, x.title]));
   importedIds = new Set(st.sets.flatMap((x) => x.players.filter((p) => p.imported).map((p) => p.owner)));
@@ -1456,7 +1496,7 @@ async function update() {
   if (review && !reviewSet()) endReview();
   const l = liveSet();
   const voice = st.active_set && st.active_set.voice;
-  if (nowView && l && !voice && selected !== l.id) { selectSet(l.id); nowSet = l.id; live = true; share(); }
+  if (nowView && l && !voice && selected !== l.id) { selectSet(l.id); nowSet = l.id; goLive(); share(); }
   if (nowView && !l && nowSet) { nowView = false; nowSet = null; }
   const roomId = st.room ? st.room.id : "";
   if (partyRoom !== roomId) { partyRoom = roomId; cancelBoard(); await joinParty(); st = await invoke("state"); idx = indexOf(st); }
@@ -1605,7 +1645,7 @@ $("play").onclick = togglePlay;
 $("back").onclick = () => jump(-STEP.normal);
 $("fwd").onclick = () => jump(STEP.normal);
 $("addnote").onclick = openQuick;
-$("live").onclick = () => { if (!playSet()) return; live = true; setClock(true, Math.max(0, received() - LIVE_LAG)); share(); renderPlayer(); };
+$("live").onclick = () => { if (!playSet()) return; goLive(); share(); renderPlayer(); };
 $("speed").onclick = (e) => speedMenu(e.currentTarget);
 $("matchchip").onclick = (e) => matchMenu(e.currentTarget);
 $("mixbtn").onclick = (e) => openMix(e.currentTarget);

@@ -271,6 +271,7 @@ pub struct Head {
     pub active: bool,
     pub members: Vec<(String, bool)>,
     pub names: HashMap<String, String>,
+    pub present: HashSet<String>,
 }
 
 pub struct Row {
@@ -320,7 +321,7 @@ impl Loaded {
     }
 
     fn sets(&self) -> Vec<Set> {
-        room::derive_sets(&self.head.id, &self.logs)
+        room::with_presence(room::derive_sets(&self.head.id, &self.logs), |owner| self.head.present.contains(owner))
     }
 
     fn name(&self, id: &str) -> String {
@@ -366,7 +367,7 @@ fn recording_json(l: &Loaded, set: &Set, debriefs: &HashMap<String, Vec<Value>>,
     let voice_only = !set.files.is_empty() && set.files.iter().all(|f| f.series(room::SERIES[0]).is_empty());
     let debrief = voice_only && debriefs.contains_key(&set.id);
     let start = set.start();
-    let end = set.end();
+    let end = set.end_shown();
     let members: Vec<Value> = set
         .files
         .iter()
@@ -374,7 +375,7 @@ fn recording_json(l: &Loaded, set: &Set, debriefs: &HashMap<String, Vec<Value>>,
         .collect();
     let imported = set.files.iter().find_map(|f| f.view.as_ref());
     json!({
-        "id": set.id, "kind": if debrief { "debrief" } else { "play" }, "recording": end.is_none(),
+        "id": set.id, "kind": if debrief { "debrief" } else { "play" }, "recording": set.recording(),
         "title": imported.and_then(|v| v.title.clone()), "imported_by": imported.map(|v| json!({"id": v.by, "name": l.name(&v.by)})),
         "start_ms": start / 1000, "end_ms": end.map(|e| e / 1000), "length_s": ((end.unwrap_or(now_us) - start).max(0) as f64 / 1e5).round() / 10.0,
         "members": members,
@@ -428,8 +429,8 @@ fn chapters_reply(l: &Loaded, set: &Set, now_us: i64) -> Response {
         chapters.push(json!({"n": i + 1, "name": format!("Match {}", i + 1), "from_s": round(from), "to_s": round(*end)}));
         from = *end;
     }
-    let total = (set.end().unwrap_or(now_us) - set.start()) as f64 / 1e6;
-    if set.end().is_none() && !ends.is_empty() && total > from {
+    let total = (set.end_shown().unwrap_or(now_us) - set.start()) as f64 / 1e6;
+    if set.recording() && !ends.is_empty() && total > from {
         chapters.push(json!({"n": ends.len() + 1, "name": format!("Match {}", ends.len() + 1), "from_s": round(from), "to_s": null}));
     }
     reply(200, json!({"chapters": chapters}))
@@ -727,7 +728,7 @@ impl Backend for Live {
         let (Some(room), Some(active)) = (core.room_id(), core.active_room()) else { return Vec::new() };
         let me = core.me();
         let sets = room::sets(core, &room, &room::logs(core, &room));
-        let recording: HashSet<&str> = sets.iter().flat_map(|s| &s.files).filter(|f| f.end_us.is_none() && f.view.is_none()).map(|f| f.owner.as_str()).collect();
+        let recording: HashSet<&str> = sets.iter().flat_map(|s| &s.files).filter(|f| f.recording() && f.view.is_none()).map(|f| f.owner.as_str()).collect();
         let peers = core.peers.lock().unwrap();
         active
             .members
@@ -774,7 +775,8 @@ impl Backend for Live {
                 let mut names = r.names.clone();
                 names.extend(known.iter().filter(|(id, _)| people.contains(id)).map(|(id, n)| (id.clone(), n.clone())));
                 names.extend(room::imported_views(core, &r.id).into_iter().map(|(id, v)| (id, v.name)));
-                Head { active: active.as_deref() == Some(&r.id), members: r.members.iter().map(|m| (m.clone(), *m == me || online.contains(m))).collect(), id: r.id, name: r.name, names }
+                let present = people.iter().filter(|m| core.present(m)).cloned().collect();
+                Head { active: active.as_deref() == Some(&r.id), members: r.members.iter().map(|m| (m.clone(), *m == me || online.contains(m))).collect(), id: r.id, name: r.name, names, present }
             })
             .collect()
     }
@@ -958,7 +960,7 @@ mod tests {
                 self.calls.lock().unwrap().push(format!("open {room}"));
                 Ok(())
             } else {
-                Err("Stop recording before switching rooms.".into())
+                Err("Leave the room before entering another.".into())
             }
         }
         fn now_us(&self) -> i64 {
@@ -966,7 +968,7 @@ mod tests {
         }
         fn heads(&self) -> Vec<Head> {
             let names: HashMap<String, String> = [("a".to_string(), "Ann".to_string()), ("b".to_string(), "Ben".to_string())].into();
-            self.heads.iter().map(|(id, active)| Head { id: id.clone(), name: format!("Room {id}"), active: *active, members: vec![("a".into(), true), ("b".into(), false)], names: names.clone() }).chain([Head { id: "pending-x".into(), name: "".into(), active: false, members: vec![], names: HashMap::new() }]).collect()
+            self.heads.iter().map(|(id, active)| Head { id: id.clone(), name: format!("Room {id}"), active: *active, members: vec![("a".into(), true), ("b".into(), false)], names: names.clone(), present: HashSet::from(["a".to_string()]) }).chain([Head { id: "pending-x".into(), name: "".into(), active: false, members: vec![], names: HashMap::new(), present: HashSet::new() }]).collect()
         }
         fn logs(&self, _: &str) -> Vec<Log> {
             self.logs.lock().unwrap().iter().map(|l| Log { owner: l.owner.clone(), offset_us: l.offset_us, records: l.records.clone() }).collect()
@@ -1164,6 +1166,14 @@ mod tests {
         assert_eq!(body["rooms"][0]["name"], "Room r1");
         assert_eq!(body["rooms"][0]["active"], true);
         assert_eq!(body["rooms"][0]["members"], json!([{"id": "a", "name": "Ann", "online": true}, {"id": "b", "name": "Ben", "online": false}]));
+    }
+
+    #[test]
+    fn a_recording_whose_open_file_belongs_to_an_absent_member_reads_as_ended() {
+        let seg = |n: i64| json!({"k": "seg", "capture": "222", "series": "m", "n": n, "set": "s1", "t_us": START + n * 4 * S, "d_us": 4 * S, "size": 1, "sha256": "x"});
+        let fake = Fake::new(vec![json!({"k": "rec", "set": "s1", "start_us": START}), json!({"k": "rec_end", "set": "s1", "t_us": START + 10 * S})], vec![json!({"k": "rec", "set": "s1", "start_us": START}), seg(1), seg(2)]);
+        let (_, body) = get(&fake, "/v1/rooms/r1/recordings/s1");
+        assert_eq!((body["recording"].as_bool(), body["end_ms"].as_i64()), (Some(false), Some((START + 12 * S) / 1000)));
     }
 
     #[test]

@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use tauri::http::{header, Request, Response, StatusCode};
 
 use crate::room::{self, capture_id, part_of, seg_name, valid_id, File, INIT, SERIES};
-use crate::{data, file_len, media, Core};
+use crate::{data, file_len, media, record, Core};
 
 pub const LIVE_WINDOW: u32 = 3;
 const RANGE_MAX: u64 = 4 << 20;
@@ -49,6 +49,7 @@ fn pieces_in(files: &data::Files, dir: &Path, f: &File, capture: &str, series: &
     for seg in f.segs.iter().filter(|s| s.capture == capture && s.series == series) {
         let name = seg_name(seg.n);
         if !data::has(files, dir, &name, Some(seg.size)) {
+            out.extend(Some(part_of(&dir.join(name))).filter(|part| part.exists()).map(piece));
             return out;
         }
         out.push(Piece { path: dir.join(name), len: seg.size });
@@ -98,17 +99,24 @@ fn pieces_from(dir: &Path, from: u32) -> Vec<Piece> {
     out
 }
 
-fn live_start(dir: &Path) -> Option<(u32, u64)> {
+fn live_start(dir: &Path) -> Option<(u32, Vec<Piece>)> {
     let numbers: Vec<u32> = crate::entries(dir).iter().filter_map(|(name, _)| room::seg_number(name)).collect();
     let from = live_from(&numbers)?;
     let pieces = pieces_from(dir, from);
-    (pieces.len() > 1).then(|| (from, size(&pieces)))
+    (pieces.len() > 1).then_some((from, pieces))
+}
+
+fn first_us(core: &Core, pieces: &[Piece]) -> Option<i64> {
+    let scales = media::timescales(&std::fs::read(&pieces.first()?.path).ok()?);
+    Some(media::micros(index(core, pieces.get(1)?).first()?, &scales))
 }
 
 pub fn live_json(core: &Core, room: &str, owner: &str) -> Option<Value> {
     let (dir, capture) = live_folder(core, room, owner)?;
-    let (from, bytes) = live_start(&dir)?;
-    Some(json!({"path": format!("live/{room}/{owner}/{capture}/{from}"), "size": bytes}))
+    let (from, pieces) = live_start(&dir)?;
+    let log = if owner == core.me() { core.own_log(room) } else { core.room_log(room, owner) };
+    let start_us = record::cap_start(&log, &capture).zip(first_us(core, &pieces)).map(|(cap, first)| cap + first);
+    Some(json!({"path": format!("live/{room}/{owner}/{capture}/{from}"), "size": size(&pieces), "start_us": start_us}))
 }
 
 fn decode(path: &str) -> String {
@@ -162,7 +170,7 @@ fn index(core: &Core, piece: &Piece) -> Arc<Vec<media::Time>> {
     if cache.len() > INDEX_MAX {
         cache.clear();
     }
-    let Ok((times, _)) = media::scan(&piece.path) else { return Arc::default() };
+    let Ok((times, _)) = media::scan(&piece.path).or_else(|_| media::scan(&piece.path.with_extension(""))) else { return Arc::default() };
     let times = Arc::new(times);
     cache.insert(piece.path.clone(), (piece.len, times.clone()));
     times
@@ -263,6 +271,7 @@ mod tests {
         write(&[("000003.m4s", "seg!"), ("000005.m4s", "next"), ("000006.m4s.part", "open")]);
         assert_eq!(lens(&ended).len(), 4 + 1);
         assert_eq!(lens(&recording)[5..], [("000005.m4s".to_string(), 4), ("000006.m4s.part".to_string(), 4)]);
+        assert_eq!(lens(&small_file(6, false)), lens(&recording));
         write(&[(INIT, "other init")]);
         assert!(lens(&ended).is_empty());
         let _ = std::fs::remove_dir_all(dir);
@@ -276,9 +285,10 @@ mod tests {
         assert_eq!(live_from(&[]), None);
         let dir = temp("live");
         seed(&dir, (4..=11).map(seg_name).chain([format!("{}.part", seg_name(12))]));
-        assert_eq!(live_start(&dir), None);
+        let start = |dir: &Path| live_start(dir).map(|(from, p)| (from, size(&p)));
+        assert_eq!(start(&dir), None);
         put(&dir, INIT, b"init");
-        assert_eq!((live_start(&dir), live_start(&dir.join("missing"))), (Some((10, 4 + 3)), None));
+        assert_eq!((start(&dir), start(&dir.join("missing"))), (Some((10, 4 + 3)), None));
         let _ = std::fs::remove_dir_all(dir);
     }
 

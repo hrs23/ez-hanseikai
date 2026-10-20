@@ -136,7 +136,7 @@ Replaces the game plan for the whole room and answers 200 with the new board (sa
 
 ### `POST /v1/rooms/{room}/open`
 
-No body. Opens the room in the app, so that writes go to it, and answers 200 `{"room": "ab12"}`. 409 while this PC records. Starting and stopping a recording is not in the API: it needs the person's confirmation in the app.
+No body. Opens the room in the app, so that writes go to it, and answers 200 `{"room": "ab12"}`. 409 "Leave the room before entering another." while this PC records. Starting and stopping a recording is not in the API: it needs the person's confirmation in the app.
 
 ### `POST /v1/rooms/{room}/recordings/import`
 

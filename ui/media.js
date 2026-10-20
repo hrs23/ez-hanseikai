@@ -1,5 +1,3 @@
-const LIVE_LAG = 1.5;
-const LIVE_SLACK = 3 * LIVE_LAG;
 const RELOAD_AHEAD = 1;
 const RELOAD_MIN_MS = 1000;
 const RELOAD_GROWTH = 300000;
@@ -38,7 +36,7 @@ function load(s, src, size, part, at) {
   dropPending(s);
   s.pending = next;
   s.loadedAt = Date.now();
-  v.onloadedmetadata = () => { const want = Math.max(0, at ?? old.currentTime); v.currentTime = Math.min(want, v.duration || want); };
+  v.onloadedmetadata = () => { const want = Math.max(0, (typeof at === "function" ? at() : at) ?? old.currentTime); v.currentTime = Math.min(want, v.duration || want); };
   v.onseeked = () => {
     if (s.pending !== next) return;
     v.onseeked = null;
@@ -63,7 +61,7 @@ function load(s, src, size, part, at) {
   old.before(v);
 }
 
-function feed(s, file, following, part = null, at = 0) {
+function feed(s, file, following, part = null, at) {
   const src = srcOf(file);
   if (s.pending) {
     if (Date.now() - s.loadedAt < NEXT_TIMEOUT_MS) return;
@@ -87,16 +85,8 @@ function feed(s, file, following, part = null, at = 0) {
   const left = isFinite(v.duration) ? v.duration - v.currentTime : Infinity;
   const since = Date.now() - s.loadedAt;
   const stuck = v.error && since > RETRY_MS;
-  const due = grew && since > RELOAD_MIN_MS && (following ? left < s.loadSec + RELOAD_AHEAD || v.ended : v.paused && (settled || file.size > s.size + RELOAD_GROWTH));
+  const due = grew && since > RELOAD_MIN_MS && (following ? left < LIVE_HEADROOM_S + s.loadSec + RELOAD_AHEAD || v.ended : v.paused && (settled || file.size > s.size + RELOAD_GROWTH));
   if (stuck || due) load(s, src, file.size, part);
-}
-
-function follow(s) {
-  const v = s && s.video;
-  if (!v || v.readyState < 1 || !isFinite(v.duration)) return;
-  const lag = LIVE_LAG + 2 * s.loadSec;
-  if (v.duration - v.currentTime > lag + LIVE_SLACK) v.currentTime = Math.max(0, v.duration - lag);
-  if (v.paused && v.currentTime < v.duration - SEEK_TOLERANCE) v.play().catch(playFailed);
 }
 
 function sync(v, target, playing) {

@@ -10,6 +10,7 @@ use crate::Core;
 pub enum Item {
     Window(Window),
     Display(Monitor),
+    Test,
 }
 
 pub struct Found {
@@ -117,6 +118,9 @@ pub fn same_window<'a, T>(list: &'a [(T, String, String, u32)], exe: &str, title
 }
 
 pub fn find(core: &Core, source: &Value, last: Option<usize>) -> Option<Found> {
+    if crate::test_mode() {
+        return (source["kind"] == "display").then(|| Found { item: Item::Test, key: 0, kind: "test", name: "Test picture".into(), game: ("Test tone".into(), 0) });
+    }
     match source["kind"].as_str()? {
         "window" => {
             let (exe, title) = (source["exe"].as_str()?, source["title"].as_str()?);

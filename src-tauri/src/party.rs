@@ -9,7 +9,7 @@ use crate::{net, room, Core};
 pub const REPEAT: Duration = Duration::from_secs(4);
 const SEEN: Duration = Duration::from_secs(10);
 const CHECK: Duration = Duration::from_secs(1);
-const SHARED: [&str; 9] = ["set", "playing", "wall_us", "at_us", "rate", "focus", "mode", "slots", "order"];
+const SHARED: [&str; 10] = ["set", "playing", "live", "wall_us", "at_us", "rate", "focus", "mode", "slots", "order"];
 
 pub type Heads = HashMap<String, u64>;
 

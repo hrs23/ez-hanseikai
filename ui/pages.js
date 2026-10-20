@@ -75,7 +75,7 @@ function renderStart() {
   }));
 }
 async function leaveRoom(room, then) {
-  const question = st.recording && st.room && st.room.id === room.id ? "Stop recording and leave {room}?" : "Leave {room}?";
+  const question = st.recording && st.room && st.room.id === room.id ? "Stop your recording?" : "Leave {room}?";
   if (await ask(t(question, { room: room.name }), t("Leave room"), true, t("Its recordings and notes on this PC are deleted. Other members keep theirs."))) run("remove_room", { id: room.id }, () => { forgetPlan(room.id); then(); });
 }
 const leaveThisRoom = () => st.room && leaveRoom(st.room, openLive);
@@ -89,7 +89,7 @@ const cancelInvite = () => run("cancel_invites", null, () => { flash(t("Invite c
 const createRoom = () => invoke("create_room", { name: "" }).then(() => { openLive(); return refresh().then(copyInvite); }).catch(fail);
 async function switchRoom() {
   if (!st.room) return;
-  if (st.recording && !(await ask(t("Stop recording and switch rooms?"), t("Switch room")))) return;
+  if (st.recording && !(await ask(t("Stop your recording?"), t("Switch room")))) return;
   run("close_room", { id: st.room.id }, openLive);
 }
 async function removeMember(id) {
@@ -586,7 +586,7 @@ function renderDiagnostics() {
   const failed = failedJobs();
   const lines = summaryLines(st, failed);
   const fed = diagFeed && diagFeed.tab === diagTab ? diagFeed.data : null;
-  if (!changed("diag", [diagTab, lines, st.peers, st.hw, st.time_sync, st.api, st.channel, fed, jobInfo && jobInfo.jobs, lang])) return;
+  if (!changed("diag", [diagTab, lines, st.peers, st.hw, st.clock, st.api, st.channel, fed, jobInfo && jobInfo.jobs, lang])) return;
   if (diagTab === "summary") {
     $("diagbody").replaceChildren(el("div", { className: "okbox" }, ...lines.map((l) => el("div", { className: "ok-line lv-" + l.level }, icon({ ok: "ok", warn: "alert", fail: "fail" }[l.level] || "info", "sm"), el("b", { textContent: t(l.key) }), el("span", { textContent: l.text }), l.key === "Plugins" && failed ? el("button", { className: "sm", textContent: t("Open jobs"), onclick: () => { $("diagdlg").close(); showRoomTab("jobs"); } }) : null))));
     return;

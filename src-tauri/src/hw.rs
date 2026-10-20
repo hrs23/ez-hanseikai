@@ -3,11 +3,10 @@ use std::sync::atomic::Ordering;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use regex::Regex;
 use serde_json::{json, Value};
 use windows_capture::monitor::Monitor;
 
-use crate::{clean_text, data, debug, ffmpeg, now_us, record, session};
+use crate::{clean_text, debug, ffmpeg, now_us, record, session};
 use crate::Core;
 
 const TEXT_MAX: usize = 80;
@@ -23,7 +22,6 @@ const KEEPING_UP: f64 = 0.5;
 const DROP_SHARE: u64 = 4;
 const RECOVERED: f64 = 0.8;
 const MIN_REPORTED_S: u64 = 5;
-const TIME_EVERY: Duration = Duration::from_secs(300);
 const SCRIPT: &str = "[Console]::OutputEncoding=[Text.Encoding]::UTF8;$g=@(Get-CimInstance Win32_VideoController|ForEach-Object{@{n=$_.Name;d=$_.DriverVersion}});$c=(Get-CimInstance Win32_Processor|Select-Object -First 1).Name;$o=Get-CimInstance Win32_OperatingSystem;@{gpu=$g;cpu=$c;os=$o.Caption;ver=$o.Version;kb=$o.TotalVisibleMemorySize}|ConvertTo-Json -Compress";
 const VIRTUAL_GPUS: [&str; 4] = ["basic", "remote", "virtual", "mirror"];
 const VENDORS: [(&str, &str, &[&str]); 3] = [("nvenc", "NVENC", &["nvidia", "geforce"]), ("amf", "AMF", &["amd", "radeon"]), ("qsv", "QSV", &["intel"])];
@@ -38,7 +36,6 @@ pub struct Hardware {
 }
 
 static HARDWARE: OnceLock<Hardware> = OnceLock::new();
-static TIME: Mutex<Option<TimeSync>> = Mutex::new(None);
 static LIVE: Mutex<Option<Live>> = Mutex::new(None);
 static RATES: Mutex<Rates> = Mutex::new(Rates::new());
 static SLOW: Mutex<Option<Limiter>> = Mutex::new(None);
@@ -82,10 +79,6 @@ fn display_size() -> (u32, u32) {
 pub fn warm() {
     std::thread::spawn(|| {
         let _ = HARDWARE.set(Hardware::parse(&debug::command_line("powershell", &["-NoProfile", "-NonInteractive", "-Command", SCRIPT]), display_size()));
-        loop {
-            *TIME.lock().unwrap() = Some(TimeSync::parse(&debug::command_line("sc", &["query", "w32time"]), &debug::command_line("w32tm", &["/query", "/status"]), data::tz_offset_seconds()));
-            std::thread::sleep(TIME_EVERY);
-        }
     });
 }
 
@@ -235,41 +228,6 @@ pub fn slow_send(peer: &str, took: Duration, queued: usize) {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct TimeSync {
-    pub running: Option<bool>,
-    pub last_sync_s: Option<i64>,
-}
-
-fn sync_time(status: &str, tz_s: i64) -> Option<i64> {
-    let year_first = Regex::new(r"(\d{4})[/.-](\d{1,2})[/.-](\d{1,2})\D+(\d{1,2}):(\d{2}):(\d{2})").unwrap();
-    let month_first = Regex::new(r"(\d{1,2})/(\d{1,2})/(\d{4})\D+(\d{1,2}):(\d{2}):(\d{2})\s*([AaPp][Mm])?").unwrap();
-    let (y, m, d, h, min, s) = status.lines().find_map(|line| {
-        let num = |c: &regex::Captures, i: usize| c[i].parse::<i64>().ok();
-        if let Some(c) = year_first.captures(line) {
-            return Some((num(&c, 1)?, num(&c, 2)?, num(&c, 3)?, num(&c, 4)?, num(&c, 5)?, num(&c, 6)?));
-        }
-        let c = month_first.captures(line)?;
-        let h = match c.get(7) {
-            Some(p) => num(&c, 4)? % 12 + if p.as_str().eq_ignore_ascii_case("pm") { 12 } else { 0 },
-            None => num(&c, 4)?,
-        };
-        Some((num(&c, 3)?, num(&c, 1)?, num(&c, 2)?, h, num(&c, 5)?, num(&c, 6)?))
-    })?;
-    Some(session::civil_seconds(y, m, d, h, min, s)? - tz_s)
-}
-
-impl TimeSync {
-    pub fn parse(service: &str, status: &str, tz_s: i64) -> Self {
-        let running = (service.contains("RUNNING") || service.contains("STOPPED")).then(|| service.contains("RUNNING"));
-        Self { running, last_sync_s: sync_time(status, tz_s) }
-    }
-}
-
-pub fn time_json() -> Value {
-    TIME.lock().unwrap().map_or(Value::Null, |t| json!({"running": t.running, "last_sync": t.last_sync_s}))
-}
-
 pub fn offset_text(us: Option<i64>) -> String {
     match us {
         None => "unknown".into(),
@@ -278,7 +236,7 @@ pub fn offset_text(us: Option<i64>) -> String {
     }
 }
 
-pub fn report(me: &Value, others: &[(String, Value)], offsets: &[(String, Option<i64>)], time: &Value) -> String {
+pub fn report(me: &Value, others: &[(String, Value)], offsets: &[(String, Option<i64>)], clock: &Value) -> String {
     let line = |who: &str, v: &Value| {
         let display = match (v["display"][0].as_u64(), v["display"][1].as_u64()) {
             (Some(w), Some(h)) => format!("{w}x{h}"),
@@ -301,8 +259,13 @@ pub fn report(me: &Value, others: &[(String, Value)], offsets: &[(String, Option
         out.push_str(&if v.is_null() { format!("  {who}: not shared") } else { line(who, v) });
     }
     out.push_str("\n\nclocks\n");
-    let sync = time["running"].as_bool().map_or("unknown", |on| if on { "on" } else { "off" });
-    out.push_str(&format!("  Windows time service {sync}, last sync {}\n", time["last_sync"].as_i64().map_or("unknown".to_string(), |t| format!("{} s ago", (now_us() / 1_000_000 - t).max(0)))));
+    out.push_str(&match (clock["offset_us"].as_i64(), clock["at_us"].as_i64()) {
+        (Some(offset), Some(at)) => format!(
+            "  NTP {} offset {}, round trip {} ms, measured {} s ago\n",
+            crate::clock::HOST, offset_text(Some(offset)), clock["rtt_us"].as_i64().unwrap_or(0) / 1000, (now_us() - at).max(0) / 1_000_000
+        ),
+        _ => format!("  NTP {} unreachable\n", crate::clock::HOST),
+    });
     for (who, offset) in offsets {
         out.push_str(&format!("  {who} clock {} from this PC\n", offset_text(*offset)));
     }
@@ -441,22 +404,6 @@ mod tests {
     }
 
     #[test]
-    fn time_sync_reads_the_service_and_the_last_sync_in_any_date_style() {
-        let tz = 9 * 3600;
-        let jp = "Leap Indicator: 0\nLast Successful Sync Time: 2026/10/19 3:04:05\nSource: time.example.net\n";
-        let us = "Last Successful Sync Time: 10/19/2026 3:04:05 PM\n";
-        let none = "Last Successful Sync Time: unspecified\nSource: Local CMOS Clock\n";
-        let expected = session::days_from_civil(2026, 10, 19) * 86400 + 3 * 3600 + 4 * 60 + 5 - tz;
-        assert_eq!(TimeSync::parse("STATE : 4  RUNNING", jp, tz), TimeSync { running: Some(true), last_sync_s: Some(expected) });
-        assert_eq!(TimeSync::parse("STATE : 1  STOPPED", "", tz), TimeSync { running: Some(false), last_sync_s: None });
-        assert_eq!(TimeSync::parse("", none, tz), TimeSync { running: None, last_sync_s: None });
-        assert_eq!(TimeSync::parse("", us, tz).last_sync_s, Some(expected + 12 * 3600));
-        assert_eq!(TimeSync::parse("", "Last: 13/45/2026 3:04:05 PM", tz).last_sync_s, None);
-        *TIME.lock().unwrap() = Some(TimeSync::parse("RUNNING", jp, tz));
-        assert_eq!(time_json(), json!({"running": true, "last_sync": expected}));
-    }
-
-    #[test]
     fn offsets_read_as_milliseconds_or_seconds() {
         assert_eq!(offset_text(Some(12_400)), "+12 ms");
         assert_eq!(offset_text(Some(-250_000)), "-250 ms");
@@ -468,8 +415,11 @@ mod tests {
     fn the_report_lists_hardware_and_clocks() {
         let hw = Hardware::parse(SAMPLE, (1920, 1080));
         let me = pc(&hw, Some(("libx264", "h264")), None);
-        let out = report(&me, &[("abc".into(), Value::Null)], &[("abc".into(), Some(30_000))], &json!({"running": false, "last_sync": null}));
+        let measured = json!({"offset_us": 8_200_000, "rtt_us": 23_000, "at_us": now_us() - 120_000_000, "ok": true});
+        let out = report(&me, &[("abc".into(), Value::Null)], &[("abc".into(), Some(30_000))], &measured);
         assert!(out.contains("this PC: gpu Test Graphics 9000 driver 31.0.15.1234 encoder Software h264 cpu Fake CPU 3.5GHz ram 16384 MB display 1920x1080"), "{out}");
-        assert!(out.contains("abc: not shared") && out.contains("abc clock +30 ms from this PC") && out.contains("Windows time service off, last sync unknown"), "{out}");
+        assert!(out.contains("abc: not shared") && out.contains("abc clock +30 ms from this PC") && out.contains("NTP time.cloudflare.com offset +8.2 s, round trip 23 ms, measured 120 s ago"), "{out}");
+        let unreachable = report(&me, &[], &[], &json!({"offset_us": null, "ok": false}));
+        assert!(unreachable.contains("NTP time.cloudflare.com unreachable"), "{unreachable}");
     }
 }

@@ -114,9 +114,10 @@ fn learn_hello(core: &Arc<Core>, id: &EndpointId, message: &Value) -> u32 {
     }
     let codecs = codec_list(&message["codecs"]);
     let hw = hw::sanitize(&message["hw"]);
+    let here = message["room"]["id"].as_str() == Some(core.active_room_id().as_str());
     core.update_peer(id, |p| {
         p.info = Some((version, proto));
-        p.seen_us = Some(now_us());
+        p.seen_us = if here { Some(now_us()) } else { p.seen_us };
         p.codecs = codecs;
         p.hw = hw;
     });
@@ -127,7 +128,7 @@ fn learn_hello(core: &Arc<Core>, id: &EndpointId, message: &Value) -> u32 {
     learn_members(core, &message["room"]);
     learn_holdings(core, id, message);
     react_to_set(core, &message["set"]);
-    if message["room"]["id"].as_str() == Some(core.active_room_id().as_str()) {
+    if here {
         let asks = message["asks"].as_array().cloned().unwrap_or_default();
         core.update_peer(id, |p| p.asks = asks);
     }
@@ -173,11 +174,15 @@ pub fn pacer_json(core: &Core) -> Value {
 async fn pace(core: &Core, bytes: usize, history: bool) {
     let Some(rate) = bytes_per_sec(core) else { return };
     loop {
-        let due = core.pacer.lock().unwrap().reserve(Instant::now(), bytes, history, rate);
-        match due {
-            Some(due) => return sleep(due).await,
-            None => sleep(HISTORY_WAIT).await,
+        let Some(due) = core.pacer.lock().unwrap().reserve(Instant::now(), bytes, history, rate) else {
+            sleep(HISTORY_WAIT).await;
+            continue;
+        };
+        let until = Instant::now() + due;
+        while bytes_per_sec(core) == Some(rate) && Instant::now() < until {
+            sleep(until.saturating_duration_since(Instant::now()).min(HISTORY_WAIT)).await;
         }
+        return;
     }
 }
 
@@ -338,7 +343,7 @@ fn react_to_set(core: &Arc<Core>, set: &Value) {
         return;
     }
     let logs = room::logs(core, room);
-    if !room::may_join(&core.own_log(room), id) || room::stopped(&logs, id) || room::dropped(&logs).contains(id) {
+    if !room::may_join(&core.own_log(room), id) || room::sets(core, room, &logs).iter().any(|s| s.id == id && s.stopped) || room::dropped(&logs).contains(id) {
         return;
     }
     let (by, start_us, voice) = (set["by"].as_str().unwrap_or_default().to_string(), set["start_us"].as_i64().unwrap_or(0), set["voice"] == true);
@@ -821,7 +826,7 @@ fn fetch_history(core: &Arc<Core>, peer: &EndpointId, conn: &Connection, room: &
     let mut waiting = false;
     for set in &sets {
         let here = set.files.iter().any(|f| data::held(core, room, f).0 > 0);
-        if !room::auto_receive(set.end().is_none(), here, room::wants(core, room, &set.id)) {
+        if !room::auto_receive(set.recording(), here, room::wants(core, room, &set.id)) {
             continue;
         }
         let focused = Some(&set.id) == focus.as_ref();
@@ -1023,6 +1028,7 @@ async fn run(core: &Arc<Core>, id: EndpointId, conn: Connection, outgoing: bool)
     core.update_peer(&id, |p| {
         if p.conn.as_ref().is_some_and(|c| c.stable_id() == conn.stable_id()) {
             p.conn = None;
+            p.seen_us = Some(now_us());
             p.live = None;
         }
         p.failures = if lived < STABLE_FOR { p.failures + 1 } else { 0 };

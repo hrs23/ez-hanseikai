@@ -19,7 +19,7 @@ use crate::ffmpeg::{self, FRAGMENTED};
 use crate::room::{self, capture_id, part_of, seg_name, INIT, RECORDINGS, SERIES};
 use crate::sources::{self, Found, Item};
 use crate::proc::{self, Process, BELOW_NORMAL};
-use crate::{data, debug, hex, hw, media, merge, now_us, write_whole, Core};
+use crate::{clock, data, debug, hex, hw, media, merge, now_us, write_whole, Core};
 
 pub type Err = Box<dyn std::error::Error + Send + Sync>;
 
@@ -185,8 +185,14 @@ pub struct Names {
 }
 
 struct Video {
-    control: CaptureControl<Capture, Err>,
+    control: Option<CaptureControl<Capture, Err>>,
     key: usize,
+}
+
+impl Video {
+    fn finished(&self) -> bool {
+        self.control.as_ref().is_some_and(|c| c.is_finished())
+    }
 }
 
 pub struct Live {
@@ -353,9 +359,10 @@ pub fn wanted(source: bool, lost: bool, recording: Option<&str>, room: Option<St
     if full {
         return None;
     }
+    let picture = source && !lost;
     match recording {
-        Some(room) => Some((room.to_string(), !source)),
-        None => room.filter(|_| source && !lost).map(|room| (room, false)),
+        Some(room) => Some((room.to_string(), !picture)),
+        None => room.filter(|_| picture).map(|room| (room, false)),
     }
 }
 
@@ -660,8 +667,8 @@ impl Sink {
         }
         if let Some(set) = &set {
             ensure_rec(core, &self.room, set, t_us, &self.meta);
-            self.log_cap(core);
         }
+        self.log_cap(core);
         let init = self.init.lock().unwrap()[which].clone();
         let Some(file) = open_part(&dir, n, init.as_deref()) else {
             self.dead.store(true, Ordering::Relaxed);
@@ -857,7 +864,8 @@ pub(crate) fn current_sink(core: &Arc<Core>, canvas: Option<(u32, u32)>) -> Opti
         let codec = ffmpeg::pick(&usable).0 != sink.encoder && (!recording || !usable.iter().any(|c| c == sink.codec));
         let requality = !recording && *e.quality.lock().unwrap() != sink.quality;
         let kind = want.as_ref().map(|(room, voice)| (room.as_str(), *voice)) != Some((sink.room.as_str(), sink.voice));
-        (sink.dead.load(Ordering::Relaxed), !sink.voice && (resized || codec || requality) || kind)
+        let rebased = sink.start.get().is_some_and(|(at, at_us)| clock::stepped(*at_us, now_us(), at.elapsed()));
+        (sink.dead.load(Ordering::Relaxed), !sink.voice && (resized || codec || requality) || kind || rebased)
     });
     if let Some((dead, changed)) = stale.filter(|(dead, changed)| *dead || *changed) {
         let old = slot.take().unwrap();
@@ -943,8 +951,12 @@ pub fn recover_files(dir: &Path, me: &str, skip: impl Fn(&Recovered) -> bool) ->
     out
 }
 
+pub fn cap_start(log: &[Value], capture: &str) -> Option<i64> {
+    log.iter().filter(|x| x["k"] == "cap" && x["capture"] == capture).find_map(|x| x["start_us"].as_i64())
+}
+
 fn recovered_seg(own: &[Value], r: &Recovered) -> Option<Value> {
-    let start_us = own.iter().filter(|x| x["k"] == "cap" && x["capture"] == r.capture.as_str()).find_map(|x| x["start_us"].as_i64())?;
+    let start_us = cap_start(own, &r.capture)?;
     let (size, sha) = data::sha256(&r.path).ok()?;
     let scales = media::timescales(&std::fs::read(r.path.with_file_name(INIT)).unwrap_or_default());
     let times = media::scan(&r.path).ok()?.0;
@@ -1046,14 +1058,12 @@ fn rescan(core: &Core, source: &Value, last: Option<usize>) -> Option<Found> {
 fn ensure_video(core: &Arc<Core>, wanted: Option<&Found>) {
     let e = &core.engine;
     let mut video = e.video.lock().unwrap();
-    if video.as_ref().is_some_and(|v| v.control.is_finished() || wanted.is_none_or(|f| f.key != v.key)) {
-        let v = video.take().unwrap();
-        let closed = v.control.is_finished();
-        let _ = v.control.stop();
-        if !closed {
-            e.last.lock().unwrap().0 = Arc::new(Vec::new());
-            *e.canvas.lock().unwrap() = None;
+    if video.as_ref().is_some_and(|v| v.finished() || wanted.is_none_or(|f| f.key != v.key)) {
+        if let Some(control) = video.take().unwrap().control {
+            let _ = control.stop();
         }
+        e.last.lock().unwrap().0 = Arc::new(Vec::new());
+        *e.canvas.lock().unwrap() = None;
     }
     let Some(f) = wanted.filter(|_| video.is_none()) else { return };
     if Instant::now() < *e.retry_at.lock().unwrap() {
@@ -1062,6 +1072,11 @@ fn ensure_video(core: &Arc<Core>, wanted: Option<&Found>) {
     let (refused, started) = match f.item {
         Item::Window(w) => start_capture::<Capture, _>(w, core.clone()),
         Item::Display(m) => start_capture::<Capture, _>(m, core.clone()),
+        Item::Test => {
+            *e.canvas.lock().unwrap() = Some(TEST_SIZE);
+            *video = Some(Video { control: None, key: f.key });
+            return;
+        }
     };
     if let Some(why) = refused {
         tracing::warn!("capture without border refused ({why}), using the default border");
@@ -1070,7 +1085,7 @@ fn ensure_video(core: &Arc<Core>, wanted: Option<&Found>) {
         Ok(control) => {
             *e.canvas.lock().unwrap() = None;
             *e.fresh.lock().unwrap() = Instant::now();
-            *video = Some(Video { control, key: f.key });
+            *video = Some(Video { control: Some(control), key: f.key });
         }
         Err(err) => e.failed(false, &format!("screen capture could not start: {err}")),
     }
@@ -1098,18 +1113,6 @@ fn check_sink(core: &Core) {
     }
 }
 
-fn test_source(core: &Core) {
-    let e = &core.engine;
-    if ffmpeg::encoders_ready() {
-        *e.canvas.lock().unwrap() = Some(TEST_SIZE);
-    }
-    let mut names = e.names.lock().unwrap();
-    names.kind = "test".into();
-    names.source = "Test picture".into();
-    names.game = "Test tone".into();
-    names.mic = "Test tone".into();
-}
-
 pub fn supervise(core: Arc<Core>) {
     let c = core.clone();
     thread::spawn(move || repeat(c));
@@ -1119,20 +1122,18 @@ pub fn supervise(core: Arc<Core>) {
     let mut scanned: Option<(Value, Instant)> = None;
     let mut found: Option<Found> = None;
     loop {
-        if crate::test_mode() {
-            test_source(&core);
-        } else {
-            let source = e.source.lock().unwrap().clone();
-            let ended = e.video.lock().unwrap().as_ref().is_some_and(|v| v.control.is_finished());
-            if ended || scanned.as_ref().is_none_or(|(s, at)| *s != source || at.elapsed() > RESCAN_EVERY) {
-                found = rescan(&core, &source, found.as_ref().map(|f| f.key));
-                scanned = Some((source, Instant::now()));
-            }
+        let source = e.source.lock().unwrap().clone();
+        let ended = e.video.lock().unwrap().as_ref().is_some_and(Video::finished);
+        if ended || scanned.as_ref().is_none_or(|(s, at)| *s != source || at.elapsed() > RESCAN_EVERY) {
+            found = rescan(&core, &source, found.as_ref().map(|f| f.key));
+            scanned = Some((source, Instant::now()));
+        }
+        if !crate::test_mode() {
             audio::ensure(&core, APP, found.as_ref().map_or(0, |f| f.game.1).to_string());
             let mic = e.mic.lock().unwrap().clone();
             audio::ensure(&core, MIC, mic);
-            ensure_video(&core, found.as_ref().filter(|_| want(&core).is_some_and(|(_, voice)| !voice) && ffmpeg::encoders_ready()));
         }
+        ensure_video(&core, found.as_ref().filter(|_| want(&core).is_some_and(|(_, voice)| !voice) && ffmpeg::encoders_ready()));
         check_sink(&core);
         hw::tick(&core);
         thread::sleep(SUPERVISE_EVERY);
@@ -1169,8 +1170,15 @@ mod tests {
         assert_eq!(wanted(true, true, None, room(), false), None);
         assert_eq!(wanted(true, false, None, None, false), None);
         assert_eq!(wanted(false, false, Some("s"), room(), false), Some(("s".into(), true)));
-        assert_eq!(wanted(true, true, Some("s"), room(), false), Some(("s".into(), false)));
+        assert_eq!(wanted(true, true, Some("s"), room(), false), Some(("s".into(), true)));
         assert_eq!(wanted(true, false, Some("s"), room(), true), None);
+    }
+
+    #[test]
+    fn a_capture_born_before_the_clock_moved_is_finished() {
+        let secs = Duration::from_secs;
+        assert!(clock::stepped(0, 18_000_000, secs(10)));
+        assert!(!clock::stepped(0, 10_100_000, secs(10)));
     }
 
     #[test]

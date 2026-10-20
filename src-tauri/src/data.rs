@@ -339,7 +339,7 @@ pub fn keeper(core: Arc<Core>) {
     let mut aged: Option<Instant> = None;
     loop {
         if core.disk_full() && core.active_set.lock().unwrap().is_some() {
-            room::stop_set(&core);
+            room::end_set(&core, false, None);
             *core.notice.lock().unwrap() = "Recording stopped: the disk is almost full.".into();
         }
         recreate(&core);

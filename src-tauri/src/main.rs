@@ -5,6 +5,7 @@ mod audio;
 mod bundle;
 mod capture;
 mod check;
+mod clock;
 mod data;
 mod debug;
 mod download;
@@ -31,7 +32,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use iroh::endpoint::{presets, Connection};
 use iroh::{Endpoint, EndpointId, SecretKey, Watcher};
@@ -71,7 +72,7 @@ fn open_main(app: &tauri::App) -> tauri::Result<()> {
 }
 
 pub fn now_us() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros() as i64
+    clock::pc_us() + clock::offset_us()
 }
 
 pub fn short(id: impl std::fmt::Display) -> String {
@@ -762,6 +763,7 @@ async fn check_peer(core: State<'_, Arc<Core>>, id: String) -> Result<Value, Str
 #[tauri::command]
 fn set_limit(core: State<Arc<Core>>, mbps: Option<f64>) {
     *core.limit_mbps.lock().unwrap() = mbps.filter(|v| *v > 0.0);
+    *core.pacer.lock().unwrap() = net::Pacer::new();
     core.save_settings();
 }
 
@@ -811,7 +813,7 @@ async fn reset(core: State<'_, Arc<Core>>, keep_rooms: bool) -> Result<(), Strin
     let core = core.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         tracing::info!("resetting the app{}", if keep_rooms { ", keeping the rooms" } else { "" });
-        room::stop_set(&core);
+        room::end_set(&core, false, None);
         export::cancel(&core);
         jobs::stop_and_wait(&core);
         data::unlock(&core.dir);
@@ -1135,6 +1137,7 @@ fn main() {
                 api::apply(&core);
             }
             hw::warm();
+            clock::start();
             let c = core.clone();
             std::thread::spawn(move || record::supervise(c));
             let c = core.clone();

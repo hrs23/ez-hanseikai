@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import dgram from "node:dgram";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
@@ -47,6 +48,27 @@ const EXPORT_FOLDER_S = 120;
 const MEDIA_SECONDS = { coach: 8, camera: 6, commentary: 7 };
 const PLAN_START = "2026-10-19T12:30:00Z";
 const START_TOLERANCE_US = 5e6;
+const RESCAN_S = 5;
+const GONE = { kind: "window", exe: "gone.exe", title: "Gone" };
+const CLOCK_SHIFT_S = 8.2;
+const NTP_EPOCH_S = 2208988800;
+const TRICKLE_MBPS = 0.01;
+const LIVE_LAG_MAX_S = 12;
+const CATCH_UP_S = 60;
+const UNREACHABLE_S = 60;
+const NTP = { c: "127.0.0.1:1" };
+const LIVE_PROBE = `(() => {
+  const grid = playSet() ? play : rec;
+  const at = (tl) => {
+    const s = tl.media;
+    if (s.video.readyState < 2 || s.video.seeking || s.pending) return null;
+    const p = players().find((x) => x.key === tl.key);
+    const start = grid === play ? s.part && (s.part.start_us - p.off) / 1e6 : liveStart(tl.key, s.part);
+    return start === null || start > liveClock.pos ? null : start + s.video.currentTime;
+  };
+  const tiles = Object.values(grid.tiles);
+  return { now: grid === play, pos: liveClock.pos, rate: liveClock.rate, held: liveClock.held, avail: Object.fromEntries(liveMembers().map((m) => [m.key, m.avail])), at: tiles.map(at).filter((x) => x !== null), wait: tiles.some((tl) => tl.box.classList.contains("wait")), late: tiles.filter((tl) => tl.box.classList.contains("late")).map((tl) => tl.key) };
+})()`;
 
 const DIAL_S = DIAL_RETRY_S + CONNECT_TIMEOUT_S;
 const SYNC_ROUND_S = LOG_SYNC_S * HELLO_EVERY;
@@ -249,6 +271,7 @@ function start(key) {
     EZH_API_PORT: String(API_PORTS[key]),
     EZH_DIR: app.data,
     WEBVIEW2_USER_DATA_FOLDER: path.join(home, "webview"),
+    EZH_NTP: NTP[key],
   };
   app.proc = spawn(EXE, [], { env, stdio: "ignore", windowsHide: true });
   app.killed = false;
@@ -303,6 +326,49 @@ async function launch(key) {
   await share(app);
   say(`${key} is ${app.id.slice(0, 10)}`);
   return app;
+}
+
+function timeServer(shiftS) {
+  const socket = dgram.createSocket("udp4");
+  socket.on("message", (asked, from) => {
+    const answer = Buffer.alloc(48);
+    answer[0] = 0x24;
+    answer[1] = 1;
+    asked.copy(answer, 24, 40, 48);
+    const ms = Date.now() + shiftS * 1000;
+    for (const at of [32, 40]) {
+      answer.writeUInt32BE(Math.floor(ms / 1000) + NTP_EPOCH_S, at);
+      answer.writeUInt32BE(Math.floor(((ms % 1000) / 1000) * 2 ** 32), at + 4);
+    }
+    socket.send(answer, from.port, from.address);
+  });
+  return new Promise((done) => socket.bind(0, "127.0.0.1", () => done(`127.0.0.1:${socket.address().port}`)));
+}
+
+async function recordsAgain(app, room, set, old) {
+  await waitFor(`${app.key} records the set again in a new capture`, within(SEGMENT_S * 2), () => {
+    const own = logOf(app, room, app.id);
+    const ended = own.findLastIndex((r) => r.k === "rec_end" && r.set === set);
+    return own.findLastIndex((r) => r.k === "rec" && r.set === set) > ended && segsOf(own, set).some((s) => !old.includes(s.capture));
+  });
+}
+
+const lastJoin = (app, room, set) => logOf(app, room, app.id).findLast((r) => r.set === set && (r.k === "rec" || r.k === "rec_end"));
+
+async function watchLive(app, b, seconds, until = () => false) {
+  const end = Date.now() + seconds * 1000;
+  let last = null;
+  while (Date.now() < end) {
+    const x = await evaluate(app, LIVE_PROBE);
+    check(!x.wait, "a live tile with a picture hid it");
+    check(x.at.length < 2 || Math.max(...x.at) - Math.min(...x.at) < 1, `live tiles are apart: ${brief(x)}`);
+    check(x.pos === null || x.avail[b.id] === null || x.pos <= x.avail[b.id], `the live position ${x.pos} passed B's media ${x.avail[b.id]}`);
+    check(!last || (x.pos >= last.pos && x.now === last.now), `the live position went back or the view changed: ${brief([last, x])}`);
+    if (until(x)) return x;
+    last = x;
+    await sleep(POLL_MS);
+  }
+  return last;
 }
 
 async function connects(app, peer, since = 0) {
@@ -548,6 +614,17 @@ async function scenario(ctx) {
     await waitFor("A shares no recording", within(UI_REFRESH_S * 5), async () => !(await state(a)).party.shared.set);
   });
 
+  await step("closing the captured window stops sending until a screen is chosen again", async () => {
+    await invoke(a, "set_source", { source: GONE });
+    await waitFor("A sends nothing from a closed source", within(RESCAN_S * 2), async () => { const st = await state(a); return st.capture.source_lost && !st.capture.sharing && !(await invoke(a, "debug_view", { tab: "recording", since: 0, set: null, addresses: false })).engine.sink; });
+    await waitFor("A's own tile and Screen button say the source closed", within(UI_REFRESH_S * 5), () => evaluate(a, `$("screensub").textContent === t("Capture source closed") && rec.tiles[st.id].what.textContent === t("Capture source closed")`));
+    await evaluate(a, `$("screenbtn").click(); true`);
+    await waitFor("the Screen button offers the picker", within(UI_REFRESH_S * 5), () => evaluate(a, `!$("pop").hidden`));
+    await evaluate(a, `closePop(); true`);
+    await invoke(a, "set_source", { source: SOURCE });
+    await allSee([a], "sending again", within(COLD_START_S), (st) => st.capture.sharing && st.capture.live);
+  });
+
   await step("B joins A's room with approval", async () => {
     const code = await invoke(a, "create_invite", { reuse: false });
     await invoke(b, "join_room", { code });
@@ -604,13 +681,26 @@ async function scenario(ctx) {
     await allSee([b, c], "A's live picture available", within(SEGMENT_S + LOG_SYNC_S), (st) => st.peers.find((p) => p.id === a.id)?.live);
   });
 
+  await step("B's time answer runs 8.2 s ahead and C gets none, and the recording still lines up", async () => {
+    check(Math.abs((await state(b)).clock.offset_us - CLOCK_SHIFT_S * 1e6) < 5e5, `B measured ${brief((await state(b)).clock)}`);
+    check(await evaluate(b, `pcCards(st)[0].rows.find((r) => r.key === "Clock").text === "8.2 s behind"`), "B's own card does not say its clock is 8.2 s behind");
+    const offset = (st, x) => st.peers.find((p) => p.id === x.id)?.offset_us;
+    await waitFor("A measures B 8.2 s ahead and C in step", within(SYNC_ROUND_S * 2), async () => { const st = await state(a); return Math.abs(offset(st, b) - CLOCK_SHIFT_S * 1e6) < 1e6 && Math.abs(offset(st, c)) < 1e6; });
+    check((await state(c)).clock.offset_us === null && (await evaluate(c, `pcCards(st)[0].rows.find((r) => r.key === "Clock").text === t("Unreachable")`)), "C's own card does not say its time check is unreachable");
+    const flow = await invoke(c, "debug_view", { tab: "flow", since: 0, set: null, addresses: false });
+    check(await evaluate(c, `flowRows(st, ${JSON.stringify(flow)}, (k) => k).find((r) => r.key === "Time check").level === "warn"`), "C's Where data goes does not warn about the time check");
+    const players = setOf(await state(a), ctx.set).players;
+    const begins = (x) => { const p = players.find((y) => y.owner === x.id); return (p.start_us - p.offset_us) / 1e6; };
+    check(Math.abs(begins(b) - begins(a)) < within(1), `B's part starts ${begins(b) - begins(a)} s from A's`);
+  });
+
   await step("connections stay up without redialing", async () => {
     const all = [a, b, c];
-    const since = Date.now() * 1000;
+    const since = Object.fromEntries(await Promise.all(all.map(async (x) => [x.key, (await state(x)).now_us])));
     await sleep(STEADY_S * 1000);
     for (const app of all) {
       for (const peer of all.filter((x) => x !== app)) {
-        const n = await connects(app, peer, since);
+        const n = await connects(app, peer, since[app.key]);
         check(n === 0, `${app.key} connected to ${peer.key} ${n} times in ${STEADY_S} s`);
       }
       check(connected(await state(app), all.filter((x) => x !== app).map((x) => x.id)), `${app.key} lost a peer`);
@@ -632,6 +722,28 @@ async function scenario(ctx) {
     await evaluate(a, `$("sessions").querySelector(".liverow").click(); true`);
     await waitFor("A marks only the running recording after opening it", within(UI_REFRESH_S * 3), () => evaluate(a, `!!$("sessions").querySelector(".liverow.on") && !$("sidenav").querySelector("[aria-current=page]")`));
     await evaluate(a, `openLive(); true`);
+  });
+
+  await step("live tiles stay in step while a member stalls, and stop waiting for one too far behind", async () => {
+    const inStep = async (view) => {
+      for (const x of [a, b, c]) await evaluate(x, `${view}; true`);
+      await waitFor(`A's live tiles in step after ${view}`, within(SEGMENT_S * 3), async () => { const x = await evaluate(a, LIVE_PROBE); check(x.pos !== null && x.at.length === 3 && Math.max(...x.at) - Math.min(...x.at) < 1, brief(x)); return true; });
+    };
+    await inStep("openNow()");
+    await watchLive(a, b, SEGMENT_S * 2);
+    await inStep("openLive()");
+    await invoke(b, "set_limit", { mbps: TRICKLE_MBPS });
+    const held = await watchLive(a, b, LIVE_LAG_MAX_S + SEGMENT_S, (x) => x.held || x.late.length > 0);
+    await invoke(b, "set_limit", { mbps: null });
+    check(held.held, `A never held for B: ${brief(held)}`);
+    await watchLive(a, b, SEGMENT_S * 2);
+    await waitFor("A plays at 1 again once the delay is small", within(CATCH_UP_S), async () => (await evaluate(a, LIVE_PROBE)).rate === 1);
+    await invoke(b, "set_limit", { mbps: TRICKLE_MBPS });
+    const gone = await waitFor("A stops waiting for B and marks its tile", within(LIVE_LAG_MAX_S + SEGMENT_S * 2), async () => { const x = await evaluate(a, LIVE_PROBE); return x.late.join() === b.id && x.pos > x.avail[b.id] && x; });
+    await sleep(1000);
+    check((await evaluate(a, LIVE_PROBE)).pos > gone.pos, "the others stopped while waiting for B");
+    await invoke(b, "set_limit", { mbps: null });
+    await waitFor("B's tile is no longer late", within(SEGMENT_S * 3), async () => !(await evaluate(a, LIVE_PROBE)).late.length);
   });
 
   await step("a note with a tag, its edit and its deletion reach everyone", async () => {
@@ -685,11 +797,7 @@ async function scenario(ctx) {
     await waitFor(`A logs ${SEGMENTS_AFTER_RESTART} more segments`, within(SEGMENT_S * (SEGMENTS_AFTER_RESTART + 1)), () => logged(a) >= target);
     const limits = { a: target, c: logged(c) };
     await waitFor("B holds them after its restart", within((SEGMENT_S + LOG_SYNC_S) * 2), () => !holdEverything([b], ctx.room, ctx.set, [a, c], limits));
-    await waitFor("B records the set again in a new capture", within(SEGMENT_S * 2), () => {
-      const own = logOf(b, ctx.room, b.id);
-      const ended = own.findLastIndex((r) => r.k === "rec_end" && r.set === ctx.set);
-      return own.findLastIndex((r) => r.k === "rec" && r.set === ctx.set) > ended && segsOf(own, ctx.set, "v").some((s) => s.capture !== capture);
-    });
+    await recordsAgain(b, ctx.room, ctx.set, [capture]);
   });
 
   await step("A's encoder is killed and A keeps recording the set in a new part", async () => {
@@ -702,9 +810,39 @@ async function scenario(ctx) {
     check(st.active_set?.id === ctx.set && st.capture.working, `A is not recording the set again: ${brief(st.capture.status)}`);
   });
 
-  await step("Stop on C ends the set everywhere and everyone has it", async () => {
+  await step("closing the captured window during the recording goes on with the voice, and a new screen adds a part", async () => {
+    const before = segsOf(logOf(a, ctx.room, a.id), ctx.set).map((s) => s.capture);
+    await invoke(a, "set_source", { source: GONE });
+    const voice = await waitFor("A records the set voice only in a new part", within(SEGMENT_S * 3), () => { const added = segsOf(logOf(a, ctx.room, a.id), ctx.set).filter((s) => !before.includes(s.capture)); return added.length && added.every((s) => s.series === "m") && added[0].capture; });
+    check((await state(a)).capture.working, "A does not record its voice");
+    await invoke(a, "set_source", { source: SOURCE });
+    await recordsAgain(a, ctx.room, ctx.set, [...before, voice]);
+    await waitFor("B holds A's voice-only part", within(SEGMENT_S + LOG_SYNC_S * 2), () => !badCopies(b, ctx.room, a.id, pieces(logOf(a, ctx.room, a.id), ctx.set).filter((p) => p.capture === voice)).length);
+  });
+
+  await step("B leaving ends only its part, and B rejoins the recording when it comes back", async () => {
+    const before = segsOf(logOf(b, ctx.room, b.id), ctx.set).map((s) => s.capture);
+    await invoke(b, "close_room", { id: ctx.room });
+    check(lastJoin(b, ctx.room, ctx.set)?.stop === false, "B did not end only its own part");
+    await allSee([a, c], "the recording goes on without B", within(UNREACHABLE_S + SYNC_ROUND_S), (st) => st.active_set?.id === ctx.set && setOf(st, ctx.set).live && setOf(st, ctx.set).players.find((p) => p.owner === b.id).recording === false);
+    await sleep(within(SYNC_ROUND_S) * 1000);
+    await allSee([a, c], "still recording", 1, (st) => st.active_set?.id === ctx.set);
+    await invoke(b, "enter_room", { id: ctx.room });
+    await recordsAgain(b, ctx.room, ctx.set, before);
+    await allSee([a], "B recording again", within(SEGMENT_S + LOG_SYNC_S * 2), (st) => setOf(st, ctx.set).players.find((p) => p.owner === b.id).recording);
+  });
+
+  await step("C crashes, Stop on A ends the set at once, C ends its part on restart, and everyone has it", async () => {
     const all = [a, b, c];
-    await invoke(c, "stop_recording");
+    kill(c);
+    await stopped(c);
+    await invoke(a, "stop_recording");
+    await allSee([a, b], "the set shown ended at once", within(LOG_SYNC_S * 2), (st) => !st.active_set && setOf(st, ctx.set) && !setOf(st, ctx.set).live && setOf(st, ctx.set).end_us);
+    start("c");
+    await attach(c);
+    await share(c);
+    await waitFor("C ends its part on restart", within(COLD_START_S), () => lastJoin(c, ctx.room, ctx.set)?.k === "rec_end");
+    await allSee(all, "everyone connected again", within(DIAL_S * 2), (st, app) => connected(st, all.filter((x) => x !== app).map((x) => x.id)));
     await allSee(all, "the set ended", within(LOG_SYNC_S * 2), (st) => !st.active_set && setOf(st, ctx.set) && !setOf(st, ctx.set).live);
     await allSee(all, "every live picture back after the stop", within(SEGMENT_S + DIAL_RETRY_S + LOG_SYNC_S), (st) => st.capture.live && st.peers.length === 2 && st.peers.every((p) => p.live));
     await allSee(all, "Everyone has it", within((SEGMENT_S + SYNC_ROUND_S) * 2), (st) => heldByAll(st, ctx.set, all));
@@ -1262,7 +1400,8 @@ async function scenario(ctx) {
     const view = (name) => set.players.find((p) => seen.names[p.owner] === name);
     const [coach, camera, commentary] = ["Coach", "Old camera", "Commentary"].map(view);
     check(coach && camera && commentary, `views ${brief(set.players.map((p) => seen.names[p.owner]))}`);
-    check(Math.abs(set.start_us - Date.parse(PLAN_START) * 1000) <= START_TOLERANCE_US, `start ${set.start_us}`);
+    const start = setOf(await state(b), made.id).start_us;
+    check(Math.abs(start - Date.parse(PLAN_START) * 1000) <= START_TOLERANCE_US, `start ${start}`);
     check(Math.abs(Math.abs(camera.start_us - coach.start_us) - 2e6) <= 1, `the second view starts ${camera.start_us - coach.start_us} us after the first`);
     check(coach.parts.every((part) => part.v && !part.m) && camera.parts.every((part) => part.v) && commentary.parts.every((part) => !part.v && part.m), "the views have the wrong series");
     const codecs = [coach, camera].map((p) => logOf(b, ctx.room, p.owner).find((r) => r.k === "cap")?.codec);
@@ -1448,6 +1587,8 @@ async function main() {
   check(fs.existsSync(EXE), `no app at ${EXE}`);
   check(fs.existsSync(path.join(FFMPEG_DIR, "ffprobe.exe")), `no ffprobe in ${FFMPEG_DIR}`);
   const ctx = { notes: [] };
+  NTP.a = await timeServer(0);
+  NTP.b = await timeServer(CLOCK_SHIFT_S);
   const started = Date.now();
   let failed = null;
   try {

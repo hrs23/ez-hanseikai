@@ -253,7 +253,7 @@ function renderDock() {
     $("screenicon").replaceChildren(icon(!c.source ? "monitor-off" : c.source.kind === "display" ? "monitor" : "window"));
     $("screentitle").textContent = sourceLabel(c);
     $("screensub").textContent = sub;
-    $("screenbtn").title = c.source ? t("Stop sending your screen") : t("Choose what to send");
+    $("screenbtn").title = c.source && !c.source_lost ? t("Stop sending your screen") : t("Choose what to send");
   }
   const mute = c.mix.mic.muted;
   if (changed("miccap", [mute, micState, lang])) {
@@ -373,7 +373,7 @@ $("splitter").setAttribute("aria-valuemax", String(SIDE_MAX));
 setSideWidth(sideWidth, false);
 $("diskbanner").onclick = () => openSettings("storage");
 $("diskbanner").onkeydown = (e) => { if (e.key === "Enter") openSettings("storage"); };
-$("screenbtn").onclick = (e) => { if (st.capture.source) stopScreen(); else openSource($("screenmore")); };
+$("screenbtn").onclick = () => { if (st.capture.source && !st.capture.source_lost) stopScreen(); else openSource($("screenmore")); };
 $("screenmore").onclick = (e) => openSource(e.currentTarget);
 $("micbtn").onclick = () => run("set_mix", { kind: "mic", volume: st.capture.mix.mic.volume, muted: !st.capture.mix.mic.muted });
 $("micmore").onclick = (e) => openMic(e.currentTarget);

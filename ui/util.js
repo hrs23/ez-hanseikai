@@ -24,8 +24,8 @@ function bytes(n) {
   while (n >= 1000 && i < units.length - 1) { n /= 1000; i++; }
   return `${n.toFixed(i && n < 10 ? 1 : 0)} ${units[i]}`;
 }
-const nowUs = () => Date.now() * 1000;
-const setTime = (id) => { const [d, tm] = id.split(" "); return tm ? `${d.slice(5).replace("-", "/")} ${tm.replaceAll("-", ":").slice(0, 5)}` : id; };
+let clockShift = 0;
+const nowUs = () => Date.now() * 1000 + clockShift;
 const colorOf = (index) => { const palette = (st && st.palette) || []; return palette.length ? palette[(index || 0) % palette.length] : "var(--muted)"; };
 const sigs = {};
 function changed(name, value) {

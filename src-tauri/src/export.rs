@@ -243,7 +243,7 @@ fn players(core: &Core, room_id: &str, set: &room::Set) -> (Vec<Player>, Vec<Str
 pub fn start(core: &Arc<Core>, room_id: &str, set_id: &str, mut path: PathBuf) -> Result<Vec<String>, String> {
     check(core)?;
     let set = room::sets(core, room_id, &room::logs(core, room_id)).into_iter().find(|s| s.id == set_id).ok_or("Unknown set.")?;
-    let end = set.end().ok_or("This set is still being recorded.")?;
+    let end = set.end_shown().ok_or("This set is still being recorded.")?;
     let total = (end - set.start()) as f64 / 1e6;
     if path.extension().is_none() {
         path.set_extension("mp4");

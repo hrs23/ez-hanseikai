@@ -190,7 +190,7 @@ pub fn run(core: &Arc<Core>, room_id: &str, set_id: &str, dir: &Path, aligned: b
     export::check(core)?;
     let logs = room::logs(core, room_id);
     let set = room::sets(core, room_id, &logs).into_iter().find(|s| s.id == set_id).ok_or("Unknown recording.")?;
-    let set_end = set.end().ok_or("This recording is still being recorded.")?;
+    let set_end = set.end_shown().ok_or("This recording is still being recorded.")?;
     if dir.is_file() || std::fs::read_dir(dir).is_ok_and(|mut d| d.next().is_some()) {
         return Err("Choose a new or empty folder.".into());
     }
@@ -207,7 +207,7 @@ pub fn run(core: &Arc<Core>, room_id: &str, set_id: &str, dir: &Path, aligned: b
     let mut views = Vec::new();
     for (out, (name, file)) in outputs.iter().zip(names.iter().zip(&files)) {
         let f = set.files.iter().find(|f| f.owner == out.owner).ok_or("Unknown recording.")?;
-        let total = if aligned { set_total } else { ((f.end_us.map_or(set_end, |e| e - f.offset_us) - out.start_us) as f64 / 1e6).max(1.0) };
+        let total = if aligned { set_total } else { ((f.last_us() - f.offset_us - out.start_us) as f64 / 1e6).max(1.0) };
         let has_video = !out.video.is_empty();
         let main = format!("{file}.{}", if has_video { "mp4" } else { "m4a" });
         jobs.push(job(out, has_video, dir.join(&main), &work, jobs.len(), total));
@@ -300,7 +300,7 @@ mod tests {
     }
 
     fn fake_set() -> Set {
-        Set { id: "s1".into(), room: "r".into(), files: vec![File { set: "s1".into(), owner: "a".into(), start_us: 1_000_000_000, end_us: Some(1_100_000_000), offset_us: 0, segs: Vec::new(), caps: HashMap::new(), view: None }] }
+        Set { id: "s1".into(), room: "r".into(), files: vec![File { set: "s1".into(), owner: "a".into(), start_us: 1_000_000_000, end_us: Some(1_100_000_000), offset_us: 0, segs: Vec::new(), caps: HashMap::new(), view: None, present: false }], stopped: false }
     }
 
     fn event(kind: &str, local: i64, end: Option<i64>, text: &str, tags: Value, plugin: bool, file: Option<&str>) -> Value {

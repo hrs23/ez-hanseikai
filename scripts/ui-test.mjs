@@ -7,9 +7,9 @@ import { fileURLToPath } from "node:url";
 
 const ui = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "ui");
 const read = (f) => fs.readFileSync(path.join(ui, f), "utf8");
-const source = ["util.js", "i18n.js", "layout.js", "dock.js", "events.js", "markdown.js", "review.js", "members.js", "recordings.js", "plugins.js", "ai.js", "diag.js"].map(read).join("\n");
+const source = ["util.js", "i18n.js", "live.js", "layout.js", "dock.js", "events.js", "markdown.js", "review.js", "members.js", "recordings.js", "plugins.js", "ai.js", "diag.js"].map(read).join("\n");
 const context = vm.createContext({ window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id });
-const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, flowAt, flowBands, flowSteps, isReview, voiceOnly, BOARD_TEMPLATE, memberStatus, receivingPercent, recordingRows, recordingMatches, recordingWords, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, discardable, DISCARD_MAX_S, soundKey, pluginProgress, isBusy, workerState, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, aiPreview, apiUrl, apiBadge, apiReferenceBlocks, rateOf, liveEdge, netState, summaryLines, leftText, pcCards, clockPairs, clockSummary, flowRows, timeRow, skewText, agoText, JA, t, sessionName, mdParse, mdInline, mdVouched, toggleTask, boardParts, boardDom, mdHooks, runBy, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, flowAt, flowBands, flowSteps, isReview, voiceOnly, BOARD_TEMPLATE, memberStatus, receivingPercent, recordingRows, recordingMatches, recordingWords, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, discardable, DISCARD_MAX_S, soundKey, pluginProgress, isBusy, workerState, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, aiPreview, apiUrl, apiBadge, apiReferenceBlocks, rateOf, liveEdge, netState, summaryLines, leftText, pcCards, clockSummary, flowRows, skewText, liveStep, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, toggleTask, boardParts, boardDom, mdHooks, runBy, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 const plain = (v) => JSON.parse(JSON.stringify(v));
 
 const moment = (m, extra = {}) => ({ role: "moment", m, plugin: { id: "apex-matches" }, tags: ["match"], ...extra });
@@ -170,14 +170,13 @@ test("the diagnostics overview marks problems", () => {
   assert.deepEqual(levels, { Connections: "warn", Capture: "info", Microphone: "info", Transfers: "warn", Storage: "warn", Versions: "warn", Clocks: "info", Plugins: "fail" });
 });
 
-const CLOCK_NOW = 1_800_000_000;
 const hw = { gpu: "Test Graphics 9000", driver: "31.0.15.1234", encoder: "NVENC", codec: "hevc", cpu: "Fake CPU 3.5GHz", ram_mb: 16384, display: [2560, 1440], os: "Test Windows 10.0.99999", fps: 29.9, dropped: 2 };
 const peerOf = (id, extra) => ({ id, connected: true, path: "direct", ...extra });
 
-test("each PC lists its hardware and, for members, the clock against this PC", () => {
+test("each PC lists its hardware and its clock, this PC against true time and members against this PC", () => {
   ui$.setLanguage("en");
-  const st = { id: "me", hw, time_sync: { running: true, last_sync: CLOCK_NOW - 7200 }, peers: [peerOf("a", { hw, offset_us: 12_000 }), peerOf("b", { offset_us: -4_500_000 }), peerOf("c", { connected: false, hw })] };
-  const [me, a, b, c] = plain(ui$.pcCards(st, CLOCK_NOW));
+  const st = { id: "me", hw, clock: { offset_us: 8_200_000 }, peers: [peerOf("a", { hw, offset_us: 12_000 }), peerOf("b", { offset_us: -4_500_000 }), peerOf("c", { connected: false, hw })] };
+  const [me, a, b, c] = plain(ui$.pcCards(st));
   const row = (card, key) => card.rows.find((r) => r.key === key);
   assert.deepEqual(row(me, "Graphics"), { key: "Graphics", level: "info", text: "Test Graphics 9000 · 31.0.15.1234" });
   assert.equal(row(me, "Encoder").text, "NVENC · HEVC");
@@ -185,7 +184,9 @@ test("each PC lists its hardware and, for members, the clock against this PC", (
   assert.equal(row(me, "Display").text, "2560 × 1440");
   assert.equal(row(me, "Capture").text, "29.9 fps · 2 dropped");
   assert.equal(row(me, "Capture").level, "ok");
-  assert.deepEqual(row(me, "Windows time"), { key: "Windows time", level: "ok", text: "Sync is on · last sync 2 h ago" });
+  assert.deepEqual(row(me, "Clock"), { key: "Clock", level: "warn", text: "8.2 s behind" });
+  assert.deepEqual(row(ui$.pcCards({ ...st, clock: { offset_us: 20_000 } })[0], "Clock").text, "In sync");
+  assert.deepEqual(plain(row(ui$.pcCards({ ...st, clock: { offset_us: null } })[0], "Clock")), { key: "Clock", level: "warn", text: "Unreachable" });
   assert.deepEqual(row(a, "Clock"), { key: "Clock", level: "ok", text: "In sync" });
   assert.equal(row(a, "CPU").text, "Fake CPU 3.5GHz");
   assert.deepEqual(b.rows.map((r) => r.key), ["Hardware", "Clock"]);
@@ -195,58 +196,89 @@ test("each PC lists its hardware and, for members, the clock against this PC", (
   assert.equal(row(c, "Clock"), undefined);
 });
 
-test("dropped frames, an off clock service and an old sync are warnings", () => {
-  const many = ui$.pcCards({ id: "me", hw: { ...hw, dropped: 120 }, time_sync: { running: false, last_sync: null }, peers: [] }, CLOCK_NOW)[0];
+test("dropped frames are a warning", () => {
+  const many = ui$.pcCards({ id: "me", hw: { ...hw, dropped: 120 }, peers: [] })[0];
   assert.equal(many.rows.find((r) => r.key === "Capture").level, "warn");
-  assert.deepEqual(plain(many.rows.find((r) => r.key === "Windows time")), { key: "Windows time", level: "warn", text: "Sync is off" });
-  assert.equal(ui$.timeRow({ running: true, last_sync: CLOCK_NOW - 30 * 86400 }, CLOCK_NOW).level, "warn");
-  assert.equal(ui$.timeRow({ running: true, last_sync: null }, CLOCK_NOW).text, "Sync is on");
-  assert.equal(ui$.timeRow({ running: null, last_sync: null }, CLOCK_NOW).level, "info");
-  assert.equal(ui$.timeRow(null, CLOCK_NOW), null);
-  assert.equal(ui$.pcCards({ id: "me", hw: null, peers: [] }, CLOCK_NOW)[0].rows[0].text, "Not shared");
+  assert.equal(ui$.pcCards({ id: "me", hw: null, peers: [] })[0].rows[0].text, "Not shared");
 });
 
-test("clock differences read in milliseconds or seconds and pair up members", () => {
+test("clock differences read in milliseconds or seconds", () => {
   assert.equal(ui$.skewText(10_000), "In sync");
   assert.equal(ui$.skewText(250_000), "250 ms ahead");
   assert.equal(ui$.skewText(-1_250_000), "1.3 s behind");
-  assert.equal(ui$.agoText(10), "Just now");
-  assert.equal(ui$.agoText(150), "3 min ago");
-  assert.equal(ui$.agoText(3 * 86400), "3 days ago");
-  const pairs = plain(ui$.clockPairs([peerOf("a", { offset_us: 1_000_000 }), peerOf("b", { offset_us: 4_000_000 }), peerOf("c", { connected: false, offset_us: 9 }), peerOf("d", {})]));
-  assert.deepEqual(pairs, [{ a: "a", b: "b", us: 3_000_000 }]);
 });
 
-test("the clock summary warns about a big spread or Windows time being off", () => {
-  const ok = { time_sync: { running: true, last_sync: CLOCK_NOW - 60 }, peers: [peerOf("a", { offset_us: 200_000 })] };
-  assert.deepEqual(plain(ui$.clockSummary(ok, CLOCK_NOW)), { level: "ok", text: "Largest difference 200 ms" });
-  assert.equal(ui$.clockSummary({ ...ok, peers: [peerOf("a", { offset_us: 5_000_000 })] }, CLOCK_NOW).level, "warn");
-  assert.equal(ui$.clockSummary({ ...ok, peers: [peerOf("a", { offset_us: 2_000_000 }), peerOf("b", { offset_us: -2_000_000 })] }, CLOCK_NOW).level, "warn");
-  assert.equal(ui$.clockSummary({ ...ok, time_sync: { running: false, last_sync: null } }, CLOCK_NOW).level, "warn");
-  assert.equal(ui$.clockSummary({ ...ok, peers: [peerOf("a", {})] }, CLOCK_NOW).level, "info");
-  assert.equal(ui$.clockSummary({ ...ok, peers: [] }, CLOCK_NOW).text, "No one else is online");
+test("the clock summary warns about a big spread between members", () => {
+  const ok = { peers: [peerOf("a", { offset_us: 200_000 })] };
+  assert.deepEqual(plain(ui$.clockSummary(ok)), { level: "ok", text: "Largest difference 200 ms" });
+  assert.equal(ui$.clockSummary({ peers: [peerOf("a", { offset_us: 5_000_000 })] }).level, "warn");
+  assert.equal(ui$.clockSummary({ peers: [peerOf("a", { offset_us: 2_000_000 }), peerOf("b", { offset_us: -2_000_000 })] }).level, "warn");
+  assert.deepEqual(plain(ui$.clockSummary({ peers: [peerOf("a", {})] })), { level: "info", text: "Measuring…" });
+  assert.equal(ui$.clockSummary({ peers: [] }).text, "No one else is online");
+});
+
+test("live tiles wait for the slowest member, never go back, and stop waiting for one too far behind", () => {
+  const { liveStep, LIVE_LAG_MAX_S: MAX, LIVE_HEADROOM_S: ROOM, LIVE_SHRINK_GAP_S: GAP, LIVE_CATCH_UP: UP } = ui$;
+  const DT = 0.15;
+  let now = 1000;
+  const at = (key, avail, ended = false) => ({ key, avail, ended });
+  let s = liveStep({ pos: null }, [at("a", now), at("b", now), at("slow", now - 6)], now, 0);
+  assert.equal(s.pos, now - 6 - ROOM - GAP);
+  const stalled = now - 6;
+  let held = false;
+  while (now < stalled + MAX - DT) {
+    now += DT;
+    const next = liveStep(s, [at("a", now), at("b", now), at("slow", stalled)], now, DT);
+    assert.ok(next.pos >= s.pos && next.pos <= stalled - ROOM + 1e-9);
+    assert.deepEqual(plain(next.late), []);
+    held ||= next.held;
+    s = next;
+  }
+  assert.ok(held && s.pos > stalled - ROOM - 1e-9);
+  now = stalled + MAX + DT;
+  s = liveStep(s, [at("a", now), at("b", now), at("slow", stalled)], now, DT);
+  assert.deepEqual(plain(s.late), ["slow"]);
+  assert.ok(s.pos > stalled - ROOM && !s.held);
+  assert.equal(s.rate, UP);
+});
+
+test("the live delay shrinks slowly only while the slack is above the gap", () => {
+  const { liveStep, LIVE_HEADROOM_S: ROOM, LIVE_SHRINK_GAP_S: GAP, LIVE_CATCH_UP: UP } = ui$;
+  const now = 1000;
+  const far = liveStep({ pos: now - ROOM - GAP - 2 }, [{ key: "a", avail: now, ended: false }], now, 1);
+  assert.equal(far.rate, UP);
+  assert.ok(Math.abs(far.pos - (now - ROOM - GAP - 2 + UP)) < 1e-9);
+  const near = liveStep({ pos: now - ROOM - GAP }, [{ key: "a", avail: now, ended: false }], now, 1);
+  assert.equal(near.rate, 1);
+  const held = liveStep({ pos: now - ROOM - 0.1 }, [{ key: "a", avail: now, ended: false }], now, 1);
+  assert.deepEqual([held.held, held.pos], [true, now - ROOM]);
+  const others = liveStep({ pos: 900 }, [{ key: "a", avail: now, ended: false }, { key: "gone", avail: 100, ended: true }, { key: "none", avail: null, ended: false }], now, 1);
+  assert.deepEqual(plain(others.late), []);
+  assert.deepEqual(plain(liveStep({ pos: 5 }, [{ key: "none", avail: null, ended: false }], now, 1)), { pos: 5, rate: 1, held: false, late: [] });
 });
 
 test("where data goes says when a relay or a server is involved", () => {
   ui$.setLanguage("en");
-  const flow = { relay: "relay.example.net", downloads: [], update: { host: "github.com", channel: "beta" }, api: { on: false, lan: false } };
+  const flow = { relay: "relay.example.net", downloads: [], update: { host: "github.com", channel: "beta" }, time: { host: "time.cloudflare.com", ok: true }, api: { on: false, lan: false } };
   const label = (k) => k;
   const names = { a: "Aki", b: "Ren" };
   const direct = ui$.flowRows({ names, peers: [peerOf("a")] }, flow, label);
   assert.deepEqual(plain(direct[0]), { key: "Members", level: "ok", text: "All direct" });
-  assert.deepEqual(plain(direct.map((r) => r.key)), ["Members", "Address lookup", "Update check", "Downloads"]);
+  assert.deepEqual(plain(direct.map((r) => r.key)), ["Members", "Address lookup", "Update check", "Time check", "Downloads"]);
+  assert.deepEqual(plain(direct[3]), { key: "Time check", level: "info", text: "time.cloudflare.com · at start and every hour" });
+  assert.deepEqual(plain(ui$.flowRows({ names, peers: [] }, { ...flow, time: { host: "time.cloudflare.com", ok: false } }, label)[3]), { key: "Time check", level: "warn", text: "time.cloudflare.com · Unreachable" });
   assert.equal(direct[1].text, "relay.example.net · Publishes only the relay address");
   assert.ok(direct[2].text.includes("github.com") && direct[2].text.includes("Beta"));
   const relayed = ui$.flowRows({ names, peers: [peerOf("a"), peerOf("b", { path: "relay", relay: "relay2.example.net" })] }, { ...flow, downloads: [{ key: "ffmpeg", hosts: ["files.example.org"] }], api: { on: true, lan: true } }, label);
   assert.deepEqual(plain(relayed[0]), { key: "Members", level: "warn", text: "Through a relay server: Ren" });
   assert.ok(relayed[1].text.startsWith("relay.example.net, relay2.example.net"));
-  assert.deepEqual(plain(relayed[3]), { key: "Downloads", level: "warn", text: "Downloading ffmpeg from files.example.org" });
-  assert.equal(relayed[4].level, "warn");
+  assert.deepEqual(plain(relayed[4]), { key: "Downloads", level: "warn", text: "Downloading ffmpeg from files.example.org" });
+  assert.equal(relayed[5].level, "warn");
   assert.equal(ui$.flowRows({ names, peers: [] }, null, label)[0].text, "No one else is online");
 });
 
 test("the new Diagnostics texts have Japanese translations", () => {
-  for (const word of ["PCs", "Hardware", "Graphics", "Encoder", "CPU", "Memory", "Display", "Windows version", "Capture", "Clock", "Windows time", "Clocks", "Clocks between members", "Members", "Address lookup", "Update check", "Downloads", "Local API"]) assert.ok(word in ui$.JA, word);
+  for (const word of ["PCs", "Hardware", "Graphics", "Encoder", "CPU", "Memory", "Display", "Windows version", "Capture", "Clock", "Clocks", "Members", "Address lookup", "Update check", "Time check", "Downloads", "Local API"]) assert.ok(word in ui$.JA, word);
 });
 
 test("every fixed text has a Japanese translation", () => {

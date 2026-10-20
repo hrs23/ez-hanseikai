@@ -512,6 +512,7 @@ fn flow_json(core: &Core) -> Value {
         "relay": if home.contains("Connected") { room::relay_host(&home) } else { None },
         "downloads": download::active(),
         "update": {"host": UPDATE_HOST, "channel": *core.channel.lock().unwrap()},
+        "time": {"host": crate::clock::HOST, "ok": crate::clock::status()["ok"] == true},
         "api": {"on": *core.api_on.lock().unwrap(), "lan": *core.api_lan.lock().unwrap()},
     })
 }
@@ -529,6 +530,7 @@ pub fn flow_text(flow: &Value) -> String {
     }
     out.push_str(&format!("  address lookup: relay {}\n", host(&flow["relay"])));
     out.push_str(&format!("  update check: {}, {} channel\n", flow["update"]["host"].as_str().unwrap_or("?"), flow["update"]["channel"].as_str().unwrap_or("?")));
+    out.push_str(&format!("  time check: {}, {}\n", flow["time"]["host"].as_str().unwrap_or("?"), if flow["time"]["ok"] == true { "ok" } else { "unreachable" }));
     let downloads: Vec<String> = flow["downloads"].as_array().into_iter().flatten().map(|d| format!("{} from {}", d["key"].as_str().unwrap_or("?"), d["hosts"].as_array().into_iter().flatten().filter_map(|h| h.as_str()).collect::<Vec<_>>().join(", "))).collect();
     out.push_str(&format!("  downloads: {}\n", if downloads.is_empty() { "none now".to_string() } else { downloads.join("; ") }));
     let api = if flow["api"]["on"] != true { "off" } else if flow["api"]["lan"] == true { "on, open to the network" } else { "on, this PC only" };
@@ -540,7 +542,7 @@ fn hardware_text(core: &Core) -> String {
     let peers: Vec<(String, Value, Option<i64>)> = core.peers.lock().unwrap().iter().map(|p| (short(p.id), p.hw.clone(), p.offset_us)).collect();
     let others: Vec<(String, Value)> = peers.iter().map(|(who, hw, _)| (who.clone(), hw.clone())).collect();
     let offsets: Vec<(String, Option<i64>)> = peers.iter().map(|(who, _, offset)| (who.clone(), *offset)).collect();
-    hw::report(&hw::share(core), &others, &offsets, &hw::time_json())
+    hw::report(&hw::share(core), &others, &offsets, &crate::clock::status())
 }
 
 fn set_detail(core: &Core, room: &str, set: &room::Set) -> Value {
@@ -596,7 +598,7 @@ fn data_json(core: &Core, set: Option<&str>) -> Value {
     let logs = room::logs(core, &active);
     let sets = room::sets(core, &active, &logs);
     let bad: Vec<Value> = logs.iter().flat_map(|l| l.records.iter().filter(|r| r["k"] == "file_bad").map(move |r| json!({"by": short(&l.owner), "record": r}))).collect();
-    let summary: Vec<Value> = sets.iter().map(|s| json!({"id": s.id, "live": s.end().is_none(), "files": s.files.len(), "segs": s.files.iter().map(|f| f.segs.len()).sum::<usize>()})).collect();
+    let summary: Vec<Value> = sets.iter().map(|s| json!({"id": s.id, "live": s.recording(), "files": s.files.len(), "segs": s.files.iter().map(|f| f.segs.len()).sum::<usize>()})).collect();
     let detail = set.and_then(|id| sets.iter().find(|s| s.id == id)).map(|s| set_detail(core, &active, s));
     let party = core.party.lock().unwrap();
     let now = Instant::now();
@@ -1057,15 +1059,16 @@ mod tests {
             "relay": "relay.example.net",
             "downloads": [{"key": "ffmpeg", "hosts": ["github.com"]}],
             "update": {"host": "github.com", "channel": "beta"},
+            "time": {"host": "time.cloudflare.com", "ok": true},
             "api": {"on": true, "lan": false},
         });
         let hidden = flow_text(&flow);
         assert!(!hidden.contains("relay.example.net"), "{hidden}");
         assert!(hidden.contains("member abcdefghij: direct") && hidden.contains("member qrstuvwxyz: through the relay <host>") && hidden.contains("member 0123456789: offline"), "{hidden}");
         assert!(hidden.contains("update check: github.com, beta channel") && hidden.contains("downloads: ffmpeg from github.com") && hidden.contains("local API: on, this PC only"), "{hidden}");
-        assert!(hidden.contains("address lookup: relay <host>"), "{hidden}");
-        let quiet = flow_text(&json!({"members": [], "relay": null, "downloads": [], "update": {"host": "github.com", "channel": "stable"}, "api": {"on": false}}));
-        assert!(quiet.contains("address lookup: relay none") && quiet.contains("downloads: none now") && quiet.contains("local API: off"), "{quiet}");
+        assert!(hidden.contains("address lookup: relay <host>") && hidden.contains("time check: time.cloudflare.com, ok"), "{hidden}");
+        let quiet = flow_text(&json!({"members": [], "relay": null, "downloads": [], "update": {"host": "github.com", "channel": "stable"}, "time": {"host": "time.cloudflare.com", "ok": false}, "api": {"on": false}}));
+        assert!(quiet.contains("address lookup: relay none") && quiet.contains("downloads: none now") && quiet.contains("local API: off") && quiet.contains("time check: time.cloudflare.com, unreachable"), "{quiet}");
     }
 
     #[test]

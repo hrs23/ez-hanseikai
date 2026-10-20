@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Duration;
 
 use iroh::endpoint::Connection;
 use iroh::EndpointId;
@@ -18,6 +19,7 @@ pub const INIT: &str = "init.mp4";
 pub const RECORDINGS: &str = "recordings";
 pub const STANDBY: &str = "standby";
 pub const TOKEN_BYTES: usize = 8;
+pub const UNREACHABLE_AFTER: Duration = Duration::from_secs(60);
 const ROOM_ID_BYTES: usize = 4;
 
 pub fn seg_name(n: u32) -> String {
@@ -185,10 +187,24 @@ impl Core {
     pub fn in_use(&self, room: &str, set: &str) -> bool {
         self.is_recording(room, set) || self.export.lock().unwrap().as_ref().is_some_and(|e| e.set.0 == room && e.set.1 == set)
     }
+
+
+    pub fn present(&self, owner: &str) -> bool {
+        if owner == self.me() {
+            return true;
+        }
+        let peers = self.peers.lock().unwrap();
+        let peer = peers.iter().find(|p| p.id.to_string() == owner);
+        reachable(peer.is_some_and(|p| p.alive().is_some()), peer.and_then(|p| p.seen_us), now_us(), self.started.elapsed())
+    }
+}
+
+pub fn reachable(connected: bool, seen_us: Option<i64>, now_us: i64, up: Duration) -> bool {
+    connected || seen_us.map_or(up < UNREACHABLE_AFTER, |seen| now_us - seen < UNREACHABLE_AFTER.as_micros() as i64)
 }
 
 fn idle(core: &Core) -> Result<(), String> {
-    if core.active_set.lock().unwrap().is_some() { Err("Stop recording before switching rooms.".into()) } else { Ok(()) }
+    if core.active_set.lock().unwrap().is_some() { Err("Leave the room before entering another.".into()) } else { Ok(()) }
 }
 
 pub fn display_name(core: &Core, id: &str) -> String {
@@ -577,13 +593,9 @@ pub fn may_join(records: &[Value], set: &str) -> bool {
     !joined(records, set) && last.is_none_or(|r| r["set"] == set || !records.iter().any(|r| r["k"] == "rec" && r["set"] == set))
 }
 
-pub fn stopped(logs: &[Log], set: &str) -> bool {
-    logs.iter().any(|log| log.records.iter().any(|r| r["k"] == "rec_end" && r["set"] == set && r["stop"] == true))
-}
-
 pub fn apply_stops(core: &Arc<Core>) {
     let Some(active) = core.active_set.lock().unwrap().clone() else { return };
-    if stopped(&logs(core, &active.room), &active.id) {
+    if sets(core, &active.room, &logs(core, &active.room)).iter().any(|s| s.id == active.id && s.stopped) {
         let core = core.clone();
         std::thread::spawn(move || end_set(&core, true, Some(&active.id)));
     }
@@ -654,6 +666,7 @@ pub struct File {
     pub segs: Vec<Seg>,
     pub caps: HashMap<String, Value>,
     pub view: Option<ViewInfo>,
+    pub present: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -699,12 +712,21 @@ impl File {
         }
         total
     }
+
+    pub fn last_us(&self) -> i64 {
+        self.end_us.unwrap_or_else(|| self.segs.iter().map(|s| s.t_us + s.d_us).max().unwrap_or(self.start_us))
+    }
+
+    pub fn recording(&self) -> bool {
+        self.end_us.is_none() && self.present
+    }
 }
 
 pub struct Set {
     pub id: String,
     pub room: String,
     pub files: Vec<File>,
+    pub stopped: bool,
 }
 
 impl Set {
@@ -712,12 +734,19 @@ impl Set {
         self.files.iter().map(|f| f.start_us - f.offset_us).min().unwrap_or(0)
     }
 
-    pub fn end(&self) -> Option<i64> {
-        self.files.iter().map(|f| f.end_us.map(|e| e - f.offset_us)).collect::<Option<Vec<i64>>>()?.into_iter().max()
+    pub fn recording(&self) -> bool {
+        !self.stopped && self.files.iter().any(File::recording)
+    }
+
+    pub fn end_shown(&self) -> Option<i64> {
+        if self.recording() {
+            return None;
+        }
+        self.files.iter().map(|f| f.last_us() - f.offset_us).max()
     }
 
     pub fn covers(&self, t: i64) -> bool {
-        self.start() <= t && self.end().is_none_or(|end| t <= end)
+        self.start() <= t && self.end_shown().is_none_or(|end| t <= end)
     }
 }
 
@@ -753,8 +782,15 @@ pub fn imported_views(core: &Core, room: &str) -> HashMap<String, ViewInfo> {
     people.into_iter().filter(|id| id.parse::<EndpointId>().is_ok()).filter_map(|id| Some((id.clone(), view_info(&core.room_log(room, &id))?))).collect()
 }
 
-pub fn sets(_core: &Core, room: &str, logs: &[Log]) -> Vec<Set> {
-    derive_sets(room, logs)
+pub fn sets(core: &Core, room: &str, logs: &[Log]) -> Vec<Set> {
+    with_presence(derive_sets(room, logs), |owner| core.present(owner))
+}
+
+pub fn with_presence(mut sets: Vec<Set>, present: impl Fn(&str) -> bool) -> Vec<Set> {
+    for f in sets.iter_mut().flat_map(|s| s.files.iter_mut()) {
+        f.present = present(&f.owner);
+    }
+    sets
 }
 
 pub fn dropped(logs: &[Log]) -> HashSet<String> {
@@ -770,6 +806,7 @@ fn seg_from(r: &Value) -> Option<Seg> {
 
 pub fn derive_sets(room: &str, logs: &[Log]) -> Vec<Set> {
     let dropped = dropped(logs);
+    let stopped: HashSet<&str> = logs.iter().flat_map(|l| l.records.iter()).filter(|r| r["k"] == "rec_end" && r["stop"] == true).filter_map(|r| r["set"].as_str()).collect();
     let mut sets: BTreeMap<String, Set> = BTreeMap::new();
     for log in logs {
         let mut open: HashMap<&str, (usize, bool)> = HashMap::new();
@@ -795,9 +832,9 @@ pub fn derive_sets(room: &str, logs: &[Log]) -> Vec<Set> {
                     if dropped.contains(id) || sets.get(id).is_some_and(|s| s.files.iter().any(|f| f.owner == log.owner)) {
                         continue;
                     }
-                    let set = sets.entry(id.to_string()).or_insert_with(|| Set { id: id.to_string(), room: room.to_string(), files: Vec::new() });
+                    let set = sets.entry(id.to_string()).or_insert_with(|| Set { id: id.to_string(), room: room.to_string(), files: Vec::new(), stopped: stopped.contains(id) });
                     open.insert(id, (set.files.len(), false));
-                    set.files.push(File { set: id.to_string(), owner: log.owner.clone(), start_us: r["start_us"].as_i64().unwrap_or(0), end_us: None, offset_us: log.offset_us, segs: Vec::new(), caps: HashMap::new(), view: view_info(&log.records) });
+                    set.files.push(File { set: id.to_string(), owner: log.owner.clone(), start_us: r["start_us"].as_i64().unwrap_or(0), end_us: None, offset_us: log.offset_us, segs: Vec::new(), caps: HashMap::new(), view: view_info(&log.records), present: false });
                 }
                 Some("rec_end") => {
                     if let Some((i, ended)) = open.get_mut(id).filter(|(_, ended)| !ended) {
@@ -1056,18 +1093,17 @@ pub fn sets_json(core: &Core, room: &str, logs: &[Log], events: &[Value]) -> Vec
             let by: Vec<&str> = holders.iter().filter(|h| full(h.have, &set, f)).map(|h| h.id).collect();
             players.push(json!({
                 "owner": f.owner, "imported": f.view.is_some(), "start_us": f.start_us, "end_us": f.end_us, "offset_us": f.offset_us, "have": have, "total": total,
-                "recording": f.end_us.is_none(), "verified_by": by, "stuck": stuck(&mine, &online, &set, f), "parts": parts_json(core, room, &set, f),
+                "recording": f.recording(), "verified_by": by, "stuck": stuck(&mine, &online, &set, f), "parts": parts_json(core, room, &set, f),
             }));
         }
         let (have, total, stuck_all) = progress(core, &set, &mine, &online);
         let finished: Vec<&File> = set.files.iter().filter(|f| f.end_us.is_some()).collect();
         let partial = |h: &Holder| finished.iter().filter(|f| !full(h.have, &set, f) && SERIES.iter().any(|s| h.have.get(&have_key(&set.id, &f.owner, s)).is_some_and(|n| *n > 0))).count();
         let lacking_by: Vec<Value> = holders.iter().map(|h| json!({"id": h.id, "n": partial(h)})).filter(|v| v["n"] != 0).collect();
-        let live = set.end().is_none();
         let covered: Vec<&Value> = events.iter().filter(|e| covers(&set, e)).map(|e| &e["key"]).collect();
         let imported = set.files.iter().find_map(|f| f.view.as_ref());
         out.push(json!({
-            "id": set.id, "room": room, "start_us": set.start(), "end_us": set.end(), "live": live,
+            "id": set.id, "room": room, "start_us": set.start(), "end_us": set.end_shown(), "live": set.recording(),
             "thumb": crate::thumbs::path(&core.room_dir(room), &set.id).exists(), "title": imported.and_then(|v| v.title.clone()), "imported_by": imported.map(|v| display_name(core, &v.by)),
             "players": players, "events": covered, "progress": {"have": have, "total": total, "stuck": stuck_all}, "lacking": lacking_by, "wanted": wants(core, room, &set.id) == Some(true), "shared": others_hold(&set.id, &reports),
             "layout": set_layout(logs, &set.id), "party": flows.remove(&set.id).unwrap_or_default(),
@@ -1175,7 +1211,8 @@ pub fn state_json(core: &Core) -> Value {
     json!({
         "version": VERSION,
         "hw": hw::share(core),
-        "time_sync": hw::time_json(),
+        "now_us": now_us(),
+        "clock": crate::clock::status(),
         "ffmpeg": core.ffmpeg_status.lock().unwrap().clone(),
         "ffmpeg_progress": crate::download::progress(ffmpeg::DOWNLOAD_KEY),
         "id": my_id,
@@ -1243,7 +1280,6 @@ pub mod tests {
         assert_eq!(s1.files.len(), 2);
         assert_eq!(s1.files[0].end_us, Some(900));
         assert_eq!(s1.start(), 100);
-        assert_eq!(s1.end(), None);
         assert!(sets[0].files[0].end_us.is_none());
         let rejoined = derive_sets("r", &[log("a", 0, vec![
             json!({"k": "rec", "set": "s1", "start_us": 100}),
@@ -1452,7 +1488,7 @@ pub mod tests {
 
     #[test]
     fn coverage_by_moment_or_set() {
-        let set = Set { id: "s1".into(), room: "r".into(), files: vec![File { set: "s1".into(), owner: "a".into(), start_us: 100, end_us: Some(200), offset_us: 0, segs: Vec::new(), caps: HashMap::new(), view: None }] };
+        let set = Set { id: "s1".into(), room: "r".into(), files: vec![File { set: "s1".into(), owner: "a".into(), start_us: 100, end_us: Some(200), offset_us: 0, segs: Vec::new(), caps: HashMap::new(), view: None, present: false }], stopped: false };
         assert!(covers(&set, &json!({"local_us": 150, "set": null})));
         assert!(!covers(&set, &json!({"local_us": 250, "set": null})));
         assert!(covers(&set, &json!({"local_us": null, "set": "s1"})));
@@ -1546,9 +1582,40 @@ pub mod tests {
         assert!(!may_join(&moved, "s1"));
         assert!(may_join(&moved, "s2"));
         assert!(!may_join(&moved[..3], "s2"));
-        let logs = [a, b];
-        assert!(!stopped(&logs, "s1"));
-        assert!(stopped(&logs, "s2"));
+        let b = log("b", 0, vec![json!({"k": "rec", "set": "s2"}), b.records[0].clone()]);
+        assert_eq!(derive_sets("r", &[a, b]).iter().map(|s| (s.id.as_str(), s.stopped)).collect::<Vec<_>>(), [("s2", true), ("s1", false)]);
+    }
+
+    #[test]
+    fn a_recording_ends_for_the_list_once_nobody_present_records_it() {
+        let seg = |set: &str, n: i64| json!({"k": "seg", "capture": "1000", "series": "m", "n": n, "set": set, "t_us": n * 4_000_000, "d_us": 4_000_000, "size": 4, "sha256": "x"});
+        let rec = |set: &str| json!({"k": "rec", "set": set, "start_us": 0});
+        let end = |set: &str, t_us: i64, stop: bool| json!({"k": "rec_end", "set": set, "t_us": t_us, "stop": stop});
+        let a = log("a", 0, vec![rec("s1"), seg("s1", 1), end("s1", 20_000_000, true), rec("s2"), seg("s2", 1), end("s2", 9_000_000, false), rec("s3"), end("s3", 5_000_000, false)]);
+        let c = log("c", 1_000_000, vec![rec("s1"), seg("s1", 6), rec("s2"), seg("s2", 3), rec("s3"), end("s3", 7_000_000, true)]);
+        let shown = |present: &'static [&str]| {
+            with_presence(derive_sets("r", &[log("a", 0, a.records.to_vec()), log("c", 1_000_000, c.records.to_vec())]), |o| present.contains(&o))
+                .into_iter()
+                .map(|s| (s.id.clone(), s.stopped, s.recording(), s.end_shown()))
+                .collect::<Vec<_>>()
+        };
+        let s = |id: &str, stopped: bool, recording: bool, end: Option<i64>| (id.to_string(), stopped, recording, end);
+        assert_eq!(shown(&["a", "c"]), [s("s3", true, false, Some(6_000_000)), s("s2", false, true, None), s("s1", true, false, Some(27_000_000))]);
+        assert_eq!(shown(&["a"])[1], s("s2", false, false, Some(15_000_000)));
+        let left = with_presence(derive_sets("r", &[a, c]), |o| o == "a").remove(1);
+        assert!(!left.files[1].recording() && left.files[0].end_us.is_some());
+        assert!(covers(&left, &json!({"local_us": 15_000_000, "set": null})));
+        assert!(!covers(&left, &json!({"local_us": 16_000_000, "set": null})));
+    }
+
+    #[test]
+    fn a_member_is_present_while_connected_or_seen_within_a_minute() {
+        let (now, minute) = (1_000_000_000, UNREACHABLE_AFTER.as_micros() as i64);
+        assert!(reachable(true, None, now, UNREACHABLE_AFTER * 2));
+        assert!(reachable(false, Some(now - minute + 1), now, UNREACHABLE_AFTER * 2));
+        assert!(!reachable(false, Some(now - minute), now, Duration::ZERO));
+        assert!(reachable(false, None, now, UNREACHABLE_AFTER / 2));
+        assert!(!reachable(false, None, now, UNREACHABLE_AFTER));
     }
 
     #[test]

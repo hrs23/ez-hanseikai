@@ -61,7 +61,7 @@ const JA: [(&str, &str); 56] = [
     ("Report a problem", "問題を報告"),
     ("Release notes", "リリースノート"),
     ("About", "バージョン情報"),
-    ("Stop recording for everyone and exit?", "全員の録画を終了してアプリを終了しますか?"),
+    ("Stop your recording?", "自分の録画を終了しますか?"),
     ("Stop recording and exit", "録画を終了して終了"),
     ("Cancel the export and exit?", "エクスポートを中止してアプリを終了しますか?"),
     ("Files are still arriving. Exit anyway?", "まだファイルを受け取っています。それでも終了しますか?"),
@@ -211,7 +211,7 @@ pub fn plain_keys(window: &tauri::WebviewWindow) {
 
 pub fn exit_question(recording: bool, exporting: bool, receiving: bool) -> Option<(&'static str, &'static str)> {
     if recording {
-        Some(("Stop recording for everyone and exit?", "Stop recording and exit"))
+        Some(("Stop your recording?", "Stop recording and exit"))
     } else if exporting {
         Some(("Cancel the export and exit?", "Exit"))
     } else if receiving {
@@ -231,7 +231,7 @@ pub fn exit_app(app: &AppHandle, core: &Arc<Core>) {
             return;
         }
         if recording {
-            room::stop_set(core);
+            room::end_set(core, false, None);
         }
         crate::export::cancel(core);
     }
@@ -539,7 +539,7 @@ mod tests {
     #[test]
     fn closing_asks_only_while_work_would_be_lost() {
         assert_eq!(exit_question(false, false, false), None);
-        assert_eq!(exit_question(true, true, true).unwrap().0, "Stop recording for everyone and exit?");
+        assert_eq!(exit_question(true, true, true), Some(("Stop your recording?", "Stop recording and exit")));
         assert_eq!(exit_question(false, true, true).unwrap().0, "Cancel the export and exit?");
         assert_eq!(exit_question(false, false, true).unwrap().0, "Files are still arriving. Exit anyway?");
     }
