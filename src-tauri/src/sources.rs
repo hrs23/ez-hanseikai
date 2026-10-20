@@ -38,15 +38,19 @@ pub fn processes() -> Vec<(String, u32)> {
     out
 }
 
+fn process(name: &str) -> Option<(String, u32)> {
+    processes().into_iter().find(|(n, _)| n.eq_ignore_ascii_case(name))
+}
+
 pub fn audio_target(wanted: &str) -> (String, u32) {
     if wanted.is_empty() {
         return Default::default();
     }
-    processes().into_iter().find(|(name, _)| name.eq_ignore_ascii_case(wanted)).unwrap_or_default()
+    process(wanted).unwrap_or_default()
 }
 
 pub fn pid_of(name: &str) -> Option<u32> {
-    processes().into_iter().find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, pid)| pid)
+    process(name).map(|(_, pid)| pid)
 }
 
 fn cloaked(w: &Window) -> bool {

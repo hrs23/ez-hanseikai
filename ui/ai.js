@@ -51,7 +51,7 @@ async function openAiMenu(anchor, recording) {
   if (!info || !st.room) return;
   const actions = {
     enable: () => run("set_api", { on: true }, () => refresh().then(() => openAiMenu(anchor, recording))),
-    show: (title, text, token) => showPrompt(title, text, token),
+    show: showPrompt,
   };
   openMenu(aiMenuItems(info, st.room, recording, actions), anchor);
 }

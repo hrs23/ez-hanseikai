@@ -77,6 +77,17 @@ impl Process {
     }
 }
 
+pub fn wait_until(wait: Duration, poll: Duration, mut done: impl FnMut() -> bool) -> bool {
+    let deadline = Instant::now() + wait;
+    while Instant::now() < deadline {
+        if done() {
+            return true;
+        }
+        std::thread::sleep(poll);
+    }
+    false
+}
+
 pub fn spawn(command: &mut Command, flags: u32) -> std::io::Result<Process> {
     let child = command.creation_flags(NO_WINDOW | flags).spawn()?;
     let job = Job::new().filter(|job| unsafe { AssignProcessToJobObject(job.handle(), HANDLE(child.as_raw_handle())) }.is_ok());

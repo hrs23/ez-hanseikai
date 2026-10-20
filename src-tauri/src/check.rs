@@ -6,7 +6,7 @@ use wasapi::{initialize_mta, AudioClient, DeviceEnumerator, Direction};
 
 use crate::{audio, capture, debug, ffmpeg, Core};
 
-fn line(level: &str, text: &str, args: Value) -> Value {
+pub(crate) fn line(level: &str, text: &str, args: Value) -> Value {
     json!({"level": level, "text": text, "args": args})
 }
 
@@ -32,25 +32,19 @@ fn audio_lines(pid: Option<u32>) -> Vec<Value> {
         Err(e) => lines.push(line("fail", "Could not list playback devices: {error}", json!({"error": e.to_string()}))),
         Ok(devices) => {
             let count = devices.get_nbr_devices().unwrap_or(0);
-            if count == 0 {
-                lines.push(line("warn", "No playback device: there is no app sound to capture on this PC", json!({})));
-            } else {
-                lines.push(line("ok", "{count} playback device(s)", json!({"count": count})));
-            }
+            lines.push(if count == 0 { line("warn", "No playback device: there is no app sound to capture on this PC", json!({})) } else { line("ok", "{count} playback device(s)", json!({"count": count})) });
         }
     }
-    match pid {
-        None => lines.push(line("info", "No app selected for app sound, so it is not checked", json!({}))),
+    lines.push(match pid {
+        None => line("info", "No app selected for app sound, so it is not checked", json!({})),
         Some(pid) => {
             let (format, mode) = audio::capture_format();
-            let result = AudioClient::new_application_loopback_client(pid, true)
-                .and_then(|mut client| client.initialize_client(&format, &Direction::Capture, &mode));
-            match result {
-                Ok(()) => lines.push(line("ok", "The selected app's sound can be captured", json!({}))),
-                Err(e) => lines.push(line("fail", "The selected app's sound cannot be captured: {error}", json!({"error": e.to_string()}))),
+            match AudioClient::new_application_loopback_client(pid, true).and_then(|mut client| client.initialize_client(&format, &Direction::Capture, &mode)) {
+                Ok(()) => line("ok", "The selected app's sound can be captured", json!({})),
+                Err(e) => line("fail", "The selected app's sound cannot be captured: {error}", json!({"error": e.to_string()})),
             }
         }
-    }
+    });
     lines
 }
 
@@ -60,23 +54,17 @@ pub fn run(core: &Arc<Core>, audio_pid: Option<u32>) -> Vec<Value> {
         None => lines.push(line("warn", "Could not read the Windows build", json!({}))),
         Some(build) => {
             lines.push(line("info", "Windows build {build}", json!({"build": build})));
-            if build < 19041 {
-                lines.push(line("fail", "Per-process app sound capture needs Windows build 19041 or newer; recording will have no app sound", json!({})));
-            } else {
-                lines.push(line("ok", "Per-process sound capture is supported", json!({})));
-            }
+            lines.push(if build < 19041 { line("fail", "Per-process app sound capture needs Windows build 19041 or newer; recording will have no app sound", json!({})) } else { line("ok", "Per-process sound capture is supported", json!({})) });
             if build < 22000 {
                 lines.push(line("warn", "Screen capture may show a yellow border before Windows 11", json!({})));
             }
         }
     }
-    match tauri::webview_version() {
-        Ok(version) => lines.push(line("ok", "WebView2 runtime {version}", json!({"version": version}))),
-        Err(e) => lines.push(line("fail", "WebView2 runtime missing: {error}", json!({"error": e.to_string()}))),
-    }
-    for (level, text, args) in capture::check_capture() {
-        lines.push(line(level, text, args));
-    }
+    lines.push(match tauri::webview_version() {
+        Ok(version) => line("ok", "WebView2 runtime {version}", json!({"version": version})),
+        Err(e) => line("fail", "WebView2 runtime missing: {error}", json!({"error": e.to_string()})),
+    });
+    lines.extend(capture::check_capture());
     lines.extend(audio_lines(audio_pid));
     if !ffmpeg::present() {
         lines.push(line("fail", "ffmpeg is not installed yet; it is downloaded on first run", json!({})));
@@ -87,17 +75,9 @@ pub fn run(core: &Arc<Core>, audio_pid: Option<u32>) -> Vec<Value> {
     let usable = core.codecs.lock().unwrap().clone();
     let (encoder, codec, _) = ffmpeg::pick(&usable);
     lines.push(line("info", "Recording with {encoder} ({codec})", json!({"encoder": encoder, "codec": codec})));
-    if format!("{:?}", core.ep.home_relay_status().get()).contains("Connected") {
-        lines.push(line("ok", "A relay server is reachable", json!({})));
-    } else {
-        lines.push(line("warn", "No relay connection yet", json!({})));
-    }
+    lines.push(if format!("{:?}", core.ep.home_relay_status().get()).contains("Connected") { line("ok", "A relay server is reachable", json!({})) } else { line("warn", "No relay connection yet", json!({})) });
     let report = format!("{:?}", core.ep.net_report().get());
-    if report.contains("udp_v4: true") {
-        lines.push(line("ok", "UDP works", json!({})));
-    } else {
-        lines.push(line("warn", "UDP may be blocked; connections will use the relay and may be slower", json!({})));
-    }
+    lines.push(if report.contains("udp_v4: true") { line("ok", "UDP works", json!({})) } else { line("warn", "UDP may be blocked; connections will use the relay and may be slower", json!({})) });
     if report.contains("mapping_varies_by_dest_ipv4: Some(true)") {
         lines.push(line("warn", "This network changes the address per destination, so a direct connection may fail and the relay will be used", json!({})));
     }

@@ -30,6 +30,5 @@ function memberStatus(m, now) {
 
 function seenLabel(us, now) {
   const at = new Date(us / 1000);
-  const clock = `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
-  return `${dayLabel(dayOf(at), now, language)} ${clock}`;
+  return `${dayLabel(dayOf(at), now, language)} ${at.toTimeString().slice(0, 5)}`;
 }

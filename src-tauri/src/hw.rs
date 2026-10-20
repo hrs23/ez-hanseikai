@@ -26,7 +26,7 @@ const MIN_REPORTED_S: u64 = 5;
 const TIME_EVERY: Duration = Duration::from_secs(300);
 const SCRIPT: &str = "[Console]::OutputEncoding=[Text.Encoding]::UTF8;$g=@(Get-CimInstance Win32_VideoController|ForEach-Object{@{n=$_.Name;d=$_.DriverVersion}});$c=(Get-CimInstance Win32_Processor|Select-Object -First 1).Name;$o=Get-CimInstance Win32_OperatingSystem;@{gpu=$g;cpu=$c;os=$o.Caption;ver=$o.Version;kb=$o.TotalVisibleMemorySize}|ConvertTo-Json -Compress";
 const VIRTUAL_GPUS: [&str; 4] = ["basic", "remote", "virtual", "mirror"];
-const VENDORS: [(&str, &[&str]); 3] = [("nvenc", &["nvidia", "geforce"]), ("amf", &["amd", "radeon"]), ("qsv", &["intel"])];
+const VENDORS: [(&str, &str, &[&str]); 3] = [("nvenc", "NVENC", &["nvidia", "geforce"]), ("amf", "AMF", &["amd", "radeon"]), ("qsv", "QSV", &["intel"])];
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Hardware {
@@ -59,23 +59,18 @@ impl Hardware {
         let os = [text_of(&v["os"]), text_of(&v["ver"])].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ");
         Self { gpus, cpu: text_of(&v["cpu"]), ram_mb: v["kb"].as_u64().unwrap_or(0) / 1024, display, os }
     }
+}
 
-    pub fn collect(run: impl Fn() -> String, display: (u32, u32)) -> Self {
-        Self::parse(&run(), display)
-    }
+fn vendor(encoder: &str) -> Option<(&'static str, &'static str, &'static [&'static str])> {
+    VENDORS.into_iter().find(|(key, _, _)| encoder.contains(key))
 }
 
 pub fn encoder_label(encoder: &str) -> &'static str {
-    VENDORS.iter().find(|(key, _)| encoder.contains(key)).map_or("Software", |(key, _)| match *key {
-        "nvenc" => "NVENC",
-        "amf" => "AMF",
-        _ => "QSV",
-    })
+    vendor(encoder).map_or("Software", |v| v.1)
 }
 
 pub fn pick_gpu<'a>(gpus: &'a [(String, String)], encoder: &str) -> Option<&'a (String, String)> {
-    let vendor = VENDORS.iter().find(|(key, _)| encoder.contains(key)).map(|(_, v)| *v);
-    let named = |g: &&(String, String)| vendor.is_some_and(|v| v.iter().any(|w| g.0.to_lowercase().contains(w)));
+    let named = |g: &&(String, String)| vendor(encoder).is_some_and(|v| v.2.iter().any(|w| g.0.to_lowercase().contains(w)));
     let real = |g: &&(String, String)| !VIRTUAL_GPUS.iter().any(|w| g.0.to_lowercase().contains(w));
     gpus.iter().find(named).or_else(|| gpus.iter().find(real)).or_else(|| gpus.first())
 }
@@ -86,26 +81,18 @@ fn display_size() -> (u32, u32) {
 
 pub fn warm() {
     std::thread::spawn(|| {
-        let _ = HARDWARE.set(Hardware::collect(|| debug::command_line("powershell", &["-NoProfile", "-NonInteractive", "-Command", SCRIPT]), display_size()));
+        let _ = HARDWARE.set(Hardware::parse(&debug::command_line("powershell", &["-NoProfile", "-NonInteractive", "-Command", SCRIPT]), display_size()));
         loop {
-            *TIME.lock().unwrap() = Some(TimeSync::collect(|| debug::command_line("sc", &["query", "w32time"]), || debug::command_line("w32tm", &["/query", "/status"]), data::tz_offset_seconds()));
+            *TIME.lock().unwrap() = Some(TimeSync::parse(&debug::command_line("sc", &["query", "w32time"]), &debug::command_line("w32tm", &["/query", "/status"]), data::tz_offset_seconds()));
             std::thread::sleep(TIME_EVERY);
         }
     });
-}
-
-pub fn hardware() -> Option<&'static Hardware> {
-    HARDWARE.get()
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Live {
     pub fps: f64,
     pub dropped: u64,
-}
-
-pub fn live() -> Option<Live> {
-    *LIVE.lock().unwrap()
 }
 
 pub fn pc(hw: &Hardware, encoder: Option<(&str, &str)>, live: Option<Live>) -> Value {
@@ -116,16 +103,16 @@ pub fn pc(hw: &Hardware, encoder: Option<(&str, &str)>, live: Option<Live>) -> V
         out["codec"] = json!(codec);
     }
     if let Some(l) = live {
-        out["fps"] = json!((l.fps * 10.0).round() / 10.0);
+        out["fps"] = json!(session::tenth(l.fps));
         out["dropped"] = json!(l.dropped);
     }
     out
 }
 
 pub fn share(core: &Core) -> Value {
-    let Some(hw) = hardware() else { return Value::Null };
+    let Some(hw) = HARDWARE.get() else { return Value::Null };
     let encoder = ffmpeg::encoders_ready().then(|| ffmpeg::pick(&record::usable_codecs(core))).map(|(name, codec, _)| (name, codec));
-    pc(hw, encoder, live())
+    pc(hw, encoder, *LIVE.lock().unwrap())
 }
 
 pub fn sanitize(v: &Value) -> Value {
@@ -269,35 +256,18 @@ fn sync_time(status: &str, tz_s: i64) -> Option<i64> {
         };
         Some((num(&c, 3)?, num(&c, 1)?, num(&c, 2)?, h, num(&c, 5)?, num(&c, 6)?))
     })?;
-    if !(1..=12).contains(&m) || !(1..=31).contains(&d) || h > 23 || min > 59 || s > 59 {
-        return None;
-    }
-    Some(((session::days_from_civil(y, m, d) * 24 + h) * 60 + min) * 60 + s - tz_s)
+    Some(session::civil_seconds(y, m, d, h, min, s)? - tz_s)
 }
 
 impl TimeSync {
     pub fn parse(service: &str, status: &str, tz_s: i64) -> Self {
-        let running = if service.contains("RUNNING") {
-            Some(true)
-        } else if service.contains("STOPPED") {
-            Some(false)
-        } else {
-            None
-        };
+        let running = (service.contains("RUNNING") || service.contains("STOPPED")).then(|| service.contains("RUNNING"));
         Self { running, last_sync_s: sync_time(status, tz_s) }
-    }
-
-    pub fn collect(service: impl Fn() -> String, status: impl Fn() -> String, tz_s: i64) -> Self {
-        Self::parse(&service(), &status(), tz_s)
-    }
-
-    pub fn json(&self) -> Value {
-        json!({"running": self.running, "last_sync": self.last_sync_s})
     }
 }
 
 pub fn time_json() -> Value {
-    TIME.lock().unwrap().map_or(Value::Null, |t| t.json())
+    TIME.lock().unwrap().map_or(Value::Null, |t| json!({"running": t.running, "last_sync": t.last_sync_s}))
 }
 
 pub fn offset_text(us: Option<i64>) -> String {
@@ -331,11 +301,7 @@ pub fn report(me: &Value, others: &[(String, Value)], offsets: &[(String, Option
         out.push_str(&if v.is_null() { format!("  {who}: not shared") } else { line(who, v) });
     }
     out.push_str("\n\nclocks\n");
-    let sync = match time["running"].as_bool() {
-        Some(true) => "on",
-        Some(false) => "off",
-        None => "unknown",
-    };
+    let sync = time["running"].as_bool().map_or("unknown", |on| if on { "on" } else { "off" });
     out.push_str(&format!("  Windows time service {sync}, last sync {}\n", time["last_sync"].as_i64().map_or("unknown".to_string(), |t| format!("{} s ago", (now_us() / 1_000_000 - t).max(0)))));
     for (who, offset) in offsets {
         out.push_str(&format!("  {who} clock {} from this PC\n", offset_text(*offset)));
@@ -355,7 +321,7 @@ mod tests {
 
     #[test]
     fn hardware_is_read_from_the_script_output() {
-        let hw = Hardware::collect(|| SAMPLE.to_string(), (2560, 1440));
+        let hw = Hardware::parse(SAMPLE, (2560, 1440));
         assert_eq!(hw.cpu, "Fake CPU 3.5GHz");
         assert_eq!(hw.ram_mb, 16384);
         assert_eq!(hw.display, (2560, 1440));
@@ -365,7 +331,7 @@ mod tests {
 
     #[test]
     fn bad_output_gives_empty_hardware() {
-        let hw = Hardware::collect(|| "unavailable: nope".into(), (0, 0));
+        let hw = Hardware::parse("unavailable: nope", (0, 0));
         assert_eq!(hw, Hardware::default());
         let one = Hardware::parse(r#"{"gpu":{"n":"Only One","d":"1"}}"#, (1, 1));
         assert_eq!(one.gpus, [("Only One".to_string(), "1".to_string())]);
@@ -486,8 +452,8 @@ mod tests {
         assert_eq!(TimeSync::parse("", none, tz), TimeSync { running: None, last_sync_s: None });
         assert_eq!(TimeSync::parse("", us, tz).last_sync_s, Some(expected + 12 * 3600));
         assert_eq!(TimeSync::parse("", "Last: 13/45/2026 3:04:05 PM", tz).last_sync_s, None);
-        let fake = TimeSync::collect(|| "RUNNING".into(), || jp.into(), tz);
-        assert_eq!(fake.json()["running"], true);
+        *TIME.lock().unwrap() = Some(TimeSync::parse("RUNNING", jp, tz));
+        assert_eq!(time_json(), json!({"running": true, "last_sync": expected}));
     }
 
     #[test]

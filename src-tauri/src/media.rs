@@ -106,8 +106,9 @@ pub fn timescales(init: &[u8]) -> HashMap<u32, u32> {
         if &kind != b"trak" {
             continue;
         }
-        let track = child(trak, b"tkhd").and_then(|t| be32(t, if t.first() == Some(&1) { 20 } else { 12 }));
-        let scale = child(trak, b"mdia").and_then(|m| child(m, b"mdhd")).and_then(|m| be32(m, if m.first() == Some(&1) { 20 } else { 12 }));
+        let field = |body: &[u8]| be32(body, if body.first() == Some(&1) { 20 } else { 12 });
+        let track = child(trak, b"tkhd").and_then(field);
+        let scale = child(trak, b"mdia").and_then(|m| child(m, b"mdhd")).and_then(field);
         if let (Some(track), Some(scale)) = (track, scale.filter(|s| *s > 0)) {
             out.insert(track, scale);
         }
@@ -200,10 +201,10 @@ pub fn cut(open: bool, count: u32, per_segment: u32, current: Option<&str>, want
 }
 
 #[cfg(test)]
-pub mod tests {
+mod tests {
     use super::*;
 
-    pub fn boxed(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
+    fn boxed(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
         let mut out = ((body.len() + HEADER) as u32).to_be_bytes().to_vec();
         out.extend_from_slice(kind);
         out.extend_from_slice(body);
@@ -214,7 +215,7 @@ pub mod tests {
         boxed(kind, &[&[version, 0, 0, 0][..], fields].concat())
     }
 
-    pub fn init(tracks: &[(u32, u32)]) -> Vec<u8> {
+    fn init(tracks: &[(u32, u32)]) -> Vec<u8> {
         let traks: Vec<u8> = tracks
             .iter()
             .flat_map(|(track, scale)| {
@@ -226,7 +227,7 @@ pub mod tests {
         [boxed(b"ftyp", b"iso6"), boxed(b"moov", &traks)].concat()
     }
 
-    pub fn fragment(times: &[(u32, u64)], data: &[u8]) -> Vec<u8> {
+    fn fragment(times: &[(u32, u64)], data: &[u8]) -> Vec<u8> {
         let trafs: Vec<u8> = times
             .iter()
             .flat_map(|(track, t)| boxed(b"traf", &[full(b"tfhd", 0, &track.to_be_bytes()), full(b"tfdt", 1, &t.to_be_bytes())].concat()))

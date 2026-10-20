@@ -13,8 +13,7 @@ Get-ChildItem $root -Force | Where-Object { $_.Name -ne "node_modules" } | ForEa
 Expand-Archive (Join-Path $env:USERPROFILE "ezh.zip") $root -Force
 Set-Location $root
 if ($Test) {
-    Set-Location (Join-Path $root "src-tauri")
-    cargo test
+    cargo test --manifest-path src-tauri/Cargo.toml
     exit $LASTEXITCODE
 }
 Get-Process ez-hanseikai -ErrorAction SilentlyContinue | Stop-Process -Force

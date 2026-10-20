@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -7,6 +8,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use crate::download::{self, Download};
+use crate::record::FPS;
 use crate::{proc, read_json, write_whole};
 
 const URL: &str = "https://github.com/GyanD/codexffmpeg/releases/download/8.1/ffmpeg-8.1-essentials_build.zip";
@@ -19,6 +21,7 @@ const RETRY_FIRST: Duration = Duration::from_secs(10);
 const RETRY_MAX: Duration = Duration::from_secs(300);
 const DROP_FOR: Duration = Duration::from_secs(600);
 const RETRY_POLL: Duration = Duration::from_millis(500);
+const KEYFRAME_EVERY: u32 = 2 * FPS;
 pub const FRAGMENTED: &str = "frag_keyframe+empty_moov+default_base_moof";
 pub const FALLBACK: (&str, &str, f64) = ("libx264", "h264", 1.0);
 pub const CANDIDATES: [(&str, &str, f64); 10] = [
@@ -70,10 +73,6 @@ pub fn failure() -> Option<String> {
 
 pub const DOWNLOAD_KEY: &str = "ffmpeg";
 
-fn needed() -> Download {
-    Download { url: URL.into(), sha256: SHA256, size: SIZE, dest: String::new(), pick: &["ffmpeg.exe"] }
-}
-
 pub fn retry_after(failures: u32) -> Duration {
     RETRY_FIRST.saturating_mul(1 << failures.saturating_sub(1).min(5)).min(RETRY_MAX)
 }
@@ -84,7 +83,7 @@ pub fn prepare(status: &Mutex<String>) {
         let Some(dir) = DATA_DIR.get() else { return };
         *status.lock().unwrap() = "downloading".into();
         tracing::info!("downloading ffmpeg");
-        match download::fetch_group(DOWNLOAD_KEY, dir, &[needed()]) {
+        match download::fetch_group(DOWNLOAD_KEY, dir, &[Download { url: URL.into(), sha256: SHA256, size: SIZE, dest: String::new(), pick: &["ffmpeg.exe"] }]) {
             Ok(()) => *FAILED.lock().unwrap() = None,
             Err(e) => {
                 failures += 1;
@@ -92,10 +91,7 @@ pub fn prepare(status: &Mutex<String>) {
                 tracing::warn!("ffmpeg download failed: {e}; retrying in {} s", wait.as_secs());
                 *status.lock().unwrap() = "failed".into();
                 *FAILED.lock().unwrap() = Some(e);
-                let until = Instant::now() + wait;
-                while Instant::now() < until && !RETRY.swap(false, Ordering::Relaxed) {
-                    std::thread::sleep(RETRY_POLL);
-                }
+                proc::wait_until(wait, RETRY_POLL, || RETRY.swap(false, Ordering::Relaxed));
             }
         }
     }
@@ -158,9 +154,8 @@ pub fn probe_encoders() {
         Some(results) => results,
         None => {
             let results: Vec<(&'static str, bool)> = CANDIDATES.iter().map(|(name, _, _)| (*name, works(name))).collect();
-            let map: serde_json::Map<String, Value> = results.iter().map(|(n, ok)| (n.to_string(), json!(ok))).collect();
             if let Some(file) = &file {
-                let _ = write_whole(file, json!({"key": key, "results": map}).to_string().as_bytes());
+                let _ = write_whole(file, json!({"key": key, "results": results.iter().copied().collect::<HashMap<_, _>>()}).to_string().as_bytes());
             }
             results
         }
@@ -200,6 +195,14 @@ pub fn drop_encoder(name: &'static str) -> bool {
 
 pub fn dropped() -> Vec<&'static str> {
     DROPPED.lock().unwrap().iter().filter(|(_, at)| at.elapsed() < DROP_FOR).map(|(n, _)| *n).collect()
+}
+
+pub fn video_args(encoder: &str, kbps: u32) -> Vec<String> {
+    let mut args = ["-c:v", encoder, "-b:v", &format!("{kbps}k"), "-g", &KEYFRAME_EVERY.to_string(), "-r", &FPS.to_string()].map(String::from).to_vec();
+    if encoder == FALLBACK.0 {
+        args.extend(["-preset", "veryfast"].map(String::from));
+    }
+    args
 }
 
 pub fn encoder() -> &'static str {

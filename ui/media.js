@@ -20,11 +20,14 @@ function release(v) {
   v.load();
   v.remove();
 }
+function dropPending(s) {
+  release(s.pending && s.pending.video);
+  s.pending = null;
+}
 function drop(s) {
   if (!s) return;
-  release(s.pending && s.pending.video);
+  dropPending(s);
   release(s.video);
-  s.pending = null;
 }
 
 function load(s, src, size, part, at) {
@@ -32,7 +35,7 @@ function load(s, src, size, part, at) {
   const v = el(old.tagName.toLowerCase(), { muted: old.muted, volume: old.volume, preload: "auto" });
   v.playbackRate = old.playbackRate;
   const next = { video: v, src, size, part };
-  release(s.pending && s.pending.video);
+  dropPending(s);
   s.pending = next;
   s.loadedAt = Date.now();
   v.onloadedmetadata = () => { const want = Math.max(0, at ?? old.currentTime); v.currentTime = Math.min(want, v.duration || want); };
@@ -53,9 +56,8 @@ function load(s, src, size, part, at) {
   };
   v.onerror = () => {
     if (s.pending !== next) return;
-    s.pending = null;
+    dropPending(s);
     s.failedAt = Date.now();
-    release(v);
   };
   v.src = src + "?r=" + Date.now();
   old.before(v);
@@ -65,8 +67,7 @@ function feed(s, file, following, part = null, at = 0) {
   const src = srcOf(file);
   if (s.pending) {
     if (Date.now() - s.loadedAt < NEXT_TIMEOUT_MS) return;
-    release(s.pending.video);
-    s.pending = null;
+    dropPending(s);
   }
   if (Date.now() - s.failedAt < RETRY_MS) return;
   const v = s.video;

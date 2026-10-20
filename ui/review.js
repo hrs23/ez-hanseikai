@@ -104,10 +104,10 @@ function oldSessions(sets, keep = KEEP_NEWEST) {
   return sets.filter((s) => !s.live && s.progress.have > 0).slice(keep).map((s) => s.id);
 }
 
+const viaRelay = (peers) => peers.filter((p) => p.connected && p.path === "relay");
 function netState(peers) {
-  const on = peers.filter((p) => p.connected);
-  if (!on.length) return null;
-  return on.some((p) => p.path === "relay") ? "relay" : "direct";
+  if (!peers.some((p) => p.connected)) return null;
+  return viaRelay(peers).length ? "relay" : "direct";
 }
 
 function leftText(seconds) {
@@ -119,7 +119,7 @@ function leftText(seconds) {
 function summaryLines(s, failed) {
   const lines = [];
   const on = s.peers.filter((p) => p.connected);
-  const relay = on.filter((p) => p.path === "relay");
+  const relay = viaRelay(on);
   const who = (p) => s.names[p.id] || shortId(p.id);
   lines.push({ key: "Connections", level: relay.length ? "warn" : "ok", text: on.length ? on.map((p) => `${who(p)} ${p.path === "relay" ? t("relay") : t("direct")} ${p.rtt_ms} ms`).join(" · ") : t("No one else is online") });
   const c = s.capture;

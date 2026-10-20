@@ -1,7 +1,6 @@
 use std::mem::ManuallyDrop;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -27,8 +26,9 @@ use windows_capture::settings::{
     SecondaryWindowSettings, Settings,
 };
 
+use crate::check::line;
 use crate::record::{current_sink, Err, FPS, FRAME_GAP};
-use crate::{debug, Core};
+use crate::{debug, proc, Core};
 
 const PROBE_WAIT: Duration = Duration::from_secs(2);
 const POLL: Duration = Duration::from_millis(20);
@@ -315,31 +315,28 @@ where
     }
 }
 
-pub fn check_capture() -> Vec<(&'static str, &'static str, Value)> {
+pub fn check_capture() -> Vec<Value> {
     let mut lines = Vec::new();
     let got = Arc::new(AtomicBool::new(false));
     let Ok(primary) = Monitor::primary() else {
-        return vec![("fail", "No display found", json!({}))];
+        return vec![line("fail", "No display found", json!({}))];
     };
     let (refused, control) = start_capture::<Probe, _>(primary, got.clone());
     if let Some(e) = refused {
-        lines.push(("warn", "Capture without a border was refused ({error}); falling back to the default border", json!({"error": e.to_string()})));
+        lines.push(line("warn", "Capture without a border was refused ({error}); falling back to the default border", json!({"error": e})));
     }
-    match control {
-        Err(e) => lines.push(("fail", "Screen capture could not start: {error}", json!({"error": e.to_string()}))),
+    lines.push(match control {
+        Err(e) => line("fail", "Screen capture could not start: {error}", json!({"error": e})),
         Ok(control) => {
-            let until = Instant::now() + PROBE_WAIT;
-            while !got.load(Ordering::Relaxed) && Instant::now() < until {
-                thread::sleep(POLL);
-            }
+            let arrived = proc::wait_until(PROBE_WAIT, POLL, || got.load(Ordering::Relaxed));
             let _ = control.stop();
-            if got.load(Ordering::Relaxed) {
-                lines.push(("ok", "Screen capture started and a frame arrived", json!({})));
+            if arrived {
+                line("ok", "Screen capture started and a frame arrived", json!({}))
             } else {
-                lines.push(("warn", "Screen capture started but no frame arrived in {seconds} s (idle or locked screen)", json!({"seconds": PROBE_WAIT.as_secs()})));
+                line("warn", "Screen capture started but no frame arrived in {seconds} s (idle or locked screen)", json!({"seconds": PROBE_WAIT.as_secs()}))
             }
         }
-    }
+    });
     lines
 }
 

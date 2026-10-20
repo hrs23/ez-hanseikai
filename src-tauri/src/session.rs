@@ -56,22 +56,24 @@ pub fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     era * 146097 + doe - 719468
 }
 
+pub fn civil_seconds(y: i64, m: i64, d: i64, h: i64, min: i64, s: i64) -> Option<i64> {
+    let valid = (1..=12).contains(&m) && (1..=31).contains(&d) && (0..=23).contains(&h) && (0..=59).contains(&min) && (0..=59).contains(&s);
+    valid.then(|| ((days_from_civil(y, m, d) * 24 + h) * 60 + min) * 60 + s)
+}
+
 pub fn parse_iso(text: &str) -> Option<i64> {
     let text = text.trim().strip_suffix('Z')?;
     let (date, time) = text.split_once('T')?;
     let mut d = date.split('-');
     let (y, m, day): (i64, i64, i64) = (d.next()?.parse().ok()?, d.next()?.parse().ok()?, d.next()?.parse().ok()?);
-    if d.next().is_some() || !(1970..=9999).contains(&y) || !(1..=12).contains(&m) || !(1..=31).contains(&day) {
-        return None;
-    }
     let (clock, fraction) = time.split_once('.').unwrap_or((time, ""));
     let mut t = clock.split(':');
     let (h, min, s): (i64, i64, i64) = (t.next()?.parse().ok()?, t.next()?.parse().ok()?, t.next().unwrap_or("0").parse().ok()?);
-    if t.next().is_some() || h > 23 || min > 59 || s > 59 || fraction.len() > 9 || !fraction.bytes().all(|b| b.is_ascii_digit()) {
+    if d.next().is_some() || t.next().is_some() || !(1970..=9999).contains(&y) || fraction.len() > 9 || !fraction.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
     let millis: i64 = format!("{fraction:0<3}")[..3].parse().ok()?;
-    Some(((days_from_civil(y, m, day) * 24 + h) * 60 + min) * 60_000 + s * 1000 + millis)
+    Some(civil_seconds(y, m, day, h, min, s)? * 1000 + millis)
 }
 
 pub fn iso(ms: i64) -> String {
@@ -102,12 +104,12 @@ pub fn is_video(name: &str) -> bool {
     VIDEO_EXTENSIONS.contains(&extension(name).as_str())
 }
 
-pub fn is_audio(name: &str) -> bool {
-    AUDIO_EXTENSIONS.contains(&extension(name).as_str())
+pub fn is_media(name: &str) -> bool {
+    is_video(name) || AUDIO_EXTENSIONS.contains(&extension(name).as_str())
 }
 
-pub fn is_media(name: &str) -> bool {
-    is_video(name) || is_audio(name)
+pub fn tenth(x: f64) -> f64 {
+    (x * 10.0).round() / 10.0
 }
 
 pub fn safe_relative(path: &str) -> bool {
@@ -149,14 +151,21 @@ fn number(value: &Value, what: &str) -> Result<f64, String> {
     value.as_f64().filter(|v| v.is_finite()).ok_or_else(|| format!("{what} must be a number."))
 }
 
+fn list<'a>(value: &'a Value, message: &str) -> Result<&'a [Value], String> {
+    match value {
+        Value::Null => Ok(&[]),
+        Value::Array(list) => Ok(list),
+        _ => Err(message.into()),
+    }
+}
+
+fn views_fit(n: usize) -> Result<(), String> {
+    if n > VIEWS_MAX { Err(format!("A recording has at most {VIEWS_MAX} views.")) } else { Ok(()) }
+}
+
 fn tag_list(value: &Value) -> Result<Vec<String>, String> {
-    let list = match value {
-        Value::Null => return Ok(Vec::new()),
-        Value::Array(list) => list,
-        _ => return Err("tags must be a list of words.".into()),
-    };
     let mut out: Vec<String> = Vec::new();
-    for tag in list {
+    for tag in list(value, "tags must be a list of words.")? {
         let tag: String = tag.as_str().ok_or("tags must be a list of words.")?.trim_start_matches('#').chars().filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-').collect();
         if !tag.is_empty() && !out.iter().any(|t| t.to_lowercase() == tag.to_lowercase()) {
             out.push(tag);
@@ -177,7 +186,7 @@ pub fn item(at_s: f64, to_s: Option<f64>, kind: &str, text: &str, tags: Vec<Stri
         "note" if text.is_empty() => Err("A note needs text.".into()),
         "note" | "mark" if to_s.is_some() => Err("Only a chapter has to_s.".into()),
         "chapter" if text.is_empty() || to_s.is_none_or(|to| to <= at_s || to > AT_MAX_S) => Err("A chapter needs text and a to_s after at_s.".into()),
-        "note" | "mark" | "chapter" => Ok(Item { at_s: (at_s * 10.0).round() / 10.0, to_s: to_s.map(|t| (t * 10.0).round() / 10.0), kind: kind.into(), text, tags }),
+        "note" | "mark" | "chapter" => Ok(Item { at_s: tenth(at_s), to_s: to_s.map(tenth), kind: kind.into(), text, tags }),
         _ => Err("kind must be note, mark or chapter.".into()),
     }
 }
@@ -244,45 +253,22 @@ pub fn parse_session(text: &str) -> Result<Session, String> {
         None => None,
         Some(s) => Some(parse_iso(&s).ok_or("start must be a UTC time like 2026-10-19T12:30:00Z.")?),
     };
-    let views = match &value["views"] {
-        Value::Null => Vec::new(),
-        Value::Array(list) => list.iter().map(parse_view).collect::<Result<Vec<_>, _>>()?,
-        _ => return Err("views must be a list.".into()),
-    };
-    if views.len() > VIEWS_MAX {
-        return Err(format!("A recording has at most {VIEWS_MAX} views."));
-    }
-    let items = match &value["events"] {
-        Value::Null => Vec::new(),
-        Value::Array(list) => list.iter().map(parse_item).collect::<Result<Vec<_>, _>>()?,
-        _ => return Err("events must be a list.".into()),
-    };
+    let views = list(&value["views"], "views must be a list.")?.iter().map(parse_view).collect::<Result<Vec<_>, _>>()?;
+    views_fit(views.len())?;
+    let items = list(&value["events"], "events must be a list.")?.iter().map(parse_item).collect::<Result<Vec<_>, _>>()?;
     Ok(Session { id: string("id")?.map(|i| clean_text(&i, 60)).filter(|i| !i.is_empty()), title, start_ms, views, items })
 }
 
+fn without_nulls(mut value: Value) -> Value {
+    if let Some(map) = value.as_object_mut() {
+        map.retain(|_, v| !v.is_null());
+    }
+    value
+}
+
 pub fn session_text(session: &Session) -> String {
-    let views: Vec<Value> = session
-        .views
-        .iter()
-        .map(|v| {
-            let mut out = json!({"name": v.name, "file": v.file, "offset_ms": v.offset_ms});
-            if let Some(voice) = &v.voice {
-                out["voice"] = json!(voice);
-            }
-            out
-        })
-        .collect();
-    let mut out = json!({});
-    if let Some(id) = &session.id {
-        out["id"] = json!(id);
-    }
-    if let Some(title) = &session.title {
-        out["title"] = json!(title);
-    }
-    if let Some(start) = session.start_ms {
-        out["start"] = json!(iso(start));
-    }
-    out["views"] = json!(views);
+    let views: Vec<Value> = session.views.iter().map(|v| without_nulls(json!({"name": v.name, "file": v.file, "voice": v.voice, "offset_ms": v.offset_ms}))).collect();
+    let out = without_nulls(json!({"id": session.id, "title": session.title, "start": session.start_ms.map(iso), "views": views}));
     serde_json::to_string_pretty(&out).unwrap_or_default() + "\n"
 }
 
@@ -292,9 +278,7 @@ pub fn views_from_files(files: &[String]) -> Result<Vec<View>, String> {
     if sorted.is_empty() {
         return Err("There is no video file to import.".into());
     }
-    if sorted.len() > VIEWS_MAX {
-        return Err(format!("A recording has at most {VIEWS_MAX} views."));
-    }
+    views_fit(sorted.len())?;
     let names = unique_names(&sorted.iter().map(|f| clean_name(&stem(f))).collect::<Vec<_>>());
     Ok(sorted.into_iter().zip(names).map(|(file, name)| View { name, file: file.clone(), voice: None, offset_ms: 0 }).collect())
 }
@@ -375,7 +359,8 @@ pub fn parse_notes(text: &str) -> Result<Vec<Item>, String> {
     let mut out = Vec::new();
     for (i, row) in body.iter().enumerate() {
         let cell = |at: Option<usize>| at.and_then(|a| row.get(a)).map(|c| c.trim().to_string()).unwrap_or_default();
-        let at_s = parse_clock(&cell(Some(time))).ok_or_else(|| format!("Row {} of the notes file has no valid time.", i + 2))?;
+        let row = format!("Row {} of the notes file", i + 2);
+        let at_s = parse_clock(&cell(Some(time))).ok_or_else(|| format!("{row} has no valid time."))?;
         let text = cell(text_at);
         let kind = match cell(kind_at).to_lowercase().as_str() {
             "" if text.is_empty() => "mark".to_string(),
@@ -385,8 +370,7 @@ pub fn parse_notes(text: &str) -> Result<Vec<Item>, String> {
         if kind == "chapter" {
             continue;
         }
-        let tags = tag_list(&json!(cell(tags_at).split_whitespace().collect::<Vec<_>>())).map_err(|e| format!("Row {} of the notes file: {e}", i + 2))?;
-        out.push(item(at_s, None, &kind, &text, tags).map_err(|e| format!("Row {} of the notes file: {e}", i + 2))?);
+        out.push(tag_list(&json!(cell(tags_at).split_whitespace().collect::<Vec<_>>())).and_then(|tags| item(at_s, None, &kind, &text, tags)).map_err(|e| format!("{row}: {e}"))?);
     }
     Ok(out)
 }
@@ -444,7 +428,7 @@ pub fn vtt_text(cues: &[Cue]) -> String {
 }
 
 pub fn chapter_items(cues: Vec<Cue>) -> Vec<Item> {
-    cues.into_iter().map(|c| Item { at_s: (c.from_s * 10.0).round() / 10.0, to_s: Some((c.to_s * 10.0).round() / 10.0), kind: "chapter".into(), text: c.text, tags: Vec::new() }).collect()
+    cues.into_iter().map(|c| Item { at_s: tenth(c.from_s), to_s: Some(tenth(c.to_s)), kind: "chapter".into(), text: c.text, tags: Vec::new() }).collect()
 }
 
 pub fn chapter_cues(items: &[Item]) -> Vec<Cue> {
@@ -462,7 +446,7 @@ mod tests {
         assert_eq!(iso(1_792_413_000_250), "2026-10-19T12:30:00.250Z");
         assert_eq!(iso(0), "1970-01-01T00:00:00.000Z");
         assert_eq!(parse_iso("2024-02-29T23:59:59Z").map(iso).as_deref(), Some("2024-02-29T23:59:59.000Z"));
-        for bad in ["2026-10-19T12:30:00", "2026-10-19 12:30:00Z", "2026-13-19T12:30:00Z", "2026-10-19T24:00:00Z", "yesterday", "", "2026-10-19T12:30:00+09:00", "2026-10-19T12:30:00.xZ"] {
+        for bad in ["2026-10-19T12:30:00", "2026-10-19 12:30:00Z", "2026-13-19T12:30:00Z", "2026-10-19T24:00:00Z", "yesterday", "", "2026-10-19T12:30:00+09:00", "2026-10-19T12:30:00.xZ", "2026-10-19T-1:30:00Z"] {
             assert_eq!(parse_iso(bad), None, "{bad}");
         }
     }

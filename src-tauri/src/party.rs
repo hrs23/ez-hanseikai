@@ -39,19 +39,16 @@ pub fn key(v: &Value) -> (u64, i64, String) {
     (v["seq"].as_u64().unwrap_or(0), v["stamp"].as_i64().unwrap_or(0), v["origin"].as_str().unwrap_or_default().to_string())
 }
 
-pub fn newer(a: &Value, b: &Value) -> bool {
-    key(a) > key(b)
-}
-
-pub fn merge_heads(into: &mut Heads, from: &Heads) {
-    for (owner, n) in from {
-        let at = into.entry(owner.clone()).or_insert(0);
-        *at = (*at).max(*n);
-    }
-}
-
 fn heads_of(value: &Value) -> Heads {
     value.as_object().into_iter().flatten().filter_map(|(k, v)| Some((k.clone(), v.as_u64()?))).collect()
+}
+
+fn to_local(shared: &mut Value, offset_us: i64) {
+    for k in ["wall_us", "at_us"] {
+        if let Some(t) = shared[k].as_i64() {
+            shared[k] = json!(t - offset_us);
+        }
+    }
 }
 
 fn shared_from(view: &Value, seq: u64, stamp: i64, origin: &str) -> Value {
@@ -76,9 +73,9 @@ impl Party {
         for (owner, n) in heads {
             if self.heads.get(owner).is_none_or(|old| n > old) {
                 self.grown.insert(owner.clone(), now);
+                self.heads.insert(owner.clone(), *n);
             }
         }
-        merge_heads(&mut self.heads, heads);
     }
 
     pub fn turn(&mut self, on: bool, me: &str, view: &Value, room: &str, now_us: i64) {
@@ -110,14 +107,10 @@ impl Party {
         }
         self.lamport = self.lamport.max(key(&shared).0);
         self.absorb(&heads, now);
-        if !newer(&shared, &self.shared) {
+        if key(&shared) <= key(&self.shared) {
             return false;
         }
-        for k in ["wall_us", "at_us"] {
-            if let Some(t) = shared[k].as_i64() {
-                shared[k] = json!(t - offset_us);
-            }
-        }
+        to_local(&mut shared, offset_us);
         self.shared = shared;
         true
     }
@@ -144,9 +137,7 @@ impl Party {
     pub fn status(&self, me: &str, own: &Heads, progress: Progress, now: Instant) -> Vec<Value> {
         let set = &self.shared["set"];
         let mut viewers: Vec<(&str, &Heads, Progress, &Value)> = vec![(me, own, progress, set)];
-        let mut others: Vec<(&String, &Viewer)> = self.viewers.iter().filter(|(_, v)| now.duration_since(v.seen) < SEEN).collect();
-        others.sort_by_key(|(id, _)| id.as_str());
-        viewers.extend(others.into_iter().map(|(id, v)| (id.as_str(), &v.heads, (v.progress, v.stuck), &v.set)));
+        viewers.extend(self.seen(now).into_iter().map(|(id, v)| (id.as_str(), &v.heads, (v.progress, v.stuck), &v.set)));
         let mut owners: Vec<&String> = self.heads.keys().collect();
         owners.sort();
         let mut out = Vec::new();
@@ -164,16 +155,18 @@ impl Party {
         out
     }
 
-    pub fn typists(&self, now: Instant) -> Vec<String> {
-        let mut out: Vec<String> = self.viewers.iter().filter(|(_, v)| v.typing && now.duration_since(v.seen) < SEEN).map(|(id, _)| id.clone()).collect();
-        out.sort();
+    fn seen(&self, now: Instant) -> Vec<(&String, &Viewer)> {
+        let mut out: Vec<(&String, &Viewer)> = self.viewers.iter().filter(|(_, v)| now.duration_since(v.seen) < SEEN).collect();
+        out.sort_by_key(|(id, _)| id.as_str());
         out
     }
 
+    pub fn typists(&self, now: Instant) -> Vec<String> {
+        self.seen(now).into_iter().filter(|(_, v)| v.typing).map(|(id, _)| id.clone()).collect()
+    }
+
     pub fn watching(&self, now: Instant) -> Vec<String> {
-        let mut out: Vec<String> = self.viewers.iter().filter(|(_, v)| now.duration_since(v.seen) < SEEN && (!self.on || v.set == self.shared["set"])).map(|(id, _)| id.clone()).collect();
-        out.sort();
-        out
+        self.seen(now).into_iter().filter(|(_, v)| !self.on || v.set == self.shared["set"]).map(|(id, _)| id.clone()).collect()
     }
 
     pub fn reviewing(&self) -> bool {
@@ -203,11 +196,7 @@ pub fn records(logs: &[room::Log]) -> HashMap<String, Vec<Value>> {
         for r in log.records.iter().filter(|r| r["k"] == "party") {
             let (Some(set), Some(t), Some(shared)) = (r["set"].as_str(), r["t_us"].as_i64(), r["shared"].as_object()) else { continue };
             let mut shared = Value::Object(shared.clone());
-            for k in ["wall_us", "at_us"] {
-                if let Some(v) = shared[k].as_i64() {
-                    shared[k] = json!(v - log.offset_us);
-                }
-            }
+            to_local(&mut shared, log.offset_us);
             out.entry(set.to_string()).or_default().push(json!({"t_us": t - log.offset_us, "by": log.owner, "shared": shared}));
         }
     }
@@ -245,9 +234,14 @@ pub fn send(core: &Arc<Core>) {
     net::broadcast(core, message);
 }
 
-pub fn receive(core: &Arc<Core>, from: &str, msg: &Value, offset_us: i64) -> bool {
+fn own_heads(core: &Core) -> (String, Heads) {
     let room = core.active_room_id();
     let own = room::holdings(&room::logs(core, &room));
+    (room, own)
+}
+
+pub fn receive(core: &Arc<Core>, from: &str, msg: &Value, offset_us: i64) -> bool {
+    let (room, own) = own_heads(core);
     let (changed, lacks) = {
         let mut party = core.party.lock().unwrap();
         let changed = party.receive(from, msg, offset_us, &room, Instant::now());
@@ -278,8 +272,7 @@ pub fn state_json(core: &Core, own: &Heads) -> Value {
 pub async fn repeat(core: Arc<Core>) {
     loop {
         tokio::time::sleep(CHECK).await;
-        let room = core.active_room_id();
-        let own = room::holdings(&room::logs(&core, &room));
+        let (_, own) = own_heads(&core);
         if core.party.lock().unwrap().due(&own, Instant::now()) {
             send(&core);
         }
@@ -298,6 +291,10 @@ mod tests {
         pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect()
     }
 
+    fn msg(p: &mut Party) -> Value {
+        p.message("r", &Heads::new(), (None, false), Instant::now())
+    }
+
     fn party(me: &str) -> Party {
         let mut p = Party::default();
         p.turn(true, me, &view("s1", 0), "r", 1_000);
@@ -307,11 +304,10 @@ mod tests {
     #[test]
     fn newest_wins_by_seq_then_time_then_origin() {
         let a = json!({"seq": 2, "stamp": 5, "origin": "a"});
-        assert!(newer(&json!({"seq": 3, "stamp": 1, "origin": "a"}), &a));
-        assert!(newer(&json!({"seq": 2, "stamp": 6, "origin": "a"}), &a));
-        assert!(newer(&json!({"seq": 2, "stamp": 5, "origin": "b"}), &a));
-        assert!(!newer(&a, &a));
-        assert!(!newer(&json!({"seq": 1, "stamp": 9, "origin": "z"}), &a));
+        assert!(key(&json!({"seq": 3, "stamp": 1, "origin": "a"})) > key(&a));
+        assert!(key(&json!({"seq": 2, "stamp": 6, "origin": "a"})) > key(&a));
+        assert!(key(&json!({"seq": 2, "stamp": 5, "origin": "b"})) > key(&a));
+        assert!(key(&json!({"seq": 1, "stamp": 9, "origin": "z"})) < key(&a));
     }
 
     #[test]
@@ -319,7 +315,7 @@ mod tests {
         let (mut a, mut b) = (party("a"), party("b"));
         a.act("a", &view("s1", 100), 1_000);
         b.act("b", &view("s1", 200), 1_000);
-        let (ma, mb) = (a.message("r", &Heads::new(), (None, false), Instant::now()), b.message("r", &Heads::new(), (None, false), Instant::now()));
+        let (ma, mb) = (msg(&mut a), msg(&mut b));
         assert!(a.receive("b", &mb, 0, "r", Instant::now()));
         assert!(!b.receive("a", &ma, 0, "r", Instant::now()));
         assert_eq!(key(&a.shared), key(&b.shared));
@@ -333,9 +329,9 @@ mod tests {
         let mut old = party("a");
         old.act("a", &view("s2", 50), 10);
         let mut new = party("z");
-        assert!(new.receive("a", &old.message("r", &Heads::new(), (None, false), Instant::now()), 0, "r", Instant::now()));
+        assert!(new.receive("a", &msg(&mut old), 0, "r", Instant::now()));
         assert_eq!(new.shared["set"], "s2");
-        assert!(!old.receive("z", &new.message("r", &Heads::new(), (None, false), Instant::now()), 0, "r", Instant::now()));
+        assert!(!old.receive("z", &msg(&mut new), 0, "r", Instant::now()));
     }
 
     #[test]
@@ -344,12 +340,12 @@ mod tests {
         first.turn(true, "z", &view("s1", 0), "r", 1_000);
         let mut joiner = Party::default();
         joiner.turn(true, "a", &view("s7", 0), "r", 5_000);
-        assert!(joiner.receive("z", &first.message("r", &Heads::new(), (None, false), Instant::now()), 0, "r", Instant::now()));
+        assert!(joiner.receive("z", &msg(&mut first), 0, "r", Instant::now()));
         assert_eq!(joiner.shared["set"], "s1");
-        assert!(!first.receive("a", &joiner.message("r", &Heads::new(), (None, false), Instant::now()), 0, "r", Instant::now()));
+        assert!(!first.receive("a", &msg(&mut joiner), 0, "r", Instant::now()));
         assert_eq!(first.shared["set"], "s1");
         joiner.act("a", &view("s7", 0), 6_000);
-        assert!(first.receive("a", &joiner.message("r", &Heads::new(), (None, false), Instant::now()), 0, "r", Instant::now()));
+        assert!(first.receive("a", &msg(&mut joiner), 0, "r", Instant::now()));
         assert_eq!(first.shared["set"], "s7");
     }
 
@@ -357,11 +353,11 @@ mod tests {
     fn rejoining_takes_the_running_state_again() {
         let (mut a, mut b) = (party("a"), party("b"));
         a.act("a", &view("s2", 0), 10);
-        b.receive("a", &a.message("r", &Heads::new(), (None, false), Instant::now()), 0, "r", Instant::now());
+        b.receive("a", &msg(&mut a), 0, "r", Instant::now());
         a.turn(false, "a", &Value::Null, "r", 20);
         b.act("b", &view("s3", 0), 30);
         a.turn(true, "a", &view("s1", 0), "r", 40);
-        assert!(a.receive("b", &b.message("r", &Heads::new(), (None, false), Instant::now()), 0, "r", Instant::now()));
+        assert!(a.receive("b", &msg(&mut b), 0, "r", Instant::now()));
         assert_eq!(a.shared["set"], "s3");
     }
 
@@ -380,7 +376,7 @@ mod tests {
         let mut a = party("a");
         let mut b = party("b");
         a.act("a", &view("s1", 1_000), 5);
-        b.receive("a", &a.message("r", &Heads::new(), (None, false), Instant::now()), 300, "r", Instant::now());
+        b.receive("a", &msg(&mut a), 300, "r", Instant::now());
         assert_eq!(b.shared["wall_us"], 700);
         assert_eq!(b.shared["at_us"], 700);
     }
@@ -423,7 +419,7 @@ mod tests {
         assert_eq!(a.typists(Instant::now()), vec!["b".to_string()]);
         assert!(a.typists(Instant::now() + SEEN).is_empty());
         a.typing = true;
-        assert_eq!(a.message("r", &Heads::new(), (None, false), Instant::now())["typing"], true);
+        assert_eq!(msg(&mut a)["typing"], true);
     }
 
     #[test]

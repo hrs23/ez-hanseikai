@@ -70,9 +70,6 @@ pub fn extend(path: &Path, from: u64, data: &[u8]) -> std::io::Result<()> {
     if whole == 0 {
         return Ok(());
     }
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
     if std::fs::metadata(path).map_or(0, |m| m.len()) != from {
         return Ok(());
     }

@@ -1,6 +1,6 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -9,7 +9,6 @@ use serde_json::{json, Value};
 
 use crate::proc;
 
-const TIMEOUT_MS: &str = "60000";
 const WAIT: Duration = Duration::from_secs(6 * 3600);
 const WATCH_EVERY: Duration = Duration::from_millis(500);
 const SCRIPT: &str = r#"
@@ -21,8 +20,8 @@ $part = $env:EZH_PART
 $out = $env:EZH_OUT
 try {
   $request = [Net.HttpWebRequest]::Create($env:EZH_URL)
-  $request.Timeout = [int]$env:EZH_TIMEOUT
-  $request.ReadWriteTimeout = [int]$env:EZH_TIMEOUT
+  $request.Timeout = 60000
+  $request.ReadWriteTimeout = 60000
   $response = $request.GetResponse()
   $body = $response.GetResponseStream()
   $file = [IO.File]::Create($part)
@@ -60,13 +59,13 @@ pub struct Download {
 }
 
 static BUSY: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
-static TRANSFERS: Mutex<Option<HashMap<String, Transfer>>> = Mutex::new(None);
+static TRANSFERS: Mutex<BTreeMap<String, Transfer>> = Mutex::new(BTreeMap::new());
 
 struct Transfer {
     done: u64,
     total: u64,
     started: Instant,
-    hosts: Vec<String>,
+    hosts: BTreeSet<String>,
 }
 
 pub fn host_of(url: &str) -> Option<String> {
@@ -76,10 +75,7 @@ pub fn host_of(url: &str) -> Option<String> {
 }
 
 pub fn active() -> Vec<Value> {
-    let transfers = TRANSFERS.lock().unwrap();
-    let mut out: Vec<Value> = transfers.iter().flatten().map(|(key, t)| json!({"key": key, "hosts": t.hosts})).collect();
-    out.sort_by_key(|v| v["key"].as_str().map(String::from));
-    out
+    TRANSFERS.lock().unwrap().iter().map(|(key, t)| json!({"key": key, "hosts": t.hosts})).collect()
 }
 
 pub fn pace(done: u64, total: u64, seconds: f64) -> (u64, Option<u64>) {
@@ -92,13 +88,13 @@ pub fn pace(done: u64, total: u64, seconds: f64) -> (u64, Option<u64>) {
 
 pub fn progress(key: &str) -> Value {
     let transfers = TRANSFERS.lock().unwrap();
-    let Some(t) = transfers.as_ref().and_then(|m| m.get(key)) else { return Value::Null };
+    let Some(t) = transfers.get(key) else { return Value::Null };
     let (speed, left) = pace(t.done, t.total, t.started.elapsed().as_secs_f64());
     json!({"done": t.done, "total": t.total, "speed": speed, "left_s": left})
 }
 
 fn set_done(key: &str, done: u64) {
-    if let Some(t) = TRANSFERS.lock().unwrap().as_mut().and_then(|m| m.get_mut(key)) {
+    if let Some(t) = TRANSFERS.lock().unwrap().get_mut(key) {
         t.done = done;
     }
 }
@@ -107,14 +103,11 @@ pub fn fetch_group(key: &str, dir: &Path, downloads: &[Download]) -> Result<(), 
     let total = downloads.iter().map(|d| d.size).sum();
     {
         let mut transfers = TRANSFERS.lock().unwrap();
-        let map = transfers.get_or_insert_with(HashMap::new);
-        if map.contains_key(key) {
+        if transfers.contains_key(key) {
             return Err("Already downloading.".into());
         }
-        let mut hosts: Vec<String> = downloads.iter().filter_map(|d| host_of(&d.url)).collect();
-        hosts.sort();
-        hosts.dedup();
-        map.insert(key.to_string(), Transfer { done: 0, total, started: Instant::now(), hosts });
+        let hosts = downloads.iter().filter_map(|d| host_of(&d.url)).collect();
+        transfers.insert(key.to_string(), Transfer { done: 0, total, started: Instant::now(), hosts });
     }
     let mut base = 0;
     let mut result = Ok(());
@@ -138,9 +131,7 @@ pub fn fetch_group(key: &str, dir: &Path, downloads: &[Download]) -> Result<(), 
         base += d.size;
         set_done(key, base);
     }
-    if let Some(m) = TRANSFERS.lock().unwrap().as_mut() {
-        m.remove(key);
-    }
+    TRANSFERS.lock().unwrap().remove(key);
     result
 }
 
@@ -184,8 +175,7 @@ pub fn fetch(dir: &Path, d: &Download) -> Result<(), String> {
         .env("EZH_SIZE", d.size.to_string())
         .env("EZH_PART", dir.join(part_name(&d.url)))
         .env("EZH_OUT", &target)
-        .env("EZH_PICK", d.pick.join("|"))
-        .env("EZH_TIMEOUT", TIMEOUT_MS);
+        .env("EZH_PICK", d.pick.join("|"));
     proc::run(&mut command, 0, WAIT).map(|_| ()).map_err(|e| e.lines().last().unwrap_or("download failed").trim().to_string())
 }
 

@@ -4,6 +4,7 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{ChildStderr, ChildStdout, Command, Stdio};
 use std::sync::Arc;
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -14,10 +15,9 @@ use crate::proc::{self, Process, BELOW_NORMAL};
 use crate::record::{self, AUDIO_KBPS, FPS};
 use crate::room::{self, part_of, SERIES};
 use crate::stream::{self, Piece};
-use crate::{strings, Core};
+use crate::{bundle, strings, Core};
 
 const CANVAS: (u32, u32) = (2560, 1440);
-const KEYFRAME_EVERY: u32 = 2 * FPS;
 const LABEL_PX: u32 = 28;
 const LABEL_MARGIN: u32 = 16;
 const PARTIAL: &str = "export.mp4";
@@ -34,7 +34,7 @@ pub struct Running {
     cancelled: bool,
 }
 
-pub struct Input {
+pub struct Track {
     pub pieces: Vec<Piece>,
     pub delay: f64,
     pub video: bool,
@@ -42,19 +42,15 @@ pub struct Input {
 
 pub struct Player {
     pub name: String,
-    pub inputs: Vec<Input>,
+    pub inputs: Vec<Track>,
     pub width: u32,
     pub kbps: f64,
-}
-
-pub fn codec_factor(codec: &str) -> f64 {
-    ffmpeg::CANDIDATES.iter().find(|c| c.1 == codec).map_or(1.0, |c| c.2)
 }
 
 pub fn source_kbps(cap: &Value) -> f64 {
     let width = cap["width"].as_u64().map_or(record::quality_width(""), |w| w as u32);
     let kbps = cap["kbps"].as_f64().unwrap_or_else(|| record::bitrate_kbps(width, 1.0) as f64);
-    kbps / codec_factor(cap["codec"].as_str().unwrap_or_default())
+    kbps / ffmpeg::CANDIDATES.iter().find(|c| c.1 == cap["codec"]).map_or(1.0, |c| c.2)
 }
 
 pub fn canvas(n: usize, widest: u32) -> (u32, u32) {
@@ -65,10 +61,9 @@ pub fn canvas(n: usize, widest: u32) -> (u32, u32) {
     ((w as f64 * scale) as u32 & !1, (h as f64 * scale) as u32 & !1)
 }
 
-pub fn export_kbps(players: &[(u32, f64)], size: (u32, u32), factor: f64) -> u32 {
-    let sources: f64 = players.iter().map(|(_, kbps)| kbps).sum();
+pub fn export_kbps(sources: &[f64], size: (u32, u32), factor: f64) -> u32 {
     let ceiling = record::bitrate_kbps(size.0.max(size.1 * 16 / 9), 1.0) as f64;
-    (sources.min(ceiling) * factor).round() as u32
+    (sources.iter().sum::<f64>().min(ceiling) * factor).round() as u32
 }
 
 pub fn grid(n: usize, (width, height): (u32, u32)) -> Vec<(u32, u32, u32, u32)> {
@@ -82,6 +77,14 @@ pub fn grid(n: usize, (width, height): (u32, u32)) -> Vec<(u32, u32, u32, u32)> 
 
 pub fn label_file(i: usize) -> String {
     format!("label-{i}.txt")
+}
+
+pub fn delayed_sound(i: usize, delay: f64) -> String {
+    format!("[{i}:a:0]asetpts=PTS-STARTPTS,adelay=delays={}:all=1[s{i}];", (delay * 1000.0).round() as u64)
+}
+
+pub fn amix(labels: &[String]) -> String {
+    format!("{}amix=inputs={}:normalize=0:duration=longest", labels.concat(), labels.len())
 }
 
 pub fn graph(players: &[Vec<(f64, bool)>], rects: &[(u32, u32, u32, u32)], size: (u32, u32), total: f64) -> String {
@@ -101,10 +104,10 @@ pub fn graph(players: &[Vec<(f64, bool)>], rects: &[(u32, u32, u32, u32)], size:
                 );
                 layer += 1;
             }
-            graph += &format!("[{j}:a:0]asetpts=PTS-STARTPTS,adelay=delays={}:all=1[s{j}];", (delay * 1000.0).round() as u64);
+            graph += &delayed_sound(j, *delay);
             sounds.push(format!("[s{j}]"));
         }
-        graph += &format!("{}amix=inputs={}:normalize=0:duration=longest,asplit=2[p{i}][m{i}];", sounds.concat(), sounds.len());
+        graph += &format!("{},asplit=2[p{i}][m{i}];", amix(&sounds));
         labels.push(format!(
             "drawtext=fontfile={FONT}:textfile={}:expansion=none:fontsize={LABEL_PX}:fontcolor=white:box=1:boxcolor=black@0.6:boxborderw=8:x={}:y={}-th",
             label_file(i),
@@ -114,10 +117,10 @@ pub fn graph(players: &[Vec<(f64, bool)>], rects: &[(u32, u32, u32, u32)], size:
         mixes.push(format!("[m{i}]"));
     }
     labels.push("format=yuv420p".into());
-    graph + &format!("[bg{layer}]{}[vout];{}amix=inputs={}:normalize=0:duration=longest[mix]", labels.join(","), mixes.concat(), players.len())
+    graph + &format!("[bg{layer}]{}[vout];{}[mix]", labels.join(","), amix(&mixes))
 }
 
-pub fn accept_until(listener: &TcpListener, deadline: Instant, keep_going: impl Fn() -> bool) -> Option<std::net::TcpStream> {
+fn accept_until(listener: &TcpListener, deadline: Instant, keep_going: impl Fn() -> bool) -> Option<std::net::TcpStream> {
     listener.set_nonblocking(true).ok()?;
     loop {
         match listener.accept() {
@@ -128,7 +131,7 @@ pub fn accept_until(listener: &TcpListener, deadline: Instant, keep_going: impl 
     }
 }
 
-pub fn feed(core: Arc<Core>, listener: TcpListener, pieces: Vec<Piece>) {
+fn feed(core: Arc<Core>, listener: TcpListener, pieces: Vec<Piece>) {
     let Some(mut stream) = accept_until(&listener, Instant::now() + CONNECT_WAIT, || core.export.lock().unwrap().is_some()) else { return };
     let total = stream::size(&pieces);
     let mut at = 0;
@@ -141,8 +144,72 @@ pub fn feed(core: Arc<Core>, listener: TcpListener, pieces: Vec<Piece>) {
     }
 }
 
+pub fn ffmpeg_command() -> Command {
+    let mut command = Command::new(ffmpeg::path());
+    command.args(["-hide_banner", "-loglevel", "error", "-nostats", "-progress", "pipe:1", "-y"]);
+    command
+}
+
+pub fn listen(command: &mut Command, inputs: impl IntoIterator<Item = Vec<Piece>>) -> Result<Vec<(TcpListener, Vec<Piece>)>, String> {
+    inputs
+        .into_iter()
+        .map(|pieces| {
+            let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
+            command.arg("-i").arg(format!("tcp://127.0.0.1:{}", listener.local_addr().map_err(|e| e.to_string())?.port()));
+            Ok((listener, pieces))
+        })
+        .collect()
+}
+
+pub fn serve(core: &Arc<Core>, feeds: Vec<(TcpListener, Vec<Piece>)>) {
+    for (listener, pieces) in feeds {
+        let core = core.clone();
+        std::thread::spawn(move || feed(core, listener, pieces));
+    }
+}
+
+pub fn stderr_tail(stderr: ChildStderr, n: usize) -> JoinHandle<String> {
+    std::thread::spawn(move || {
+        let mut tail = VecDeque::new();
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if tail.len() == n {
+                tail.pop_front();
+            }
+            tail.push_back(line);
+        }
+        Vec::from(tail).join("\n")
+    })
+}
+
+pub fn read_progress(stdout: ChildStdout, mut seconds: impl FnMut(f64)) {
+    for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+        if let Some(us) = line.strip_prefix("out_time_us=").and_then(|v| v.parse::<f64>().ok()) {
+            seconds(us / 1e6);
+        }
+    }
+}
+
+pub fn tracks(core: &Core, room_id: &str, set: &room::Set, f: &room::File) -> (Vec<Track>, (u32, u32), f64) {
+    let (mut tracks, mut size, mut kbps) = (Vec::new(), (0, 0), 0f64);
+    for capture in f.captures() {
+        if let Some(cap) = f.caps.get(capture) {
+            let side = |key: &str| cap[key].as_u64().unwrap_or(0) as u32;
+            size = (size.0.max(side("width")), size.1.max(side("height")));
+            kbps = kbps.max(source_kbps(cap));
+        }
+        for series in SERIES {
+            let Some(first) = f.segs.iter().find(|s| s.capture == capture && s.series == series) else { continue };
+            let pieces = stream::set_pieces(core, room_id, f, capture, series);
+            if pieces.len() > 1 {
+                tracks.push(Track { pieces, delay: ((first.t_us - f.offset_us) - set.start()).max(0) as f64 / 1e6, video: series == SERIES[0] });
+            }
+        }
+    }
+    (tracks, size, kbps)
+}
+
 pub fn emit(core: &Core, percent: f64, done: bool, error: Option<String>) {
-    let _ = core.app.emit("export", json!({"percent": (percent * 10.0).round() / 10.0, "done": done, "error": error}));
+    let _ = core.app.emit("export", json!({"percent": crate::session::tenth(percent), "done": done, "error": error}));
 }
 
 pub fn check(core: &Core) -> Result<(), String> {
@@ -162,22 +229,7 @@ fn players(core: &Core, room_id: &str, set: &room::Set) -> (Vec<Player>, Vec<Str
     files.sort_by_key(|f| order.iter().position(|o| *o == f.owner).unwrap_or(usize::MAX));
     let (mut players, mut skipped) = (Vec::new(), Vec::new());
     for f in files {
-        let mut inputs = Vec::new();
-        let (mut width, mut kbps) = (0u32, 0f64);
-        for capture in f.captures() {
-            if let Some(cap) = f.caps.get(capture) {
-                width = width.max(cap["width"].as_u64().unwrap_or(0) as u32);
-                kbps = kbps.max(source_kbps(cap));
-            }
-            for series in SERIES {
-                let Some(first) = f.segs.iter().find(|s| s.capture == capture && s.series == series) else { continue };
-                let pieces = stream::set_pieces(core, room_id, f, capture, series);
-                if pieces.len() > 1 {
-                    let delay = ((first.t_us - f.offset_us) - set.start()).max(0) as f64 / 1e6;
-                    inputs.push(Input { pieces, delay, video: series == SERIES[0] });
-                }
-            }
-        }
+        let (inputs, (width, _), kbps) = tracks(core, room_id, set, f);
         let name = room::display_name(core, &f.owner);
         if inputs.is_empty() {
             skipped.push(name);
@@ -186,32 +238,6 @@ fn players(core: &Core, room_id: &str, set: &room::Set) -> (Vec<Player>, Vec<Str
         }
     }
     (players, skipped)
-}
-
-fn command(work: &Path, ports: &[u16], graph: &str, names: &[String], total: f64, kbps: u32) -> Command {
-    let chosen = ffmpeg::pick(&crate::default_codecs());
-    let mut command = Command::new(ffmpeg::path());
-    command.current_dir(work).args(["-hide_banner", "-loglevel", "error", "-nostats", "-progress", "pipe:1", "-y"]);
-    for port in ports {
-        command.arg("-i").arg(format!("tcp://127.0.0.1:{port}"));
-    }
-    command
-        .args(["-filter_complex", graph, "-map", "[vout]", "-map", "[mix]"])
-        .args((0..names.len()).flat_map(|i| ["-map".to_string(), format!("[p{i}]")]))
-        .args(["-c:v", chosen.0, "-b:v", &format!("{kbps}k"), "-g", &KEYFRAME_EVERY.to_string(), "-r", &FPS.to_string()]);
-    if chosen.0 == ffmpeg::FALLBACK.0 {
-        command.args(["-preset", "veryfast"]);
-    }
-    command
-        .args(["-c:a", "aac", "-b:a", &format!("{AUDIO_KBPS}k")])
-        .args(std::iter::once("Mix").chain(names.iter().map(String::as_str)).enumerate().flat_map(|(i, n)| {
-            [format!("-metadata:s:a:{i}"), format!("title={n}"), format!("-metadata:s:a:{i}"), format!("handler_name={n}")]
-        }))
-        .args(["-t", &format!("{total:.3}"), "-movflags", FRAGMENTED, "-f", "mp4", PARTIAL])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    command
 }
 
 pub fn start(core: &Arc<Core>, room_id: &str, set_id: &str, mut path: PathBuf) -> Result<Vec<String>, String> {
@@ -223,9 +249,7 @@ pub fn start(core: &Arc<Core>, room_id: &str, set_id: &str, mut path: PathBuf) -
         path.set_extension("mp4");
     }
     let (players, skipped) = players(core, room_id, &set);
-    if players.is_empty() {
-        return Err("None of this recording's files are on this PC yet.".into());
-    }
+    let players = bundle::found(players)?;
     let work = core.dir.join("export");
     std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
     let fonts = PathBuf::from(std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".into())).join("Fonts");
@@ -233,43 +257,36 @@ pub fn start(core: &Arc<Core>, room_id: &str, set_id: &str, mut path: PathBuf) -
     if !work.join(FONT).exists() {
         std::fs::copy(&font, work.join(FONT)).map_err(|e| e.to_string())?;
     }
-    let mut feeds = Vec::new();
     for (i, player) in players.iter().enumerate() {
         std::fs::write(work.join(label_file(i)), &player.name).map_err(|e| e.to_string())?;
     }
     let shape: Vec<Vec<(f64, bool)>> = players.iter().map(|p| p.inputs.iter().map(|i| (i.delay, i.video)).collect()).collect();
     let size = canvas(players.len(), players.iter().map(|p| p.width).max().unwrap_or(0));
     let graph = graph(&shape, &grid(players.len(), size), size, total);
-    let rates: Vec<(u32, f64)> = players.iter().map(|p| (p.width, p.kbps)).collect();
-    let kbps = export_kbps(&rates, size, ffmpeg::pick(&crate::default_codecs()).2);
+    let chosen = ffmpeg::pick(&crate::default_codecs());
+    let kbps = export_kbps(&players.iter().map(|p| p.kbps).collect::<Vec<_>>(), size, chosen.2);
     tracing::info!("export of {set_id} started: {} players, {}x{}, {kbps} kbit/s, {total:.0} s", players.len(), size.0, size.1);
     let names: Vec<String> = players.iter().map(|p| p.name.clone()).collect();
-    let mut ports = Vec::new();
-    for input in players.into_iter().flat_map(|p| p.inputs) {
-        let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
-        ports.push(listener.local_addr().map_err(|e| e.to_string())?.port());
-        feeds.push((listener, input.pieces));
-    }
-    let mut child = proc::spawn(&mut command(&work, &ports, &graph, &names, total, kbps), BELOW_NORMAL).map_err(|e| e.to_string())?;
-    let (stdout, stderr) = (child.child.stdout.take().unwrap(), child.child.stderr.take().unwrap());
-    {
-        let mut slot = core.export.lock().unwrap();
-        if slot.is_some() {
-            child.kill();
-            return Err("An export is already running.".into());
-        }
-        *slot = Some(Running { set: (room_id.to_string(), set_id.to_string()), child, cancelled: false });
-    }
-    for (listener, pieces) in feeds {
-        let core = core.clone();
-        std::thread::spawn(move || feed(core, listener, pieces));
-    }
+    let mut command = ffmpeg_command();
+    command.current_dir(&work);
+    let feeds = listen(&mut command, players.into_iter().flat_map(|p| p.inputs).map(|i| i.pieces))?;
+    command
+        .args(["-filter_complex", &graph, "-map", "[vout]", "-map", "[mix]"])
+        .args((0..names.len()).flat_map(|i| ["-map".to_string(), format!("[p{i}]")]))
+        .args(ffmpeg::video_args(chosen.0, kbps))
+        .args(["-c:a", "aac", "-b:a", &format!("{AUDIO_KBPS}k")])
+        .args(std::iter::once("Mix").chain(names.iter().map(String::as_str)).enumerate().flat_map(|(i, n)| {
+            [format!("-metadata:s:a:{i}"), format!("title={n}"), format!("-metadata:s:a:{i}"), format!("handler_name={n}")]
+        }))
+        .args(["-t", &format!("{total:.3}"), "-movflags", FRAGMENTED, "-f", "mp4", PARTIAL]);
+    let (stdout, stderr) = begin(core, (room_id.to_string(), set_id.to_string()), &mut command)?;
+    serve(core, feeds);
     let core = core.clone();
     std::thread::spawn(move || watch(&core, stdout, stderr, &work.join(PARTIAL), &path, total));
     Ok(skipped)
 }
 
-pub fn finish(partial: &Path, path: &Path, keep_going: impl Fn() -> bool) -> std::io::Result<()> {
+fn finish(partial: &Path, path: &Path, keep_going: impl Fn() -> bool) -> std::io::Result<()> {
     if std::fs::rename(partial, path).is_ok() {
         return Ok(());
     }
@@ -281,39 +298,16 @@ pub fn finish(partial: &Path, path: &Path, keep_going: impl Fn() -> bool) -> std
     copied
 }
 
-pub fn cancelled(core: &Core) -> bool {
+fn cancelled(core: &Core) -> bool {
     core.export.lock().unwrap().as_ref().is_some_and(|r| r.cancelled)
 }
 
 fn watch(core: &Core, stdout: ChildStdout, stderr: ChildStderr, partial: &Path, path: &Path, total: f64) {
-    let errors = std::thread::spawn(move || {
-        let mut tail = VecDeque::new();
-        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-            if tail.len() == ERROR_LINES {
-                tail.pop_front();
-            }
-            tail.push_back(line);
-        }
-        Vec::from(tail).join("\n")
-    });
+    let tail = stderr_tail(stderr, ERROR_LINES);
     emit(core, 0.0, false, None);
-    for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-        if let Some(us) = line.strip_prefix("out_time_us=").and_then(|v| v.parse::<f64>().ok()) {
-            emit(core, (us / 1e6 / total * 100.0).clamp(0.0, 100.0), false, None);
-        }
-    }
-    let ok = wait(core);
-    let text = errors.join().unwrap_or_default();
-    let result = if cancelled(core) {
-        Err("Export cancelled".to_string())
-    } else if ok {
-        finish(partial, path, || !cancelled(core)).map_err(|e| if cancelled(core) { "Export cancelled".to_string() } else { format!("Export failed: {e}") })
-    } else {
-        tracing::warn!("export failed: {text}");
-        Err(format!("Export failed: {}", text.lines().last().unwrap_or("ffmpeg stopped")))
-    };
-    let _ = std::fs::remove_file(partial);
-    *core.export.lock().unwrap() = None;
+    read_progress(stdout, |s| emit(core, (s / total * 100.0).clamp(0.0, 100.0), false, None));
+    let result = outcome(core, tail, partial, path);
+    end(core);
     match result {
         Ok(()) => {
             tracing::info!("export finished: {} ({} B)", path.display(), crate::file_len(path));
@@ -326,37 +320,45 @@ fn watch(core: &Core, stdout: ChildStdout, stderr: ChildStderr, partial: &Path, 
     }
 }
 
-pub fn wait(core: &Core) -> bool {
+fn wait(core: &Core) -> bool {
     loop {
-        if let Some(running) = core.export.lock().unwrap().as_mut() {
-            match running.child.child.try_wait() {
-                Ok(Some(status)) => return status.success(),
-                Ok(None) => {}
-                Err(_) => return false,
-            }
-        } else {
-            return false;
+        match core.export.lock().unwrap().as_mut().map(|r| r.child.child.try_wait()) {
+            Some(Ok(Some(status))) => return status.success(),
+            Some(Ok(None)) => {}
+            None | Some(Err(_)) => return false,
         }
         std::thread::sleep(POLL);
     }
 }
 
-pub fn begin(core: &Core, set: (String, String), mut child: Process) -> Result<(), String> {
+pub fn outcome(core: &Core, tail: JoinHandle<String>, partial: &Path, path: &Path) -> Result<(), String> {
+    let ok = wait(core);
+    let text = tail.join().unwrap_or_default();
+    let result = if cancelled(core) {
+        Err("Export cancelled".to_string())
+    } else if ok {
+        finish(partial, path, || !cancelled(core)).map_err(|e| if cancelled(core) { "Export cancelled".to_string() } else { format!("Export failed: {e}") })
+    } else {
+        tracing::warn!("export failed: {text}");
+        Err(format!("Export failed: {}", text.lines().last().unwrap_or("ffmpeg stopped")))
+    };
+    let _ = std::fs::remove_file(partial);
+    result
+}
+
+pub fn begin(core: &Core, set: (String, String), command: &mut Command) -> Result<(ChildStdout, ChildStderr), String> {
+    let mut child = proc::spawn(command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()), BELOW_NORMAL).map_err(|e| e.to_string())?;
+    let pipes = (child.child.stdout.take().unwrap(), child.child.stderr.take().unwrap());
     let mut slot = core.export.lock().unwrap();
     match slot.as_mut() {
-        Some(running) if running.set == set => {
-            running.child = child;
-            Ok(())
-        }
+        Some(running) if running.set == set => running.child = child,
         Some(_) => {
             child.kill();
-            Err("An export is already running.".into())
+            return Err("An export is already running.".into());
         }
-        None => {
-            *slot = Some(Running { set, child, cancelled: false });
-            Ok(())
-        }
+        None => *slot = Some(Running { set, child, cancelled: false }),
     }
+    Ok(pipes)
 }
 
 pub fn end(core: &Core) {
@@ -399,10 +401,10 @@ mod tests {
         assert_eq!(canvas(4, 1920), CANVAS);
         assert_eq!(source_kbps(&json!({"width": 1280, "kbps": 3000, "codec": "av1"})).round(), (3000.0 / 0.55_f64).round());
         assert_eq!(source_kbps(&json!({"width": 1280})), record::bitrate_kbps(1280, 1.0) as f64);
-        let three = [(1280, 5000.0), (1280, 5000.0), (1280, 5000.0)];
+        let three = [5000.0; 3];
         assert_eq!(export_kbps(&three, canvas(3, 1280), 1.0), 15000);
         assert_eq!(export_kbps(&three, canvas(3, 1280), 0.55), 8250);
-        assert_eq!(export_kbps(&[(1280, 90000.0)], canvas(1, 1280), 1.0), record::bitrate_kbps(1280, 1.0));
+        assert_eq!(export_kbps(&[90000.0], canvas(1, 1280), 1.0), record::bitrate_kbps(1280, 1.0));
     }
 
     #[test]

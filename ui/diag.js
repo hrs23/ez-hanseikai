@@ -28,8 +28,9 @@ function timeRow(time, nowS) {
   const age = Math.max(0, nowS - time.last_sync);
   return { key, level: age > CLOCK_SYNC_OLD_S ? "warn" : "ok", text: t("Sync is on · last sync {ago}", { ago: agoText(age) }) };
 }
+const measured = (p) => p.connected && p.offset_us !== null && p.offset_us !== undefined;
 function clockRow(p) {
-  if (!p.connected || p.offset_us === null || p.offset_us === undefined) return null;
+  if (!measured(p)) return null;
   return { key: "Clock", level: Math.abs(p.offset_us) > CLOCK_WARN_US ? "warn" : "ok", text: skewText(p.offset_us) };
 }
 function hardwareRows(hw) {
@@ -50,7 +51,7 @@ function pcCards(s, nowS) {
   return [mine, ...s.peers.map((p) => ({ id: p.id, me: false, dim: !p.connected, rows: [...hardwareRows(p.hw), clockRow(p)].filter(Boolean) }))];
 }
 function clockPairs(peers) {
-  const known = peers.filter((p) => p.connected && p.offset_us !== null && p.offset_us !== undefined);
+  const known = peers.filter(measured);
   const pairs = [];
   for (let i = 0; i < known.length; i++) for (let j = i + 1; j < known.length; j++) pairs.push({ a: known[i].id, b: known[j].id, us: known[j].offset_us - known[i].offset_us });
   return pairs;
@@ -59,14 +60,14 @@ function clockSummary(s, nowS = Date.now() / 1000) {
   const time = timeRow(s.time_sync, nowS);
   if (time && time.level === "warn") return { level: "warn", text: `${t("Windows time")}: ${time.text}` };
   if (!s.peers.some((p) => p.connected)) return { level: "ok", text: t("No one else is online") };
-  const offsets = [0, ...s.peers.filter((p) => p.connected && p.offset_us !== null && p.offset_us !== undefined).map((p) => p.offset_us)];
+  const offsets = [0, ...s.peers.filter(measured).map((p) => p.offset_us)];
   if (offsets.length === 1) return { level: "info", text: t("Measuring…") };
   const range = Math.max(...offsets) - Math.min(...offsets);
   return { level: range > CLOCK_WARN_US ? "warn" : "ok", text: t("Largest difference {x}", { x: spanText(range) }) };
 }
 function flowRows(s, flow, label) {
   const on = s.peers.filter((p) => p.connected);
-  const relayed = on.filter((p) => p.path === "relay");
+  const relayed = viaRelay(on);
   const who = (p) => s.names[p.id] || nameOf(p.id);
   const route = relayed.length
     ? { key: "Members", level: "warn", text: t("Through a relay server: {names}", { names: relayed.map(who).join(", ") }) }
