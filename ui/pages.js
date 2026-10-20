@@ -66,7 +66,7 @@ function renderStart() {
   if (!changed("rooms", [others, lang])) return;
   $("roomlist").replaceChildren(...others.map((r, i) => {
     const face = (id) => { const a = el("span", { className: "av sm", textContent: initial(id === st.id ? st.name : r.names[id]) }); a.style.background = colorOf(r.colors[id]); return a; };
-    const enter = () => run("switch_room", { id: r.id }, openLive);
+    const enter = () => run("enter_room", { id: r.id }, openLive);
     const more = iconButton("more", t("More"), (e) => { e.stopPropagation(); openMenu([{ label: t("Remove from this PC…"), icon: "trash", danger: true, run: () => removeRoom(r) }], e.currentTarget); }, "icon sm more");
     const row = el("div", { className: "rrow", tabIndex: 0, role: "button" }, el("b", { textContent: r.name }), el("span", { className: "avs" }, ...r.members.slice(0, AVATARS_SHOWN).map(face)), el("span", { className: "sp" }), r.used_us ? el("span", { className: "muted small", textContent: dayLabel(dayOf(new Date(r.used_us / 1000)), new Date(), lang) }) : null, el("button", { className: "sm" + (i ? "" : " primary"), textContent: t("Enter"), onclick: (e) => { e.stopPropagation(); enter(); } }), more);
     row.onclick = enter;
@@ -88,7 +88,7 @@ const createRoom = () => invoke("create_room", { name: "" }).then(() => { openLi
 async function switchRoom() {
   if (!st.room) return;
   if (st.recording && !(await ask(t("Stop recording and leave {room}?", { room: st.room.name }), t("Switch room"), true))) return;
-  run("leave_room", { id: st.room.id }, () => { endReview(); selectSet(null); openLive(); });
+  run("close_room", { id: st.room.id }, () => { endReview(); selectSet(null); openLive(); });
 }
 async function leaveRoom() {
   if (!st.room) return;
@@ -108,6 +108,7 @@ function openRoomSettings() {
   $("roomnameinput").select();
 }
 function showRoomTab(tab) {
+  if (!inRoom()) return;
   roomTab = tab;
   drawerFor = null;
   delete sigs.roomtab;
@@ -115,11 +116,12 @@ function showRoomTab(tab) {
   renderRoom();
 }
 
-const ROOM_TITLES = { members: "Members", plugins: "Plugins", jobs: "Plugins", board: "Game plan", recordings: "Recordings" };
+const ROOM_TITLES = { members: "Members", plugins: "Plugins", board: "Game plan", recordings: "Recordings" };
+const navOf = (tab) => (tab === "jobs" ? "plugins" : tab);
 
 function renderRoom() {
   if (page !== "room" || !inRoom()) return;
-  $("homename").textContent = t(ROOM_TITLES[roomTab]);
+  $("homename").textContent = t(ROOM_TITLES[navOf(roomTab)]);
   if (roomTab !== "board") $("homesub").textContent = roomTab === "members" ? t(people().length === 1 ? "{n} member" : "{n} members", { n: people().length }) : "";
   $("boardpane").hidden = roomTab !== "board";
   $("roomtab").parentElement.hidden = roomTab === "board";
@@ -334,19 +336,10 @@ const personal = () => boardScope === "personal";
 const planKey = (id) => `board/${id}`;
 const personalKey = () => planKey(st.room ? st.room.id : "");
 const forgetPlan = (id) => unstore((k) => k === planKey(id));
-const starterOf = (templates) => templates[lang === "ja" ? "ja" : "en"];
-function showBoard() {
-  roomTab = "board";
-  go("room");
-  renderRoom();
-}
 function boardText() {
-  if (personal()) {
-    const text = stored(personalKey(), null);
-    return typeof text === "string" ? text : starterOf(PERSONAL_TEMPLATE);
-  }
+  if (personal()) return stored(personalKey(), "");
   const e = boardEvent();
-  return e ? e.text : starterOf(BOARD_TEMPLATE);
+  return e ? e.text : BOARD_TEMPLATE[lang === "ja" ? "ja" : "en"];
 }
 function setBoardScope(scope) {
   if (boardEditing || scope === boardScope) return;
@@ -358,7 +351,7 @@ function setBoardScope(scope) {
 function writeBoard(text) {
   delete sigs.board;
   if (personal()) {
-    store(personalKey(), text.trim() ? text : "");
+    store(personalKey(), text);
     renderBoard();
     return Promise.resolve();
   }
@@ -401,11 +394,11 @@ function renderBoard() {
 }
 async function editBoard(scope) {
   const want = scope === "room" || scope === "personal" ? scope : boardScope;
-  if (boardEditing && want === boardScope) { showBoard(); $("boardtext").focus(); return; }
+  if (boardEditing && want === boardScope) { showRoomTab("board"); $("boardtext").focus(); return; }
   if (boardEditing && $("boardtext").value !== boardText() && !(await ask(t("Discard your changes?"), t("Discard"), true))) return;
   boardScope = want;
   store("boardScope", want);
-  showBoard();
+  showRoomTab("board");
   boardEditing = true;
   $("boardtext").value = boardText();
   renderMini();
@@ -763,10 +756,10 @@ const menuActions = {
   "next-session": () => stepSet(1),
   "export-session": () => exportSet(playSet()),
   "delete-session": () => deleteSession(playSet()),
-  "page-live": openLive,
-  "page-board": showBoard,
-  "page-members": () => showRoomTab("members"),
-  "page-plugins": () => showRoomTab("plugins"),
+  "page-live": () => navigate("live"),
+  "page-board": () => navigate("board"),
+  "page-members": () => navigate("members"),
+  "page-plugins": () => navigate("plugins"),
   "sidebar": toggleSidebar,
   "events-panel": togglePanel,
   "fullscreen": toggleFull,

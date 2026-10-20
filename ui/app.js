@@ -568,10 +568,11 @@ function openSession(id) {
   go("player");
 }
 function openNow() {
+  if (st.active_set && st.active_set.voice) return openLive();
   endReview();
   nowView = true;
   const l = liveSet();
-  if (l && !(st.active_set && st.active_set.voice)) {
+  if (l) {
     if (selected !== l.id) openSet(l.id);
     nowSet = l.id;
     live = true;

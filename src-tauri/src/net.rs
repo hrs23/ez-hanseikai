@@ -830,7 +830,7 @@ async fn present_invite(core: &Arc<Core>, id: &EndpointId, conn: &Connection) ->
         let Ok(reply) = request(conn, &json!({"t": "join", "token": token, "name": name})).await else { return false };
         let Ok(reply) = serde_json::from_slice::<Value>(&reply) else { return false };
         if reply["declined"] == true {
-            room::leave_room(core, &pending);
+            room::forget_room(core, &pending);
             *core.notice.lock().unwrap() = "Your request to join was declined.".into();
             return false;
         }

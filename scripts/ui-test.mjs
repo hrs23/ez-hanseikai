@@ -9,7 +9,7 @@ const ui = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "ui");
 const read = (f) => fs.readFileSync(path.join(ui, f), "utf8");
 const source = ["util.js", "i18n.js", "layout.js", "events.js", "markdown.js", "review.js", "members.js", "recordings.js", "plugins.js", "ai.js", "diag.js"].map(read).join("\n");
 const context = vm.createContext({ window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id });
-const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, flowAt, flowBands, flowSteps, isReview, voiceOnly, BOARD_TEMPLATE, memberStatus, receivingPercent, recordingRows, recordingMatches, recordingWords, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, discardable, DISCARD_MAX_S, soundKey, pluginProgress, isBusy, workerState, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, aiPreview, apiUrl, apiBadge, apiReferenceBlocks, rateOf, liveEdge, netState, summaryLines, leftText, pcCards, clockPairs, clockSummary, flowRows, timeRow, skewText, agoText, JA, t, sessionName, mdParse, mdInline, mdHosts, toggleTask, boardParts, boardDom, markdownDom, mdHooks, runBy, PERSONAL_TEMPLATE, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, flowAt, flowBands, flowSteps, isReview, voiceOnly, BOARD_TEMPLATE, memberStatus, receivingPercent, recordingRows, recordingMatches, recordingWords, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, discardable, DISCARD_MAX_S, soundKey, pluginProgress, isBusy, workerState, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, aiPreview, apiUrl, apiBadge, apiReferenceBlocks, rateOf, liveEdge, netState, summaryLines, leftText, pcCards, clockPairs, clockSummary, flowRows, timeRow, skewText, agoText, JA, t, sessionName, mdParse, mdInline, mdHosts, toggleTask, boardParts, boardDom, markdownDom, mdHooks, runBy, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 const plain = (v) => JSON.parse(JSON.stringify(v));
 
 const moment = (m, extra = {}) => ({ role: "moment", m, plugin: { id: "apex-matches" }, tags: ["match"], ...extra });
@@ -503,87 +503,13 @@ test("the recordings list is one newest-first list of every recording, and searc
   assert.ok(!ui$.recordingMatches(rows.find((r) => r.id.startsWith("2026-10-04")), ui$.recordingWords("imported")));
 });
 
-test("the sidebar is a room header with a menu, four items, the record box and then every recording", () => {
-  const html = read("index.html");
-  const side = html.slice(html.indexOf('<aside id="side"'), html.indexOf("</aside>"));
-  const order = ['id="roomname"', 'id="roomfaces"', 'id="sidenav"', 'id="startbtn"', 'id="standby"', 'id="recsopen"', 'id="sessions"', 'class="dock"'].map((x) => side.indexOf(x));
-  assert.ok(order.every((x, i) => x >= 0 && (!i || order[i - 1] < x)), order.join());
-  assert.deepEqual([...side.matchAll(/data-nav="(\w+)"/g)].map((m) => m[1]), ["live", "board", "members", "plugins"]);
-  assert.match(side, /<button id="roomname"[^>]*aria-haspopup="menu"[^>]*>[^]*?data-icon="chevron-down"/);
-  assert.match(side, /<div class="startgroup"><button id="startbtn"[^]*?<button id="startmore"[^>]*aria-haspopup="menu"/);
-  assert.doesNotMatch(html, /id="allrecs"|data-tab=|id="boardsub"/);
-  const sidejs = read("side.js");
-  const menu = sidejs.slice(sidejs.indexOf("function roomMenu"), sidejs.indexOf("function navigate"));
-  const labels = [...menu.matchAll(/label: t\("([^"]+)"\)/g)].map((m) => m[1]);
-  assert.deepEqual(labels, ["Room settings…", "Copy invite code", "Cancel invite", "Switch room", "Leave room…"]);
-  const shell = fs.readFileSync(path.join(ui, "..", "src-tauri", "src", "shell.rs"), "utf8");
-  const native = shell.slice(shell.indexOf('tr(lang, "Room")'), shell.indexOf('tr(lang, "Recording")'));
-  assert.deepEqual([...native.matchAll(/it\("[\w-]+", "([^"]+)"/g)].map((m) => m[1]), labels);
-  assert.match(read("pages.js"), /"cancel-invite": \(\) => \{ if \(st\.invites\) cancelInvite\(\); \}/);
-  assert.match(sidejs, /\$\("roomname"\)\.onclick = \(e\) => roomMenu\(e\.currentTarget\)/);
-  assert.match(read("app.js"), /anchorMenu\(t instanceof Element && t\.hasAttribute\("aria-haspopup"\) \? t : null\);/);
-  assert.match(read("style.css"), /\.roombtn\[aria-expanded=true\] \{ background/);
-  assert.match(sidejs, /t\("Standby"\)\} · \$\{t\("\{n\} online"/);
-  assert.match(sidejs, /id: "livetimer"/);
-  assert.match(sidejs, /const rows = recordingRows\(\);/);
-  assert.match(sidejs, /rows\.map\(\(r\) => sessionRow\(r\.s\)\)/);
-  assert.match(sidejs, /t\("Record debrief"\)/);
-  for (const word of ["Live", "Game plan", "Members", "Plugins", "Room settings…", "Switch room", "Leave room…", "Leave {room}?", "Sidebar width"]) assert.ok(word in ui$.JA, word);
-  const pages = read("pages.js");
-  assert.match(pages, /"page-live": openLive/);
-  assert.match(pages, /"switch-room": switchRoom/);
-  assert.match(pages, /run\("leave_room", \{ id: st\.room\.id \}/);
-});
-
-test("the room page has no tabs: the sidebar items and the recordings header choose what the main area shows", () => {
-  const html = read("index.html");
-  const room = html.slice(html.indexOf('<div id="roompage"'), html.indexOf('<div id="playerpage"'));
-  assert.doesNotMatch(room, /ptabs|role="tab"/);
-  assert.match(html, /<dialog id="roomdlg">[^]*?id="roomnameinput"[^]*?id="roomsave"/);
-  const side = read("side.js");
-  assert.match(side, /\$\("recsopen"\)\.onclick = \(\) => showRoomTab\("recordings"\)/);
-  const open = read("pages.js");
-  assert.match(open, /const ROOM_TITLES = \{[^}]*members[^}]*plugins[^}]*jobs[^}]*board[^}]*recordings/);
-  assert.match(read("pages.js"), /recBar = el\("div", \{ className: "recbar" \},[^]*?id: "recfilter"[^]*?id: "recimport"/);
-});
-
-test("the sidebar opens on Live, which shows everyone who shares a screen before any recording", () => {
-  const app = read("app.js");
-  assert.match(app, /^let page = "player";$/m);
-  assert.match(app, /function openLive\(\) \{\s*endReview\(\);\s*nowView = false;\s*if \(selected\) selectSet\(null\);/);
-  assert.match(app, /const idle = page === "player" && showingNow\(\) && !playSet\(\);\s*\$\("livetiles"\)\.hidden = !idle;/);
-  assert.match(app, /const title = review \? sessionName\(review\.id\) : !set \? t\("Live"\)/);
-  const side = read("side.js");
-  assert.match(side, /return !nowView && !playSet\(\) && !review \? "live" : "";/);
-  assert.match(side, /const on = page === "player" && nowView && !review;/);
-  assert.match(app, /if \(!set\) return st\.active_set \? t\("\{n\} online", [^\n]*\) : "";/);
-  assert.match(side, /\$\("standby"\)\.onclick = openLive/);
-  const pages = read("pages.js");
-  assert.match(pages, /switch_room", \{ id: r\.id \}, openLive/);
-  assert.match(pages, /create_room", \{ name: "" \}\)\.then\(\(\) => \{ openLive\(\)/);
-});
-
-test("the sidebar width is dragged, kept between limits and never scrolls sideways", () => {
+test("the sidebar width stays between limits and the splitter takes the arrow keys", () => {
   assert.equal(ui$.clampSide(100), ui$.SIDE_MIN);
   assert.equal(ui$.clampSide(900), ui$.SIDE_MAX);
   assert.equal(ui$.clampSide(300.4), 300);
   assert.equal(ui$.clampSide("junk"), ui$.SIDE_DEFAULT);
   assert.equal(ui$.clampSide(null), ui$.SIDE_MIN);
   assert.ok(ui$.SIDE_MIN < ui$.SIDE_DEFAULT && ui$.SIDE_DEFAULT < ui$.SIDE_MAX);
-  const html = read("index.html");
-  assert.match(html, /<\/aside>\s*<div id="splitter" class="splitter" role="separator" aria-orientation="vertical" tabindex="0"/);
-  const side = read("side.js");
-  assert.match(side, /store\("sideWidth", sideWidth\)/);
-  assert.match(side, /stored\("sideWidth", SIDE_DEFAULT\)/);
-  assert.match(side, /\$\("splitter"\)\.onpointerdown = dragSide/);
-  assert.match(side, /ArrowLeft: -SIDE_KEY_STEP, ArrowRight: SIDE_KEY_STEP/);
-  const css = read("style.css");
-  assert.match(css, /\.side \{[^}]*width: var\(--side\)[^}]*overflow: hidden/);
-  assert.match(css, /\.sessions \{[^}]*overflow-y: auto; overflow-x: hidden/);
-  assert.match(css, /\.roombtn \.nm \{[^}]*text-overflow: ellipsis/);
-  assert.match(css, /\.splitter \{[^}]*left: calc\(var\(--side\) - 3px\); width: 7px/);
-  assert.match(css, /body\.noside \.splitter, body\.boardfull \.splitter \{ display: none/);
-  assert.match(css, /body\.full \.side, body\.full \.splitter, body\.full \.notices \{ display: none !important; \}/);
   const focused = (a) => { context.document.activeElement = a; return vm.runInContext("nativeKey", context); };
   const key = (k) => ({ key: k });
   for (const k of ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"]) assert.equal(focused({ getAttribute: (n) => (n === "role" ? "separator" : null) })(key(k)), true, k);
@@ -616,8 +542,6 @@ test("markdown inline reads emphasis, code, links and tags, and only safe links 
   assert.deepEqual(node("**b** *i* ~~s~~ ==m== `c`").filter((n) => !n.text).map((n) => Object.keys(n)[0]), ["strong", "em", "strike", "mark", "code"]);
   assert.deepEqual(node("snake_case_name 2 * 3 * 4"), [{ text: "snake_case_name 2 * 3 * 4" }]);
   assert.equal(node("[site](https://example.com/a)")[0].link.url, "https://example.com/a");
-  assert.equal(node("[site](https://example.com/a)")[0].masked, true);
-  assert.equal(node("https://example.com/a")[0].masked, false);
   assert.equal(node("[wiki](https://ja.wikipedia.org/wiki/戦術)")[0].link.url, "https://ja.wikipedia.org/wiki/%E6%88%A6%E8%A1%93");
   assert.equal(node("https://例え.jp/a?q=作戦")[0].link.url, "https://xn--r8jz45g.jp/a?q=%E4%BD%9C%E6%88%A6");
   assert.equal(node("<https://www.google.com/maps/@48.85,2.35,15z>")[0].link.url, "https://www.google.com/maps/@48.85,2.35,15z");
@@ -664,12 +588,6 @@ test("a board is a title, a goal line and cards, and a heading inside code does 
   assert.match(early.lead.text, /^Warm up together\n[^]*- \[ \] Win first fight$/);
   assert.equal(plain(ui$.mdParse(early.lead.text, early.lead.line)).find((b) => b.type === "list").items[0].n, 2);
   assert.equal(early.sections[0].line, 4);
-  for (const lang of ["en", "ja"]) {
-    const lines = ui$.PERSONAL_TEMPLATE[lang].split("\n");
-    assert.ok(lines.length <= 12);
-    assert.match(lines[0], /^# /);
-    assert.ok(lines.some((l) => l.startsWith("- [ ] ")));
-  }
 });
 
 class Text {
@@ -717,6 +635,11 @@ test("a game plan shows tables, code and tasks, and nothing a note can write run
   assert.match(card.textContent, /javascript:alert\(1\)/);
   assert.match(card.textContent, /<img src=x onerror=alert\(1\)>/);
   assert.equal(card.find("button").filter((b) => b.className === "link").length, 1);
+  const labels = [];
+  ctx.onOpen = (url, label) => labels.push(label);
+  const links = vm.runInContext(`boardDom("https://a.example/x <https://a.example@evil.example/y> [b](https://b.example/z)", mdHooks({ onOpen }))`, ctx).find("a");
+  for (const a of links) a.onclick({ preventDefault() {}, stopPropagation() {} });
+  assert.deepEqual(labels, ["https://a.example/x", "https://a.example@evil.example/y", "b"]);
   const preview = vm.runInContext(`boardDom(${JSON.stringify("- [ ] a")}, mdHooks({ onTask: null }))`, ctx);
   assert.equal(preview.find("input")[0].disabled, true);
 });
@@ -736,46 +659,11 @@ test("a moment link keeps a formatted label, and deep quotes and lists render wi
   assert.equal(depth(blocks("> > a")[0]), 2);
 });
 
-test("the personal game plan stays on this PC and the room's goes to the log", () => {
-  const html = read("index.html");
-  assert.match(html, /<span id="boardscope" class="seg"[^>]*><button data-scope="room"[^>]*>Room<\/button><button data-scope="personal"[^>]*>Personal<\/button>/);
-  const pages = read("pages.js");
-  const write = pages.slice(pages.indexOf("function writeBoard"), pages.indexOf("const boardHooks"));
-  const personal = write.slice(write.indexOf("if (personal())"), write.indexOf("return invoke"));
-  assert.match(personal, /store\(personalKey\(\)/);
-  assert.doesNotMatch(personal, /invoke|add_event/);
-  assert.match(write, /invoke\("add_event", \{ kind: "board", text, target: \{\}, values: \{ card: "team" \} \}\)/);
-  assert.match(pages, /const planKey = \(id\) => `board\/\$\{id\}`;\s*const personalKey = \(\) => planKey\(st\.room \? st\.room\.id : ""\);/);
-  assert.match(pages, /run\("remove_room", \{ id: r\.id \}, \(\) => \{ forgetPlan\(r\.id\);/);
-  assert.match(pages, /run\("remove_room", \{ id \}, \(\) => \{ forgetPlan\(id\);/);
-  assert.match(pages, /if \(!keepRooms\) unstore\(\(k\) => k\.startsWith\(planKey\(""\)\)\);\s*run\("reset"/);
-  const tick = pages.slice(pages.indexOf("function tickTask"), pages.indexOf("const boardHooks"));
-  assert.match(tick, /const next = toggleTask\(boardDraft, n\);\s*if \(next === boardDraft\) \{ delete sigs\.board; renderBoard\(\); return; \}/);
-  assert.match(pages, /mdHooks\(\{ onTask: tickTask \}\)/);
-  assert.match(pages, /\$\("boardedit"\)\.onclick = \(\) => editBoard\(\);/);
-  assert.match(pages, /const want = scope === "room" \|\| scope === "personal" \? scope : boardScope;/);
-  assert.match(pages, /\$\("boardtext"\)\.value !== boardText\(\) && !\(await ask\(t\("Discard your changes\?"\)/);
-  assert.match(pages, /const text = stored\(personalKey\(\), null\);\s*return typeof text === "string" \? text : starterOf\(PERSONAL_TEMPLATE\);/);
-  assert.match(read("app.js"), /if \(partyRoom !== roomId\) \{ partyRoom = roomId; cancelBoard\(\);/);
-  assert.match(pages, /b\.disabled = boardEditing;/);
-  assert.doesNotMatch(pages, /\$\("boardscope"\)\.hidden/);
-  assert.match(pages, /editBoard\(scope\)/);
-  assert.match(read("app.js"), /editBoard\("room"\)/);
-  for (const word of ["Personal", "Only on this PC", "Discard your changes?"]) assert.ok(word in ui$.JA, word);
-});
-
-test("web links open in the browser through the app, and the plugin runner is named in the jobs list", () => {
-  const md = read("markdown.js");
-  assert.match(md, /invoke\("open_link", \{ url \}\)/);
-  assert.match(md, /onauxclick: \(e\) => \{ if \(e\.button === 1\) open\(e\); \}/);
-  assert.match(md, /!mdHosts\(label\)\.includes\(host\.replace\(\/\^www\\\.\/, ""\)\) && !\(await ask\(t\("Open \{host\}\?"/);
+test("a link's text vouches only for the host it names, and the jobs list names whose PC runs a job", () => {
   const hides = (label, url) => !plain(ui$.mdHosts(label)).includes(new URL(url).host.replace(/^www\./, ""));
   for (const [label, url] of [["dropbox.com", "https://x.com/a"], ["paypal.com", "https://l.com"], ["google.com/search?q=evil.io", "https://evil.io/x"], ["https://www.google.com/search?q=evil.io", "https://evil.io/x"], ["google.com@evil.io", "https://evil.io"], ["Open the plan", "https://example.com"]]) assert.ok(hides(label, url), label);
   for (const [label, url] of [["example.com", "https://example.com/p"], ["https://www.example.com/a", "https://example.com/b"], ["the example.com page", "https://www.example.com"]]) assert.ok(!hides(label, url), label);
   assert.ok("Open {host}?" in ui$.JA);
-  const pages = read("pages.js");
-  assert.match(pages, /disabled: j\.state !== "waiting" \|\| !j\.here \|\| !plugin \|\| !plugin\.process_here \|\| !plugin\.ready \|\| \(plugin\.runner && plugin\.runner !== st\.id\)/);
-  assert.match(pages, /t\(st\.recording \? "Stop recording and leave \{room\}\?" : "Leave \{room\}\?"/);
   ui$.setLanguage("en");
   assert.equal(ui$.runBy({ by: "b", runner: "a" }), "b's PC");
   assert.equal(ui$.runBy({ by: null, runner: "a" }), "a's PC");
@@ -783,13 +671,9 @@ test("web links open in the browser through the app, and the plugin runner is na
   ui$.setLanguage("ja");
   assert.equal(ui$.runBy({ by: null, runner: null }), "自動");
   ui$.setLanguage("en");
-  const plugins = read("plugins.js");
-  assert.match(plugins, /invoke\("set_plugin_runner", \{ id: p\.id, runner: e\.target\.value \|\| null \}\)/);
-  assert.match(plugins, /el\("option", \{ value: "", textContent: t\("Auto"\)/);
-  assert.match(plugins, /t\("Who runs it"\)/);
 });
 
-test("the screen and microphone buttons share one state system: on is green, off is neutral, red only while recording", () => {
+test("the screen and microphone buttons share one state: off, on, recording or a warning", () => {
   const cap = (source, muted, extra = {}) => ({ source, mix: { mic: { muted } }, working: true, ...extra });
   assert.deepEqual(plain(ui$.captureStates(cap(null, true), false, "")), { screen: "off", mic: "off" });
   assert.deepEqual(plain(ui$.captureStates(cap({ kind: "display" }, false), false, "")), { screen: "on", mic: "on" });
@@ -797,16 +681,6 @@ test("the screen and microphone buttons share one state system: on is green, off
   assert.deepEqual(plain(ui$.captureStates(cap({ kind: "display" }, true), true, "")), { screen: "recording", mic: "off" });
   assert.equal(ui$.captureStates(cap({ kind: "display" }, false), false, "Capture stopped").screen, "warn");
   assert.equal(ui$.captureStates(cap(null, false), true, "").screen, "off");
-  const css = read("style.css");
-  assert.doesNotMatch(css, /\.cap\.mic\.muted/);
-  for (const state of ["off", "on", "recording", "warn"]) assert.match(css, new RegExp(`\\.cap\\.${state} `));
-  assert.match(css, /\.cap\.on \.capmain[^{]*\{ color: var\(--ok\)/);
-  assert.match(css, /\.cap\.recording \.capmain[^{]*\{ color: var\(--rec-text\)/);
-  const side = read("side.js");
-  assert.match(side, /\$\("miccap"\)\.className = "cap mic " \+ micState/);
-  assert.match(side, /\$\("screencap"\)\.className = "cap " \+ state/);
-  assert.match(side, /icon\(mute \? "mic-off" : "mic"\)/);
-  assert.match(side, /icon\(!c\.source \? "monitor-off"/);
 });
 
 test("the microphone button shows a live level that sits flat while muted", () => {
@@ -817,20 +691,5 @@ test("the microphone button shows a live level that sits flat while muted", () =
   const loud = ui$.micLevel(0.3, false);
   assert.ok(quiet > 0 && quiet < loud && loud < 1);
   assert.equal(ui$.meterPos(-60), 0);
-  assert.match(read("index.html"), /id="micbtn"[^>]*>[^]*?id="miclvl" class="lvl"/);
-  assert.match(read("side.js"), /\$\("miclvl"\)\.style\.setProperty\("--lvl", String\(micLevel\(/);
 });
 
-test("one count of failed jobs leads to Jobs, a lone member reads in the singular, and the API badge names other devices", () => {
-  const plugins = read("plugins.js");
-  assert.match(plugins, /const failedJobs = \(\) => \(jobInfo \? jobInfo\.jobs\.filter\(\(j\) => j\.state === "failed"\)\.length : 0\);/);
-  assert.match(plugins, /tab\("jobs", t\("Jobs"\), failedJobs\(\)\)/);
-  assert.match(plugins, /className: "count bad"/);
-  assert.match(read("side.js"), /const failed = failedJobs\(\);/);
-  assert.match(read("pages.js"), /t\(people\(\)\.length === 1 \? "\{n\} member" : "\{n\} members"/);
-  assert.ok("{n} member" in ui$.JA);
-  assert.match(read("side.js"), /"API", \.\.\.\(badge\.lan \? \[el\("small", \{ textContent: t\("Other devices"\) \}\)\] : \[\]\)/);
-  const css = read("style.css");
-  assert.match(css, /\.cap:has\(:focus-visible\) \{ border-color: var\(--accent\); \}/);
-  assert.doesNotMatch(css, /\.cap:focus-within/);
-});

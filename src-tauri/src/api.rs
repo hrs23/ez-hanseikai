@@ -86,7 +86,7 @@ fn write_info(dir: &Path, token: &str) -> std::io::Result<()> {
 }
 
 pub fn open_docs() {
-    let _ = Command::new("explorer").arg(format!("http://{}/llms.txt", address())).creation_flags(crate::proc::NO_WINDOW).spawn();
+    crate::shell::open_link(&format!("http://{}/llms.txt", address()));
 }
 
 pub fn forget(dir: &Path) {
@@ -743,7 +743,7 @@ impl Backend for Live {
     }
 
     fn open(&self, room: &str) -> Result<(), String> {
-        room::switch_room(&self.0, room)
+        room::enter_room(&self.0, room)
     }
 
     fn now_us(&self) -> i64 {

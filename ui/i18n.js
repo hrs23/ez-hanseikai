@@ -40,6 +40,7 @@ const JA = {
   "Recording: the newest one in the room (list the recordings to find it)": "録画: ルームでいちばん新しいもの(録画の一覧から探す)",
   "Keep the token secret: never write it into a note or the game plan.": "トークンは秘密です。メモや作戦ボードに書かないでください。",
   "A recording is already in progress.": "録画はすでに進行中です。",
+  "A recording is being imported into this room. Cancel the import first.": "このルームに録画をインポート中です。先にインポートを中止してください。",
   "A relay server is reachable": "中継サーバーに接続できます",
   "About {size} per hour · room for about {h} h": "1時間あたり約 {size} · あと約 {h} 時間分",
   "Active": "実行中・待ち",

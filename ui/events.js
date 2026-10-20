@@ -35,8 +35,8 @@ function parseLink(text) {
   return { set, m, view: parts[2] && parts[2] !== "all" ? parts[2] : null };
 }
 
-function inline(text, onTag = filterTag, onLink = openLink) {
-  return mdSpans(mdInline(text), mdHooks({ onTag, onLink }));
+function inline(text) {
+  return mdSpans(mdInline(text), mdHooks());
 }
 
 function tagName(tag) {
@@ -84,11 +84,6 @@ function groupDrawings(list) {
   }
   return out;
 }
-
-const PERSONAL_TEMPLATE = {
-  en: "# My focus\n**The one thing to fix first**\n\n## Next match\n- [ ] Check the corners before peeking\n- [ ] Call the rotation early\n\n## Notes\n- Right-click a video to copy a moment link, then paste it here",
-  ja: "# 自分の課題\n**まず直す1つのこと**\n\n## 次の試合\n- [ ] 角を覗く前に確認する\n- [ ] ローテーションを早めに伝える\n\n## メモ\n- 動画を右クリックして場面のリンクをコピーし、ここに貼る",
-};
 
 const BOARD_TEMPLATE = {
   en: "# Goals for this week\n- Win the first fight of each match\n\n## Rules we agreed\n- Drop spots, rotations, comms\n\n## Review checklist\n- Positioning before each fight\n- Who called what\n\n## Notes\n- Right-click a video to copy a moment link, then paste it here",

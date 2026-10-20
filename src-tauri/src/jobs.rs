@@ -238,8 +238,8 @@ pub fn next(
 ) -> Option<Pick> {
     let mut picks = Vec::new();
     for (order, (id, config)) in configs.iter().enumerate() {
-        let usable = bundled.iter().any(|(b, version, live)| *b == id.as_str() && *version == config.version && (!recording || *live));
-        if !config.on || !usable || config.runner.as_deref().is_some_and(|runner| runner != me) || !ready(id, &config.settings) {
+        let paused = recording && !bundled.iter().any(|(b, _, live)| *b == id.as_str() && *live);
+        if paused || !runs_here(me, bundled, &ready, id, config) {
             continue;
         }
         let prefix = prefix(id, config);
@@ -264,22 +264,24 @@ pub fn next(
     picks.into_iter().min_by(|a, b| a.0.cmp(&b.0)).map(|(_, p)| p)
 }
 
-pub fn unfinished(me: &str, tracks: &HashMap<String, Track>) -> Vec<(String, i64)> {
-    tracks
-        .iter()
-        .filter_map(|(key, t)| match t.last.get(me) {
-            Some(Status::Claimed(run)) if t.done.is_empty() && t.unfinished.get(me).copied().unwrap_or(0) >= UNFINISHED_MAX => Some((key.clone(), *run)),
-            _ => None,
-        })
-        .collect()
+fn runs_here(me: &str, bundled: &[(&str, &str, bool)], ready: impl Fn(&str, &Value) -> bool, id: &str, config: &Config) -> bool {
+    config.on && bundled.iter().any(|(b, version, _)| *b == id && *version == config.version) && config.runner.as_deref().is_none_or(|runner| runner == me) && ready(id, &config.settings)
 }
 
-pub fn released(me: &str, ready: impl Fn(&str, &Value) -> bool, configs: &BTreeMap<String, Config>, tracks: &HashMap<String, Track>) -> Vec<(String, i64, String)> {
-    let elsewhere: Vec<(String, &String)> = configs.iter().filter(|(id, c)| c.on && (c.runner.as_deref().is_some_and(|runner| runner != me) || !ready(id, &c.settings))).map(|(id, c)| (prefix(id, c), id)).collect();
+pub fn abandoned(me: &str, bundled: &[(&str, &str, bool)], ready: impl Fn(&str, &Value) -> bool, configs: &BTreeMap<String, Config>, tracks: &HashMap<String, Track>) -> Vec<Value> {
+    let elsewhere: Vec<(String, &String)> = configs.iter().filter(|(id, c)| c.on && !runs_here(me, bundled, &ready, id, c)).map(|(id, c)| (prefix(id, c), id)).collect();
     tracks
         .iter()
         .filter_map(|(key, t)| match t.last.get(me) {
-            Some(Status::Claimed(run)) if t.done.is_empty() => elsewhere.iter().find(|(p, _)| key.starts_with(p.as_str())).map(|(_, id)| (key.clone(), *run, (*id).clone())),
+            Some(Status::Claimed(run)) if t.done.is_empty() => {
+                if t.unfinished.get(me).copied().unwrap_or(0) >= UNFINISHED_MAX {
+                    tracing::warn!("job {key} stopped twice without finishing, marking it failed");
+                    return Some(job_record("fail", key, *run, json!({"error": "Stopped twice without finishing."})));
+                }
+                let (_, plugin) = elsewhere.iter().find(|(p, _)| key.starts_with(p.as_str()))?;
+                tracing::info!("job {key} is no longer run here, releasing it");
+                Some(job_record("stop", key, *run, json!({"plugin": plugin})))
+            }
             _ => None,
         })
         .collect()
@@ -377,8 +379,19 @@ pub fn open(file: &str, me: &str, prefixes: &[String], tracks: &HashMap<String, 
 
 fn snapshot(core: &Core, room: &str) -> (Vec<Log>, BTreeMap<String, Config>, HashMap<String, Track>) {
     let logs = room::logs(core, room);
-    let (configs, tracks) = (configs(&logs, None), tracks(&logs, None));
+    let (configs, tracks) = (room_configs(core, room, &logs), tracks(&logs, None));
     (logs, configs, tracks)
+}
+
+fn room_configs(core: &Core, room: &str, logs: &[Log]) -> BTreeMap<String, Config> {
+    members_run(configs(logs, None), &room_members(core, room))
+}
+
+pub fn members_run(mut configs: BTreeMap<String, Config>, members: &[String]) -> BTreeMap<String, Config> {
+    for c in configs.values_mut() {
+        c.runner = c.runner.take().filter(|r| members.contains(r));
+    }
+    configs
 }
 
 fn plugin_dir(core: &Core, id: &str) -> PathBuf {
@@ -495,16 +508,8 @@ fn tick(core: &Arc<Core>, room: &str) {
         return;
     }
     let me = core.me();
-    let failed = unfinished(&me, &tracks);
-    for (key, run) in &failed {
-        tracing::warn!("job {key} stopped twice without finishing, marking it failed");
-        core.append_log(room, &job_record("fail", key, *run, json!({"error": "Stopped twice without finishing."})));
-    }
-    for (key, run, plugin) in released(&me, |id, s| ready(core, id, s), &configs, &tracks) {
-        if !failed.iter().any(|(k, _)| *k == key) {
-            tracing::info!("job {key} is no longer run here, releasing it");
-            core.append_log(room, &job_record("stop", &key, run, json!({"plugin": plugin})));
-        }
+    for record in abandoned(&me, &bundled(), |id, s| ready(core, id, s), &configs, &tracks) {
+        core.append_log(room, &record);
     }
     let inputs = inputs(core, room, &logs, |file| open(file, &me, &prefixes, &tracks));
     let first = FIRST.lock().unwrap().clone();
@@ -657,7 +662,7 @@ fn finish(core: &Arc<Core>, room: &str, plugin: &Plugin, key: &str, run: i64, in
 
 pub fn plugins_json(core: &Core, room: &str) -> Vec<Value> {
     let logs = room::logs(core, room);
-    let configs = configs(&logs, None);
+    let configs = room_configs(core, room, &logs);
     let known = workers(&logs);
     let members = room_members(core, room);
     plugins::ALL
@@ -695,7 +700,7 @@ pub fn set_room_plugin(core: State<Arc<Core>>, id: String, on: bool, settings: V
     let plugin = plugins::find(&id).ok_or("Unknown plugin.")?;
     let room = core.active_room_id();
     let logs = room::logs(&core, &room);
-    let runner = configs(&logs, None).get(plugin.id).and_then(|c| c.runner.clone());
+    let runner = room_configs(&core, &room, &logs).remove(plugin.id).and_then(|c| c.runner);
     let config = Config { on, version: plugin.version.into(), settings: plugins::normalize(plugin, &settings), runner };
     core.append_log(&room, &plugin_record(plugin.id, &config, change_time(now_us(), &logs, plugin.id)));
     Ok(())
@@ -812,19 +817,20 @@ pub fn stop_now(core: &Core) {
     core.append_log(&r.room, &job_record("stop", &r.key, r.run, json!({"plugin": r.plugin, "file": r.file})));
 }
 
-pub fn release_room(room: &str) {
+fn wait_idle(busy: impl Fn(Option<&str>) -> bool) {
     let started = Instant::now();
-    while WORK.lock().unwrap().as_deref() == Some(room) && started.elapsed() < STOP_WAIT {
+    while busy(WORK.lock().unwrap().as_deref()) && started.elapsed() < STOP_WAIT {
         std::thread::sleep(EMIT_EVERY);
     }
 }
 
+pub fn release_room(room: &str) {
+    wait_idle(|work| work == Some(room));
+}
+
 pub fn stop_and_wait(core: &Core) {
     stop_now(core);
-    let started = Instant::now();
-    while WORK.lock().unwrap().is_some() && started.elapsed() < STOP_WAIT {
-        std::thread::sleep(EMIT_EVERY);
-    }
+    wait_idle(|work| work.is_some());
 }
 
 #[cfg(test)]
@@ -867,6 +873,11 @@ mod tests {
         next(me, &online, recording, &BUNDLED, |_, _| true, &configs(logs, None), &tracks(logs, None), &HashMap::new(), inputs, "").map(|p| inputs[p.input].file.clone())
     }
 
+    fn ends(me: &str, ready: bool, bundled: &[(&str, &str, bool)], logs: &[Log]) -> Vec<(String, String, i64)> {
+        let records = abandoned(me, bundled, |_, _| ready, &configs(logs, None), &tracks(logs, None));
+        records.iter().map(|r| (r["state"].as_str().unwrap_or_default().to_string(), r["job"].as_str().unwrap_or_default().to_string(), r["run"].as_i64().unwrap_or_default())).collect()
+    }
+
     fn base_logs(extra_a: Vec<Value>, extra_b: Vec<Value>) -> Vec<Log> {
         let mut a = vec![config_record(1, true, "small")];
         a.extend(extra_a);
@@ -883,7 +894,7 @@ mod tests {
     }
 
     #[test]
-    fn a_chosen_runner_takes_every_job_and_the_others_leave_them() {
+    fn a_chosen_runner_takes_every_job_the_others_leave_them_and_a_removed_one_leaves_them_to_auto() {
         let with_runner = |runner: &str| json!({"k": "plugin", "plugin": "transcribe", "on": true, "version": "1.0.0", "settings": {"model": "small"}, "runner": runner, "t_us": 2});
         let logs = base_logs(vec![with_runner("b")], vec![]);
         assert_eq!(configs(&logs, None)["transcribe"].runner.as_deref(), Some("b"));
@@ -895,6 +906,9 @@ mod tests {
         assert_eq!(pick("a", &["b"], false, &auto, &inputs), Some("s1/a".to_string()));
         let cleared = base_logs(vec![with_runner("b"), json!({"k": "plugin", "plugin": "transcribe", "on": true, "version": "1.0.0", "settings": {"model": "small"}, "runner": "", "t_us": 3})], vec![]);
         assert_eq!(configs(&cleared, None)["transcribe"].runner, None);
+        let members = |ids: &[&str]| ids.iter().map(|id| id.to_string()).collect::<Vec<_>>();
+        assert_eq!(members_run(configs(&logs, None), &members(&["a", "b"]))["transcribe"].runner.as_deref(), Some("b"));
+        assert_eq!(members_run(configs(&logs, None), &members(&["a", "c"]))["transcribe"].runner, None);
     }
 
     #[test]
@@ -916,16 +930,15 @@ mod tests {
         let mut logs = base_logs(vec![job_record("claim", &key("s1/a"), 5, Value::Null), with_runner], vec![]);
         let inputs = [input("s1", "a", 10, true)];
         assert_eq!(pick("b", &["a"], false, &logs, &inputs), None);
-        let all_ready = |_: &str, _: &Value| true;
-        assert!(released("b", all_ready, &configs(&logs, None), &tracks(&logs, None)).is_empty());
-        let stops = released("a", all_ready, &configs(&logs, None), &tracks(&logs, None));
-        assert_eq!(stops, vec![(key("s1/a"), 5, "transcribe".to_string())]);
-        Arc::make_mut(&mut logs[0].records).push(job_record("stop", &stops[0].0, stops[0].1, Value::Null));
+        assert!(ends("b", true, &BUNDLED, &logs).is_empty());
+        assert_eq!(ends("a", true, &BUNDLED, &logs), vec![("stop".to_string(), key("s1/a"), 5)]);
+        Arc::make_mut(&mut logs[0].records).push(job_record("stop", &key("s1/a"), 5, Value::Null));
         assert_eq!(pick("b", &["a"], false, &logs, &inputs).as_deref(), Some("s1/a"));
-        assert!(released("a", all_ready, &configs(&logs, None), &tracks(&logs, None)).is_empty());
+        assert!(ends("a", true, &BUNDLED, &logs).is_empty());
         let auto = base_logs(vec![job_record("claim", &key("s1/a"), 5, Value::Null)], vec![]);
-        assert!(released("a", all_ready, &configs(&auto, None), &tracks(&auto, None)).is_empty());
-        assert_eq!(released("a", |_, _| false, &configs(&auto, None), &tracks(&auto, None)).len(), 1);
+        assert!(ends("a", true, &BUNDLED, &auto).is_empty());
+        assert_eq!(ends("a", false, &BUNDLED, &auto).len(), 1);
+        assert_eq!(ends("a", true, &[("transcribe", "2.0.0", false)], &auto).len(), 1);
     }
 
     #[test]
@@ -1070,12 +1083,13 @@ mod tests {
     fn a_job_stopped_twice_without_finishing_fails_and_a_stop_on_purpose_does_not_count() {
         let claim = |run| job_record("claim", &key("s1/a"), run, Value::Null);
         let once = base_logs(vec![claim(1)], vec![]);
-        assert!(unfinished("a", &tracks(&once, None)).is_empty());
+        assert!(ends("a", true, &BUNDLED, &once).is_empty());
         let twice = base_logs(vec![claim(1), claim(2)], vec![]);
-        assert_eq!(unfinished("a", &tracks(&twice, None)), vec![(key("s1/a"), 2)]);
-        assert!(unfinished("b", &tracks(&twice, None)).is_empty());
+        assert_eq!(ends("a", true, &BUNDLED, &twice), vec![("fail".to_string(), key("s1/a"), 2)]);
+        assert_eq!(ends("a", false, &BUNDLED, &twice), vec![("fail".to_string(), key("s1/a"), 2)]);
+        assert!(ends("b", true, &BUNDLED, &twice).is_empty());
         let stopped = base_logs(vec![claim(1), job_record("stop", &key("s1/a"), 1, Value::Null), claim(2)], vec![]);
-        assert!(unfinished("a", &tracks(&stopped, None)).is_empty());
+        assert!(ends("a", true, &BUNDLED, &stopped).is_empty());
         let inputs = [input("s1", "a", 10, true)];
         assert_eq!(pick("a", &[], false, &stopped, &inputs).as_deref(), Some("s1/a"));
     }

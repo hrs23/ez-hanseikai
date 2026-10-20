@@ -484,7 +484,7 @@ pub fn run(core: &Arc<Core>, spec: &Value) -> Result<Value, String> {
         if running.is_some() {
             return Err("An import is already running.".into());
         }
-        *running = Some(plan.title.clone());
+        *running = Some(room_id.clone());
         Guard
     };
     CANCELLED.store(false, Ordering::Relaxed);

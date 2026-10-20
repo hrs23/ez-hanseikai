@@ -17,6 +17,7 @@ pub const SERIES: [&str; 2] = ["v", "m"];
 pub const INIT: &str = "init.mp4";
 pub const RECORDINGS: &str = "recordings";
 pub const TOKEN_BYTES: usize = 8;
+const ROOM_ID_BYTES: usize = 4;
 
 pub fn seg_name(n: u32) -> String {
     format!("{n:06}.m4s")
@@ -89,8 +90,12 @@ pub fn capture_id(text: &str) -> bool {
     !text.is_empty() && text.len() <= 20 && text.chars().all(|c| c.is_ascii_digit())
 }
 
+fn hex_of(text: &str, bytes: usize) -> bool {
+    text.len() == 2 * bytes && text.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
 pub fn valid_token(text: &str) -> bool {
-    text.len() == 2 * TOKEN_BYTES && text.chars().all(|c| c.is_ascii_hexdigit())
+    hex_of(text, TOKEN_BYTES)
 }
 
 pub fn valid_id(text: &str) -> bool {
@@ -272,7 +277,7 @@ fn activate(core: &Arc<Core>, room: Room) {
 
 pub fn create_room(core: &Arc<Core>, name: &str) -> Result<String, String> {
     idle(core)?;
-    let id = random_hex(4);
+    let id = random_hex(ROOM_ID_BYTES);
     let name = match clean_text(name, ROOM_NAME_MAX) {
         n if n.is_empty() => format!("{}'s room", core.name.lock().unwrap()),
         n => n,
@@ -293,7 +298,7 @@ pub fn join_room(core: &Arc<Core>, code: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn switch_room(core: &Arc<Core>, id: &str) -> Result<(), String> {
+pub fn enter_room(core: &Arc<Core>, id: &str) -> Result<(), String> {
     idle(core)?;
     {
         let mut rooms = core.rooms.lock().unwrap();
@@ -318,7 +323,7 @@ pub fn close_room(core: &Arc<Core>, id: &str) {
     apply_active(core);
 }
 
-pub fn leave_room(core: &Arc<Core>, id: &str) {
+pub fn forget_room(core: &Arc<Core>, id: &str) {
     {
         let mut rooms = core.rooms.lock().unwrap();
         rooms.list.retain(|r| r.id != id);
@@ -531,7 +536,7 @@ pub fn apply_removals(core: &Arc<Core>) {
 }
 
 pub fn adopt_room(core: &Arc<Core>, pending: &str, id: &str, name: &str, members: &[String]) {
-    if !valid_id(id) || id.starts_with("pending-") {
+    if !hex_of(id, ROOM_ID_BYTES) {
         return;
     }
     {
@@ -1479,6 +1484,14 @@ mod tests {
         assert!(!valid_id("../outside"));
         assert!(!valid_id("a\\b"));
         assert!(valid_id("1a2b3c4d"));
+    }
+
+    #[test]
+    fn a_peer_can_only_name_a_room_with_an_id_this_app_makes() {
+        assert!(hex_of(&random_hex(ROOM_ID_BYTES), ROOM_ID_BYTES));
+        for id in ["A1B2C3D4", "a1b2c3d ", "pending-0123456789abcdef", "a1b2c3d4e5", "a1b2"] {
+            assert!(!hex_of(id, ROOM_ID_BYTES), "{id}");
+        }
     }
 
     #[test]

@@ -35,7 +35,7 @@ function mdHosts(label) {
 
 async function openWeb(url, label) {
   const host = new URL(url).host;
-  if (label !== undefined && !mdHosts(label).includes(host.replace(/^www\./, "")) && !(await ask(t("Open {host}?", { host }), t("Open"), false, url))) return;
+  if (!mdHosts(label).includes(host.replace(/^www\./, "")) && !(await ask(t("Open {host}?", { host }), t("Open"), false, url))) return;
   invoke("open_link", { url }).catch(warn);
 }
 const mdHooks = (over = {}) => ({ onTag: filterTag, onLink: openLink, onOpen: openWeb, onTask: null, ...over });
@@ -49,9 +49,9 @@ function mdHref(url) {
   try { return { kind: "web", url: new URL(url).href }; } catch { return null; }
 }
 
-function mdLink(url, label, raw, masked = false) {
+function mdLink(url, label, raw) {
   const href = mdHref(url);
-  return href ? { link: href, children: label, masked } : { text: raw };
+  return href ? { link: href, children: label } : { text: raw };
 }
 
 function urlEnd(url) {
@@ -69,7 +69,7 @@ function mdInline(text) {
     last = m.index + m[0].length;
     if (m[1] !== undefined) out.push({ text: m[1] });
     else if (m[3] !== undefined) out.push({ code: m[3].trim() });
-    else if (m[5] !== undefined) out.push(m[0].startsWith("!") ? { text: m[0] } : mdLink(m[5], mdInline(m[4]), m[0], true));
+    else if (m[5] !== undefined) out.push(m[0].startsWith("!") ? { text: m[0] } : mdLink(m[5], mdInline(m[4]), m[0]));
     else if (m[6] !== undefined) out.push(mdLink(m[6], [{ text: m[6] }], m[0]));
     else if (m[7] !== undefined) {
       const url = urlEnd(m[7]);
@@ -217,13 +217,13 @@ function mdSpans(nodes, hooks) {
       const label = mdText(n.children) || t("Moment");
       return [el("button", { className: "link", onclick: (e) => { e.stopPropagation(); hooks.onLink(n.link.link); } }, icon("play", "sm"), `${label} ${fmt(n.link.link.m)}`)];
     }
-    const open = (e) => { e.preventDefault(); e.stopPropagation(); hooks.onOpen(n.link.url, n.masked ? mdText(n.children) : undefined); };
+    const open = (e) => { e.preventDefault(); e.stopPropagation(); hooks.onOpen(n.link.url, mdText(n.children)); };
     const a = el("a", { className: "ext", role: "link", tabIndex: 0, title: n.link.url, onclick: open, onauxclick: (e) => { if (e.button === 1) open(e); }, onkeydown: (e) => { if (e.key === "Enter") open(e); } }, ...(n.children.length ? mdSpans(n.children, hooks) : [n.link.url]));
     return [a];
   });
 }
 
-function mdNodes(blocks, hooks, base = 0) {
+function mdNodes(blocks, hooks, base) {
   return blocks.map((b) => {
     if (b.type === "heading") return el(`h${Math.min(MD_HEADING_MAX, b.level + base)}`, {}, ...mdSpans(b.inline, hooks));
     if (b.type === "paragraph") return el("p", {}, ...mdSpans(b.inline, hooks));
@@ -242,7 +242,7 @@ function mdNodes(blocks, hooks, base = 0) {
   });
 }
 
-function markdownDom(text, hooks, base = 0, firstLine = 0) {
+function markdownDom(text, hooks, base, firstLine) {
   return mdNodes(mdParse(text, firstLine), hooks, base);
 }
 

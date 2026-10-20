@@ -26,11 +26,11 @@ function renderRoomHead() {
 }
 function navActive() {
   if (page === "player") return !nowView && !playSet() && !review ? "live" : "";
-  return { board: "board", members: "members", plugins: "plugins", jobs: "plugins" }[roomTab] || "";
+  return navOf(roomTab);
 }
 function renderNav() {
   const active = navActive();
-  for (const b of $("sidenav").querySelectorAll("button")) {
+  for (const b of document.querySelectorAll("[data-nav]")) {
     const on = b.dataset.nav === active;
     b.classList.toggle("on", on);
     if (on) b.setAttribute("aria-current", "page");
@@ -41,7 +41,6 @@ function renderNav() {
   $("askcount").textContent = String(st.asks.length);
   $("jobcount").hidden = !failed;
   $("jobcount").textContent = String(failed);
-  $("recsopen").classList.toggle("on", page === "room" && roomTab === "recordings");
   const badge = apiBadge(st.api);
   $("apibadge").hidden = !badge;
   if (badge) {
@@ -56,7 +55,6 @@ function setSideWidth(px, keep = true) {
   document.documentElement.style.setProperty("--side", sideWidth + "px");
   $("splitter").setAttribute("aria-valuenow", String(sideWidth));
   if (keep) store("sideWidth", sideWidth);
-  if (st) { place(rec); place(play); }
 }
 function dragSide(down) {
   down.preventDefault();
@@ -89,8 +87,8 @@ function roomMenu(anchor) {
   ], anchor);
 }
 function navigate(name) {
+  if (!inRoom()) return;
   if (name === "live") openLive();
-  else if (name === "board") showBoard();
   else showRoomTab(name);
 }
 function tickSide() {
@@ -362,8 +360,7 @@ window.__TAURI__.event.listen("levels", (e) => {
 });
 
 $("roomname").onclick = (e) => roomMenu(e.currentTarget);
-for (const b of $("sidenav").querySelectorAll("button")) b.onclick = () => navigate(b.dataset.nav);
-$("recsopen").onclick = () => showRoomTab("recordings");
+for (const b of document.querySelectorAll("[data-nav]")) b.onclick = () => navigate(b.dataset.nav);
 $("startbtn").onclick = () => toggleRecording();
 $("startmore").onclick = () => startMenu($("startbtn").parentElement);
 $("standby").onclick = openLive;

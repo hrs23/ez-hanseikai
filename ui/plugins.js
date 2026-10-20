@@ -54,9 +54,8 @@ function pluginTabs() {
   return el("div", { className: "seg" }, tab("plugins", t("Plugins")), tab("jobs", t("Jobs"), failedJobs()));
 }
 function pluginRunner(p) {
-  const ids = [...new Set([...p.workers.map((w) => w.id), ...(p.runner ? [p.runner] : [])])];
   const change = (e) => askRoom(t("Change who runs {name}?", { name: t(p.name) }), t("Change"), () => invoke("set_plugin_runner", { id: p.id, runner: e.target.value || null }).then(pollPlugins).catch(fail));
-  const select = el("select", { ariaLabel: t("Who runs it"), onchange: change }, el("option", { value: "", textContent: t("Auto"), selected: !p.runner }), ...ids.map((id) => el("option", { value: id, textContent: nameOf(id), selected: p.runner === id })));
+  const select = el("select", { ariaLabel: t("Who runs it"), onchange: change }, el("option", { value: "", textContent: t("Auto"), selected: !p.runner }), ...p.workers.map(({ id }) => el("option", { value: id, textContent: nameOf(id), selected: p.runner === id })));
   return el("div", { className: "field" }, el("label", { textContent: t("Who runs it") }), select, pill("accent", "users", t("Everyone")));
 }
 function pluginWorkers(p) {

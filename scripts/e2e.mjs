@@ -698,7 +698,7 @@ async function scenario(ctx) {
     const file = fs.readFileSync(path.join(roomDir(a, ctx.room), "thumbs", `${ctx.set}.jpg`));
     check(file[0] === 0xff && file[1] === 0xd8 && file.length > 500, "the thumbnail file is not a JPEG");
     await evaluate(a, `$("recsopen").click(); true`);
-    await waitFor("A lists the set as a card with a picture", within(UI_REFRESH_S * 5), () => evaluate(a, `[...$("roomtab").querySelectorAll(".reccard")].some((c) => c.querySelector("img") && c.querySelectorAll(".acts button").length === 2) && $("homename").textContent === t("Recordings")`));
+    await waitFor("A lists the set as a card with a picture", within(UI_REFRESH_S * 5), () => evaluate(a, `[...$("roomtab").querySelectorAll(".reccard")].some((c) => c.querySelector("img") && c.querySelectorAll(".acts button").length === 2) && $("homename").textContent === t("Recordings") && $("recsopen").getAttribute("aria-current") === "page"`));
     check(await evaluate(a, `!!$("sessions").querySelector(".srow:not(.liverow) .thumb img") && !$("allrecs") && $("sessions").querySelectorAll(".srow:not(.liverow)").length === recordingRows().length && !!$("recfilter") && !!$("recimport")`), "the sidebar does not list every recording with a thumbnail, or the filter and Import are not in the main area");
     await evaluate(a, `$("recfilter").value = "zzzz"; $("recfilter").dispatchEvent(new Event("input")); true`);
     check(await evaluate(a, `$("roomtab").querySelectorAll(".reccard").length === 0`), "the filter did not hide the cards");
@@ -1369,11 +1369,11 @@ async function scenario(ctx) {
   });
 
   await step("B switches away from the room, keeps it and enters it again", async () => {
-    await invoke(b, "leave_room", { id: ctx.room });
+    await invoke(b, "close_room", { id: ctx.room });
     const left = await state(b);
     check(!left.room && left.rooms.some((r) => r.id === ctx.room), `B's rooms after leaving: ${brief(left.rooms)}`);
     check(fs.existsSync(logFile(b, ctx.room, b.id)), "B lost its log by leaving");
-    await invoke(b, "switch_room", { id: ctx.room });
+    await invoke(b, "enter_room", { id: ctx.room });
     await allSee([a, b], "A and B connected again", within(DIAL_S * 2), (st, app) => st.room?.id === ctx.room && connected(st, [a, b].filter((x) => x !== app).map((x) => x.id)));
   });
 
