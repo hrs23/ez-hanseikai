@@ -54,6 +54,7 @@ const CLOCK_SHIFT_S = 8.2;
 const NTP_EPOCH_S = 2208988800;
 const TRICKLE_MBPS = 0.01;
 const LIVE_LAG_MAX_S = 12;
+const LIVE_CATCH_UP = 1.05;
 const CATCH_UP_S = 60;
 const UNREACHABLE_S = 60;
 const NTP = { c: "127.0.0.1:1" };
@@ -354,6 +355,8 @@ async function recordsAgain(app, room, set, old) {
 }
 
 const lastJoin = (app, room, set) => logOf(app, room, app.id).findLast((r) => r.set === set && (r.k === "rec" || r.k === "rec_end"));
+
+const listenExport = (app) => evaluate(app, `window.e2eExport = null; window.__TAURI__.event.listen("export", (e) => { if (e.payload.done) window.e2eExport = e.payload; }).then(() => true)`);
 
 async function watchLive(app, b, seconds, until = () => false) {
   const end = Date.now() + seconds * 1000;
@@ -736,8 +739,10 @@ async function scenario(ctx) {
     const held = await watchLive(a, b, LIVE_LAG_MAX_S + SEGMENT_S, (x) => x.held || x.late.length > 0);
     await invoke(b, "set_limit", { mbps: null });
     check(held.held, `A never held for B: ${brief(held)}`);
-    await watchLive(a, b, SEGMENT_S * 2);
+    const fast = await watchLive(a, b, SEGMENT_S * 3, (x) => x.rate === LIVE_CATCH_UP);
+    check(fast.rate === LIVE_CATCH_UP, `A never caught up at ${LIVE_CATCH_UP}: ${brief(fast)}`);
     await waitFor("A plays at 1 again once the delay is small", within(CATCH_UP_S), async () => (await evaluate(a, LIVE_PROBE)).rate === 1);
+    await evaluate(a, `openNow(); true`);
     await invoke(b, "set_limit", { mbps: TRICKLE_MBPS });
     const gone = await waitFor("A stops waiting for B and marks its tile", within(LIVE_LAG_MAX_S + SEGMENT_S * 2), async () => { const x = await evaluate(a, LIVE_PROBE); return x.late.join() === b.id && x.pos > x.avail[b.id] && x; });
     await sleep(1000);
@@ -835,7 +840,12 @@ async function scenario(ctx) {
     kill(c);
     await stopped(c);
     await invoke(a, "stop_recording");
-    await allSee([a, b], "the set shown ended at once", within(LOG_SYNC_S * 2), (st) => !st.active_set && setOf(st, ctx.set) && !setOf(st, ctx.set).live && setOf(st, ctx.set).end_us);
+    const lastOf = (app) => Math.max(...segsOf(logOf(app, ctx.room, c.id), ctx.set).map((s) => s.t_us + s.d_us));
+    await allSee([a, b], "the set shown ended at once, not before C's last segment", within(LOG_SYNC_S * 2), (st, app) => { const set = setOf(st, ctx.set); return !st.active_set && set && !set.live && set.end_us >= lastOf(app) - set.players.find((p) => p.owner === c.id).offset_us; });
+    await listenExport(b);
+    check((await invoke(b, "export_set", { room: ctx.room, set: ctx.set }))?.skipped, "B cannot export the set while C is down");
+    await invoke(b, "cancel_export");
+    await waitFor("B's export stops", within(COLD_START_S), () => evaluate(b, "window.e2eExport"));
     start("c");
     await attach(c);
     await share(c);
@@ -1275,7 +1285,7 @@ async function scenario(ctx) {
   });
 
   await step("export the set on A to a playable file", async () => {
-    await evaluate(a, `window.e2eExport = null; window.__TAURI__.event.listen("export", (e) => { if (e.payload.done) window.e2eExport = e.payload; }).then(() => true)`);
+    await listenExport(a);
     const started = await invoke(a, "export_set", { room: ctx.room, set: ctx.set });
     check(started && started.skipped.length === 0, `export skipped ${brief(started)}`);
     const done = await waitFor("the export finished", within(ctx.durationS / EXPORT_SPEED), () => evaluate(a, "window.e2eExport"));

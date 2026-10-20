@@ -307,18 +307,15 @@ function tickLive() {
   if (playSet()) return;
   for (const p of livePlayers()) {
     const tl = rec.tiles[p.key];
-    if (!tl) continue;
-    tl.box.classList.toggle("late", !!p.file && liveClock.late.includes(p.key));
-    if (!p.file) continue;
+    if (!tl || !p.file) continue;
     const v = tl.media.video;
     const start = liveStart(p.key, tl.media.part);
-    const edge = start === null || liveClock.pos === null;
+    const edge = start === null || liveClock.pos === null || liveClock.late.includes(p.key);
     const step = edge ? liveFollow(v.duration, v.currentTime) : { target: liveClock.pos - start, playing: !liveClock.held };
     sync(v, step.target, step.playing);
     v.playbackRate = edge ? 1 : liveClock.rate;
   }
 }
-const waitingFor = (key) => t("Waiting for {name}…", { name: nameOf(key) });
 function liveWhat(p) {
   if (p.key === st.id) {
     if (!st.capture.source) return [el("div", { className: "big" }, icon("monitor-off")), el("b", { textContent: t("{name} · Screen off", { name: nameOf(st.id) }) }), el("button", { className: "sm choose", textContent: t("Choose screen"), onclick: (e) => { e.stopPropagation(); openSource($("screenmore")); } })];
@@ -339,7 +336,7 @@ function renderLive() {
   for (const p of list) {
     const tl = tile(rec, p.key);
     nameTile(tl, p.key, p.recording);
-    if (changed("livewhat/" + p.key, [!!p.file, p.sharing, st.capture.source, captureProblem(st.capture), nameOf(p.key), lang])) tl.what.replaceChildren(...(p.file ? [waitingFor(p.key)] : liveWhat(p)));
+    if (changed("livewhat/" + p.key, [p.sharing, st.capture.source, captureProblem(st.capture), nameOf(p.key), lang])) tl.what.replaceChildren(...liveWhat(p));
     tl.box.classList.toggle("wait", !p.file);
     tl.box.classList.toggle("mine", p.key === st.id && !st.capture.source);
     if (!p.file) continue;
@@ -732,7 +729,7 @@ function tick() {
     tl.box.classList.toggle("late", !!tl.media.part && pinned && liveClock.late.includes(p.key));
     const n = p.file.total ? Math.floor((p.file.have / p.file.total) * 100) : 0;
     const what = p.file.stuck ? ["stuck", n] : !pictured ? ["voice"] : behind ? ["here", n] : ["wait"];
-    if (changed("what/" + p.key, [...what, nameOf(p.key), lang])) tl.what.replaceChildren(...(what[0] === "stuck" ? [icon("alert", "sm"), t("{name} stopped at {n}%", { name: nameOf(p.key), n })] : what[0] === "here" ? [icon("download", "sm"), t("{name} {n}% here", { name: nameOf(p.key), n })] : what[0] === "voice" ? [icon("mic", "sm"), t("Voice only")] : [waitingFor(p.key)]));
+    if (changed("what/" + p.key, [...what, nameOf(p.key), lang])) tl.what.replaceChildren(...(what[0] === "stuck" ? [icon("alert", "sm"), t("{name} stopped at {n}%", { name: nameOf(p.key), n })] : what[0] === "here" ? [icon("download", "sm"), t("{name} {n}% here", { name: nameOf(p.key), n })] : what[0] === "voice" ? [icon("mic", "sm"), t("Voice only")] : [t("Waiting for {name}…", { name: nameOf(p.key) })]));
     for (const s of [tl.media, tl.mic]) if (s && s.part && !switching(s)) sync(s.video, m + shiftOf(p, s.part, b), clock.playing && !away && !(livePinned() && liveClock.held));
   }
   if (review) syncVoices();
