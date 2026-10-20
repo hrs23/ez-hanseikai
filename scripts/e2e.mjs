@@ -830,6 +830,7 @@ async function scenario(ctx) {
     await allSee([a, c], "still recording", 1, (st) => st.active_set?.id === ctx.set);
     await invoke(b, "enter_room", { id: ctx.room });
     await recordsAgain(b, ctx.room, ctx.set, before);
+    await allSee([a, b], "A and B connected again", within(DIAL_S * 2), (st, app) => connected(st, [a, b].filter((x) => x !== app).map((x) => x.id)));
     await allSee([a], "B recording again", within(SEGMENT_S + LOG_SYNC_S * 2), (st) => setOf(st, ctx.set).players.find((p) => p.owner === b.id).recording);
     kill(c);
     await stopped(c);
