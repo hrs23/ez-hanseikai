@@ -65,7 +65,7 @@ One key per person, made on first start; its public half is the person's ID ever
 
 ## Verification
 
-Each recorder logs the size and SHA-256 of every init and set segment. A fetched copy is checked once, when it arrives; one that does not match is logged as `file_bad`, deleted and not asked from that member again until the next start. Live copies come straight from the recorder and are kept as they arrive. A file counts as here when it has its logged size, and members tell each other, per set, member and series, how many segments they hold in order, so the set list shows whether everyone has everything or what is missing.
+Each recorder logs the size and SHA-256 of every init and set segment. A fetched copy is checked once, when it arrives; one that does not match is logged as `file_bad` and deleted, and a member that sent all of it is not asked for it again until the next start. Live copies come straight from the recorder and are kept as they arrive. A file counts as here when it has its logged size, and members tell each other, per set, member and series, how many segments they hold in order, so the set list shows whether everyone has everything or what is missing.
 
 ## Time
 

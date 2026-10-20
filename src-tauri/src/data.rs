@@ -235,12 +235,16 @@ fn names(dir: &Path) -> HashMap<String, u64> {
     out
 }
 
-pub fn listing(files: &Files, dir: &Path) -> Listing {
+fn listing(files: &Files, dir: &Path) -> Listing {
     files.lock().unwrap().entry(dir.to_path_buf()).or_insert_with(|| Arc::new(names(dir))).clone()
 }
 
 pub fn forget(files: &Files, prefix: &Path) {
     files.lock().unwrap().retain(|dir, _| !dir.starts_with(prefix));
+}
+
+pub fn has(files: &Files, dir: &Path, name: &str, size: Option<u64>) -> bool {
+    listing(files, dir).get(name).is_some_and(|len| size.is_none_or(|size| size == *len))
 }
 
 pub fn file_dir(core: &Core, room: &str, f: &File) -> PathBuf {
@@ -249,15 +253,15 @@ pub fn file_dir(core: &Core, room: &str, f: &File) -> PathBuf {
 
 pub fn presence(files: &Files, base: &Path, f: &File, series: &str) -> Vec<(bool, bool)> {
     let mut out = Vec::new();
-    let mut at: Option<(&str, Listing, bool)> = None;
+    let mut at: Option<(&str, PathBuf, bool)> = None;
     for seg in f.series(series) {
         if at.as_ref().is_none_or(|(capture, ..)| *capture != seg.capture) {
-            let names = listing(files, &base.join(&seg.capture).join(series));
-            let init = names.get(INIT).is_some_and(|len| f.init(&seg.capture, series).is_none_or(|(size, _)| size == *len));
-            at = Some((seg.capture.as_str(), names, init));
+            let dir = base.join(&seg.capture).join(series);
+            let init = has(files, &dir, INIT, f.init(&seg.capture, series).map(|(size, _)| size));
+            at = Some((seg.capture.as_str(), dir, init));
         }
-        if let Some((_, names, init)) = &at {
-            out.push((names.get(&seg_name(seg.n)) == Some(&seg.size), *init));
+        if let Some((_, dir, init)) = &at {
+            out.push((has(files, dir, &seg_name(seg.n), Some(seg.size)), *init));
         }
     }
     out
@@ -608,6 +612,23 @@ mod tests {
         let want = expected(&f, &fetch, "v");
         assert_eq!(want.keys().copied().collect::<BTreeSet<_>>(), [0, 2, 3].into());
         assert_eq!((want[&0].clone(), want[&3].clone()), ((4, "i".to_string()), (4, "s3".to_string())));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_file_is_here_under_its_final_name_with_its_logged_size() {
+        let dir = temp("has");
+        for (name, body) in [(INIT, b"init".as_slice()), ("000001.m4s", b"seg!"), ("000002.m4s.part", b"seg!"), ("verified.json", b"{}")] {
+            put(&dir, name, body);
+        }
+        let files = Files::default();
+        assert!(has(&files, &dir, INIT, Some(4)) && has(&files, &dir, INIT, None) && !has(&files, &dir, INIT, Some(5)));
+        assert!(has(&files, &dir, "000001.m4s", Some(4)) && !has(&files, &dir, "000001.m4s", Some(3)));
+        assert!(!has(&files, &dir, "000002.m4s", Some(4)) && !has(&files, &dir, "000002.m4s.part", None) && !has(&files, &dir, "verified.json", None));
+        put(&dir, "000002.m4s", b"seg!");
+        assert!(!has(&files, &dir, "000002.m4s", Some(4)));
+        forget(&files, &dir);
+        assert!(has(&files, &dir, "000002.m4s", Some(4)));
         let _ = std::fs::remove_dir_all(dir);
     }
 

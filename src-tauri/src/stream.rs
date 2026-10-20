@@ -44,15 +44,17 @@ fn growing(dir: &Path, mut n: u32, out: &mut Vec<Piece>) {
 }
 
 fn pieces_in(files: &data::Files, dir: &Path, f: &File, capture: &str, series: &str) -> Vec<Piece> {
-    let names = data::listing(files, dir);
-    let Some(len) = names.get(INIT).filter(|len| f.init(capture, series).is_none_or(|(size, _)| size == **len)) else { return Vec::new() };
-    let mut out = vec![Piece { path: dir.join(INIT), len: *len }];
+    if !data::has(files, dir, INIT, f.init(capture, series).map(|(size, _)| size)) {
+        return Vec::new();
+    }
+    let mut out = vec![piece(dir.join(INIT))];
     let mut next = None;
     for seg in f.segs.iter().filter(|s| s.capture == capture && s.series == series) {
-        if names.get(&seg_name(seg.n)) != Some(&seg.size) {
+        let name = seg_name(seg.n);
+        if !data::has(files, dir, &name, Some(seg.size)) {
             return out;
         }
-        out.push(Piece { path: dir.join(seg_name(seg.n)), len: seg.size });
+        out.push(Piece { path: dir.join(name), len: seg.size });
         next = Some(seg.n + 1);
     }
     if let Some(n) = next.filter(|_| f.end_us.is_none()) {
@@ -78,18 +80,17 @@ fn live_from(numbers: &[u32]) -> Option<u32> {
     Some(from)
 }
 
-pub fn own_live(core: &Core, room: &str) -> Option<(String, Option<String>)> {
-    let live = core.engine.live().filter(|l| l.room == room)?;
-    let set = live.recent[0].last().and_then(|(_, set)| set.clone());
-    Some((live.capture, set))
-}
-
-fn live_folder(core: &Core, room: &str, owner: &str) -> Option<(String, Option<String>)> {
-    if owner == core.me() {
-        return own_live(core, room);
-    }
-    let live = core.peers.lock().unwrap().iter().find(|p| p.id.to_string() == owner).and_then(|p| p.live.clone())?;
-    Some((live.capture, live.set[0].clone()))
+fn live_folder(core: &Core, room: &str, owner: &str) -> Option<(String, PathBuf)> {
+    let (capture, set) = if owner == core.me() {
+        let live = core.engine.live().filter(|l| l.room == room)?;
+        let set = live.recent[0].last().and_then(|(_, set)| set.clone());
+        (live.capture, set)
+    } else {
+        let live = core.peers.lock().unwrap().iter().find(|p| p.id.to_string() == owner).and_then(|p| p.live.clone())?;
+        (live.capture, live.set[0].clone())
+    };
+    let dir = core.media_dir(room, set.as_deref(), owner, &capture).join(SERIES[0]);
+    Some((capture, dir))
 }
 
 fn pieces_from(dir: &Path, from: u32) -> Vec<Piece> {
@@ -104,17 +105,22 @@ fn pieces_from(dir: &Path, from: u32) -> Vec<Piece> {
 
 fn live_pieces(core: &Core, room: &str, owner: &str, capture: &str, from: u32) -> Vec<Piece> {
     match live_folder(core, room, owner) {
-        Some((current, set)) if current == capture => pieces_from(&core.media_dir(room, set.as_deref(), owner, capture).join(SERIES[0]), from),
+        Some((current, dir)) if current == capture => pieces_from(&dir, from),
         _ => Vec::new(),
     }
 }
 
-pub fn live_json(core: &Core, room: &str, owner: &str, capture: &str, set: Option<&str>) -> Option<Value> {
-    let dir = core.media_dir(room, set, owner, capture).join(SERIES[0]);
-    let numbers: Vec<u32> = std::fs::read_dir(&dir).ok()?.flatten().filter_map(|e| room::seg_number(&e.file_name().to_string_lossy())).collect();
+fn live_start(dir: &Path) -> Option<(u32, u64)> {
+    let numbers: Vec<u32> = std::fs::read_dir(dir).ok()?.flatten().filter_map(|e| room::seg_number(&e.file_name().to_string_lossy())).collect();
     let from = live_from(&numbers)?;
-    let pieces = pieces_from(&dir, from);
-    (pieces.len() > 1).then(|| json!({"path": format!("live/{room}/{owner}/{capture}/{from}"), "size": size(&pieces)}))
+    let pieces = pieces_from(dir, from);
+    (pieces.len() > 1).then(|| (from, size(&pieces)))
+}
+
+pub fn live_json(core: &Core, room: &str, owner: &str) -> Option<Value> {
+    let (capture, dir) = live_folder(core, room, owner)?;
+    let (from, bytes) = live_start(&dir)?;
+    Some(json!({"path": format!("live/{room}/{owner}/{capture}/{from}"), "size": bytes}))
 }
 
 fn decode(path: &str) -> String {
@@ -286,6 +292,21 @@ mod tests {
         assert_eq!([1, 2, 3, 4, 5, 6, 7, 8].map(window), [1, 1, 1, 1, 4, 4, 4, 7]);
         assert_eq!(live_from(&(1..=8).collect::<Vec<_>>()), Some(7));
         assert_eq!(live_from(&[]), None);
+    }
+
+    #[test]
+    fn a_live_tile_starts_where_its_folder_serves_it() {
+        let dir = crate::log::tests::temp("live");
+        for n in 4..=10 {
+            std::fs::write(dir.join(seg_name(n)), b"seg!").unwrap();
+        }
+        std::fs::write(part_of(&dir.join(seg_name(11))), b"op").unwrap();
+        assert_eq!(live_start(&dir), None);
+        std::fs::write(dir.join(INIT), b"init").unwrap();
+        assert_eq!(live_start(&dir), Some((10, 4 + 4 + 2)));
+        assert_eq!(size(&pieces_from(&dir, 10)), 4 + 4 + 2);
+        assert_eq!(live_start(&dir.join("missing")), None);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

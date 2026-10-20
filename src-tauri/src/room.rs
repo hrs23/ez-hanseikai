@@ -1091,7 +1091,7 @@ pub fn relay_host(text: &str) -> Option<String> {
     (!host.is_empty()).then_some(host)
 }
 
-fn peer_json(core: &Core, room: &str, p: &Peer) -> Value {
+fn peer_json(p: &Peer) -> Value {
     let alive = p.alive();
     let kind = alive.map(path_kind);
     let (path, rtt, relay) = (kind.as_ref().map(|k| k.0), kind.as_ref().map(|k| k.1), kind.and_then(|k| k.2));
@@ -1114,7 +1114,6 @@ fn peer_json(core: &Core, room: &str, p: &Peer) -> Value {
         "version": p.info.as_ref().map(|(version, _)| version),
         "other_version": other_version,
         "sharing": sharing,
-        "live": p.live.as_ref().filter(|_| sharing).and_then(|l| stream::live_json(core, room, &p.id.to_string(), &l.capture, l.set[0].as_deref())),
     })
 }
 
@@ -1127,7 +1126,7 @@ pub fn state_json(core: &Core) -> Value {
     let my_id = core.ep.id().to_string();
     let active = core.active_room();
     let mut names: HashMap<String, String> = active.as_ref().map(|r| r.names.clone()).unwrap_or_default();
-    let peers: Vec<Value> = core
+    let mut peers: Vec<Value> = core
         .peers
         .lock()
         .unwrap()
@@ -1136,9 +1135,12 @@ pub fn state_json(core: &Core) -> Value {
             if !p.name.is_empty() {
                 names.insert(p.id.to_string(), p.name.clone());
             }
-            peer_json(core, &room_id, p)
+            peer_json(p)
         })
         .collect();
+    for p in peers.iter_mut().filter(|p| p["sharing"] == true) {
+        p["live"] = json!(stream::live_json(core, &room_id, p["id"].as_str().unwrap_or_default()));
+    }
     names.insert(my_id.clone(), "You".to_string());
     names.extend(imported_views(core, &room_id).into_iter().map(|(id, v)| (id, v.name)));
     let logs = logs(core, &room_id);
@@ -1192,7 +1194,7 @@ pub fn state_json(core: &Core) -> Value {
         "previous_version": core.previous_version,
         "codec": ffmpeg::pick(&core.codecs.lock().unwrap()).1,
         "recording": core.active_set.lock().unwrap().is_some(),
-        "capture": record::capture_json(core, stream::own_live(core, &room_id).and_then(|(capture, set)| stream::live_json(core, &room_id, &my_id, &capture, set.as_deref()))),
+        "capture": record::capture_json(core, stream::live_json(core, &room_id, &my_id)),
         "active_set": core.active_set_json(),
         "room": active.map(|r| json!({"id": r.id, "name": r.name, "pending": r.invite.is_some(), "waiting": r.waiting})),
         "rooms": room_list,
