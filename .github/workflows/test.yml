@@ -28,7 +28,6 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
           workspaces: src-tauri
-          shared-key: release-build
           cache-on-failure: true
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         id: ffmpeg
@@ -46,7 +45,10 @@ jobs:
           New-Item -ItemType Directory ffmpeg | Out-Null
           Get-ChildItem unpacked -Recurse -Include ffmpeg.exe, ffprobe.exe | Move-Item -Destination ffmpeg
       - run: npm ci
-      - run: npx tauri build --no-bundle
+      - run: npx tauri build
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       - run: Copy-Item ffmpeg/ffmpeg.exe src-tauri/target/release/ffmpeg.exe
         shell: pwsh
       - name: End-to-end test
@@ -54,6 +56,14 @@ jobs:
         run: node scripts/e2e.mjs src-tauri/target/release/ez-hanseikai.exe ffmpeg
         env:
           E2E_OUT: ${{ runner.temp }}/e2e
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: github.ref == 'refs/heads/main'
+        with:
+          name: installer
+          retention-days: 1
+          path: |
+            src-tauri/target/release/bundle/nsis/*-setup.exe
+            src-tauri/target/release/bundle/nsis/*-setup.exe.sig
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: failure()
         with:
@@ -63,3 +73,40 @@ jobs:
             ${{ runner.temp }}/e2e/*.png
             ${{ runner.temp }}/e2e/*.txt
             ${{ runner.temp }}/e2e/*.json
+
+  release:
+    needs: [test, e2e]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Find the version to release
+        id: version
+        run: |
+          tag="v$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml)"
+          gh release view "$tag" >/dev/null 2>&1 || echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - if: steps.version.outputs.tag
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: installer
+          path: nsis
+      - name: Publish the release and the update manifests
+        if: steps.version.outputs.tag
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          notes="The installer is unsigned, so Windows SmartScreen warns: choose More info, then Run anyway. It installs for the current user only. ffmpeg is not included; the app downloads it on first run."
+          case "$TAG" in *-*) pre=--prerelease ;; *) pre= ;; esac
+          exe=$(ls nsis/*-setup.exe)
+          name=$(basename "$exe")
+          jq -n --arg version "${TAG#v}" --arg notes "$notes" --arg pub_date "$(date -u +%FT%TZ)" --arg signature "$(cat "$exe.sig")" --arg url "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/${name// /.}" \
+            '{version: $version, notes: $notes, pub_date: $pub_date, platforms: {"windows-x86_64": {signature: $signature, url: $url}}}' > latest.json
+          gh release create "$TAG" "$exe" "$exe.sig" latest.json --target "$GITHUB_SHA" --title "EZ Hanseikai $TAG" --notes "$notes" $pre
+          gh release view updater >/dev/null 2>&1 || gh release create updater --prerelease --title "Update manifests" --notes "Rolling manifests read by the in-app updater: latest.json for the stable channel, latest-beta.json for the beta channel."
+          cp latest.json latest-beta.json
+          gh release upload updater latest-beta.json --clobber
+          if [ -z "$pre" ]; then gh release upload updater latest.json --clobber; fi
