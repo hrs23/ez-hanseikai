@@ -156,12 +156,13 @@ fn encode_args(graph: &str, mapped_audio: bool, video: Option<Vec<String>>, tota
     args
 }
 
-fn run_job(core: &Arc<Core>, set: &(String, String), job: Job, work: &Path, done: usize, jobs: usize) -> Result<(), String> {
+fn run_job(core: &Arc<Core>, set: &(String, String), job: Job, work: &Path, done: usize, jobs: usize, owned: &mut bool) -> Result<(), String> {
     let mut command = export::ffmpeg_command();
     command.current_dir(work);
     let feeds = export::listen(&mut command, job.feeds)?;
     command.args(&job.args).args(["-movflags", "+faststart", "-f", "mp4"]).arg(&job.partial);
-    let (stdout, stderr) = export::begin(core, set.clone(), &mut command, done > 0)?;
+    let (stdout, stderr) = export::begin(core, set.clone(), &mut command, *owned)?;
+    *owned = true;
     export::serve(core, feeds);
     let tail = export::stderr_tail(stderr, ERROR_LINES);
     export::read_progress(stdout, |s| export::emit(core, ((done as f64 + (s / job.total.max(1.0)).clamp(0.0, 1.0)) / jobs as f64) * 100.0, false, None));
@@ -222,17 +223,16 @@ pub fn run(core: &Arc<Core>, room_id: &str, set_id: &str, dir: &Path, aligned: b
     let count = jobs.len();
     tracing::info!("folder export of {set_id} started: {count} files, aligned {aligned}");
     let key = (room_id.to_string(), set_id.to_string());
-    let mut failure = None;
-    for (n, job) in jobs.into_iter().enumerate() {
-        if let Err(e) = run_job(core, &key, job, &work, n, count) {
-            failure = Some(e);
-            break;
-        }
+    let mut owned = false;
+    let failure = jobs.into_iter().enumerate().try_for_each(|(n, job)| run_job(core, &key, job, &work, n, count, &mut owned)).err();
+    if owned {
+        export::end(core);
     }
-    export::end(core);
     if let Some(e) = failure {
         let _ = std::fs::remove_dir_all(dir);
-        export::emit(core, 0.0, true, Some(e.clone()));
+        if owned {
+            export::emit(core, 0.0, true, Some(e.clone()));
+        }
         return Err(e);
     }
     let title = set.files.iter().find_map(|f| f.view.as_ref().and_then(|v| v.title.clone()));
