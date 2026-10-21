@@ -27,9 +27,9 @@ if ($Installer) {
     npx tauri build --no-bundle
 }
 if ($LASTEXITCODE -ne 0) { exit 1 }
-$exe = Join-Path $root "src-tauri\target\release\ggi-hanseikai.exe"
+$exe = Join-Path $root "src-tauri\target\release\ez-hanseikai.exe"
 schtasks /Create /TN ezh-run /TR "`"$exe`"" /SC ONCE /ST 00:00 /IT /F | Out-Null
 schtasks /Run /TN ezh-run | Out-Null
 Start-Sleep 5
 schtasks /Delete /TN ezh-run /F | Out-Null
-Get-Process ggi-hanseikai | Select-Object Name, SessionId | Format-Table -AutoSize | Out-String
+Get-Process ez-hanseikai | Select-Object Name, SessionId | Format-Table -AutoSize | Out-String

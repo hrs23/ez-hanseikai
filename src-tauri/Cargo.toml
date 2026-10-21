@@ -1,5 +1,5 @@
 [package]
-name = "ggi-hanseikai"
+name = "ez-hanseikai"
 version = "0.19.4"
 edition = "2021"
 license = "MIT OR Apache-2.0"

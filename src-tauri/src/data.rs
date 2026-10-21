@@ -234,10 +234,10 @@ pub fn lock(dir: &Path) -> std::io::Result<bool> {
 }
 
 pub fn migrate(old: &Path, new: &Path) -> PathBuf {
-    if new.exists() || !old.exists() {
+    if !old.exists() {
         return new.to_path_buf();
     }
-    if open_lock(old, false).is_err_and(|e| e.kind() != std::io::ErrorKind::NotFound) {
+    if new.exists() || open_lock(old, false).is_err_and(|e| e.kind() != std::io::ErrorKind::NotFound) {
         return old.to_path_buf();
     }
     let moved = crate::proc::wait_until(MOVE_WAIT, MOVE_GAP, || std::fs::rename(old, new).is_ok());
@@ -458,7 +458,7 @@ mod tests {
             std::fs::rename(&new, &old).unwrap();
         }
         put(&new, "key.bin", b"new");
-        assert_eq!(migrate(&old, &new), new);
+        assert_eq!(migrate(&old, &new), old);
         assert_eq!((tree(&old), tree(&new).len()), (before, 1));
         let _ = std::fs::remove_dir_all(base);
     }

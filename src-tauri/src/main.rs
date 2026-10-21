@@ -38,9 +38,9 @@ use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-pub const ALPN: &[u8] = b"ggi-hanseikai/0";
-pub const OLD_ALPN: &[u8] = b"ez-hanseikai/0";
-pub const REPO: &str = "https://github.com/hrs23/ggi-hanseikai";
+pub const ALPN: &[u8] = b"ez-hanseikai/0";
+pub const OLD_ALPN: &[u8] = b"ggi-hanseikai/0";
+pub const REPO: &str = "https://github.com/hrs23/ez-hanseikai";
 pub const PROTOCOL: u32 = 5;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub use proc::{BELOW_NORMAL, NO_WINDOW};
@@ -77,7 +77,7 @@ pub fn profile<'a, M: tauri::Manager<tauri::Wry>>(builder: tauri::WebviewWindowB
 
 fn open_main(app: &tauri::App, dir: &Path) -> tauri::Result<()> {
     let config = app.config().app.windows.first().cloned().unwrap_or_default();
-    profile(tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?, dir).build().map(|window| {
+    profile(tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?.title(&app.package_info().name), dir).build().map(|window| {
         shell::plain_keys(&window);
         shell::match_caption(&window);
     })
@@ -397,13 +397,13 @@ async fn save_text(core: State<'_, Arc<Core>>, name: String, text: String) -> Re
 fn data_dir(app: &AppHandle) -> tauri::Result<PathBuf> {
     match std::env::var_os("EZH_DIR") {
         Some(dir) => Ok(PathBuf::from(dir)),
-        None => app.path().app_local_data_dir().map(|dir| data::migrate(&dir.with_file_name("dev.ez-hanseikai.app"), &dir)),
+        None => app.path().app_local_data_dir().map(|dir| data::migrate(&dir.with_file_name("dev.ggi-hanseikai.app"), &dir)),
     }
 }
 
 async fn init(app: AppHandle, dir: PathBuf, left_lock: bool) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
     debug::init(&dir);
-    tracing::info!("GGI Hanseikai {VERSION} started, process {}, data folder {}", std::process::id(), dir.display());
+    tracing::info!("{} {VERSION} started, process {}, data folder {}", env!("CARGO_PKG_NAME"), std::process::id(), dir.display());
     ffmpeg::set_data_dir(dir.clone());
     let mut recovery = None;
     if left_lock {
@@ -558,7 +558,7 @@ fn main() {
                 Ok(left) => left,
                 Err(_) => {
                     if !test_mode() {
-                        shell::already_running();
+                        shell::already_running(app.handle());
                     }
                     std::process::exit(0);
                 }

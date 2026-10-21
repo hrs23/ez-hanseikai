@@ -12,6 +12,8 @@ npm run build
 
 The setup exe is in `src-tauri/target/release/bundle/nsis`. `scripts/build-installer.ps1` builds an offline installer that bundles that ffmpeg (a GPL build, so do not publish it) and writes its SHA-256 file.
 
+`src-tauri/icons/icon.ico` is generated from `src-tauri/icons/logo.svg` with `npx tauri icon src-tauri/icons/logo.svg -o <temp folder>`, then `icon.ico` is copied back.
+
 ## Release
 
 Releases do not contain ffmpeg: the app downloads a pinned build into its data folder on first run and checks its SHA-256. To release, raise the version in `src-tauri/Cargo.toml` (`Cargo.lock` follows on the next build) and push to main. The `build` job builds the installer (on main only; other branches build the app alone), signed with the key in the repository secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (unsigned, and not released, without them). When the tests and the end-to-end test pass on main and no release for that version exists, the `release` job in `.github/workflows/test.yml` publishes that tested installer with `latest.json`. Every run on main then copies that release's manifest to the `updater` release that the app reads, for the channels in [the README](../README.md#update): a version with a pre-release part (`0.9.1-1`) reaches Beta only, one without it (`0.9.1`) reaches both. Use a numeric pre-release part, which every Windows installer format accepts. Keep the private key out of the repository; only the public key is in `tauri.conf.json`.

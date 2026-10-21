@@ -1305,6 +1305,7 @@ pub fn state_json(core: &Core) -> Value {
     let room_list: Vec<Value> = rooms.list.iter().map(|r| json!({"id": r.id, "name": r.name, "active": rooms.active.as_deref() == Some(&r.id), "members": r.members, "names": r.names, "colors": colors(&r.people()), "used_us": last_used(core, &r.id)})).collect();
     drop(rooms);
     json!({
+        "app": crate::shell::app_name(&core.app, &crate::language(core)),
         "version": VERSION,
         "hw": hw::share(core),
         "now_us": now_us(),

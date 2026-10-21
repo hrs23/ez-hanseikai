@@ -1,6 +1,6 @@
-![GGI Hanseikai](docs/logo.svg)
+![EZ Hanseikai](docs/logo.svg)
 
-# GGI Hanseikai
+# EZ Hanseikai
 
 Record your team's games and review them together.
 
@@ -27,7 +27,7 @@ Work in progress. See [the design](docs/design.md).
 
 ## Install
 
-1. Download `GGI.Hanseikai_<version>_x64-setup.exe` from [Releases](https://github.com/hrs23/ggi-hanseikai/releases) and run it. It is unsigned, so SmartScreen warns: More info, then Run anyway. It installs for your Windows user only and needs no admin rights.
+1. Download `EZ.Hanseikai_<version>_x64-setup.exe` from [Releases](https://github.com/hrs23/ez-hanseikai/releases) and run it. It is unsigned, so SmartScreen warns: More info, then Run anyway. It installs for your Windows user only and needs no admin rights.
 2. Start the app. Allow it through the firewall when Windows asks. On first run it downloads ffmpeg, and keeps retrying until that works.
 3. Enter your name. One player presses Create room, which copies an invite code to send; the others paste it and press Join, and a member approves them (Copy invite code in the room's menu, the name at the top left, makes more). Choose your screen with the Screen button at the bottom left, then press Start recording.
 
@@ -35,15 +35,15 @@ Requires Windows 10 version 2004 or later, or Windows 11.
 
 ## Update
 
-The app checks for a new version at start, every four hours while it runs (or Help > Check for updates), and shows it above the page with Install. While recording it offers to install after recording instead: then it asks once nothing records, plays, exports or analyses, and it never installs without asking. Updates are signed and checked before they install. An older version may not read data from a newer one, so going back means starting with an empty data folder. Updating from EZ Hanseikai moves the data folder to [its new name](#uninstall), removes the old app and its shortcuts, and Windows asks about the firewall again.
+The app checks for a new version at start, every four hours while it runs (or Help > Check for updates), and shows it above the page with Install. While recording it offers to install after recording instead: then it asks once nothing records, plays, exports or analyses, and it never installs without asking. Updates are signed and checked before they install. An older version may not read data from a newer one, so going back means starting with an empty data folder. Updating from GGI Hanseikai moves the data folder to [its name](#uninstall), removes the old app and its shortcuts, and Windows asks about the firewall again.
 
 Settings > Updates chooses the channel: Stable (the default) gets releases marked stable, Beta gets every release first.
 
 ## Uninstall
 
-Settings > Apps > Installed apps > GGI Hanseikai > Uninstall. Your data stays unless you tick the option to delete it, so a reinstall keeps your ID and recordings.
+Settings > Apps > Installed apps > EZ Hanseikai > Uninstall. Your data stays unless you tick the option to delete it, so a reinstall keeps your ID and recordings.
 
-Data lives in `%LOCALAPPDATA%\dev.ggi-hanseikai.app`; File > Open data folder opens it, and Help > Reset app resets it, keeping your ID, rooms and recordings unless you choose otherwise. `key.bin` is your identity: keep it private, and deleting it changes your ID.
+Data lives in `%LOCALAPPDATA%\dev.ez-hanseikai.app`; File > Open data folder opens it, and Help > Reset app resets it, keeping your ID, rooms and recordings unless you choose otherwise. `key.bin` is your identity: keep it private, and deleting it changes your ID.
 
 ## Security
 

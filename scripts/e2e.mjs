@@ -6,7 +6,7 @@ import http from "node:http";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
-const EXE = path.resolve(process.argv[2] || "src-tauri/target/release/ggi-hanseikai.exe");
+const EXE = path.resolve(process.argv[2] || "src-tauri/target/release/ez-hanseikai.exe");
 const FFMPEG_DIR = path.resolve(process.argv[3] || path.dirname(EXE));
 const OUT = path.resolve(process.env.E2E_OUT || "e2e-out");
 
@@ -649,7 +649,7 @@ async function collect(room) {
 }
 
 function processes() {
-  const script = "Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'ggi-hanseikai' -or $_.CommandLine -match 'remote-debugging-port' } | ForEach-Object { \"$($_.ProcessId) $($_.ParentProcessId) $($_.Name) $($_.CreationDate.ToString('HH:mm:ss')) $(if ($_.CommandLine -match 'remote-debugging-port=(\\d+)') { $matches[1] })\" }; Get-Process ggi-hanseikai, msedgewebview2 -ErrorAction SilentlyContinue | ForEach-Object { \"$($_.Id) $($_.ProcessName) responding=$($_.Responding) window=$($_.MainWindowHandle) title=$($_.MainWindowTitle) threads=$($_.Threads.Count) cpu=$([int]$_.CPU)\" }; netstat -ano | Select-String ':93[0-9][0-9] '; Get-ChildItem $env:E2E_OUT\\apps\\*\\data | ForEach-Object { \"$($_.FullName.Substring($env:E2E_OUT.Length)) $($_.LastWriteTime.ToString('HH:mm:ss'))\" }; Get-ChildItem -Recurse -Filter DevToolsActivePort $env:E2E_OUT | ForEach-Object { \"$($_.FullName) $($_.LastWriteTime.ToString('HH:mm:ss')) $((Get-Content $_.FullName) -join ' ')\" }; Get-Date -Format HH:mm:ss";
+  const script = "Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'ez-hanseikai' -or $_.CommandLine -match 'remote-debugging-port' } | ForEach-Object { \"$($_.ProcessId) $($_.ParentProcessId) $($_.Name) $($_.CreationDate.ToString('HH:mm:ss')) $(if ($_.CommandLine -match 'remote-debugging-port=(\\d+)') { $matches[1] })\" }; Get-Process ez-hanseikai, msedgewebview2 -ErrorAction SilentlyContinue | ForEach-Object { \"$($_.Id) $($_.ProcessName) responding=$($_.Responding) window=$($_.MainWindowHandle) title=$($_.MainWindowTitle) threads=$($_.Threads.Count) cpu=$([int]$_.CPU)\" }; netstat -ano | Select-String ':93[0-9][0-9] '; Get-ChildItem $env:E2E_OUT\\apps\\*\\data | ForEach-Object { \"$($_.FullName.Substring($env:E2E_OUT.Length)) $($_.LastWriteTime.ToString('HH:mm:ss'))\" }; Get-ChildItem -Recurse -Filter DevToolsActivePort $env:E2E_OUT | ForEach-Object { \"$($_.FullName) $($_.LastWriteTime.ToString('HH:mm:ss')) $((Get-Content $_.FullName) -join ' ')\" }; Get-Date -Format HH:mm:ss";
   const r = spawnSync("powershell", ["-NoProfile", "-Command", script], { encoding: "utf8" });
   return (r.stdout || r.stderr || "").trim() || "no process with a remote-debugging port and nothing on ports 9300 to 9399";
 }
@@ -1406,7 +1406,7 @@ async function library(ctx) {
     check(status.status === 200 && status.json.room === ctx.room && status.json.recording === false && ["idle", "standby"].includes(status.json.state) && status.json.members.length === 3 && status.json.members.some((m) => m.id === a.id && m.state === status.json.state), `status: ${status.status} ${brief(status.json)}`);
     const diag = await api(a, "GET", "/v1/diagnostics?everyone=true", { token });
     const diagText = diag.json && diag.json.text || "";
-    check(diag.status === 200 && diagText.includes("=== this PC ===\nggi-hanseikai") && diagText.includes("recent log") && diagText.split("=== member ").length === 3, `diagnostics: ${diag.status} ${brief(diagText.slice(0, 200))}`);
+    check(diag.status === 200 && diagText.includes("=== this PC ===\nez-hanseikai") && diagText.includes("recent log") && diagText.split("=== member ").length === 3, `diagnostics: ${diag.status} ${brief(diagText.slice(0, 200))}`);
     for (const secret of [NAMES.a, NAMES.b, NAMES.c, a.id, b.id]) check(!diagText.includes(secret), `the API report holds ${secret.slice(0, 4)}`);
     const operation = (name, body) => api(a, "POST", `/v1/ops/${name}`, { token, body });
     const opened = await operation("enter_room", { id: ctx.room });
@@ -1485,7 +1485,7 @@ async function library(ctx) {
     await evaluate(a, `openDiagnostics("flow"); true`);
     await screenshot(a, "diagnostics");
     const report = await evaluate(a, `diagnosticsText()`);
-    check(report.includes("ggi-hanseikai") && report.includes("jobs") && report.includes("recent log") && report.includes("\nhardware\n") && report.includes("\nclocks\n") && report.includes("\nwhere data goes\n"), "the report lacks its parts");
+    check(report.includes("ez-hanseikai") && report.includes("jobs") && report.includes("recent log") && report.includes("\nhardware\n") && report.includes("\nclocks\n") && report.includes("\nwhere data goes\n"), "the report lacks its parts");
     for (const secret of [NAMES.a, NAMES.b, NAMES.c, a.id, b.id]) check(!report.includes(secret), `the report holds ${secret.slice(0, 4)}`);
     check(!/[A-Za-z]:\\/.test(report) && !/\b\d{1,3}(\.\d{1,3}){3}\b/.test(report), "the report holds a path or an address");
     await evaluate(a, `$("diagdlg").close(); true`);

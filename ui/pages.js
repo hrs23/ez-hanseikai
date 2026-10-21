@@ -34,6 +34,7 @@ let diagFeedAt = 0;
 
 function renderStart() {
   if (inRoom()) return;
+  $("brand").textContent = st.app;
   const pendingRoom = st.room && st.room.pending;
   if (!st.name) askName = true;
   $("namefield").hidden = !askName;
@@ -253,7 +254,7 @@ function renderStorage() {
   const seg = (cls, n) => { const i = el("i", { className: cls }); i.style.width = (n / totalBytes) * 100 + "%"; return i; };
   $("usage").replaceChildren(seg("app", used), seg("other", other));
   const free = d.hours_left !== null && d.hours_left !== undefined ? t("Free {free} · about {h} h of recording", { free: bytes(d.free), h: Math.floor(d.hours_left) }) : t("Free {free}", { free: bytes(d.free) });
-  $("legend").replaceChildren(el("span", {}, el("i", { className: "app" }), t("GGI Hanseikai {size}", { size: bytes(used) })), el("span", {}, el("i", { className: "other" }), t("Other files {size}", { size: bytes(other) })), el("span", { className: "sp" }), el("span", {}, el("i", { className: "free" }), free));
+  $("legend").replaceChildren(el("span", {}, el("i", { className: "app" }), `${st.app} ${bytes(used)}`), el("span", {}, el("i", { className: "other" }), t("Other files {size}", { size: bytes(other) })), el("span", { className: "sp" }), el("span", {}, el("i", { className: "free" }), free));
   $("selold").textContent = t("All but newest {n}", { n: KEEP_NEWEST });
   for (const id of [...picked]) if (!sets.some((s) => s.id === id)) picked.delete(id);
   const biggest = Math.max(1, ...sets.map((s) => s.progress.have));
@@ -435,7 +436,7 @@ $("oldfiles").onclick = async () => {
 $("delno").onclick = () => $("deletedlg").close();
 for (const b of $("diagdlg").querySelectorAll("[data-dtab]")) b.onclick = () => openDiagnostics(b.dataset.dtab);
 $("diagcopy").onclick = () => diagnosticsText().then((text) => navigator.clipboard.writeText(text)).then(() => flash(t("Copied"))).catch(fail);
-$("diagsave").onclick = () => diagnosticsText().then((text) => dialog("save_text", { name: "ggi-hanseikai-diagnostics.txt", text })).then((saved) => { if (saved) flash(t("Saved")); }).catch(fail);
+$("diagsave").onclick = () => diagnosticsText().then((text) => dialog("save_text", { name: "ez-hanseikai-diagnostics.txt", text })).then((saved) => { if (saved) flash(t("Saved")); }).catch(fail);
 $("resetno").onclick = () => $("resetdlg").close();
 $("resetyes").onclick = () => {
   $("resetdlg").close();

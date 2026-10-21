@@ -26,7 +26,7 @@ function aiPurposes() {
 function aiPrompt(purpose, info, room, recording) {
   const address = apiUrl(info.address);
   return [
-    t("Help my team review its game with GGI Hanseikai, using the app's local API."),
+    t("Help my team review its game using this app's local API."),
     t("First read {address}/llms.txt: it explains the API.", { address }),
     t("Address: {address}", { address }),
     t("Token (send it as: Authorization: Bearer <token>): {token}", { token: info.token }),

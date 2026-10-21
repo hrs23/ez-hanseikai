@@ -1,12 +1,12 @@
-# GGI Hanseikai
+# EZ Hanseikai
 
-GGI Hanseikai is a Windows app where a team records its games and reviews them together. A room holds the team's recordings. Each recording has events (notes, marks, analysis results such as match ends and spoken lines), and the room has a game plan: a team card and a card for each member, each a short Markdown text.
+EZ Hanseikai is a Windows app where a team records its games and reviews them together. A room holds the team's recordings. Each recording has events (notes, marks, analysis results such as match ends and spoken lines), and the room has a game plan: a team card and a card for each member, each a short Markdown text.
 
 This file describes the app's local HTTP API. An AI agent or a program can read recordings and do everything the app's window does, except open windows. Whatever you write is shared with the whole room, like what people write in the app.
 
 ## Turn it on
 
-The API is off by default. A person turns it on in the app: Settings > API > Local API, or starts the app with --api (or EZH_API=1). The address is http://127.0.0.1:47625 and Copy token puts the token on the clipboard. While the API runs, the address and the token are also in api.json in the app's data folder (%LOCALAPPDATA%\\dev.ggi-hanseikai.app), readable by the current Windows user only. The token is secret; never print it into notes or the game plan.
+The API is off by default. A person turns it on in the app: Settings > API > Local API, or starts the app with --api (or EZH_API=1). The address is http://127.0.0.1:47625 and Copy token puts the token on the clipboard. While the API runs, the address and the token are also in api.json in the app's data folder (%LOCALAPPDATA%\\dev.ez-hanseikai.app), readable by the current Windows user only. The token is secret; never print it into notes or the game plan.
 
 ## Rules
 
@@ -22,7 +22,7 @@ The API is off by default. A person turns it on in the app: Settings > API > Loc
 ## Read
 
 GET /v1
-  {"app": "GGI Hanseikai", "version": "0.12.0", "id": "...", "name": "Ann", "room": "<open room id or null>", "recording": false}
+  {"app": "ez-hanseikai", "version": "0.12.0", "id": "...", "name": "Ann", "room": "<open room id or null>", "recording": false}
 
 GET /v1/status
   {"room": "<open room id or null>", "recording": false, "state": "standby", "members": [{"id": "...", "name": "Ann", "online": true, "state": "standby"}]}
@@ -62,7 +62,7 @@ GET /v1/rooms/{room}/plugins
   runner is the one member whose PC analyses every recording for the extension (null when that member left the room); left and failed count recordings.
 
 GET /v1/diagnostics[?everyone=true]
-  {"text": "ggi-hanseikai 0.16.2 on windows ...\n\nrecent errors\n..."}
+  {"text": "ez-hanseikai 0.16.2 on windows ...\n\nrecent errors\n..."}
   The report that Help > Diagnostics > Copy report gives, without its summary lines and with names and addresses hidden: versions, environment check, connections, hardware and clocks, where data goes, recent errors, jobs, crashes and the recent log. everyone=true puts this report under `=== this PC ===` and adds each connected member's under `=== member <first 10 characters of the id> ===`. Read it when something does not work.
 
 ## Write

@@ -11,14 +11,14 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Modifiers, Shortcut};
 use tauri_plugin_notification::NotificationExt;
 
-use crate::{room, Core, REPO, VERSION};
+use crate::{language, room, Core, REPO, VERSION};
 
 pub const DEFAULT_HOTKEY: &str = "Ctrl+Alt+M";
 const BOARD: &str = "board";
 const STATUS_POLL: Duration = Duration::from_secs(1);
 const JA: [(&str, &str); 46] = [
-    ("GGI Hanseikai is already running with this data folder.", "GGI反省会はこのデータフォルダですでに動いています。"),
-    ("GGI Hanseikai", "GGI反省会"),
+    ("Already running with this data folder.", "このデータフォルダですでに動いています。"),
+    ("EZ Hanseikai", "EZ反省会"),
     ("File", "ファイル"),
     ("Room", "ルーム"),
     ("Recording", "録画"),
@@ -73,23 +73,23 @@ struct Items {
 
 static ITEMS: Mutex<Items> = Mutex::new(Items { toggle: None, mark: None });
 
-pub fn tr(lang: &str, en: &'static str) -> &'static str {
+pub fn tr<'a>(lang: &str, en: &'a str) -> &'a str {
     if lang != "ja" {
         return en;
     }
     JA.iter().find(|(e, _)| *e == en).map_or(en, |(_, ja)| ja)
 }
 
-fn lang(core: &Core) -> String {
-    crate::language(core)
+pub fn app_name(app: &AppHandle, lang: &str) -> String {
+    tr(lang, &app.package_info().name).to_string()
 }
 
 pub fn ask(app: &AppHandle, lang: &str, text: &str, ok: &str, cancel: &str) -> bool {
-    app.dialog().message(text).title(tr(lang, "GGI Hanseikai")).kind(MessageDialogKind::Warning).buttons(MessageDialogButtons::OkCancelCustom(ok.into(), cancel.into())).blocking_show()
+    app.dialog().message(text).title(app_name(app, lang)).kind(MessageDialogKind::Warning).buttons(MessageDialogButtons::OkCancelCustom(ok.into(), cancel.into())).blocking_show()
 }
 
 pub fn tell(app: &AppHandle, lang: &str, text: &str) {
-    app.dialog().message(text).title(tr(lang, "GGI Hanseikai")).kind(MessageDialogKind::Info).buttons(MessageDialogButtons::Ok).blocking_show();
+    app.dialog().message(text).title(app_name(app, lang)).kind(MessageDialogKind::Info).buttons(MessageDialogButtons::Ok).blocking_show();
 }
 
 fn documents(app: &AppHandle) -> Option<PathBuf> {
@@ -145,11 +145,11 @@ pub fn open_link(url: &str) {
     }
 }
 
-pub fn already_running() {
+pub fn already_running(app: &AppHandle) {
     use windows::core::HSTRING;
     use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONINFORMATION, MB_OK};
-    let text = tr(crate::os_language(), "GGI Hanseikai is already running with this data folder.");
-    unsafe { MessageBoxW(None, &HSTRING::from(text), &HSTRING::from(tr(crate::os_language(), "GGI Hanseikai")), MB_OK | MB_ICONINFORMATION) };
+    let text = tr(crate::os_language(), "Already running with this data folder.");
+    unsafe { MessageBoxW(None, &HSTRING::from(text), &HSTRING::from(app_name(app, crate::os_language())), MB_OK | MB_ICONINFORMATION) };
 }
 
 pub fn set_fullscreen(app: &AppHandle, label: &str, on: bool) -> Result<(), String> {
@@ -167,7 +167,7 @@ pub fn open_board(app: &AppHandle, dir: &Path) {
     }
     let (handle, dir) = (app.clone(), dir.to_path_buf());
     let _ = app.run_on_main_thread(move || {
-        let builder = tauri::WebviewWindowBuilder::new(&handle, BOARD, tauri::WebviewUrl::App("index.html?board".into())).title(tr("", "GGI Hanseikai")).decorations(false).maximized(true).theme(Some(tauri::Theme::Dark)).background_color(tauri::window::Color(12, 14, 18, 255));
+        let builder = tauri::WebviewWindowBuilder::new(&handle, BOARD, tauri::WebviewUrl::App("index.html?board".into())).title(app_name(&handle, "")).decorations(false).maximized(true).theme(Some(tauri::Theme::Dark)).background_color(tauri::window::Color(12, 14, 18, 255));
         match crate::profile(builder, &dir).build() {
             Ok(window) => crate::shell::plain_keys(&window),
             Err(e) => tracing::warn!("the board window did not open: {e}"),
@@ -228,7 +228,7 @@ pub fn exit_app(app: &AppHandle, core: &Arc<Core>) {
     let exporting = core.export.lock().unwrap().is_some();
     if let Some(question) = exit_question(exporting, crate::net::receiving(core)) {
         show_window(app);
-        let lang = lang(core);
+        let lang = language(core);
         if !ask(app, &lang, tr(&lang, question), tr(&lang, "Exit"), tr(&lang, "Cancel")) {
             return;
         }
@@ -239,15 +239,15 @@ pub fn exit_app(app: &AppHandle, core: &Arc<Core>) {
 }
 
 pub fn export_identity(app: &AppHandle, core: &Arc<Core>) {
-    let Some(path) = save_file(app, "ggi-hanseikai-identity.key") else { return };
+    let Some(path) = save_file(app, "ez-hanseikai-identity.key") else { return };
     if std::fs::copy(core.dir.join("key.bin"), &path).is_ok() {
-        tell(app, &lang(core), tr(&lang(core), "Identity saved. Keep this file private: anyone with it can act as you."));
+        tell(app, &language(core), tr(&language(core), "Identity saved. Keep this file private: anyone with it can act as you."));
     }
 }
 
 pub fn import_identity(app: &AppHandle, core: &Arc<Core>) {
     let Some(path) = open_file(app, "Key", "key") else { return };
-    let lang = lang(core);
+    let lang = language(core);
     if !std::fs::read(&path).is_ok_and(|b| b.len() == 32) {
         tell(app, &lang, tr(&lang, "That file is not an identity key."));
         return;
@@ -289,7 +289,7 @@ pub fn set_hotkey(core: &Core, text: &str) -> Result<(), String> {
 
 pub fn marked(core: &Arc<Core>) {
     if crate::ops::mark(core, Value::Null).is_ok() && !window_shown(&core.app) {
-        notify(&core.app, tr(&lang(core), "Moment marked"), "");
+        notify(&core.app, tr(&language(core), "Moment marked"), "");
     }
 }
 
@@ -365,7 +365,7 @@ fn build_menu(app: &AppHandle, lang: &str, toggle: &MenuItem<Wry>, mark: &MenuIt
 }
 
 fn install_menus(app: &AppHandle, core: &Core) -> tauri::Result<()> {
-    let lang = lang(core);
+    let lang = language(core);
     let recording = core.active_set.lock().unwrap().is_some();
     let text = toggle_text(recording, core.party.lock().unwrap().reviewing());
     let keys = core.hotkey.lock().unwrap().clone();
@@ -393,13 +393,13 @@ pub fn clock(seconds: i64) -> String {
     }
 }
 
-fn status_text(core: &Core, lang: &str) -> String {
+fn status_text(core: &Core) -> String {
     let room = core.active_room().filter(|r| r.invite.is_none()).map(|r| r.name);
     let timer = core.active_set.lock().unwrap().as_ref().map(|s| clock((crate::now_us() - s.start_us) / 1_000_000));
     match (room, timer) {
         (Some(room), Some(timer)) => format!("{room} · {timer}"),
         (Some(room), None) => room,
-        _ => tr(lang, "GGI Hanseikai").into(),
+        _ => String::new(),
     }
 }
 
@@ -434,7 +434,7 @@ pub fn setup(app: &tauri::App, core: Arc<Core>) -> tauri::Result<()> {
             "github" => open_link(REPO),
             "issues" => open_link(&format!("{REPO}/issues/new")),
             "releases" => open_link(&format!("{REPO}/releases")),
-            "about" => dialog(|app, core| { let lang = lang(core); tell(app, &lang, &format!("{}\n{} {VERSION}\nMIT or Apache-2.0\n{REPO}", tr(&lang, "GGI Hanseikai"), tr(&lang, "Version"))) }),
+            "about" => dialog(|app, core| { let lang = language(core); tell(app, &lang, &format!("{} {VERSION}\nMIT or Apache-2.0\n{REPO}", tr(&lang, "Version"))) }),
             other => {
                 show_window(app);
                 let _ = app.emit("menu", other.to_string());
@@ -449,7 +449,7 @@ pub fn setup(app: &tauri::App, core: Arc<Core>) -> tauri::Result<()> {
         loop {
             let recording = core.active_set.lock().unwrap().is_some();
             let reviewing = core.party.lock().unwrap().reviewing();
-            let lang = lang(&core);
+            let lang = language(&core);
             let hotkey = core.hotkey.lock().unwrap().clone();
             if last.as_ref() != Some(&(recording, reviewing, lang.clone(), hotkey.clone())) {
                 last = Some((recording, reviewing, lang.clone(), hotkey.clone()));
@@ -462,7 +462,7 @@ pub fn setup(app: &tauri::App, core: Arc<Core>) -> tauri::Result<()> {
                     let _ = mark.set_enabled(recording);
                 }
             }
-            let status = status_text(&core, &lang);
+            let status = status_text(&core);
             let asks = ask_names(&core);
             let hidden = !window_shown(&app);
             for (id, name) in &asks {

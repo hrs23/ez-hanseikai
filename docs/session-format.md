@@ -14,7 +14,7 @@ Store raw, compute views later.
 
 ## Data folder
 
-`%LOCALAPPDATA%\dev.ggi-hanseikai.app`, or the folder in the environment variable `EZH_DIR`. A reader needs only these:
+`%LOCALAPPDATA%\dev.ez-hanseikai.app`, or the folder in the environment variable `EZH_DIR`. A reader needs only these:
 
 | Path | Content |
 | --- | --- |

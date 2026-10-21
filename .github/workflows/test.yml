@@ -38,7 +38,7 @@ jobs:
           name: app
           retention-days: 1
           compression-level: 0
-          path: src-tauri/target/release/ggi-hanseikai.exe
+          path: src-tauri/target/release/ez-hanseikai.exe
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: github.ref == 'refs/heads/main'
         with:
@@ -84,7 +84,7 @@ jobs:
         shell: pwsh
       - name: End-to-end test
         timeout-minutes: 30
-        run: node scripts/e2e.mjs app/ggi-hanseikai.exe ffmpeg
+        run: node scripts/e2e.mjs app/ez-hanseikai.exe ffmpeg
         env:
           E2E_OUT: ${{ runner.temp }}/e2e
           E2E_PART: ${{ matrix.part }}
@@ -121,7 +121,7 @@ jobs:
           name=$(basename "$exe")
           jq -n --arg version "${tag#v}" --arg notes "$notes" --arg pub_date "$(date -u +%FT%TZ)" --arg signature "$(cat "$exe.sig")" --arg url "https://github.com/$GITHUB_REPOSITORY/releases/download/$tag/${name// /.}" \
             '{version: $version, notes: $notes, pub_date: $pub_date, platforms: {"windows-x86_64": {signature: $signature, url: $url}}}' > latest.json
-          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" "$exe" "$exe.sig" latest.json --target "$GITHUB_SHA" --title "GGI Hanseikai $tag" --notes "$notes" $pre
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" "$exe" "$exe.sig" latest.json --target "$GITHUB_SHA" --title "$tag" --notes "$notes" $pre
           gh release download "$tag" -p latest.json --clobber
           gh release view updater >/dev/null 2>&1 || gh release create updater --prerelease --title "Update manifests" --notes "Rolling manifests read by the in-app updater: latest.json for the stable channel, latest-beta.json for the beta channel."
           cp latest.json latest-beta.json

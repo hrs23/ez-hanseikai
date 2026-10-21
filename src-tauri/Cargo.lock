@@ -1359,6 +1359,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "ez-hanseikai"
+version = "0.19.4"
+dependencies = [
+ "anyhow",
+ "crc32fast",
+ "iroh",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-global-shortcut",
+ "tauri-plugin-notification",
+ "tauri-plugin-single-instance",
+ "tauri-plugin-updater",
+ "tauri-plugin-window-state",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "tracing-subscriber",
+ "wasapi",
+ "webview2-com",
+ "windows",
+ "windows-capture",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1749,35 +1778,6 @@ dependencies = [
  "r-efi 6.0.0",
  "rand_core 0.10.1",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "ggi-hanseikai"
-version = "0.19.4"
-dependencies = [
- "anyhow",
- "crc32fast",
- "iroh",
- "regex",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-global-shortcut",
- "tauri-plugin-notification",
- "tauri-plugin-single-instance",
- "tauri-plugin-updater",
- "tauri-plugin-window-state",
- "tokio",
- "tokio-stream",
- "tracing",
- "tracing-subscriber",
- "wasapi",
- "webview2-com",
- "windows",
- "windows-capture",
 ]
 
 [[package]]
