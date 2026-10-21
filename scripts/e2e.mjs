@@ -738,7 +738,7 @@ async function live(ctx) {
     }
     check(await evaluate(a, `$("miccap").classList.contains("off") && $("screencap").classList.contains("on") && getComputedStyle($("miccap")).borderTopStyle === "dashed" && !!$("miclvl")`), "the bottom-left buttons are not in the shared off/recording states");
     await screenshot(a, "live-recording");
-    await waitFor("A marks only Live, not the running recording, and shows the elapsed time and the free space", within(UI_REFRESH_S * 3), () => evaluate(a, `!$("sessions").querySelector(".liverow.on") && $("sidenav").querySelector("[aria-current=page]").dataset.nav === "live" && /^\d+:\d\d · Free /.test($("psub").textContent)`));
+    await waitFor("A marks only Live, not the running recording, and shows the elapsed time and the free space", within(UI_REFRESH_S * 3), () => evaluate(a, `!$("sessions").querySelector(".liverow.on") && $("sidenav").querySelector("[aria-current=page]").dataset.nav === "live" && /^\\d+:\\d\\d · Free /.test($("psub").textContent)`));
     await evaluate(a, `$("sessions").querySelector(".liverow").click(); true`);
     await waitFor("A marks only the running recording after opening it", within(UI_REFRESH_S * 3), () => evaluate(a, `!!$("sessions").querySelector(".liverow.on") && !$("sidenav").querySelector("[aria-current=page]")`));
     await evaluate(a, `openLive(); true`);
