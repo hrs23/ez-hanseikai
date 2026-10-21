@@ -48,7 +48,6 @@ const EXPORT_FOLDER_S = 120;
 const MEDIA_SECONDS = { coach: 8, camera: 6, commentary: 7 };
 const PLAN_START = "2026-10-19T12:30:00Z";
 const START_TOLERANCE_US = 5e6;
-const RESCAN_S = 5;
 const GONE = { kind: "window", exe: "gone.exe", title: "Gone" };
 const CLOCK_SHIFT_S = 8.2;
 const NTP_EPOCH_S = 2208988800;
@@ -617,17 +616,6 @@ async function scenario(ctx) {
     await waitFor("A shares no recording", within(UI_REFRESH_S * 5), async () => !(await state(a)).party.shared.set);
   });
 
-  await step("closing the captured window stops sending until a screen is chosen again", async () => {
-    await invoke(a, "set_source", { source: GONE });
-    await waitFor("A sends nothing from a closed source", within(RESCAN_S * 2), async () => { const st = await state(a); return st.capture.source_lost && !st.capture.sharing && !(await invoke(a, "debug_view", { tab: "recording", since: 0, set: null, addresses: false })).engine.sink; });
-    await waitFor("A's own tile and Screen button say the source closed", within(UI_REFRESH_S * 5), () => evaluate(a, `$("screensub").textContent === t("Capture source closed") && rec.tiles[st.id].what.textContent === t("Capture source closed")`));
-    await evaluate(a, `$("screenbtn").click(); true`);
-    await waitFor("the Screen button offers the picker", within(UI_REFRESH_S * 5), () => evaluate(a, `!$("pop").hidden`));
-    await evaluate(a, `closePop(); true`);
-    await invoke(a, "set_source", { source: SOURCE });
-    await allSee([a], "sending again", within(COLD_START_S), (st) => st.capture.sharing && st.capture.live);
-  });
-
   await step("B joins A's room with approval", async () => {
     const code = await invoke(a, "create_invite", { reuse: false });
     await invoke(b, "join_room", { code });
@@ -817,9 +805,15 @@ async function scenario(ctx) {
 
   await step("closing the captured window during the recording goes on with the voice, and a new screen adds a part", async () => {
     const before = segsOf(logOf(a, ctx.room, a.id), ctx.set).map((s) => s.capture);
+    await evaluate(a, `openLive(); true`);
     await invoke(a, "set_source", { source: GONE });
     const voice = await waitFor("A records the set voice only in a new part", within(SEGMENT_S * 3), () => { const added = segsOf(logOf(a, ctx.room, a.id), ctx.set).filter((s) => !before.includes(s.capture)); return added.length && added.every((s) => s.series === "m") && added[0].capture; });
-    check((await state(a)).capture.working, "A does not record its voice");
+    const st = await state(a);
+    check(st.capture.working && st.capture.source_lost && !st.capture.sharing, `A does not record only its voice: ${brief(st.capture)}`);
+    await waitFor("A's own tile and Screen button say the source closed", within(UI_REFRESH_S * 5), () => evaluate(a, `$("screensub").textContent === t("Capture source closed") && rec.tiles[st.id].what.textContent === t("Capture source closed")`));
+    await evaluate(a, `$("screenbtn").click(); true`);
+    await waitFor("the Screen button offers the picker", within(UI_REFRESH_S * 5), () => evaluate(a, `!$("pop").hidden`));
+    await evaluate(a, `closePop(); true`);
     await invoke(a, "set_source", { source: SOURCE });
     await recordsAgain(a, ctx.room, ctx.set, [...before, voice]);
     await waitFor("B holds A's voice-only part", within(SEGMENT_S + LOG_SYNC_S * 2), () => !badCopies(b, ctx.room, a.id, pieces(logOf(a, ctx.room, a.id), ctx.set).filter((p) => p.capture === voice)).length);
@@ -999,7 +993,7 @@ async function scenario(ctx) {
     await waitFor("the sidebar header shows the room name as a menu", within(UI_REFRESH_S * 5), () => evaluate(a, `$("roomname").firstElementChild.textContent === "Practice" && $("roomname").getAttribute("aria-haspopup") === "menu"`));
     await evaluate(a, `$("roomname").click(); true`);
     const labels = await evaluate(a, `[...$("menu").querySelectorAll("button")].map((b) => b.textContent)`);
-    check(labels.filter((l) => l !== "Cancel invite").join() === ["Room settings…", "Copy invite code", "Switch room", "Leave room…"].join(), `the room menu lists ${labels}`);
+    check(labels.filter((l) => l !== "Cancel invite").join() === ["Room settings…", "Copy invite code", "Leave room"].join(), `the room menu lists ${labels}`);
     await evaluate(a, `[...$("menu").querySelectorAll("button")].find((b) => b.textContent === t("Room settings…")).click(); true`);
     await waitFor("A shows the room settings", within(UI_REFRESH_S * 3), () => evaluate(a, `$("roomdlg").open && $("roomnameinput").value === "Practice" && $("roomsave").disabled`));
     await screenshot(a, "room-settings");
@@ -1554,23 +1548,22 @@ async function scenario(ctx) {
     check(!st.events.some((e) => e.key === key), "C shows a note written after its removal");
   });
 
-  await step("B switches away from the room, keeps it and enters it again", async () => {
-    await invoke(b, "close_room", { id: ctx.room });
-    const left = await state(b);
-    check(!left.room && left.rooms.some((r) => r.id === ctx.room), `B's rooms after leaving: ${brief(left.rooms)}`);
-    check(fs.existsSync(logFile(b, ctx.room, b.id)), "B lost its log by leaving");
-    await invoke(b, "enter_room", { id: ctx.room });
-    await allSee([a, b], "A and B connected again", within(DIAL_S * 2), (st, app) => st.room?.id === ctx.room && connected(st, [a, b].filter((x) => x !== app).map((x) => x.id)));
-  });
-
-  await step("B leaves the room from its menu, which removes it here and forgets B's personal plan", async () => {
+  await step("B leaves the room from its menu, enters it again with its recordings and notes, and deletes it from the list, which forgets B's personal plan", async () => {
     const plan = JSON.stringify(`board/${ctx.room}`);
     await evaluate(b, `localStorage.setItem(${plan}, JSON.stringify("# Mine")); true`);
+    const kept = (st) => [st.sets.map((s) => `${s.id} ${s.players.map((p) => p.have).join()}`), st.events.map((e) => e.key)].map((x) => x.sort().join()).join();
+    const before = kept(await state(b));
     await waitFor("B shows the room header", within(UI_REFRESH_S * 5), () => evaluate(b, `!$("app").hidden && !!st.room`));
-    await pressAndConfirm(b, `$("roomname").click(); [...$("menu").querySelectorAll("button")].find((x) => x.textContent === t("Leave room…")).click()`);
+    await evaluate(b, `$("roomname").click(); [...$("menu").querySelectorAll("button")].find((x) => x.textContent === t("Leave room")).click(); true`);
+    await waitFor("B shows the start screen and still lists the room", within(UI_REFRESH_S * 5), async () => { const st = await state(b); return !st.room && st.rooms.some((r) => r.id === ctx.room) && evaluate(b, `!$("start").hidden && $("app").hidden`); });
+    await invoke(b, "enter_room", { id: ctx.room });
+    await allSee([a, b], "A and B connected again", within(DIAL_S * 2), (st, app) => st.room?.id === ctx.room && connected(st, [a, b].filter((x) => x !== app).map((x) => x.id)));
+    check(kept(await state(b)) === before, "B lost recordings or notes by leaving and entering again");
+    await invoke(b, "close_room", { id: ctx.room });
+    await waitFor("B lists the room", within(UI_REFRESH_S * 5), () => evaluate(b, `!$("start").hidden && $("roomlist").children.length > 0`));
+    await pressAndConfirm(b, `[...$("roomlist").children].find((r) => r.firstChild.textContent === st.rooms.find((x) => x.id === ${JSON.stringify(ctx.room)}).name).querySelector(".more").click(); [...$("menu").querySelectorAll("button")].find((x) => x.textContent === t("Delete…")).click()`);
     await waitFor("B no longer lists the room", within(UI_REFRESH_S * 5), async () => { const st = await state(b); return !st.room && !st.rooms.some((r) => r.id === ctx.room); });
-    await waitFor("B shows the start screen", within(UI_REFRESH_S * 5), () => evaluate(b, `!$("start").hidden && $("app").hidden`));
-    check((await evaluate(b, `localStorage.getItem(${plan})`)) === null, "B kept the personal plan of the room it left");
+    await waitFor("B forgets the personal plan of the room it deleted", within(UI_REFRESH_S * 5), async () => (await evaluate(b, `localStorage.getItem(${plan})`)) === null);
     await waitFor("B removes the folder of the room it left", within(UI_REFRESH_S * 5), () => !fs.existsSync(roomDir(b, ctx.room)));
   });
 

@@ -112,7 +112,7 @@ pub fn offset_us() -> i64 {
 
 pub fn status() -> Value {
     let (last, failed) = *STATE.lock().unwrap();
-    json!({"offset_us": last.map(|m| corrected(&m, pc_us())), "rtt_us": last.map(|m| m.rtt_us), "at_us": last.map(|m| m.at_us), "ok": failed.is_none()})
+    json!({"offset_us": last.map(|m| corrected(&m, pc_us())), "rtt_us": last.map(|m| m.rtt_us), "ago_s": last.map(|m| m.at.elapsed().as_secs()), "ok": failed.is_none()})
 }
 
 pub fn start() {

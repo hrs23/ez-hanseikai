@@ -217,7 +217,7 @@ test("the clock summary warns about a big spread between members", () => {
   assert.equal(ui$.clockSummary({ peers: [] }).text, "No one else is online");
 });
 
-test("live tiles wait for the slowest member, never go back, stop waiting for one too far behind, and pause while nobody holds", () => {
+test("live tiles wait for the slowest member, never go back, stop waiting for one too far behind, mark it late once passed, and advance while nobody holds", () => {
   const { liveStep, LIVE_LAG_MAX_S: MAX, LIVE_HEADROOM_S: ROOM, LIVE_SHRINK_GAP_S: GAP, LIVE_CATCH_UP: UP } = ui$;
   const DT = 0.15;
   let now = 1000;
@@ -237,11 +237,12 @@ test("live tiles wait for the slowest member, never go back, stop waiting for on
   assert.ok(held && s.pos > stalled - ROOM - 1e-9);
   now = stalled + MAX + DT;
   s = liveStep(s, [at("a", now), at("b", now), at("slow", stalled)], now, DT);
+  assert.ok(s.pos > stalled - ROOM && !s.held && s.rate === UP && !s.late.length);
+  s = liveStep(s, [at("a", now), at("b", now), at("slow", stalled)], now, ROOM);
   assert.deepEqual(plain(s.late), ["slow"]);
-  assert.ok(s.pos > stalled - ROOM && !s.held);
-  assert.equal(s.rate, UP);
   const alone = liveStep(s, [at("slow", stalled)], now, DT);
-  assert.deepEqual(plain(alone), { pos: s.pos + DT, rate: 1, held: true, late: ["slow"] });
+  assert.deepEqual(plain(alone), { pos: s.pos + DT, rate: 1, held: false, late: ["slow"] });
+  assert.deepEqual(plain(liveStep(alone, [at("slow", alone.pos + DT)], now, DT).late), []);
 });
 
 test("the live delay shrinks slowly only while the slack is above the gap, and a tile with no start follows its own edge", () => {
@@ -256,9 +257,9 @@ test("the live delay shrinks slowly only while the slack is above the gap, and a
   assert.deepEqual([held.held, held.pos], [true, now - ROOM]);
   const others = liveStep({ pos: 900 }, [{ key: "a", avail: now, ended: false }, { key: "gone", avail: 100, ended: true }, { key: "none", avail: null, ended: false }], now, 1);
   assert.deepEqual(plain(others.late), []);
-  assert.deepEqual(plain(liveStep({ pos: 5 }, [{ key: "none", avail: null, ended: false }], now, 1)), { pos: 6, rate: 1, held: true, late: [] });
+  assert.deepEqual(plain(liveStep({ pos: 5 }, [{ key: "none", avail: null, ended: false }], now, 1)), { pos: 6, rate: 1, held: false, late: [] });
   assert.equal(liveStep({ pos: null }, [], now, 1).pos, null);
-  assert.deepEqual([ui$.liveFollow(20, 19.5), ui$.liveFollow(20, 16), ui$.liveFollow(20, 10), ui$.liveFollow(20, 20).playing].map(plain), [{ target: 19.5, playing: true }, { target: 16, playing: true }, { target: 18, playing: true }, false]);
+  assert.deepEqual([ui$.liveFollow(20, 19.5, 0), ui$.liveFollow(20, 12, 0.5), ui$.liveFollow(20, 10, 0.5), ui$.liveFollow(20, 20, 0).playing].map(plain), [{ target: 19.5, playing: true }, { target: 12, playing: true }, { target: 17, playing: true }, false]);
 });
 
 test("where data goes says when a relay or a server is involved", () => {

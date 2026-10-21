@@ -81,8 +81,7 @@ function roomMenu(anchor) {
     { label: t("Copy invite code"), icon: "user-plus", run: copyInvite },
     ...(st.invites ? [{ label: t("Cancel invite"), icon: "x", run: cancelInvite }] : []),
     { separator: true },
-    { label: t("Switch room"), icon: "home", run: switchRoom },
-    { label: t("Leave room…"), icon: "logout", danger: true, run: leaveThisRoom },
+    { label: t("Leave room"), icon: "logout", run: leaveRoom },
   ], anchor);
 }
 function navigate(name) {

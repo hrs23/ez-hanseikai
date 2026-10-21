@@ -171,8 +171,8 @@ pub fn pacer_json(core: &Core) -> Value {
 }
 
 async fn pace(core: &Core, bytes: usize, history: bool) {
-    let Some(rate) = bytes_per_sec(core) else { return };
     loop {
+        let Some(rate) = bytes_per_sec(core) else { return };
         let Some(due) = core.pacer.lock().unwrap().reserve(Instant::now(), bytes, history, rate) else {
             sleep(HISTORY_WAIT).await;
             continue;
@@ -406,12 +406,13 @@ async fn handle(core: Arc<Core>, from: EndpointId, mut send: SendStream, mut rec
         }
         Some("rec") => {
             let by = req["by"].as_str().unwrap_or_default();
+            let here = req["room"].as_str() == Some(core.active_room_id().as_str());
             if req["action"] == "start" {
-                if req["room"].as_str() == Some(core.active_room_id().as_str()) {
+                if here {
                     room::announce(&core, "start", by);
                 }
                 react_to_set(&core, &json!({"id": req["set"], "room": req["room"], "by": req["by"], "start_us": req["start_us"], "voice": req["voice"]}));
-            } else if req["action"] == "stop" && core.is_recording(req["room"].as_str().unwrap_or_default(), req["set"].as_str().unwrap_or_default()) {
+            } else if req["action"] == "stop" && here {
                 room::announce(&core, "end", by);
                 let (core, set) = (core.clone(), req["set"].as_str().unwrap_or_default().to_string());
                 tokio::task::spawn_blocking(move || room::end_set(&core, true, Some(&set)));
@@ -423,7 +424,7 @@ async fn handle(core: Arc<Core>, from: EndpointId, mut send: SendStream, mut rec
             let reply = match core.engine.live().filter(|l| sharing && l.room == core.active_room_id()) {
                 Some(l) => {
                     let newest = l.recent.map(|r| r.last().cloned().unwrap_or_default());
-                    json!({"sharing": true, "capture": l.capture, "n": newest.clone().map(|(n, _)| n), "set": newest.map(|(_, set)| set)})
+                    json!({"sharing": true, "capture": l.capture, "start_us": l.start_us, "n": newest.clone().map(|(n, _)| n), "set": newest.map(|(_, set)| set)})
                 }
                 None => json!({"sharing": false}),
             };
@@ -751,6 +752,7 @@ async fn receive(core: &Arc<Core>, conn: &Connection, req: Value, expect: HashMa
 #[derive(Clone, Default, PartialEq)]
 pub struct PeerLive {
     pub capture: String,
+    pub start_us: Option<i64>,
     pub n: [u32; 2],
     pub set: [Option<String>; 2],
 }
@@ -759,7 +761,7 @@ fn peer_live(info: &Value) -> Option<PeerLive> {
     let capture = info["capture"].as_str().filter(|c| info["sharing"] == true && capture_id(c))?;
     let n = [0, 1].map(|i| info["n"][i].as_u64().and_then(|n| u32::try_from(n).ok()).unwrap_or(0));
     let set = [0, 1].map(|i| info["set"][i].as_str().filter(|s| valid_id(s)).map(String::from));
-    Some(PeerLive { capture: capture.to_string(), n, set })
+    Some(PeerLive { capture: capture.to_string(), start_us: info["start_us"].as_i64(), n, set })
 }
 
 async fn live_info(core: &Core, id: &EndpointId, conn: &Connection) -> Option<PeerLive> {
@@ -1115,9 +1117,9 @@ mod tests {
 
     #[test]
     fn a_live_reply_names_the_recording_of_each_series() {
-        let live = |info: Value| peer_live(&info).map(|l| (l.capture, l.n, l.set));
-        assert_eq!(live(json!({"sharing": true, "capture": "1700", "n": [7, 5], "set": ["s1", null]})), Some(("1700".into(), [7, 5], [Some("s1".into()), None])));
-        assert_eq!(live(json!({"sharing": true, "capture": "1700", "n": [3], "set": ["../x", 5]})), Some(("1700".into(), [3, 0], [None, None])));
+        let live = |info: Value| peer_live(&info).map(|l| (l.capture, l.start_us, l.n, l.set));
+        assert_eq!(live(json!({"sharing": true, "capture": "1700", "start_us": 9, "n": [7, 5], "set": ["s1", null]})), Some(("1700".into(), Some(9), [7, 5], [Some("s1".into()), None])));
+        assert_eq!(live(json!({"sharing": true, "capture": "1700", "n": [3], "set": ["../x", 5]})), Some(("1700".into(), None, [3, 0], [None, None])));
         assert_eq!((live(json!({"sharing": false, "capture": "1700"})), live(json!({"sharing": true, "capture": "../x"}))), (None, None));
     }
 

@@ -67,18 +67,17 @@ function renderStart() {
   $("roomlist").replaceChildren(...others.map((r, i) => {
     const face = (id) => { const a = el("span", { className: "av sm", textContent: initial(id === st.id ? st.name : r.names[id]) }); a.style.background = colorOf(r.colors[id]); return a; };
     const enter = () => run("enter_room", { id: r.id }, openLive);
-    const more = iconButton("more", t("More"), (e) => { e.stopPropagation(); openMenu([{ label: t("Leave room…"), icon: "logout", danger: true, run: () => leaveRoom(r, refresh) }], e.currentTarget); }, "icon sm more");
+    const more = iconButton("more", t("More"), (e) => { e.stopPropagation(); openMenu([{ label: t("Delete…"), icon: "trash", danger: true, run: () => deleteRoom(r) }], e.currentTarget); }, "icon sm more");
     const row = el("div", { className: "rrow", tabIndex: 0, role: "button" }, el("b", { textContent: r.name }), el("span", { className: "avs" }, ...r.members.slice(0, AVATARS_SHOWN).map(face)), el("span", { className: "sp" }), r.used_us ? el("span", { className: "muted small", textContent: dayLabel(dayOf(new Date(r.used_us / 1000)), new Date(), lang) }) : null, el("button", { className: "sm" + (i ? "" : " primary"), textContent: t("Enter"), onclick: (e) => { e.stopPropagation(); enter(); } }), more);
     row.onclick = enter;
     row.onkeydown = (e) => { if (e.key === "Enter") enter(); };
     return row;
   }));
 }
-async function leaveRoom(room, then) {
-  const question = st.recording && st.room && st.room.id === room.id ? "Stop your recording?" : "Leave {room}?";
-  if (await ask(t(question, { room: room.name }), t("Leave room"), true, t("Its recordings and notes on this PC are deleted. Other members keep theirs."))) run("remove_room", { id: room.id }, () => { forgetPlan(room.id); then(); });
+async function deleteRoom(room) {
+  if (await ask(t("Leave {room} and delete its recordings and notes on this PC? You need an invite code to come back. Other members keep theirs.", { room: room.name }), t("Delete"), true)) run("remove_room", { id: room.id }, () => { forgetPlan(room.id); refresh(); });
 }
-const leaveThisRoom = () => st.room && leaveRoom(st.room, openLive);
+const leaveRoom = () => st.room && run("close_room", { id: st.room.id }, openLive);
 function joinWith(input) {
   if (joining) return;
   joining = true;
@@ -87,11 +86,6 @@ function joinWith(input) {
 const copyInvite = () => invoke("create_invite", { reuse: true }).then((code) => navigator.clipboard.writeText(code)).then(() => { flash(t("Invite code copied")); refresh(); }).catch(fail);
 const cancelInvite = () => run("cancel_invites", null, () => { flash(t("Invite cancelled")); refresh(); });
 const createRoom = () => invoke("create_room", { name: "" }).then(() => { openLive(); return refresh().then(copyInvite); }).catch(fail);
-async function switchRoom() {
-  if (!st.room) return;
-  if (st.recording && !(await ask(t("Stop your recording?"), t("Switch room")))) return;
-  run("close_room", { id: st.room.id }, openLive);
-}
 async function removeMember(id) {
   if (await ask(t("Remove {name} from the room?", { name: nameOf(id) }), t("Remove from room"), true, t("Everyone stops sending to them. What they already have stays with them."))) { drawerFor = null; run("remove_peer", { id }); }
 }
@@ -741,8 +735,7 @@ const menuActions = {
   "copy-invite": copyInvite,
   "cancel-invite": () => { if (st.invites) cancelInvite(); },
   "rename-room": openRoomSettings,
-  "switch-room": switchRoom,
-  "leave-room": leaveThisRoom,
+  "leave-room": leaveRoom,
   "add-note": openQuick,
   "prev-session": () => stepSet(-1),
   "next-session": () => stepSet(1),

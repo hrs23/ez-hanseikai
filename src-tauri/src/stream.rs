@@ -79,15 +79,15 @@ fn live_from(numbers: &[u32]) -> Option<u32> {
     Some(from)
 }
 
-fn live_folder(core: &Core, room: &str, owner: &str) -> Option<(PathBuf, String)> {
-    let (capture, set) = if owner == core.me() {
+fn live_folder(core: &Core, room: &str, owner: &str) -> Option<(PathBuf, String, Option<i64>)> {
+    let (capture, set, start_us) = if owner == core.me() {
         let live = core.engine.live().filter(|l| l.room == room)?;
-        (live.capture, live.recent[0].last().and_then(|(_, set)| set.clone()))
+        (live.capture, live.recent[0].last().and_then(|(_, set)| set.clone()), live.start_us)
     } else {
         let live = core.peers.lock().unwrap().iter().find(|p| p.id.to_string() == owner)?.live.clone()?;
-        (live.capture, live.set[0].clone())
+        (live.capture, live.set[0].clone(), live.start_us)
     };
-    Some((core.series_dir(room, set.as_deref(), owner, &capture, SERIES[0]), capture))
+    Some((core.series_dir(room, set.as_deref(), owner, &capture, SERIES[0]), capture, start_us))
 }
 
 fn pieces_from(dir: &Path, from: u32) -> Vec<Piece> {
@@ -113,10 +113,9 @@ fn first_us(core: &Core, pieces: &[Piece]) -> Option<i64> {
 }
 
 pub fn live_json(core: &Core, room: &str, owner: &str) -> Option<Value> {
-    let (dir, capture) = live_folder(core, room, owner)?;
+    let (dir, capture, start_us) = live_folder(core, room, owner)?;
     let (from, pieces) = live_start(&dir)?;
-    let log = if owner == core.me() { core.own_log(room) } else { core.room_log(room, owner) };
-    let start_us = crate::record::cap_start(&log, &capture).zip(first_us(core, &pieces)).map(|(start, first)| start + first);
+    let start_us = start_us.zip(first_us(core, &pieces)).map(|(start, first)| start + first);
     Some(json!({"path": format!("live/{room}/{owner}/{capture}/{from}"), "size": size(&pieces), "start_us": start_us}))
 }
 
@@ -149,7 +148,7 @@ pub fn pieces_for(core: &Core, path: &str) -> Option<(Vec<Piece>, &'static str)>
     let parts: Vec<&str> = path.split('/').collect();
     match parts.as_slice() {
         ["live", room, owner, capture, from] if valid_id(room) && member(owner) && capture_id(capture) => {
-            let (dir, _) = live_folder(core, room, owner).filter(|(_, current)| current == capture)?;
+            let (dir, _, _) = live_folder(core, room, owner).filter(|(_, current, _)| current == capture)?;
             Some((pieces_from(&dir, from.parse().ok()?), "video/mp4"))
         }
         ["set", room, set, owner, series, capture] if valid_id(room) && valid_id(set) && member(owner) && SERIES.contains(series) && capture_id(capture) => {

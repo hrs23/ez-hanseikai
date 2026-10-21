@@ -15,7 +15,7 @@ use crate::{room, Core, VERSION};
 pub const DEFAULT_HOTKEY: &str = "Ctrl+Alt+M";
 const REPO: &str = "https://github.com/hrs23/ez-hanseikai";
 const STATUS_POLL: Duration = Duration::from_secs(1);
-const JA: [(&str, &str); 56] = [
+const JA: [(&str, &str); 53] = [
     ("GGI Hanseikai is already running with this data folder.", "GGI反省会はこのデータフォルダですでに動いています。"),
     ("GGI Hanseikai", "GGI反省会"),
     ("File", "ファイル"),
@@ -31,8 +31,7 @@ const JA: [(&str, &str); 56] = [
     ("Copy invite code", "招待コードをコピー"),
     ("Cancel invite", "招待を取り消す"),
     ("Room settings…", "ルームの設定…"),
-    ("Switch room", "ルームを切り替える"),
-    ("Leave room…", "ルームを離れる…"),
+    ("Leave room", "ルームを離れる"),
     ("Members", "メンバー"),
     ("Plugins", "プラグイン"),
     ("Start recording", "録画開始"),
@@ -61,8 +60,6 @@ const JA: [(&str, &str); 56] = [
     ("Report a problem", "問題を報告"),
     ("Release notes", "リリースノート"),
     ("About", "バージョン情報"),
-    ("Stop your recording?", "自分の録画を終了しますか?"),
-    ("Stop recording and exit", "録画を終了して終了"),
     ("Cancel the export and exit?", "エクスポートを中止してアプリを終了しますか?"),
     ("Files are still arriving. Exit anyway?", "まだファイルを受け取っています。それでも終了しますか?"),
     ("Cancel", "キャンセル"),
@@ -209,32 +206,25 @@ pub fn plain_keys(window: &tauri::WebviewWindow) {
     });
 }
 
-pub fn exit_question(recording: bool, exporting: bool, receiving: bool) -> Option<(&'static str, &'static str)> {
-    if recording {
-        Some(("Stop your recording?", "Stop recording and exit"))
-    } else if exporting {
-        Some(("Cancel the export and exit?", "Exit"))
-    } else if receiving {
-        Some(("Files are still arriving. Exit anyway?", "Exit"))
+pub fn exit_question(exporting: bool, receiving: bool) -> Option<&'static str> {
+    if exporting {
+        Some("Cancel the export and exit?")
     } else {
-        None
+        receiving.then_some("Files are still arriving. Exit anyway?")
     }
 }
 
 pub fn exit_app(app: &AppHandle, core: &Arc<Core>) {
-    let recording = core.active_set.lock().unwrap().is_some();
     let exporting = core.export.lock().unwrap().is_some();
-    if let Some((question, ok)) = exit_question(recording, exporting, crate::net::receiving(core)) {
+    if let Some(question) = exit_question(exporting, crate::net::receiving(core)) {
         show_window(app);
         let lang = lang(core);
-        if !ask(app, &lang, tr(&lang, question), tr(&lang, ok), tr(&lang, "Cancel")) {
+        if !ask(app, &lang, tr(&lang, question), tr(&lang, "Exit"), tr(&lang, "Cancel")) {
             return;
-        }
-        if recording {
-            room::end_set(core, false, None);
         }
         crate::export::cancel(core);
     }
+    room::end_set(core, false, None);
     app.exit(0);
 }
 
@@ -328,8 +318,7 @@ fn build_menu(app: &AppHandle, lang: &str, toggle: &MenuItem<Wry>, mark: &MenuIt
         .item(&it("copy-invite", "Copy invite code", None)?)
         .item(&it("cancel-invite", "Cancel invite", None)?)
         .separator()
-        .item(&it("switch-room", "Switch room", None)?)
-        .item(&it("leave-room", "Leave room…", None)?)
+        .item(&it("leave-room", "Leave room", None)?)
         .build()?;
     let session = SubmenuBuilder::new(app, tr(lang, "Recording"))
         .item(toggle)
@@ -538,10 +527,9 @@ mod tests {
 
     #[test]
     fn closing_asks_only_while_work_would_be_lost() {
-        assert_eq!(exit_question(false, false, false), None);
-        assert_eq!(exit_question(true, true, true), Some(("Stop your recording?", "Stop recording and exit")));
-        assert_eq!(exit_question(false, true, true).unwrap().0, "Cancel the export and exit?");
-        assert_eq!(exit_question(false, false, true).unwrap().0, "Files are still arriving. Exit anyway?");
+        assert_eq!(exit_question(false, false), None);
+        assert_eq!(exit_question(true, true), Some("Cancel the export and exit?"));
+        assert_eq!(exit_question(false, true), Some("Files are still arriving. Exit anyway?"));
     }
 
     #[test]
