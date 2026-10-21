@@ -39,6 +39,7 @@ const SHORT_SET_SEGMENTS = 5;
 const LIVE_ROUNDS = 2;
 const KEYFRAME_DECODE_SPEED = 10;
 const SEEK_TO_S = 5;
+const STAY_AT_S = 3;
 const FAR_FROM_END_S = 8;
 const PLAY_START_S = 8;
 const LOG_TAIL_LINES = 15;
@@ -1142,13 +1143,11 @@ async function library(ctx) {
     await waitFor(`A has logged ${SHORT_SET_SEGMENTS} segments`, within(SEGMENT_S * SHORT_SET_SEGMENTS), () => segsOf(logOf(a, ctx.room, a.id), ctx.set, "v").length >= SHORT_SET_SEGMENTS);
   });
 
-  await step("stopping a recording opens it from the start for everyone in the Watch Party, and leaves a PC watching another recording alone", async () => {
+  await step("stopping a recording opens it from the start for everyone in the Watch Party, and leaves a PC already watching that recording where it is", async () => {
     const all = [a, b, c];
     await evaluate(a, `openLive(); selectSet(null); true`);
     await evaluate(b, `openNow(); true`);
-    const other = (await state(c)).sets.find((x) => x.id !== ctx.set && !x.of)?.id;
-    check(other, "the room has no earlier recording for C to watch");
-    await evaluate(c, `setParty(false); openSession(${JSON.stringify(other)}); true`);
+    await evaluate(c, `setParty(false); openSession(${JSON.stringify(ctx.set)}); setClock(false, ${STAY_AT_S}); true`);
     for (const app of [a, b]) check(await evaluate(app, `page === "player" && showingNow()`), `${app.key} does not show Live before the stop`);
     await invoke(a, "stop_recording");
     await allSee(all, "the set ended and everyone has it", within((SEGMENT_S + SYNC_ROUND_S) * 3), (st) => !st.active_set && setOf(st, ctx.set) && !setOf(st, ctx.set).live && heldByAll(st, ctx.set, all));
@@ -1156,7 +1155,7 @@ async function library(ctx) {
       await waitFor(`${app.key} opens the ended recording at 0:00`, within(UI_REFRESH_S * 3), () => evaluate(app, `selected === ${JSON.stringify(ctx.set)} && nowM() === 0 && !clock.playing`));
       await waitFor(`${app.key} is in the Watch Party of the recording`, within(PARTY_REPEAT_S + UI_REFRESH_S * 2), async () => (await state(app)).party.shared.set === ctx.set);
     }
-    check(await evaluate(c, `page === "player" && selected === ${JSON.stringify(other)}`), "C was moved off the recording it was watching");
+    check(await evaluate(c, `selected === ${JSON.stringify(ctx.set)} && !clock.playing && Math.abs(nowM() - ${STAY_AT_S}) < 0.5`), "C was moved off the place it was watching in the recording");
     const ended = setOf(await state(a), ctx.set);
     ctx.durationS = (ended.end_us - ended.start_us) / 1e6;
   });
