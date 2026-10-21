@@ -33,15 +33,10 @@ pub struct Running {
     cancelled: bool,
 }
 
-struct Track {
-    pieces: Vec<Piece>,
-    delay: f64,
-    video: bool,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 struct Input {
     delay_s: f64,
+    end_s: f64,
     video: bool,
     audio: bool,
 }
@@ -99,7 +94,7 @@ fn delayed_sound(i: usize, delay: f64) -> String {
 }
 
 fn amix(labels: &[String]) -> String {
-    format!("{}amix=inputs={}:normalize=0:duration=longest", labels.concat(), labels.len())
+    format!("{}amix=inputs={}:normalize=0:duration=longest,apad", labels.concat(), labels.len())
 }
 
 fn graph(inputs: &[Input], size: (u32, u32), total: f64) -> (String, bool) {
@@ -132,8 +127,8 @@ fn voice_graph(inputs: &[Input]) -> String {
     inputs.iter().enumerate().map(|(i, input)| delayed_sound(i, input.delay_s)).collect::<String>() + &amix(&sounds) + "[mix]"
 }
 
-fn copyable(inputs: &[Input]) -> bool {
-    matches!(inputs, [only] if only.delay_s <= TOLERANCE_S)
+fn copyable(inputs: &[Input], total: f64) -> bool {
+    matches!(inputs, [only] if only.delay_s <= TOLERANCE_S && only.end_s >= total - TOLERANCE_S)
 }
 
 fn file_name(name: &str) -> String {
@@ -298,7 +293,7 @@ fn read_progress(stdout: ChildStdout, mut seconds: impl FnMut(f64)) {
     }
 }
 
-fn tracks(core: &Core, room_id: &str, set: &Set, f: &File) -> (Vec<Track>, (u32, u32), f64) {
+fn tracks(core: &Core, room_id: &str, set: &Set, f: &File) -> (Vec<Captured>, (u32, u32), f64) {
     let (mut tracks, mut size, mut kbps) = (Vec::new(), (0, 0), 0f64);
     for capture in f.captures() {
         if let Some(cap) = f.caps.get(capture) {
@@ -307,10 +302,15 @@ fn tracks(core: &Core, room_id: &str, set: &Set, f: &File) -> (Vec<Track>, (u32,
             kbps = kbps.max(source_kbps(cap));
         }
         for series in SERIES {
-            let Some(first) = f.segs.iter().find(|s| s.capture == capture && s.series == series) else { continue };
+            let mut segs = f.segs.iter().filter(|s| s.capture == capture && s.series == series);
+            let Some(first) = segs.next() else { continue };
+            let end_us = segs.fold(first.t_us + first.d_us, |end, s| end.max(s.t_us + s.d_us));
             let pieces = stream::set_pieces(core, room_id, f, capture, series);
             if pieces.len() > 1 {
-                tracks.push(Track { pieces, delay: ((first.t_us - f.offset_us) - set.start()).max(0) as f64 / 1e6, video: series == SERIES[0] });
+                let seconds = |us: i64| (us - f.offset_us - set.start()).max(0) as f64 / 1e6;
+                let video = series == SERIES[0];
+                let audio = !video || has_sound(&pieces[0]);
+                tracks.push(Captured { input: Input { delay_s: seconds(first.t_us), end_s: seconds(end_us), video, audio }, pieces });
             }
         }
     }
@@ -408,10 +408,7 @@ fn view_outputs(core: &Core, room_id: &str, set: &Set, f: &File) -> Option<Outpu
     if tracks.is_empty() {
         return None;
     }
-    let (video, voice): (Vec<Captured>, Vec<Captured>) = tracks
-        .into_iter()
-        .map(|t| Captured { input: Input { delay_s: t.delay, video: t.video, audio: !t.video || has_sound(&t.pieces[0]) }, pieces: t.pieces })
-        .partition(|c| c.input.video);
+    let (video, voice): (Vec<Captured>, Vec<Captured>) = tracks.into_iter().partition(|c| c.input.video);
     let size = (w.max(DEFAULT_SIZE.0) & !1, h.max(DEFAULT_SIZE.1) & !1);
     Some(Output { name: room::display_name(core, &f.owner), owner: f.owner.clone(), video, voice, size, kbps })
 }
@@ -448,7 +445,7 @@ fn run_job(core: &Arc<Core>, set: &(String, String), job: Job, work: &Path, done
 fn job(out: &Output, video: bool, path: PathBuf, work: &Path, n: usize, total: f64) -> Job {
     let captured = if video { &out.video } else { &out.voice };
     let inputs: Vec<Input> = captured.iter().map(|c| c.input.clone()).collect();
-    let args = if copyable(&inputs) {
+    let args = if copyable(&inputs, total) {
         ["-map", "0", "-c", "copy"].map(String::from).to_vec()
     } else if video {
         let (graph, audio) = graph(&inputs, out.size, total);
@@ -525,16 +522,17 @@ mod tests {
     use super::*;
 
     fn input(delay_s: f64, video: bool, audio: bool) -> Input {
-        Input { delay_s, video, audio }
+        Input { delay_s, end_s: 1e6, video, audio }
     }
 
     #[test]
     fn one_input_without_delay_is_copied_and_the_rest_is_filtered() {
-        assert!(copyable(&[input(0.0, true, true)]));
-        assert!(copyable(&[input(0.04, true, true)]));
-        assert!(!copyable(&[input(0.5, true, true)]));
-        assert!(!copyable(&[input(0.0, true, true), input(60.0, true, true)]));
-        assert!(!copyable(&[]));
+        assert!(copyable(&[input(0.0, true, true)], 120.0));
+        assert!(copyable(&[input(0.04, true, true)], 120.0));
+        assert!(!copyable(&[input(0.5, true, true)], 120.0));
+        assert!(!copyable(&[input(0.0, true, true), input(60.0, true, true)], 120.0));
+        assert!(!copyable(&[Input { end_s: 60.0, ..input(0.0, true, true) }], 120.0));
+        assert!(!copyable(&[], 120.0));
     }
 
     #[test]
@@ -547,10 +545,10 @@ mod tests {
         assert!(g.contains("[bg1][v1]overlay=eof_action=pass[bg2];"));
         assert!(g.contains("[0:a:0]asetpts=PTS-STARTPTS,adelay=delays=0:all=1[s0];"));
         assert!(!g.contains("[1:a:0]"));
-        assert!(g.ends_with("[bg2]format=yuv420p[vout];[s0]amix=inputs=1:normalize=0:duration=longest[mix]"));
+        assert!(g.ends_with("[bg2]format=yuv420p[vout];[s0]amix=inputs=1:normalize=0:duration=longest,apad[mix]"));
         let (silent, audio) = graph(&[input(2.0, true, false)], (640, 360), 10.0);
         assert!(!audio && silent.ends_with("[bg1]format=yuv420p[vout]"));
-        assert_eq!(voice_graph(&[input(1.25, false, true), input(9.0, false, true)]), "[0:a:0]asetpts=PTS-STARTPTS,adelay=delays=1250:all=1[s0];[1:a:0]asetpts=PTS-STARTPTS,adelay=delays=9000:all=1[s1];[s0][s1]amix=inputs=2:normalize=0:duration=longest[mix]");
+        assert_eq!(voice_graph(&[input(1.25, false, true), input(9.0, false, true)]), "[0:a:0]asetpts=PTS-STARTPTS,adelay=delays=1250:all=1[s0];[1:a:0]asetpts=PTS-STARTPTS,adelay=delays=9000:all=1[s1];[s0][s1]amix=inputs=2:normalize=0:duration=longest,apad[mix]");
     }
 
     #[test]
@@ -578,6 +576,9 @@ mod tests {
         assert!(voice.contains("adelay=delays=61500:all=1") && voice.ends_with("-t 120.000"));
         let first = Output { video: vec![captured(0.0, true)], ..late };
         assert_eq!(job(&first, true, PathBuf::from("Ann.mp4"), work, 0, 120.0).args.join(" "), "-map 0 -c copy");
+        let early = Output { video: vec![Captured { input: Input { end_s: 60.0, ..input(0.0, true, true) }, ..captured(0.0, true) }], ..first };
+        let padded = job(&early, true, PathBuf::from("Ann.mp4"), work, 0, 120.0).args.join(" ");
+        assert!(padded.contains("color=c=black:s=1280x720:r=30:d=120.000") && padded.contains("duration=longest,apad[mix]") && padded.ends_with("-t 120.000"));
     }
 
     fn fake_set() -> Set {

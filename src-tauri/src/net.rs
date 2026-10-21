@@ -292,7 +292,7 @@ async fn follow(core: &Core, from: EndpointId, send: &mut SendStream, req: &Valu
     let set = Some(text("set")).filter(|s| valid_id(s));
     let own = owner == core.me();
     let live = req["live"] == true;
-    let valid = in_active_room(core, &room) && owner.parse::<EndpointId>().is_ok() && SERIES.contains(&series.as_str()) && capture_id(&capture);
+    let valid = in_active_room(core, &room) && room::member_id(&owner) && SERIES.contains(&series.as_str()) && capture_id(&capture);
     if !valid || (live && !own) || (!own && set.is_none()) {
         return Ok(());
     }
@@ -951,7 +951,7 @@ async fn sync(core: &Arc<Core>, id: &EndpointId, conn: &Connection) -> Result<()
         tick += 1;
         let room = core.active_room_id();
         let via = id.to_string();
-        let people: Vec<String> = core.active_room().map(|r| r.people()).unwrap_or_default().into_iter().filter(|p| p.parse::<EndpointId>().is_ok()).collect();
+        let people: Vec<String> = core.active_room().map(|r| r.people()).unwrap_or_default().into_iter().filter(|p| room::member_id(p)).collect();
         let pulls: Vec<_> = people
             .into_iter()
             .map(|of| {

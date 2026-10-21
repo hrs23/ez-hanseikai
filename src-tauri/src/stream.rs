@@ -139,19 +139,15 @@ fn decode(path: &str) -> String {
     String::from_utf8_lossy(&out).to_string()
 }
 
-fn member(id: &str) -> bool {
-    id.parse::<iroh::EndpointId>().is_ok()
-}
-
 pub fn pieces_for(core: &Core, path: &str) -> Option<(Vec<Piece>, &'static str)> {
     let path = decode(path.trim_start_matches('/'));
     let parts: Vec<&str> = path.split('/').collect();
     match parts.as_slice() {
-        ["live", room, owner, capture, from] if valid_id(room) && member(owner) && capture_id(capture) => {
+        ["live", room, owner, capture, from] if valid_id(room) && room::member_id(owner) && capture_id(capture) => {
             let (dir, _, _) = live_folder(core, room, owner).filter(|(_, current, _)| current == capture)?;
             Some((pieces_from(&dir, from.parse().ok()?), "video/mp4"))
         }
-        ["set", room, set, owner, series, capture] if valid_id(room) && valid_id(set) && member(owner) && SERIES.contains(series) && capture_id(capture) => {
+        ["set", room, set, owner, series, capture] if valid_id(room) && valid_id(set) && room::member_id(owner) && SERIES.contains(series) && capture_id(capture) => {
             let found = room::sets(core, room, &room::logs(core, room)).into_iter().find(|s| s.id == *set)?;
             let f = found.files.iter().find(|f| f.owner == *owner)?;
             Some((set_pieces(core, room, f, capture, series), if *series == SERIES[1] { "audio/mp4" } else { "video/mp4" }))

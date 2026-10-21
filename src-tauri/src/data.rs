@@ -30,15 +30,11 @@ const OLD_ROOM: [&str; 2] = ["sets", "live"];
 const OLD_CAPTURE: [&str; 2] = ["verified.json", "cap.json"];
 const OLD_SERIES: &str = "open.json";
 
-fn member_id(text: &str) -> bool {
-    text.parse::<iroh::EndpointId>().is_ok()
-}
-
 pub fn repair_logs(dir: &Path) {
     for (_, room) in crate::entries(&dir.join("rooms")) {
         log::repair(&room.join(room::PENDING));
         for (_, path) in crate::entries(&room.join(room::LOGS)) {
-            if path.extension().is_some_and(|e| e == "bin") && path.file_stem().is_some_and(|s| member_id(&s.to_string_lossy())) {
+            if path.extension().is_some_and(|e| e == "bin") && path.file_stem().is_some_and(|s| room::member_id(&s.to_string_lossy())) {
                 log::repair(&path);
             }
         }
@@ -104,8 +100,8 @@ fn old_recording(name: &str) -> bool {
 pub fn old_files(dir: &Path) -> Vec<PathBuf> {
     let mut old: Vec<PathBuf> = crate::entries(dir).into_iter().filter(|(name, _)| OLD_ROOT.contains(&name.as_str()) || old_recording(name)).map(|(_, path)| path).collect();
     for (_, room) in crate::entries(&dir.join("rooms")) {
-        old.extend(crate::entries(&room).into_iter().filter(|(name, path)| OLD_ROOM.contains(&name.as_str()) || (member_id(name) && path.is_dir())).map(|(_, path)| path));
-        old.extend(crate::entries(&room.join(room::LOGS)).into_iter().filter(|(name, _)| name.strip_suffix(".bin").is_some_and(|stem| !member_id(stem))).map(|(_, path)| path));
+        old.extend(crate::entries(&room).into_iter().filter(|(name, path)| OLD_ROOM.contains(&name.as_str()) || (room::member_id(name) && path.is_dir())).map(|(_, path)| path));
+        old.extend(crate::entries(&room.join(room::LOGS)).into_iter().filter(|(name, _)| name.strip_suffix(".bin").is_some_and(|stem| !room::member_id(stem))).map(|(_, path)| path));
         for (_, set) in crate::entries(&room.join(room::RECORDINGS)) {
             for (_, capture) in crate::entries(&set).iter().flat_map(|(_, owner)| crate::entries(owner)) {
                 old.extend(OLD_CAPTURE.iter().map(|name| capture.join(name)));
@@ -125,23 +121,27 @@ pub fn old_bytes(dir: &Path) -> u64 {
     old_files(dir).iter().map(|path| size_of(path)).sum()
 }
 
-fn remove_old(dir: &Path, files: &Files) -> Result<u64, String> {
-    let mut freed = 0;
+fn remove_old(dir: &Path, files: &Files) -> (u64, Option<String>) {
+    let (mut freed, mut failure) = (0, None);
     for path in old_files(dir) {
         let size = size_of(&path);
-        if let Err(e) = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) } {
-            return Err(format!("Delete failed: {e}"));
+        match if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) } {
+            Ok(()) => {
+                forget(files, &path);
+                freed += size;
+            }
+            Err(e) => failure = failure.or(Some(format!("Delete failed: {e}"))),
         }
-        forget(files, &path);
-        freed += size;
     }
-    Ok(freed)
+    (freed, failure)
 }
 
 pub fn delete_old_files(core: &Core) -> Result<u64, String> {
-    let freed = remove_old(&core.dir, &core.files)?;
-    debug::event(core, core.started, format!("deleted old files, {freed} bytes"));
-    Ok(freed)
+    let (freed, failure) = remove_old(&core.dir, &core.files);
+    if freed > 0 {
+        debug::event(core, core.started, format!("deleted old files, {freed} bytes"));
+    }
+    failure.map_or(Ok(freed), Err)
 }
 
 fn in_standby(dir: &Path, depth: usize) -> bool {
@@ -551,7 +551,7 @@ mod tests {
         let mut expected: Vec<String> = expected.iter().map(|n| n.replace("ME", &me)).collect();
         expected.sort();
         assert_eq!(relative(&dir, old_files(&dir)), expected);
-        assert_eq!((old_bytes(&dir), remove_old(&dir, &Files::default())), (older.len() as u64, Ok(older.len() as u64)));
+        assert_eq!((old_bytes(&dir), remove_old(&dir, &Files::default())), (older.len() as u64, (older.len() as u64, None)));
         let mut left: Vec<String> = unknown.iter().map(|n| n.replace("ME", &me).replace("OT", &other)).chain(current.iter().map(|p| p.to_string_lossy().replace('\\', "/"))).collect();
         left.sort();
         assert_eq!(tree(&dir).into_keys().collect::<Vec<_>>(), left);

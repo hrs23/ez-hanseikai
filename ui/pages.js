@@ -674,7 +674,7 @@ $("selnone").onclick = () => { picked.clear(); delete sigs.storage; renderStorag
 $("selold").onclick = () => { picked = new Set(oldSessions(st.sets.filter((s) => !s.live))); delete sigs.storage; renderStorage(); };
 $("deletesel").onclick = () => confirmDelete([...picked]);
 $("oldfiles").onclick = async () => {
-  if (await ask(t("Delete old files?"), t("Delete"), true)) run("delete_old_files", null, loadStorage);
+  if (await ask(t("Delete old files?"), t("Delete"), true)) invoke("delete_old_files").catch(fail).finally(loadStorage);
 };
 $("delno").onclick = () => $("deletedlg").close();
 for (const b of $("diagdlg").querySelectorAll("[data-dtab]")) b.onclick = () => openDiagnostics(b.dataset.dtab);

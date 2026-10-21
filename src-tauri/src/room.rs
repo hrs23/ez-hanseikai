@@ -116,6 +116,10 @@ pub fn valid_token(text: &str) -> bool {
     hex_of(text, TOKEN_BYTES)
 }
 
+pub fn member_id(text: &str) -> bool {
+    text.parse::<EndpointId>().is_ok()
+}
+
 pub fn valid_id(text: &str) -> bool {
     !text.is_empty() && text.len() <= 40 && text.trim() == text && text.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == ' ')
 }
@@ -436,7 +440,7 @@ pub fn shares(room: &Room, asker: &str, of: &str) -> bool {
 }
 
 pub fn may_share(core: &Core, room: &str, asker: &str, of: &str) -> bool {
-    valid_id(room) && of.parse::<EndpointId>().is_ok() && core.rooms.lock().unwrap().list.iter().find(|r| r.id == room).is_some_and(|r| shares(r, asker, of))
+    valid_id(room) && member_id(of) && core.rooms.lock().unwrap().list.iter().find(|r| r.id == room).is_some_and(|r| shares(r, asker, of))
 }
 
 #[derive(Debug, PartialEq)]
@@ -687,7 +691,7 @@ pub struct ViewInfo {
 
 pub fn view_info(records: &[Value]) -> Option<ViewInfo> {
     let r = records.iter().find(|r| r["k"] == "rec")?;
-    let by = r["imported"].as_str().filter(|b| b.parse::<EndpointId>().is_ok())?;
+    let by = r["imported"].as_str().filter(|b| member_id(b))?;
     let name = crate::clean_name(r["view"].as_str()?);
     (!name.is_empty()).then(|| ViewInfo { name, by: by.to_string(), title: r["title"].as_str().map(|t| crate::clean_text(t, TITLE_MAX)).filter(|t| !t.is_empty()) })
 }
@@ -774,7 +778,7 @@ pub fn logs(core: &Core, room: &str) -> Vec<Log> {
     let people = core.rooms.lock().unwrap().list.iter().find(|r| r.id == room).map(Room::people).unwrap_or_default();
     let me = core.me();
     let mut out = vec![Log { owner: me.clone(), offset_us: 0, records: own }];
-    for id in people.iter().filter(|id| id.parse::<EndpointId>().is_ok() && **id != me) {
+    for id in people.iter().filter(|id| member_id(id) && **id != me) {
         let records = core.room_log(room, id);
         let offset_us = match view_info(&records) {
             Some(view) if view.by == me => 0,
@@ -788,7 +792,7 @@ pub fn logs(core: &Core, room: &str) -> Vec<Log> {
 
 pub fn imported_views(core: &Core, room: &str) -> HashMap<String, ViewInfo> {
     let people = core.rooms.lock().unwrap().list.iter().find(|r| r.id == room).map(|r| r.removed.clone()).unwrap_or_default();
-    people.into_iter().filter(|id| id.parse::<EndpointId>().is_ok()).filter_map(|id| Some((id.clone(), view_info(&core.room_log(room, &id))?))).collect()
+    people.into_iter().filter(|id| member_id(id)).filter_map(|id| Some((id.clone(), view_info(&core.room_log(room, &id))?))).collect()
 }
 
 pub fn sets(core: &Core, room: &str, logs: &[Log]) -> Vec<Set> {

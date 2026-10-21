@@ -521,10 +521,7 @@ const JA = {
   "Imported by {name}": "{name} がインポート",
   "Delete old files ({size})": "古いファイルを削除 ({size})",
   "Delete old files?": "古いファイルを削除しますか?",
-  "Title": "タイトル",
-  "Import": "インポート",
   "Export": "エクスポート",
-  "Export to folder": "フォルダにエクスポート",
   "Export to folder…": "フォルダにエクスポート…",
   "Enter the room first: the app writes only to the room that is open.": "先にそのルームに入ってください。アプリは開いているルームにだけ書き込みます。",
   "tags must be a list of words.": "tags は単語のリストでなければなりません。",
@@ -602,6 +599,7 @@ let language = "en";
 const PATTERNS = [
   [/^The folder cannot be made: (.+)$/, "フォルダを作成できません: {1}"],
   [/^Export failed: (.+)$/, "エクスポートに失敗しました: {1}"],
+  [/^Delete failed: (.+)$/, "削除に失敗しました: {1}"],
 ];
 
 function pattern(text) {
