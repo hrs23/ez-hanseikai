@@ -7,7 +7,6 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
           workspaces: src-tauri
@@ -15,20 +14,51 @@ jobs:
         working-directory: src-tauri
       - run: node --test scripts/ui-test.mjs
 
-  e2e:
+  build:
     runs-on: windows-latest
-    timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22
           cache: npm
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
           workspaces: src-tauri
           cache-on-failure: true
+      - run: npm ci
+      - run: npx tauri build ${{ github.ref != 'refs/heads/main' && '--no-bundle' || secrets.TAURI_SIGNING_PRIVATE_KEY == '' && '--no-sign' || '' }}
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: app
+          retention-days: 1
+          compression-level: 0
+          path: src-tauri/target/release/ez-hanseikai.exe
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: github.ref == 'refs/heads/main'
+        with:
+          name: installer
+          retention-days: 1
+          path: |
+            src-tauri/target/release/bundle/nsis/*-setup.exe
+            src-tauri/target/release/bundle/nsis/*-setup.exe.sig
+
+  e2e:
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [record, library]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         id: ffmpeg
         with:
@@ -44,30 +74,22 @@ jobs:
           Expand-Archive ffmpeg.zip unpacked
           New-Item -ItemType Directory ffmpeg | Out-Null
           Get-ChildItem unpacked -Recurse -Include ffmpeg.exe, ffprobe.exe | Move-Item -Destination ffmpeg
-      - run: npm ci
-      - run: npx tauri build ${{ secrets.TAURI_SIGNING_PRIVATE_KEY == '' && '--no-sign' || '' }}
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-      - run: Copy-Item ffmpeg/ffmpeg.exe src-tauri/target/release/ffmpeg.exe
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: app
+          path: app
+      - run: Copy-Item ffmpeg/ffmpeg.exe app/ffmpeg.exe
         shell: pwsh
       - name: End-to-end test
         timeout-minutes: 30
-        run: node scripts/e2e.mjs src-tauri/target/release/ggi-hanseikai.exe ffmpeg
+        run: node scripts/e2e.mjs app/ggi-hanseikai.exe ffmpeg
         env:
           E2E_OUT: ${{ runner.temp }}/e2e
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: github.ref == 'refs/heads/main'
-        with:
-          name: installer
-          retention-days: 1
-          path: |
-            src-tauri/target/release/bundle/nsis/*-setup.exe
-            src-tauri/target/release/bundle/nsis/*-setup.exe.sig
+          E2E_PART: ${{ matrix.part }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: failure()
         with:
-          name: e2e
+          name: e2e-${{ matrix.part }}
           retention-days: 7
           path: |
             ${{ runner.temp }}/e2e/*.png

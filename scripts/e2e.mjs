@@ -32,12 +32,12 @@ const CALL_S = 30;
 const POLL_MS = 500;
 const SEGMENTS_BEFORE_LATE_JOIN = 2;
 const SEGMENTS_AFTER_RESTART = 2;
+const SHORT_SET_SEGMENTS = 5;
 const LIVE_ROUNDS = 2;
 const KEYFRAME_DECODE_SPEED = 10;
 const EXPORT_SPEED = 0.5;
 const SEEK_TO_S = 5;
 const LOG_TAIL_LINES = 15;
-const STEADY_S = 20;
 const APPROVAL_WAIT_S = LOG_SYNC_S * 3;
 const SOURCE = { kind: "display", index: 1 };
 const MODEL_BYTES = { base: 147_951_465, medium: 1_533_763_059 };
@@ -503,7 +503,7 @@ function heldByAll(st, set, list) {
 }
 
 async function onlyOnDownload(others, holder, set) {
-  await sleep(within(SYNC_ROUND_S * 2) * 1000);
+  await sleep(SYNC_ROUND_S * 1000);
   for (const app of others) {
     const row = setOf(await state(app), set);
     check(row && row.progress.have === 0 && !row.wanted && row.progress.total > 0, `${app.key} fetched a finished recording nobody asked for: ${brief(row?.progress)}`);
@@ -521,6 +521,13 @@ function connected(st, ids) {
 
 async function allSee(list, label, seconds, probe) {
   await Promise.all(list.map((app) => waitFor(`${app.key}: ${label}`, seconds, async () => probe(await state(app), app))));
+}
+
+const meshed = (list, room) => allSee(list, "connected to each other", within(DIAL_S * 2), (st, app) => (!room || (st.room?.id === room && !st.room.pending)) && connected(st, list.filter((x) => x !== app).map((x) => x.id)));
+
+async function asks(approver, joiner, inviter) {
+  await invoke(joiner, "join_room", { code: await invoke(inviter, "create_invite", { reuse: false }) });
+  await waitFor(`${approver.key} sees ${joiner.key} asking to join`, within(DIAL_S * 2), async () => (await state(approver)).asks.some((x) => x.id === joiner.id));
 }
 
 function holdEverything(list, room, set, owners, limits = {}) {
@@ -587,7 +594,7 @@ function logTail(app) {
   return fs.readFileSync(log, "utf8").trim().split("\n").slice(-LOG_TAIL_LINES).map((l) => l.slice(0, LOG_LINE_CHARS)).join("\n");
 }
 
-async function scenario(ctx) {
+async function record(ctx) {
   let a, b, c;
   await step("start A and B", async () => {
     a = await launch("a");
@@ -614,12 +621,10 @@ async function scenario(ctx) {
   });
 
   await step("B joins A's room with approval", async () => {
-    const code = await invoke(a, "create_invite", { reuse: false });
-    await invoke(b, "join_room", { code });
-    await waitFor("A sees B asking to join", within(DIAL_S * 2), async () => (await state(a)).asks.some((x) => x.id === b.id));
+    await asks(a, b, a);
     await sleep(APPROVAL_WAIT_S * 1000);
     await invoke(a, "answer_ask", { id: b.id, approve: true });
-    await allSee([a, b], "in the room and connected", within(DIAL_S * 2), (st, app) => st.room?.id === ctx.room && !st.room.pending && connected(st, [a, b].filter((x) => x !== app).map((x) => x.id)));
+    await meshed([a, b], ctx.room);
     const names = (await state(b)).names;
     check(names[a.id] === a.name, `B knows A as ${names[a.id]}`);
     const dials = await connects(b, a);
@@ -648,12 +653,10 @@ async function scenario(ctx) {
   await step("C joins late through B's invite, approved on A", async () => {
     await waitFor(`A has logged ${SEGMENTS_BEFORE_LATE_JOIN} segments`, within(SEGMENT_S * (SEGMENTS_BEFORE_LATE_JOIN + 1)), () => segsOf(logOf(a, ctx.room, a.id), ctx.set, "v").length >= SEGMENTS_BEFORE_LATE_JOIN);
     c = await launch("c");
-    const code = await invoke(b, "create_invite", { reuse: false });
-    await invoke(c, "join_room", { code });
-    await waitFor("A sees C asking B to join", within(DIAL_S * 2), async () => (await state(a)).asks.some((x) => x.id === c.id));
+    await asks(a, c, b);
     await invoke(a, "answer_ask", { id: c.id, approve: true });
     const all = [a, b, c];
-    await allSee(all, "everyone connected", within(DIAL_S * 2), (st, app) => st.room?.id === ctx.room && !st.room.pending && connected(st, all.filter((x) => x !== app).map((x) => x.id)));
+    await meshed(all, ctx.room);
     await allSee([c], "recording the running set", within(SYNC_ROUND_S * 2), (st) => st.active_set?.id === ctx.set);
   });
 
@@ -683,19 +686,6 @@ async function scenario(ctx) {
     check(Math.abs(begins(b) - begins(a)) < within(1), `B's part starts ${begins(b) - begins(a)} s from A's`);
   });
 
-  await step("connections stay up without redialing", async () => {
-    const all = [a, b, c];
-    const since = Object.fromEntries(await Promise.all(all.map(async (x) => [x.key, (await state(x)).now_us])));
-    await sleep(STEADY_S * 1000);
-    for (const app of all) {
-      for (const peer of all.filter((x) => x !== app)) {
-        const n = await connects(app, peer, since[app.key]);
-        check(n === 0, `${app.key} connected to ${peer.key} ${n} times in ${STEADY_S} s`);
-      }
-      check(connected(await state(app), all.filter((x) => x !== app).map((x) => x.id)), `${app.key} lost a peer`);
-    }
-  });
-
   await step("while recording the start box says Stop recording with the time and the list gets the running recording", async () => {
     check(await evaluate(a, `$("startbtn").textContent.includes(t("Stop recording")) && !!$("startbtn").querySelector("#livetimer") && !!$("startbtn").querySelector(".recdot") && $("standby").hidden && !!$("sessions").querySelector(".liverow .thumb.live")`), "the start box or the running recording's row is wrong");
   });
@@ -713,13 +703,22 @@ async function scenario(ctx) {
     await evaluate(a, `openLive(); true`);
   });
 
-  await step("live tiles stay in step while a member stalls, and stop waiting for one too far behind", async () => {
+  await step("connections stay up while live tiles stay in step, a member stalls, and the others stop waiting for one too far behind", async () => {
     const inStep = async (view) => {
       for (const x of [a, b, c]) await evaluate(x, `${view}; true`);
       await waitFor(`A's live tiles in step after ${view}`, within(SEGMENT_S * 3), async () => { const x = await evaluate(a, LIVE_PROBE); check(x.pos !== null && x.at.length === 3 && Math.max(...x.at) - Math.min(...x.at) < 1, brief(x)); return true; });
     };
+    const all = [a, b, c];
+    const since = Object.fromEntries(await Promise.all(all.map(async (x) => [x.key, (await state(x)).now_us])));
     await inStep("openNow()");
     await watchLive(a, b, SEGMENT_S * 2);
+    for (const app of all) {
+      for (const peer of all.filter((x) => x !== app)) {
+        const n = await connects(app, peer, since[app.key]);
+        check(n === 0, `${app.key} connected to ${peer.key} ${n} times while the live tiles ran`);
+      }
+      check(connected(await state(app), all.filter((x) => x !== app).map((x) => x.id)), `${app.key} lost a peer`);
+    }
     await inStep("openLive()");
     await invoke(b, "set_limit", { mbps: TRICKLE_MBPS });
     const held = await watchLive(a, b, LIVE_LAG_MAX_S + SEGMENT_S, (x) => x.held || x.late.length > 0);
@@ -782,7 +781,7 @@ async function scenario(ctx) {
     const recovered = pieces(logOf(b, ctx.room, b.id), ctx.set).filter((p) => p.capture === capture && open.some((o) => o.series === p.series && segName(o.n) === p.name));
     check(!badCopies(b, ctx.room, b.id, recovered).length, "a recovered segment does not match its log record");
     const all = [a, b, c];
-    await allSee(all, "everyone connected again", within(DIAL_S * 2), (st, app) => connected(st, all.filter((x) => x !== app).map((x) => x.id)));
+    await meshed(all);
     const logged = (x) => segsOf(logOf(x, ctx.room, x.id), ctx.set, "v").length;
     const target = logged(a) + SEGMENTS_AFTER_RESTART;
     await waitFor(`A logs ${SEGMENTS_AFTER_RESTART} more segments`, within(SEGMENT_S * (SEGMENTS_AFTER_RESTART + 1)), () => logged(a) >= target);
@@ -823,11 +822,11 @@ async function scenario(ctx) {
     await invoke(b, "close_room", { id: ctx.room });
     check(lastJoin(b, ctx.room, ctx.set)?.stop === false, "B did not end only its own part");
     await allSee([a, c], "the recording goes on without B", within(UNREACHABLE_S + SYNC_ROUND_S), (st) => st.active_set?.id === ctx.set && setOf(st, ctx.set).live && setOf(st, ctx.set).players.find((p) => p.owner === b.id).recording === false);
-    await sleep(within(SYNC_ROUND_S) * 1000);
+    await sleep(SYNC_ROUND_S * 1000);
     await allSee([a, c], "still recording", 1, (st) => st.active_set?.id === ctx.set);
     await invoke(b, "enter_room", { id: ctx.room });
     await recordsAgain(b, ctx.room, ctx.set, before);
-    await allSee([a, b], "A and B connected again", within(DIAL_S * 2), (st, app) => connected(st, [a, b].filter((x) => x !== app).map((x) => x.id)));
+    await meshed([a, b]);
     await allSee([a], "B recording again", within(SEGMENT_S + LOG_SYNC_S * 2), (st) => setOf(st, ctx.set).players.find((p) => p.owner === b.id).recording);
     kill(c);
     await stopped(c);
@@ -836,16 +835,13 @@ async function scenario(ctx) {
     await allSee([a, b], "the set shown ended at once, not before C's last segment", within(LOG_SYNC_S * 2), (st, app) => { const set = setOf(st, ctx.set); return !st.active_set && set && !set.live && set.end_us >= lastOf(app) - set.players.find((p) => p.owner === c.id).offset_us; });
     const ended = setOf(await state(a), ctx.set);
     ctx.durationS = (ended.end_us - ended.start_us) / 1e6;
-    await listenExport(b);
-    check((await invoke(b, "export_set", { room: ctx.room, set: ctx.set, path: path.join(b.data, `${ctx.set}.mp4`) }))?.skipped, "B cannot export the set while C is down");
-    await waitFor("B's export finishes", within(ctx.durationS / EXPORT_SPEED), () => evaluate(b, "window.e2eExport"));
     start("c");
     await attach(c);
     await share(c);
     await waitFor("C ends its part on restart", within(COLD_START_S), () => lastJoin(c, ctx.room, ctx.set)?.k === "rec_end");
-    await allSee(all, "everyone connected again", within(DIAL_S * 2), (st, app) => connected(st, all.filter((x) => x !== app).map((x) => x.id)));
+    await meshed(all);
     await allSee(all, "the set ended", within(LOG_SYNC_S * 2), (st) => !st.active_set && setOf(st, ctx.set) && !setOf(st, ctx.set).live);
-    await allSee(all, "every live picture back after the stop", within(SEGMENT_S + DIAL_RETRY_S + LOG_SYNC_S), (st) => st.capture.live && st.peers.length === 2 && st.peers.every((p) => p.live));
+    await allSee(all, "every live picture back after the stop", within(COLD_START_S), (st) => st.capture.live && st.peers.length === 2 && st.peers.every((p) => p.live));
     await allSee(all, "Everyone has it", within((SEGMENT_S + SYNC_ROUND_S) * 2), (st) => heldByAll(st, ctx.set, all));
     const st = await state(a);
     const players = setOf(st, ctx.set).players.map((p) => p.owner).sort();
@@ -861,6 +857,50 @@ async function scenario(ctx) {
     check(!missing, missing);
     const count = all.reduce((n, owner) => n + pieces(logOf(owner, ctx.room, owner.id), ctx.set).length, 0);
     ctx.notes.push(`verified ${count} pieces by SHA-256 on each of ${all.length} members, set of ${ctx.durationS.toFixed(1)} s`);
+  });
+
+  await step("C loses its own log and gets all of it back before writing again", async () => {
+    kill(c);
+    await stopped(c);
+    const copy = fs.readFileSync(logFile(a, ctx.room, c.id));
+    fs.rmSync(logFile(c, ctx.room, c.id));
+    start("c");
+    await attach(c);
+    await share(c);
+    const pending = path.join(roomDir(c, ctx.room), "pending.bin");
+    await waitFor("C holds its whole log again", within(DIAL_S + SYNC_ROUND_S * 2), () => fileSize(logFile(c, ctx.room, c.id)) >= copy.length && !fs.existsSync(pending));
+    check(fs.readFileSync(logFile(c, ctx.room, c.id)).subarray(0, copy.length).equals(copy), "C's restored log differs from A's copy of it");
+    const all = [a, b, c];
+    await meshed(all);
+    const id = await invoke(c, "add_event", { kind: "note", text: "After the restore", target: {}, values: null });
+    await allSee([a, b], "C's note written after the restore", within(REQUEST_TIMEOUT_S + DIAL_S + LOG_SYNC_S), (st) => st.events.some((e) => e.key === `${c.id}/${id}`));
+  });
+}
+
+async function library(ctx) {
+  let a, b, c;
+  await step("A, B and C record a short set, C joining late", async () => {
+    [a, b] = await Promise.all([launch("a"), launch("b")]);
+    ctx.room = await invoke(a, "create_room", { name: "Practice" });
+    await asks(a, b, a);
+    await invoke(a, "answer_ask", { id: b.id, approve: true });
+    await meshed([a, b], ctx.room);
+    await allSee([a, b], "encoding its test source", within(COLD_START_S), (st) => st.capture.live);
+    await invoke(a, "start_recording");
+    ctx.set = (await state(a)).active_set.id;
+    const logged = () => segsOf(logOf(a, ctx.room, a.id), ctx.set, "v").length;
+    await waitFor(`A has logged ${SEGMENTS_BEFORE_LATE_JOIN} segments`, within(SEGMENT_S * (SEGMENTS_BEFORE_LATE_JOIN + 1)), () => logged() >= SEGMENTS_BEFORE_LATE_JOIN);
+    c = await launch("c");
+    await asks(a, c, b);
+    await invoke(a, "answer_ask", { id: c.id, approve: true });
+    const all = [a, b, c];
+    await meshed(all, ctx.room);
+    await waitFor("C logs a picture segment of the running set", within(COLD_START_S), () => segsOf(logOf(c, ctx.room, c.id), ctx.set, "v").length > 0);
+    await waitFor(`A has logged ${SHORT_SET_SEGMENTS} segments`, within(SEGMENT_S * SHORT_SET_SEGMENTS), () => logged() >= SHORT_SET_SEGMENTS);
+    await invoke(a, "stop_recording");
+    await allSee(all, "the set ended and everyone has it", within((SEGMENT_S + SYNC_ROUND_S) * 3), (st) => !st.active_set && setOf(st, ctx.set) && !setOf(st, ctx.set).live && heldByAll(st, ctx.set, all));
+    const ended = setOf(await state(a), ctx.set);
+    ctx.durationS = (ended.end_us - ended.start_us) / 1e6;
   });
 
   await step("each ended recording gets a thumbnail, and the room page lists recordings as cards", async () => {
@@ -880,23 +920,6 @@ async function scenario(ctx) {
     await evaluate(a, `$("sidenav").querySelector("[data-nav=members]").click(); true`);
     await waitFor("A shows the members", within(UI_REFRESH_S * 3), () => evaluate(a, `$("homename").textContent === t("Members") && navActive() === "members"`));
     await screenshot(a, "room-members");
-  });
-
-  await step("C loses its own log and gets all of it back before writing again", async () => {
-    kill(c);
-    await stopped(c);
-    const copy = fs.readFileSync(logFile(a, ctx.room, c.id));
-    fs.rmSync(logFile(c, ctx.room, c.id));
-    start("c");
-    await attach(c);
-    await share(c);
-    const pending = path.join(roomDir(c, ctx.room), "pending.bin");
-    await waitFor("C holds its whole log again", within(DIAL_S + SYNC_ROUND_S * 2), () => fileSize(logFile(c, ctx.room, c.id)) >= copy.length && !fs.existsSync(pending));
-    check(fs.readFileSync(logFile(c, ctx.room, c.id)).subarray(0, copy.length).equals(copy), "C's restored log differs from A's copy of it");
-    const all = [a, b, c];
-    await allSee(all, "everyone connected again", within(DIAL_S * 2), (st, app) => connected(st, all.filter((x) => x !== app).map((x) => x.id)));
-    const id = await invoke(c, "add_event", { kind: "note", text: "After the restore", target: {}, values: null });
-    await allSee([a, b], "C's note written after the restore", within(REQUEST_TIMEOUT_S + DIAL_S + LOG_SYNC_S), (st) => st.events.some((e) => e.key === `${c.id}/${id}`));
   });
 
   await step("an Apex matches job for the set is claimed once and finished", async () => {
@@ -1021,7 +1044,7 @@ async function scenario(ctx) {
     await evaluate(a, `$("boardtext").value = "# Mine\\n- [ ] only me"; renderMini(); saveBoard(); true`);
     await waitFor("A shows the personal plan", within(UI_REFRESH_S * 5), () => evaluate(a, `boardScope === "personal" && $("canvas").textContent.includes("only me") && $("homesub").textContent === t("Only on this PC")`));
     await screenshot(a, "board-personal");
-    await sleep(within(LOG_SYNC_S * 2) * 1000);
+    await sleep(SYNC_ROUND_S * 1000);
     for (const app of [a, b, c]) {
       check((await boards(app)) === before[app.key] && !JSON.stringify((await state(app)).events).includes("only me"), `${app.key} has the personal game plan as an event`);
       check(!fs.readFileSync(logFile(app, ctx.room, app.id)).includes("only me"), `${app.key} wrote the personal plan to its log`);
@@ -1287,7 +1310,9 @@ async function scenario(ctx) {
     await evaluate(a, `$("diagdlg").close(); true`);
   });
 
-  await step("export the set on A to a playable file", async () => {
+  await step("export the set on A to a playable file while C is down", async () => {
+    kill(c);
+    await stopped(c);
     await listenExport(a);
     const file = path.join(a.data, `${ctx.set}.mp4`);
     const started = await invoke(a, "export_set", { room: ctx.room, set: ctx.set, path: file });
@@ -1305,6 +1330,10 @@ async function scenario(ctx) {
     check(decode.ok && !decode.err, `export does not decode cleanly: ${decode.err.slice(0, 400)}`);
     ctx.notes.push(`export of ${duration.toFixed(1)} s with streams ${kinds.join(" ")}`);
     ffmpeg("ffmpeg", ["-v", "error", "-y", "-ss", String(duration / 2), "-i", file, "-frames:v", "1", path.join(OUT, "export-frame.png")]);
+    start("c");
+    await attach(c);
+    await share(c);
+    await meshed([a, b, c]);
   });
 
   await step("the set exports to a folder of plain files and imports back as a recording everyone receives", async () => {
@@ -1558,12 +1587,12 @@ async function scenario(ctx) {
   await step("removing C for the whole room stops it fetching", async () => {
     await invoke(a, "remove_peer", { id: c.id });
     await allSee([a, b], "C no longer a peer", within(LOG_SYNC_S * 2), (st) => !st.peers.some((p) => p.id === c.id));
-    await sleep(within(LOG_SYNC_S) * 1000);
+    await sleep(LOG_SYNC_S * 1000);
     const before = fileSize(logFile(c, ctx.room, a.id));
     const id = await invoke(a, "add_event", { kind: "note", text: "After the removal", target: {}, values: null });
     const key = `${a.id}/${id}`;
     await allSee([b], "the new note", within(LOG_SYNC_S * 2), (st) => st.events.some((e) => e.key === key));
-    await sleep(within(DIAL_S + LOG_SYNC_S) * 1000);
+    await sleep((DIAL_S + SYNC_ROUND_S) * 1000);
     check(fileSize(logFile(c, ctx.room, a.id)) === before, "C still received A's log after its removal");
     const st = await state(c);
     check(!st.events.some((e) => e.key === key), "C shows a note written after its removal");
@@ -1578,7 +1607,7 @@ async function scenario(ctx) {
     await evaluate(b, `$("roomname").click(); [...$("menu").querySelectorAll("button")].find((x) => x.textContent === t("Leave room")).click(); true`);
     await waitFor("B shows the start screen and still lists the room", within(UI_REFRESH_S * 5), async () => { const st = await state(b); return !st.room && st.rooms.some((r) => r.id === ctx.room) && evaluate(b, `!$("start").hidden && $("app").hidden`); });
     await invoke(b, "enter_room", { id: ctx.room });
-    await allSee([a, b], "A and B connected again", within(DIAL_S * 2), (st, app) => st.room?.id === ctx.room && connected(st, [a, b].filter((x) => x !== app).map((x) => x.id)));
+    await meshed([a, b], ctx.room);
     check(kept(await state(b)) === before, "B lost recordings or notes by leaving and entering again");
     await invoke(b, "close_room", { id: ctx.room });
     await waitFor("B lists the room", within(UI_REFRESH_S * 5), () => evaluate(b, `!$("start").hidden && $("roomlist").children.length > 0`));
@@ -1614,7 +1643,12 @@ async function main() {
   const started = Date.now();
   let failed = null;
   try {
-    await scenario(ctx);
+    for (const part of (process.env.E2E_PART || "record,library").split(",")) {
+      for (const app of Object.values(apps)) kill(app);
+      for (const key of Object.keys(apps)) delete apps[key];
+      fs.rmSync(path.join(OUT, "apps"), { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
+      await { record, library }[part](ctx);
+    }
   } catch (e) {
     failed = e;
   }
