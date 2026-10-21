@@ -1156,6 +1156,7 @@ async function library(ctx) {
       await waitFor(`${app.key} is in the Watch Party of the recording`, within(PARTY_REPEAT_S + UI_REFRESH_S * 2), async () => (await state(app)).party.shared.set === ctx.set);
     }
     check(await evaluate(c, `selected === ${JSON.stringify(ctx.set)} && !clock.playing && Math.abs(nowM() - ${STAY_AT_S}) < 0.5`), "C was moved off the place it was watching in the recording");
+    await evaluate(c, `setParty(true); true`);
     const ended = setOf(await state(a), ctx.set);
     ctx.durationS = (ended.end_us - ended.start_us) / 1e6;
   });
