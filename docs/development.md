@@ -16,7 +16,7 @@ The setup exe is in `src-tauri/target/release/bundle/nsis`. `scripts/build-insta
 
 Releases do not contain ffmpeg: the app downloads a pinned build into its data folder on first run and checks its SHA-256. To release, raise the version in `src-tauri/Cargo.toml` (`Cargo.lock` follows on the next build) and push to main. The end-to-end job builds the installer, signed with the key in the repository secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (unsigned, and not released, without them). When the tests and the end-to-end test pass on main and no release for that version exists, the `release` job in `.github/workflows/test.yml` publishes that tested installer with `latest.json`. Every run on main then copies that release's manifest to the `updater` release that the app reads: always as `latest-beta.json` (the Beta channel), and as `latest.json` (the Stable channel) only when the version has no pre-release part. So `0.9.1-1` reaches Beta only, and `0.9.1` reaches both. Use a numeric pre-release part, which every Windows installer format accepts. Keep the private key out of the repository; only the public key is in `tauri.conf.json`.
 
-To run a second instance on one PC for testing, set `EZH_DIR` to a folder inside the app data folder (it holds that instance's identity key, recordings and log) and, for a separate WebView2 profile, `WEBVIEW2_USER_DATA_FOLDER`.
+To run a second instance on one PC for testing, set `EZH_DIR` to a folder inside the app data folder (it holds that instance's identity key, recordings, log and WebView2 profile).
 
 To try a change on another Windows PC over SSH without pushing: `scripts/deploy.sh <user@host>`. It sends the working tree, builds, and starts the app.
 

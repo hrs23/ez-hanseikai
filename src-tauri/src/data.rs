@@ -18,6 +18,8 @@ const RATE_SETS: usize = 5;
 const KEEP_EVERY: Duration = Duration::from_secs(5);
 const AGE_EVERY: Duration = Duration::from_secs(3600);
 const OLD_AFTER: Duration = Duration::from_secs(7 * 86_400);
+const MOVE_WAIT: Duration = Duration::from_secs(5);
+const MOVE_GAP: Duration = Duration::from_millis(200);
 pub const LIVE_KEEP: u32 = 2 * crate::stream::LIVE_WINDOW + 1;
 
 pub type Listing = Arc<HashMap<String, u64>>;
@@ -166,7 +168,7 @@ pub fn open_folder(dir: &Path) {
 pub fn reset(dir: &Path, keep_rooms: bool) {
     let rooms = ["key.bin", "rooms.json", "rooms"];
     for (name, path) in crate::entries(dir) {
-        if name == "EBWebView" || name == "webview" || name == LOCK || (keep_rooms && rooms.contains(&name.as_str())) {
+        if name == "EBWebView" || name == LOCK || (keep_rooms && rooms.contains(&name.as_str())) {
             continue;
         }
         let _ = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
@@ -176,13 +178,26 @@ pub fn reset(dir: &Path, keep_rooms: bool) {
 pub const LOCK: &str = "app.lock";
 static HELD: Mutex<Option<std::fs::File>> = Mutex::new(None);
 
-pub fn lock(dir: &Path) -> std::io::Result<bool> {
+fn open_lock(dir: &Path, create: bool) -> std::io::Result<std::fs::File> {
     use std::os::windows::fs::OpenOptionsExt;
-    let path = dir.join(LOCK);
-    let left = path.exists();
-    let file = std::fs::OpenOptions::new().write(true).create(true).truncate(false).share_mode(0).open(&path)?;
-    *HELD.lock().unwrap() = Some(file);
+    std::fs::OpenOptions::new().write(true).create(create).truncate(false).share_mode(0).open(dir.join(LOCK))
+}
+
+pub fn lock(dir: &Path) -> std::io::Result<bool> {
+    let left = dir.join(LOCK).exists();
+    *HELD.lock().unwrap() = Some(open_lock(dir, true)?);
     Ok(left)
+}
+
+pub fn migrate(old: &Path, new: &Path) -> PathBuf {
+    if new.exists() || !old.exists() {
+        return new.to_path_buf();
+    }
+    if open_lock(old, false).is_err_and(|e| e.kind() != std::io::ErrorKind::NotFound) {
+        return old.to_path_buf();
+    }
+    let moved = crate::proc::wait_until(MOVE_WAIT, MOVE_GAP, || std::fs::rename(old, new).is_ok());
+    (if moved { new } else { old }).to_path_buf()
 }
 
 pub fn unlock(dir: &Path) {
@@ -371,6 +386,37 @@ mod tests {
         assert!(lock(&dir).unwrap());
         unlock(&dir);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_data_folder_moves_to_its_new_name_once_and_never_while_the_old_app_runs() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let base = temp("migrate");
+        let (old, new) = (base.join("old"), base.join("new"));
+        let exclusive = |path: &Path| std::fs::OpenOptions::new().write(true).share_mode(0).open(path).unwrap();
+        let files = ["key.bin", "rooms/r/logs/a.bin", "rooms/r/sets/s/a/screen/000001.m4s.part", LOCK];
+        assert_eq!(migrate(&old, &new), new);
+        assert!(!old.exists() && !new.exists());
+        seed(&new, ["key.bin"]);
+        assert_eq!((migrate(&old, &new), tree(&new).len()), (new.clone(), 1));
+        std::fs::remove_dir_all(&new).unwrap();
+        seed(&old, files);
+        let before = tree(&old);
+        assert_eq!(migrate(&old, &new), new);
+        assert_eq!((old.exists(), tree(&new)), (false, before.clone()));
+        std::fs::rename(&new, &old).unwrap();
+        for held in [LOCK, "rooms/r/logs/a.bin"] {
+            let (file, start) = (exclusive(&old.join(held)), Instant::now());
+            assert_eq!((migrate(&old, &new), new.exists(), start.elapsed() < MOVE_WAIT), (old.clone(), false, held == LOCK));
+            drop(file);
+            assert_eq!(migrate(&old, &new), new);
+            assert_eq!((old.exists(), tree(&new)), (false, before.clone()));
+            std::fs::rename(&new, &old).unwrap();
+        }
+        put(&new, "key.bin", b"new");
+        assert_eq!(migrate(&old, &new), new);
+        assert_eq!((tree(&old), tree(&new).len()), (before, 1));
+        let _ = std::fs::remove_dir_all(base);
     }
 
     #[test]

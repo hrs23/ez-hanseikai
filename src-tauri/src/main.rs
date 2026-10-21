@@ -41,7 +41,9 @@ use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, State};
 
-pub const ALPN: &[u8] = b"ez-hanseikai/0";
+pub const ALPN: &[u8] = b"ggi-hanseikai/0";
+pub const OLD_ALPN: &[u8] = b"ez-hanseikai/0";
+pub const REPO: &str = "https://github.com/hrs23/ggi-hanseikai";
 pub const PROTOCOL: u32 = 5;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub use proc::{BELOW_NORMAL, NO_WINDOW};
@@ -60,9 +62,9 @@ pub fn test_mode() -> bool {
     TEST_PORT.is_some()
 }
 
-fn open_main(app: &tauri::App) -> tauri::Result<()> {
+fn open_main(app: &tauri::App, dir: &Path) -> tauri::Result<()> {
     let config = app.config().app.windows.first().cloned().unwrap_or_default();
-    let mut builder = tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?;
+    let mut builder = tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?.data_directory(dir.to_path_buf());
     if let Some(port) = TEST_PORT.as_ref().and_then(|p| p.parse::<u16>().ok()) {
         builder = builder.additional_browser_args(&format!("{BROWSER_ARGS} --remote-debugging-port={port}"));
     }
@@ -403,13 +405,13 @@ async fn save_text(core: State<'_, Arc<Core>>, name: String, text: String) -> Re
 fn data_dir(app: &AppHandle) -> tauri::Result<PathBuf> {
     match std::env::var_os("EZH_DIR") {
         Some(dir) => Ok(PathBuf::from(dir)),
-        None => app.path().app_local_data_dir(),
+        None => app.path().app_local_data_dir().map(|dir| data::migrate(&dir.with_file_name("dev.ez-hanseikai.app"), &dir)),
     }
 }
 
 async fn init(app: AppHandle, dir: PathBuf, left_lock: bool) -> Result<Arc<Core>, Box<dyn std::error::Error>> {
     debug::init(&dir);
-    tracing::info!("EZ Hanseikai {VERSION} started, process {}, data folder {}", std::process::id(), dir.display());
+    tracing::info!("GGI Hanseikai {VERSION} started, process {}, data folder {}", std::process::id(), dir.display());
     ffmpeg::set_data_dir(dir.clone());
     let mut recovery = None;
     if left_lock {
@@ -434,7 +436,7 @@ async fn init(app: AppHandle, dir: PathBuf, left_lock: bool) -> Result<Arc<Core>
         write_whole(&key_path, &key.to_bytes())?;
         key
     };
-    let mut builder = Endpoint::builder(presets::N0).secret_key(key).alpns(vec![ALPN.to_vec()]);
+    let mut builder = Endpoint::builder(presets::N0).secret_key(key).alpns(vec![ALPN.to_vec(), OLD_ALPN.to_vec()]);
     if std::env::var_os("EZH_RELAY_ONLY").is_some() {
         builder = builder.clear_ip_transports();
     }
@@ -575,7 +577,7 @@ fn main() {
                     std::process::exit(0);
                 }
             };
-            open_main(app)?;
+            open_main(app, &dir)?;
             let core = tauri::async_runtime::block_on(init(app.handle().clone(), dir, left_lock))?;
             app.manage(core.clone());
             shell::setup(app, core.clone())?;

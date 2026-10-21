@@ -134,7 +134,7 @@ impl<'a> MakeWriter<'a> for RollingFile {
 pub fn init(dir: &Path) {
     let tz = data::tz_offset_seconds();
     let Ok(writer) = RollingFile::open(dir) else { return };
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn,ez_hanseikai=debug"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(format!("warn,{}=debug", env!("CARGO_CRATE_NAME"))));
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(writer)
@@ -871,7 +871,7 @@ pub fn report_text(core: &Core, check: Option<&str>) -> String {
     let recent: Vec<&str> = log.lines().rev().take(REPORT_LINES).collect();
     let recent: Vec<&str> = recent.into_iter().rev().collect();
     let mut out = String::new();
-    out.push_str(&format!("ez-hanseikai {} on {} {}\n", crate::VERSION, std::env::consts::OS, command_line("cmd", &["/c", "ver"])));
+    out.push_str(&format!("{} {} on {} {}\n", env!("CARGO_PKG_NAME"), crate::VERSION, std::env::consts::OS, command_line("cmd", &["/c", "ver"])));
     out.push_str(&format!("previous version {}\n", if core.previous_version.is_empty() { "none" } else { &core.previous_version }));
     out.push_str(&format!("ffmpeg {}\n\n", command_line(&ffmpeg::path().to_string_lossy(), &["-version"]).lines().next().unwrap_or("")));
     let infos: Vec<String> = core.peers.lock().unwrap().iter().map(|p| format!("{} {:?}", short(p.id), p.info)).collect();

@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use iroh::endpoint::{Connection, RecvStream, SendStream};
+use iroh::endpoint::{ConnectError, ConnectOptions, Connection, RecvStream, SendStream};
 use iroh::EndpointId;
 use serde_json::{json, Value};
 use tauri::Emitter;
@@ -14,7 +14,7 @@ use tokio::time::{sleep, timeout};
 
 use crate::record::{self, LiveStep};
 use crate::room::{self, capture_id, part_of, seg_name, valid_id, INIT, SERIES};
-use crate::{data, debug, default_codecs, file_len, hw, log, merge, now_us, party, short, strings, Core, ALPN, PROTOCOL, VERSION};
+use crate::{data, debug, default_codecs, file_len, hw, log, merge, now_us, party, short, strings, Core, ALPN, OLD_ALPN, PROTOCOL, VERSION};
 
 const CHUNK: usize = 64 << 10;
 pub const LOG_SYNC: Duration = Duration::from_secs(2);
@@ -1068,7 +1068,8 @@ pub async fn peer_loop(core: Arc<Core>, id: EndpointId) {
             continue;
         }
         let dialing = Instant::now();
-        let conn = match timeout(CONNECT_TIMEOUT, core.ep.connect(id, ALPN)).await {
+        let dial = async { Ok::<_, ConnectError>(core.ep.connect_with_opts(id, ALPN, ConnectOptions::new().with_additional_alpns(vec![OLD_ALPN.to_vec()])).await?.await?) };
+        let conn = match timeout(CONNECT_TIMEOUT, dial).await {
             Ok(Ok(conn)) => conn,
             other => {
                 core.update_peer(&id, |p| p.failures += 1);

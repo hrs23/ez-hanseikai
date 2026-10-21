@@ -8,7 +8,7 @@ Off by default. Settings > API > Local API starts it. The page shows the address
 
 Starting the app with `--api`, or with `EZH_API=1`, turns the API on at start (and keeps the switch on). `"api": true` in `settings.json` does the same.
 
-While the API runs, the address and token are also written to `api.json` in the data folder, `%LOCALAPPDATA%\dev.ez-hanseikai.app\api.json`, readable by the current Windows user only: `{"address": "127.0.0.1:47625", "token": "<token>"}`. The file is removed when the API stops or the app exits, and rewritten with a new token. A program on this PC can read it instead of asking the person.
+While the API runs, the address and token are also written to `api.json` in the data folder, `%LOCALAPPDATA%\dev.ggi-hanseikai.app\api.json`, readable by the current Windows user only: `{"address": "127.0.0.1:47625", "token": "<token>"}`. The file is removed when the API stops or the app exits, and rewritten with a new token. A program on this PC can read it instead of asking the person.
 
 The port is 47625. If another program holds it, Settings says so. `EZH_API_PORT` sets another port, for tests.
 
@@ -40,7 +40,7 @@ The text of [llms.txt](llms.txt). No token.
 ### `GET /v1`
 
 ```json
-{"app": "EZ Hanseikai", "version": "0.12.0", "id": "<own id>", "name": "Ann", "room": "ab12", "recording": false}
+{"app": "GGI Hanseikai", "version": "0.12.0", "id": "<own id>", "name": "Ann", "room": "ab12", "recording": false}
 ```
 
 `room` is the open room (or `null`); `recording` is true while a recording runs.
@@ -166,7 +166,7 @@ Not available: the operations that open a window, that is choosing files or fold
 ### `GET /v1/diagnostics`
 
 ```json
-{"text": "ez-hanseikai 0.16.2 on windows ...\n\nrecent errors\n..."}
+{"text": "ggi-hanseikai 0.16.2 on windows ...\n\nrecent errors\n..."}
 ```
 
 The plain-text report of Help > Diagnostics > Copy report, without its summary lines, with names and addresses hidden. `?everyone=true` (or `1`) puts this PC's report under `=== this PC ===` and adds each connected member's report, as they share it, under `=== member <first 10 characters of the id> ===`. It runs the environment check, so it can take a few seconds.

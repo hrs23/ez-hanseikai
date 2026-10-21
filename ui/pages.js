@@ -679,7 +679,7 @@ $("deletesel").onclick = () => confirmDelete([...picked]);
 $("delno").onclick = () => $("deletedlg").close();
 for (const b of $("diagdlg").querySelectorAll("[data-dtab]")) b.onclick = () => openDiagnostics(b.dataset.dtab);
 $("diagcopy").onclick = () => diagnosticsText().then((text) => navigator.clipboard.writeText(text)).then(() => flash(t("Copied"))).catch(fail);
-$("diagsave").onclick = () => diagnosticsText().then((text) => dialog("save_text", { name: "ez-hanseikai-diagnostics.txt", text })).then((saved) => { if (saved) flash(t("Saved")); }).catch(fail);
+$("diagsave").onclick = () => diagnosticsText().then((text) => dialog("save_text", { name: "ggi-hanseikai-diagnostics.txt", text })).then((saved) => { if (saved) flash(t("Saved")); }).catch(fail);
 $("resetno").onclick = () => $("resetdlg").close();
 $("resetyes").onclick = () => {
   $("resetdlg").close();

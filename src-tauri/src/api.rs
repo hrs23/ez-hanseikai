@@ -665,7 +665,7 @@ struct Live(Arc<Core>);
 
 impl Backend for Live {
     fn app(&self) -> Value {
-        json!({"app": "EZ Hanseikai", "version": crate::VERSION, "id": self.me(), "name": *self.0.name.lock().unwrap(), "room": self.0.room_id(), "recording": self.0.active_set.lock().unwrap().is_some()})
+        json!({"app": "GGI Hanseikai", "version": crate::VERSION, "id": self.me(), "name": *self.0.name.lock().unwrap(), "room": self.0.room_id(), "recording": self.0.active_set.lock().unwrap().is_some()})
     }
 
     fn me(&self) -> String {
@@ -881,7 +881,7 @@ mod tests {
 
     impl Backend for Fake {
         fn app(&self) -> Value {
-            json!({"app": "EZ Hanseikai", "version": "0", "id": "a"})
+            json!({"app": "GGI Hanseikai", "version": "0", "id": "a"})
         }
         fn me(&self) -> String {
             "a".into()
@@ -1279,7 +1279,7 @@ mod tests {
     #[test]
     fn the_app_info_names_the_open_room() {
         let (status, info) = get(&fixture(), "/v1");
-        assert_eq!((status, info["app"].as_str()), (200, Some("EZ Hanseikai")));
+        assert_eq!((status, info["app"].as_str()), (200, Some("GGI Hanseikai")));
     }
 
     #[test]

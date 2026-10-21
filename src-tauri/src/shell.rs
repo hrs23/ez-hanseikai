@@ -11,10 +11,9 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Modifiers, Shortcut};
 use tauri_plugin_notification::NotificationExt;
 
-use crate::{room, Core, VERSION};
+use crate::{room, Core, REPO, VERSION};
 
 pub const DEFAULT_HOTKEY: &str = "Ctrl+Alt+M";
-const REPO: &str = "https://github.com/hrs23/ez-hanseikai";
 const STATUS_POLL: Duration = Duration::from_secs(1);
 const JA: [(&str, &str); 53] = [
     ("GGI Hanseikai is already running with this data folder.", "GGI反省会はこのデータフォルダですでに動いています。"),
@@ -231,7 +230,7 @@ pub fn exit_app(app: &AppHandle, core: &Arc<Core>) {
 }
 
 pub fn export_identity(app: &AppHandle, core: &Arc<Core>) {
-    let Some(path) = save_file(app, "ez-hanseikai-identity.key") else { return };
+    let Some(path) = save_file(app, "ggi-hanseikai-identity.key") else { return };
     if std::fs::copy(core.dir.join("key.bin"), &path).is_ok() {
         tell(app, &lang(core), tr(&lang(core), "Identity saved. Keep this file private: anyone with it can act as you."));
     }

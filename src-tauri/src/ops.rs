@@ -7,7 +7,7 @@ use iroh::Watcher;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
-use crate::{api, audio, bundle, check, clean_name, clean_note, data, debug, export, ffmpeg, import, jobs, net, now_us, party, record, room, shell, sources, Core, BOARD_MAX, CHANNELS, EVENT_KINDS, NOTE_MAX, VALUES_MAX};
+use crate::{api, audio, bundle, check, clean_name, clean_note, data, debug, export, ffmpeg, import, jobs, net, now_us, party, record, room, shell, sources, Core, BOARD_MAX, CHANNELS, EVENT_KINDS, NOTE_MAX, REPO, VALUES_MAX};
 
 pub type Op = fn(&Arc<Core>, Value) -> Result<Value, String>;
 
@@ -361,7 +361,7 @@ fn update_allowed(core: &Core) -> Result<(), String> {
 
 pub fn update_url(channel: &str) -> String {
     let file = if channel == CHANNELS[1] { "latest-beta.json" } else { "latest.json" };
-    format!("https://github.com/hrs23/ez-hanseikai/releases/download/updater/{file}")
+    format!("{REPO}/releases/download/updater/{file}")
 }
 
 fn find_update(core: &Core) -> Result<Option<tauri_plugin_updater::Update>, String> {

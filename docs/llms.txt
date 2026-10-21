@@ -6,7 +6,7 @@ This file describes the app's local HTTP API. An AI agent or a program can read 
 
 ## Turn it on
 
-The API is off by default. A person turns it on in the app: Settings > API > Local API, or starts the app with --api (or EZH_API=1). The address is http://127.0.0.1:47625 and Copy token puts the token on the clipboard. While the API runs, the address and the token are also in api.json in the app's data folder (%LOCALAPPDATA%\\dev.ez-hanseikai.app), readable by the current Windows user only. The token is secret; never print it into notes or the game plan.
+The API is off by default. A person turns it on in the app: Settings > API > Local API, or starts the app with --api (or EZH_API=1). The address is http://127.0.0.1:47625 and Copy token puts the token on the clipboard. While the API runs, the address and the token are also in api.json in the app's data folder (%LOCALAPPDATA%\\dev.ggi-hanseikai.app), readable by the current Windows user only. The token is secret; never print it into notes or the game plan.
 
 ## Rules
 
@@ -22,7 +22,7 @@ The API is off by default. A person turns it on in the app: Settings > API > Loc
 ## Read
 
 GET /v1
-  {"app": "EZ Hanseikai", "version": "0.12.0", "id": "...", "name": "Ann", "room": "<open room id or null>", "recording": false}
+  {"app": "GGI Hanseikai", "version": "0.12.0", "id": "...", "name": "Ann", "room": "<open room id or null>", "recording": false}
 
 GET /v1/status
   {"room": "<open room id or null>", "recording": false, "state": "standby", "members": [{"id": "...", "name": "Ann", "online": true, "state": "standby"}]}
@@ -62,7 +62,7 @@ GET /v1/rooms/{room}/jobs
   state is waiting, claimed, done or failed; by is who runs or ran it.
 
 GET /v1/diagnostics[?everyone=true]
-  {"text": "ez-hanseikai 0.16.2 on windows ...\n\nrecent errors\n..."}
+  {"text": "ggi-hanseikai 0.16.2 on windows ...\n\nrecent errors\n..."}
   The report that Help > Diagnostics > Copy report gives, without its summary lines and with names and addresses hidden: versions, environment check, connections, hardware and clocks, where data goes, recent errors, jobs, crashes and the recent log. everyone=true puts this report under `=== this PC ===` and adds each connected member's under `=== member <first 10 characters of the id> ===`. Read it when something does not work.
 
 ## Write
