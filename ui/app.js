@@ -1599,7 +1599,7 @@ function escapeKey() {
   else if (panelOpen) showPanel(false);
 }
 document.addEventListener("focusin", (e) => {
-  if (!e.target.matches(":focus-visible") && !typing() && !e.target.closest("dialog")) e.target.blur();
+  if (!e.target.matches(":focus-visible") && !typing() && !e.target.closest("dialog, .menu")) e.target.blur();
 });
 document.addEventListener("keydown", (e) => {
   if (composing(e) || listening) return;
