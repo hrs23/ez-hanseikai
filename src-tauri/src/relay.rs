@@ -11,12 +11,12 @@ const RELAY_EVERY: Duration = Duration::from_secs(300);
 const RELAY_WAIT: Duration = Duration::from_secs(10);
 const RELAY_POLL: Duration = Duration::from_millis(500);
 
+pub fn url(u: &str) -> Option<RelayUrl> {
+    u.trim().parse::<RelayUrl>().ok().filter(|r| r.scheme() == "https" && r.host_str().is_some())
+}
+
 pub fn parse(urls: &[String]) -> Result<Vec<RelayUrl>, String> {
-    urls.iter()
-        .map(|u| u.trim())
-        .filter(|u| !u.is_empty())
-        .map(|u| u.parse::<RelayUrl>().ok().filter(|r| r.scheme() == "https" && r.host_str().is_some()).ok_or(format!("Not a relay URL: {u}")))
-        .collect()
+    urls.iter().map(|u| u.trim()).filter(|u| !u.is_empty()).map(|u| url(u).ok_or(format!("Not a relay URL: {u}"))).collect()
 }
 
 fn public() -> Vec<RelayUrl> {
@@ -66,21 +66,28 @@ async fn measured(ep: &Endpoint, url: &RelayUrl) -> bool {
     false
 }
 
-async fn alive(ep: &Endpoint, map: &[RelayUrl], url: &RelayUrl) -> bool {
+async fn insert(ep: &Endpoint, map: &mut Vec<RelayUrl>, url: &RelayUrl) -> bool {
     let added = !map.contains(url);
     if added {
         ep.insert_relay(url.clone(), Arc::new(RelayConfig::from(url.clone()))).await;
+        map.push(url.clone());
     }
+    added
+}
+
+async fn alive(ep: &Endpoint, map: &mut Vec<RelayUrl>, url: &RelayUrl) -> bool {
+    let added = insert(ep, map, url).await;
     let ok = measured(ep, url).await;
     if added && !ok {
         ep.remove_relay(url).await;
+        map.pop();
     }
     ok
 }
 
 async fn choose(ep: &Endpoint, map: &mut Vec<RelayUrl>, group: &[RelayUrl]) {
-    for url in group.iter().filter(|u| !map.contains(u)) {
-        ep.insert_relay(url.clone(), Arc::new(RelayConfig::from(url.clone()))).await;
+    for url in group {
+        insert(ep, map, url).await;
     }
     for url in map.iter().filter(|u| !group.contains(u)) {
         ep.remove_relay(url).await;
@@ -100,7 +107,7 @@ pub async fn keep(core: Arc<Core>) {
                 }
                 continue;
             }
-            if i == last || alive(&core.ep, &map, &group[0]).await {
+            if i == last || alive(&core.ep, &mut map, &group[0]).await {
                 choose(&core.ep, &mut map, group).await;
                 debug::event(&core, std::time::Instant::now(), if i == last { "relay: the public relays".into() } else { format!("relay: server {} of the list", i + 1) });
                 break;

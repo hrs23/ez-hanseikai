@@ -29,7 +29,7 @@ mod thumbs;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
@@ -189,6 +189,11 @@ impl Peer {
         self.alive().is_some_and(|c| !relay::relayed(c))
     }
 
+    pub fn sendable(&self) -> HashMap<String, u64> {
+        let picture = self.picture();
+        self.have.iter().filter(|(k, _)| picture || k.rsplit('/').next() != Some(room::SERIES[0])).map(|(k, n)| (k.clone(), *n)).collect()
+    }
+
     pub fn new(id: EndpointId, name: String, task: tauri::async_runtime::JoinHandle<()>) -> Self {
         Self { id, name, conn: None, offset_us: None, failures: 0, announce: true, codecs: default_codecs(), info: None, hw: Value::Null, live: None, speaking: false, seen_us: None, have: HashMap::new(), logs: HashMap::new(), asks: Vec::new(), drops: [None; 2], served: None, task }
     }
@@ -227,7 +232,7 @@ pub struct Core {
     pub wake: tokio::sync::Notify,
     pub relays: Mutex<Vec<RelayUrl>>,
     pub relay_wake: tokio::sync::Notify,
-    pub live_writes: AtomicUsize,
+    pub live_at: Mutex<Option<Instant>>,
     pub focus: Mutex<Option<String>>,
     pub asks: Mutex<Vec<room::Ask>>,
     pub party: Mutex<party::Party>,
@@ -484,9 +489,9 @@ async fn init(app: AppHandle, dir: PathBuf, left_lock: bool) -> Result<Arc<Core>
         export: Mutex::new(None),
         log_lock: Mutex::new(()),
         wake: tokio::sync::Notify::new(),
-        relays: Mutex::new(relay::parse(&strings::<Vec<String>>(&settings["relays"])).unwrap_or_default()),
+        relays: Mutex::new(strings::<Vec<String>>(&settings["relays"]).iter().filter_map(|u| relay::url(u)).collect()),
         relay_wake: tokio::sync::Notify::new(),
-        live_writes: AtomicUsize::new(0),
+        live_at: Mutex::new(None),
         focus: Mutex::new(None),
         asks: Mutex::new(Vec::new()),
         party: Mutex::new(party::Party::default()),
@@ -527,7 +532,7 @@ pub fn clean_settings(mut settings: Value) -> Value {
     if !settings["quality"].as_str().is_some_and(|q| record::QUALITIES.iter().any(|(id, _)| *id == q)) {
         settings["quality"] = Value::Null;
     }
-    settings["relays"] = json!(strings::<Vec<String>>(&settings["relays"]).iter().filter_map(|u| relay::parse(std::slice::from_ref(u)).ok()?.pop().map(|u| u.to_string())).collect::<Vec<_>>());
+    settings["relays"] = json!(strings::<Vec<String>>(&settings["relays"]).iter().filter_map(|u| relay::url(u)).map(|u| u.to_string()).collect::<Vec<_>>());
     settings
 }
 

@@ -59,7 +59,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - Your own tile shows and moves right after recording ends and while it records. `todo`
 - net: a live reply names the recording of each series; history gets its share while live fills the limit. `unit`
 - record: a segment opens only beside its init; a live stream serves only segments of the recording it asked for and ends once it is two segments behind; quality steps down only while every direct receiver fell behind twice recently. `unit`
-- History to one member waits while live goes to another, and in standby the quality drops one preset when live falls behind for every receiver. `manual`
+- History to one member waits while live flows to another but not while that live write is stuck, and in standby the quality drops one preset when live falls behind for every receiver. `manual`
 - receiving speed and the live edge; live tiles wait for the slowest member, never go back, stop waiting for one too far behind, mark it late once passed, and advance while nobody holds; the live delay shrinks slowly only while the slack is above the gap, and a tile with no start follows its own edge; a Live tile tells at most one problem, only while this PC records; live lists every room member in the saved order and then in join order, whatever their connection, without a picture from a member reached through a relay. `ui-test`
 
 ## Playback

@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -266,17 +265,13 @@ async fn send_file(core: &Core, send: &mut SendStream, n: u32, path: &Path, at: 
     loop {
         let k = file.read(&mut buf).await?;
         if k > 0 {
+            while history && core.live_at.lock().unwrap().is_some_and(|t| t.elapsed() < HISTORY_WAIT) {
+                sleep(HISTORY_WAIT).await;
+            }
             let wrote = Instant::now();
-            if history {
-                while core.live_writes.load(Ordering::Relaxed) > 0 {
-                    sleep(HISTORY_WAIT).await;
-                }
-                write_frame(send, n, &buf[..k]).await?;
-            } else {
-                core.live_writes.fetch_add(1, Ordering::Relaxed);
-                let done = write_frame(send, n, &buf[..k]).await;
-                core.live_writes.fetch_sub(1, Ordering::Relaxed);
-                done?;
+            write_frame(send, n, &buf[..k]).await?;
+            if !history {
+                *core.live_at.lock().unwrap() = Some(Instant::now());
             }
             debug::slow_send(what, wrote.elapsed());
             row.add(k);
@@ -892,8 +887,8 @@ fn fetch_history(core: &Arc<Core>, peer: &EndpointId, conn: &Connection, room: &
         return;
     }
     let via = peer.to_string();
-    let haves: Vec<(String, HashMap<String, u64>, bool)> = core.peers.lock().unwrap().iter().filter(|p| p.conn.is_some()).map(|p| (p.id.to_string(), p.have.clone(), p.picture())).collect();
-    let count = |who: &str, key: &str, series: &str| haves.iter().find(|(id, ..)| id == who).filter(|(.., picture)| *picture || series != SERIES[0]).and_then(|(_, h, _)| h.get(key)).copied().unwrap_or(0);
+    let haves: Vec<(String, HashMap<String, u64>)> = core.peers.lock().unwrap().iter().filter(|p| p.conn.is_some()).map(|p| (p.id.to_string(), p.sendable())).collect();
+    let count = |who: &str, key: &str| haves.iter().find(|(id, _)| id == who).and_then(|(_, h)| h.get(key)).copied().unwrap_or(0);
     let focus = core.focus.lock().unwrap().clone();
     let logs = room::logs(core, room);
     let mut sets = room::sets(core, room, &logs);
@@ -923,7 +918,7 @@ fn fetch_history(core: &Arc<Core>, peer: &EndpointId, conn: &Connection, room: &
                 if waiting && !focused {
                     continue;
                 }
-                let here = count(&via, &key, series) > run.index && (f.owner == via || count(&f.owner, &key, series) <= run.index);
+                let here = count(&via, &key) > run.index && (f.owner == via || count(&f.owner, &key) <= run.index);
                 if !focused && history_fetches(core) >= HISTORY_FETCHES {
                     return;
                 }

@@ -1269,7 +1269,7 @@ pub fn progress(core: &Core, set: &Set, mine: &HashMap<String, u64>, others: &[&
 pub fn sets_json(core: &Core, room: &str, logs: &[Log], events: &[Value]) -> Vec<Value> {
     let me = core.me();
     let peers = others_have(core);
-    let online: Vec<HashMap<String, u64>> = core.peers.lock().unwrap().iter().filter(|p| p.conn.is_some()).map(|p| (p, p.picture())).map(|(p, picture)| p.have.iter().filter(|(k, _)| picture || !k.ends_with(&format!("/{}", SERIES[0]))).map(|(k, n)| (k.clone(), *n)).collect()).collect();
+    let online: Vec<HashMap<String, u64>> = core.peers.lock().unwrap().iter().filter(|p| p.conn.is_some()).map(crate::Peer::sendable).collect();
     let online: Vec<&HashMap<String, u64>> = online.iter().collect();
     let reports: Vec<&HashMap<String, u64>> = peers.iter().map(|p| &p.1).collect();
     let all = sets(core, room, logs);

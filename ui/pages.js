@@ -120,7 +120,7 @@ function renderRoom() {
 function memberOf(id) {
   const me = id === st.id;
   const p = me ? null : peerOf(id);
-  const status = memberStatus({ connected: me || !!(p && p.connected), sharing: me ? !!st.capture.source : !!(p && p.sharing), relayed: !!p && p.path === "relay", seen_us: p && p.seen_us }, new Date());
+  const status = memberStatus({ connected: me || !!(p && p.connected), sharing: me ? !!st.capture.source : !!(p && p.sharing), relayed: !!p && !sendsPicture(p), seen_us: p && p.seen_us }, new Date());
   return { p, status };
 }
 function renderMembers() {
