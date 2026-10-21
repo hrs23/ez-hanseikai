@@ -73,7 +73,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - a focused player plays its own sound; otherwise the sound is the one chosen by a click, else the viewer's own, else the first player's; the view line names the first member who blocks the playback, in one sentence. `ui-test`
 - live speaking leaves the player alone and a played voice lights its tile: a live `speaking` message lights no player tile and every voice moves with the media through Web Audio (`e2e`, `library`); the ring following a real voice and fading after the hang (`manual`); a voice counts as talking while loud and for the hang after (`ui-test`).
 - clicking a tile picks whose app sound plays and clicks keep no focus: the clicked tile is heard and marked, the app sound button picks the next member, and after clicks on the volume and play buttons Space and the arrows still work (`e2e`, `library`).
-- repeated seeks in one direction add up and a change of direction starts over (`ui-test`); the seek bezel shows the sum, for example 15 s back after three quick left arrows, and the seek bar shows the target time (`manual`).
+- repeated seeks in one direction add up and a change of direction starts over (`ui-test`); the seek bezel shows the sum, for example 15 s back after three quick left arrows, and releasing a seekbar drag shows the target time in the centre bezel (`manual`).
 - a voice counts as speaking until the hang has passed and not after (`ui-test`); the bezel and a run of seeks end after the bezel time even with animations off (`manual`).
 - dragging the volume and the popover ranges still works with clicks not taking focus; Tab still reaches the controls with a visible focus ring. `manual`
 
