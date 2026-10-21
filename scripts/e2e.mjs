@@ -1290,6 +1290,7 @@ async function library(ctx) {
     const id = await invoke(b, "put_board_card", { room: ctx.room, card: "", title: "Drops", text: "north" });
     for (const app of [a, b, c]) await waitFor(`${app.key} sees the new card after the member cards`, within(LOG_SYNC_S * 2), async () => { const x = await card(app, id); return x?.title === "Drops" && x.text === "north" && (await state(app)).board.at(-1).card === id; });
     await invoke(c, "put_board_card", { room: ctx.room, card: id, title: "Calls" });
+    await waitFor("A has C's rename before it moves the card", within(LOG_SYNC_S * 2), async () => (await card(a, id))?.title === "Calls");
     await invoke(a, "put_board_card", { room: ctx.room, card: id, pos: -0.5 });
     for (const app of [a, b, c]) await waitFor(`${app.key} sees the card renamed and moved up with its text`, within(LOG_SYNC_S * 2), async () => { const x = await card(app, id); return x?.title === "Calls" && x.text === "north" && (await state(app)).board[1].card === id; });
     await invoke(b, "put_board_card", { room: ctx.room, card: id, gone: true });
