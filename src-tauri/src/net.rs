@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use iroh::endpoint::{ConnectError, ConnectOptions, Connection, ConnectionError, RecvStream, SendStream, Side};
+use iroh::endpoint::{Connection, ConnectionError, RecvStream, SendStream, Side};
 use iroh::EndpointId;
 use serde_json::{json, Value};
 use tauri::Emitter;
