@@ -12,11 +12,11 @@ use iroh::endpoint::Connection;
 use iroh::Watcher;
 use regex::Regex;
 use serde_json::{json, Value};
-use tauri::State;
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::EnvFilter;
 
 use crate::room::{self, part_of, SERIES};
+use crate::ops::arg;
 use crate::{check, data, download, ffmpeg, hw, net, now_us, party, record, short, sources, Core, NO_WINDOW};
 
 const MAX_LOG: u64 = 10 << 20;
@@ -379,7 +379,7 @@ pub fn choice(candidates: &[(&'static str, &'static str, f64)], results: &[(&str
         .collect()
 }
 
-fn path_json(conn: &Connection, addresses: bool) -> Vec<Value> {
+fn path_json(conn: &Connection) -> Vec<Value> {
     conn.paths()
         .iter()
         .map(|path| {
@@ -387,7 +387,6 @@ fn path_json(conn: &Connection, addresses: bool) -> Vec<Value> {
             json!({
                 "kind": if path.is_relay() { "relay" } else if path.is_ip() { "direct" } else { "other" },
                 "selected": path.is_selected(),
-                "addr": if addresses { format!("{:?}", path.remote_addr()) } else { String::new() },
                 "rtt_ms": stats.rtt.as_secs_f64() * 1000.0,
                 "tx": stats.udp_tx.bytes,
                 "rx": stats.udp_rx.bytes,
@@ -397,7 +396,7 @@ fn path_json(conn: &Connection, addresses: bool) -> Vec<Value> {
         .collect()
 }
 
-fn conn_json(label: &str, conn: &Connection, addresses: bool) -> Value {
+fn conn_json(label: &str, conn: &Connection) -> Value {
     let stats = conn.stats();
     json!({
         "label": label,
@@ -405,7 +404,7 @@ fn conn_json(label: &str, conn: &Connection, addresses: bool) -> Value {
         "tx": stats.udp_tx.bytes,
         "rx": stats.udp_rx.bytes,
         "lost": stats.lost_packets,
-        "paths": path_json(conn, addresses),
+        "paths": path_json(conn),
     })
 }
 
@@ -433,14 +432,14 @@ fn endpoint_json(core: &Core, addresses: bool) -> Value {
     })
 }
 
-fn connections_json(core: &Core, since: u64, addresses: bool) -> Value {
+fn connections_json(core: &Core, since: u64) -> Value {
     let mut peers: Vec<Value> = core
         .peers
         .lock()
         .unwrap()
         .iter()
         .map(|p| {
-            let conns: Vec<Value> = p.conn.iter().map(|c| conn_json("connection", c, addresses)).collect();
+            let conns: Vec<Value> = p.conn.iter().map(|c| conn_json("connection", c)).collect();
             json!({
                 "id": p.id.to_string(), "short": short(p.id), "name": p.name, "failures": p.failures, "offset_us": p.offset_us,
                 "version": p.info.as_ref().map(|i| &i.0), "proto": p.info.as_ref().map(|i| i.1), "codecs": p.codecs, "sharing": p.live.is_some(), "conns": conns,
@@ -450,9 +449,8 @@ fn connections_json(core: &Core, since: u64, addresses: bool) -> Value {
     for p in peers.iter_mut().filter(|p| p["name"] == "") {
         p["name"] = json!(room::display_name(core, p["id"].as_str().unwrap_or_default()));
     }
-    let shown = |text: &str| if addresses { text.to_string() } else { hide_addresses(text) };
-    let events: Vec<Value> = core.events.lock().unwrap().iter().filter(|e| e.t_us as u64 > since).map(|e| json!({"t_us": e.t_us, "text": shown(&e.text)})).collect();
-    json!({"me": endpoint_json(core, addresses), "proto": crate::PROTOCOL, "peers": peers, "events": events})
+    let events: Vec<Value> = core.events.lock().unwrap().iter().filter(|e| e.t_us as u64 > since).map(|e| json!({"t_us": e.t_us, "text": hide_addresses(&e.text)})).collect();
+    json!({"me": endpoint_json(core, false), "proto": crate::PROTOCOL, "peers": peers, "events": events})
 }
 
 fn network_json(core: &Core, since: u64) -> Value {
@@ -642,56 +640,47 @@ pub fn tail(path: &Path, from: u64, max: u64) -> (String, u64, bool) {
     (text, len, skipped)
 }
 
-fn log_json(core: &Core, from: u64, addresses: bool) -> Value {
+fn log_json(core: &Core, from: u64) -> Value {
     let (text, len, reset) = tail(&core.dir.join("log.txt"), from, LOG_TAIL);
-    json!({"text": if addresses { text } else { hide_addresses(&text) }, "len": len, "reset": reset})
+    json!({"text": hide_addresses(&text), "len": len, "reset": reset})
 }
 
-pub fn view(core: &Core, tab: &str, since: u64, set: Option<&str>, addresses: bool) -> Value {
+pub fn view(core: &Core, tab: &str, since: u64, set: Option<&str>) -> Value {
     match tab {
-        "connections" => connections_json(core, since, addresses),
+        "connections" => connections_json(core, since),
         "network" => network_json(core, since),
         "recording" => recording_json(core, since),
         "data" => data_json(core, set),
         "jobs" => jobs_json(core),
         "flow" => flow_json(core),
-        "log" => log_json(core, since, addresses),
+        "log" => log_json(core, since),
         _ => Value::Null,
     }
 }
 
-#[tauri::command]
-pub async fn debug_view(core: State<'_, Arc<Core>>, tab: String, since: u64, set: Option<String>, addresses: bool) -> Result<Value, String> {
-    let core = core.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || view(&core, &tab, since, set.as_deref(), addresses)).await.map_err(|e| e.to_string())
+pub fn debug_view(core: &Arc<Core>, args: Value) -> Result<Value, String> {
+    Ok(view(core, &arg::<String>(&args, "tab")?, arg(&args, "since")?, arg::<Option<String>>(&args, "set")?.as_deref()))
 }
 
-#[tauri::command]
-pub async fn debug_report(core: State<'_, Arc<Core>>, audio_process: String, save: bool, head: Option<String>) -> Result<String, String> {
-    let core = core.inner().clone();
-    let text = diagnostics(core.clone(), false, audio_process, head).await?;
-    if !save {
-        return Ok(text);
+pub fn debug_report(core: &Arc<Core>, args: Value) -> Result<Value, String> {
+    let text = diagnostics(core, false, arg(&args, "head")?)?;
+    if !arg::<bool>(&args, "save")? {
+        return Ok(json!(text));
     }
     let path = core.dir.join("report.txt");
     fs::write(&path, text).map_err(|e| e.to_string())?;
-    Ok(path.display().to_string())
+    Ok(json!(path.display().to_string()))
 }
 
-pub async fn diagnostics(core: Arc<Core>, everyone: bool, audio_process: String, head: Option<String>) -> Result<String, String> {
-    crate::warm(&core).await;
-    let c = core.clone();
-    let own = tauri::async_runtime::spawn_blocking(move || {
-        let lines = check::run(&c, sources::pid_of(&audio_process));
-        let text = report_text(&c, Some(&check::text(&lines)));
-        match head.filter(|h| !h.is_empty()) {
-            Some(h) => format!("{}\n\n{text}", redact(&h, &home(), &known_names(&c))),
-            None => text,
-        }
-    })
-    .await
-    .map_err(|e| e.to_string())?;
-    Ok(if everyone { combine(own, team(&core).await) } else { own })
+pub fn diagnostics(core: &Arc<Core>, everyone: bool, head: Option<String>) -> Result<String, String> {
+    crate::ops::warm(core);
+    let lines = check::run(core, sources::pid_of(&core.audio_process.lock().unwrap().clone()));
+    let own = report_text(core, Some(&check::text(&lines)));
+    let own = match head.filter(|h| !h.is_empty()) {
+        Some(h) => format!("{}\n\n{own}", redact(&h, &home(), &known_names(core))),
+        None => own,
+    };
+    Ok(if everyone { combine(own, tauri::async_runtime::block_on(team(core))) } else { own })
 }
 
 async fn team(core: &Arc<Core>) -> Vec<(String, String)> {
@@ -731,12 +720,11 @@ pub fn shared_report(core: &Core) -> String {
 
 fn describe(conn: &Connection, out: &mut String) {
     out.push_str(&format!("connection to {}\n", conn.remote_id().fmt_short()));
-    for p in path_json(conn, false) {
+    for p in path_json(conn) {
         out.push_str(&format!(
-            "  path {}{} {}rtt {:.1} ms sent {} B received {} B mtu {}\n",
+            "  path {}{} rtt {:.1} ms sent {} B received {} B mtu {}\n",
             p["kind"].as_str().unwrap_or_default(),
             if p["selected"] == true { " (selected)" } else { "" },
-            p["addr"].as_str().filter(|a| !a.is_empty()).map(|a| format!("remote {a} ")).unwrap_or_default(),
             p["rtt_ms"].as_f64().unwrap_or(0.0),
             p["tx"],
             p["rx"],

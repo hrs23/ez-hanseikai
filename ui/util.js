@@ -1,4 +1,7 @@
-const { invoke, convertFileSrc } = window.__TAURI__.core;
+const { invoke: tauriInvoke, convertFileSrc } = window.__TAURI__.core;
+const queue = {};
+const invoke = (name, args) => (queue[name] = (queue[name] || Promise.resolve()).catch(() => {}).then(() => tauriInvoke("call", { name, args: args || {} })));
+const dialog = (name, args) => tauriInvoke(name, args || {});
 const $ = (id) => document.getElementById(id);
 
 function el(tag, props = {}, ...children) {

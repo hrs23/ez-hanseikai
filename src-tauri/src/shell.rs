@@ -1,9 +1,10 @@
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use serde_json::Value;
 use tauri::menu::{Menu, MenuBuilder, MenuItem, MenuItemBuilder, SubmenuBuilder};
 use tauri::{AppHandle, Emitter, Manager, Wry};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
@@ -102,8 +103,9 @@ fn documents(app: &AppHandle) -> Option<PathBuf> {
     app.path().document_dir().ok()
 }
 
-pub fn save_file(app: &AppHandle, name: &str, kind: &str, ext: &str) -> Option<PathBuf> {
-    let mut dialog = app.dialog().file().set_file_name(name).add_filter(kind, &[ext]);
+pub fn save_file(app: &AppHandle, name: &str) -> Option<PathBuf> {
+    let ext = Path::new(name).extension().and_then(|e| e.to_str()).unwrap_or_default();
+    let mut dialog = app.dialog().file().set_file_name(name).add_filter(ext.to_uppercase(), &[ext]);
     if let Some(dir) = documents(app) {
         dialog = dialog.set_directory(dir);
     }
@@ -229,7 +231,7 @@ pub fn exit_app(app: &AppHandle, core: &Arc<Core>) {
 }
 
 pub fn export_identity(app: &AppHandle, core: &Arc<Core>) {
-    let Some(path) = save_file(app, "ez-hanseikai-identity.key", "Key", "key") else { return };
+    let Some(path) = save_file(app, "ez-hanseikai-identity.key") else { return };
     if std::fs::copy(core.dir.join("key.bin"), &path).is_ok() {
         tell(app, &lang(core), tr(&lang(core), "Identity saved. Keep this file private: anyone with it can act as you."));
     }
@@ -278,7 +280,7 @@ pub fn set_hotkey(core: &Core, text: &str) -> Result<(), String> {
 }
 
 pub fn marked(core: &Arc<Core>) {
-    if crate::mark_moment(core).is_ok() && !window_shown(&core.app) {
+    if crate::ops::mark(core, Value::Null).is_ok() && !window_shown(&core.app) {
         notify(&core.app, tr(&lang(core), "Moment marked"), "");
     }
 }

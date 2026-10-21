@@ -98,12 +98,6 @@ pub fn list() -> Vec<Value> {
     windows.chain(displays).collect()
 }
 
-pub fn primary_display() -> Value {
-    let all = Monitor::enumerate().unwrap_or_default();
-    let index = Monitor::primary().ok().and_then(|p| all.iter().position(|m| *m == p)).unwrap_or(0);
-    json!({"kind": "display", "index": index + 1})
-}
-
 pub fn valid(source: &Value) -> bool {
     match source["kind"].as_str() {
         Some("window") => source["exe"].is_string() && source["title"].is_string(),

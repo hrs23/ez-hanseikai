@@ -85,16 +85,6 @@ pub fn run(core: &Arc<Core>, audio_pid: Option<u32>) -> Vec<Value> {
     lines
 }
 
-pub fn with_text(lines: Vec<Value>) -> Vec<Value> {
-    lines
-        .into_iter()
-        .map(|mut l| {
-            l["text"] = json!(fill(l["text"].as_str().unwrap_or_default(), &l["args"]));
-            l
-        })
-        .collect()
-}
-
 pub fn text(lines: &[Value]) -> String {
     lines
         .iter()
@@ -110,8 +100,7 @@ mod tests {
     #[test]
     fn lines_are_filled_from_their_arguments_and_carry_no_device_names() {
         let l = line("ok", "{count} playback device(s)", json!({"count": 2}));
-        assert_eq!(text(&[l.clone()]), "[ok] 2 playback device(s)");
-        assert_eq!(with_text(vec![l])[0]["text"], "2 playback device(s)");
+        assert_eq!(text(&[l]), "[ok] 2 playback device(s)");
         assert_eq!(fill("Windows build {build}", &json!({"build": 22631})), "Windows build 22631");
         assert_eq!(fill("no arguments", &Value::Null), "no arguments");
     }

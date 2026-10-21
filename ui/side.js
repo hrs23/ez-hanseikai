@@ -222,7 +222,7 @@ function sessionMenu(id, anchor) {
     { heading: `${sessionName(id)} · ${bytes(sizeOf(set))}` },
     { label: t("Export video…"), icon: "film", disabled: set.live || !onThisPc(set) || voiceOnly(set), run: () => exportSet(set) },
     { label: t("Export to folder…"), icon: "upload", disabled: set.live || !onThisPc(set), run: () => exportFolder(set) },
-    { label: t("Open folder"), icon: "folder", disabled: set.live || set.progress.have === 0, run: () => run("open_set_folder", { room: set.room, set: set.id }, null) },
+    { label: t("Open folder"), icon: "folder", disabled: set.live || set.progress.have === 0, run: () => dialog("open_set_folder", { room: set.room, set: set.id }).catch(fail) },
     { label: t("Copy link"), icon: "link", run: () => navigator.clipboard.writeText(momentLink(set.id, 0, null)).then(() => flash(t("Link copied"))).catch(fail) },
     ...(failed.length ? [{ label: t("Retry analysis"), icon: "rotate-cw", run: () => Promise.all(failed.map((j) => invoke("retry_job", { job: j.job }))).then(pollPlugins).catch(fail) }] : []),
     { separator: true },

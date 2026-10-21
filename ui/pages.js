@@ -543,7 +543,7 @@ function pullDiag() {
   const tab = { traffic: "network", log: "log", flow: "flow" }[diagTab];
   if (!tab || Date.now() - diagFeedAt < DIAG_FEED_MS) return;
   diagFeedAt = Date.now();
-  invoke("debug_view", { tab, since: 0, set: null, addresses: false }).then((data) => { diagFeed = { tab: diagTab, data }; delete sigs.diag; renderDiagnostics(); }).catch(warn);
+  invoke("debug_view", { tab, since: 0, set: null }).then((data) => { diagFeed = { tab: diagTab, data }; delete sigs.diag; renderDiagnostics(); }).catch(warn);
 }
 function diagTable(head, rows, empty) {
   if (!rows.length) return el("div", { className: "empty", textContent: empty });
@@ -611,7 +611,7 @@ function renderDiagnostics() {
 }
 async function diagnosticsText() {
   const head = summaryLines(st, failedJobs()).map((l) => `[${l.level}] ${l.key}: ${l.text}`).join("\n");
-  return invoke("debug_report", { audioProcess: st.audio_process, save: false, head });
+  return invoke("debug_report", { save: false, head });
 }
 
 function openReset() {
@@ -655,7 +655,7 @@ $("aibtn").onclick = (e) => openAiMenu(e.currentTarget, newestRecording());
 $("aiplay").onclick = (e) => openAiMenu(e.currentTarget, selected);
 $("apibadge").onclick = () => openSettings("api");
 for (const b of $("apiaccess").children) b.onclick = () => run("set_api_lan", { lan: b.dataset.lan === "1" });
-$("apidoc").onclick = () => run("open_llms", null, null);
+$("apidoc").onclick = () => dialog("open_link", { url: `${apiUrl(st.api.address)}/llms.txt` }).catch(fail);
 $("apion").onchange = () => run("set_api", { on: $("apion").checked });
 $("apicopy").onclick = () => invoke("api_info").then((info) => navigator.clipboard.writeText(info.token)).then(() => flash(t("Token copied"))).catch(fail);
 $("apinew").onclick = async () => {
@@ -665,9 +665,9 @@ $("name").onchange = () => run("set_name", { name: $("name").value });
 $("language").onchange = () => run("set_language", { language: $("language").value });
 $("sessionsound").onchange = () => { sessionSound = $("sessionsound").checked; store("sessionSound", sessionSound); };
 $("copyid").onclick = () => navigator.clipboard.writeText(st.id).then(() => flash(t("ID copied")));
-$("exportid").onclick = () => quiet("identity", { export: true });
-$("importid").onclick = () => quiet("identity", { export: false });
-$("opendata").onclick = $("storeopen").onclick = () => run("open_data_folder", null, null);
+$("exportid").onclick = () => dialog("identity", { export: true }).catch(warn);
+$("importid").onclick = () => dialog("identity", { export: false }).catch(warn);
+$("opendata").onclick = $("storeopen").onclick = () => dialog("open_data_folder").catch(fail);
 for (const b of $("quality").children) b.onclick = () => run("set_quality", { id: b.dataset.q });
 $("limit").onchange = () => run("set_limit", { mbps: $("limit").value ? Number($("limit").value) : null });
 for (const b of $("channel").children) b.onclick = () => run("set_channel", { channel: b.dataset.c }, () => { refresh(); checkUpdate(false); });
@@ -679,13 +679,13 @@ $("deletesel").onclick = () => confirmDelete([...picked]);
 $("delno").onclick = () => $("deletedlg").close();
 for (const b of $("diagdlg").querySelectorAll("[data-dtab]")) b.onclick = () => openDiagnostics(b.dataset.dtab);
 $("diagcopy").onclick = () => diagnosticsText().then((text) => navigator.clipboard.writeText(text)).then(() => flash(t("Copied"))).catch(fail);
-$("diagsave").onclick = () => diagnosticsText().then((text) => invoke("save_text", { name: "ez-hanseikai-diagnostics.txt", text })).then((saved) => { if (saved) flash(t("Saved")); }).catch(fail);
+$("diagsave").onclick = () => diagnosticsText().then((text) => dialog("save_text", { name: "ez-hanseikai-diagnostics.txt", text })).then((saved) => { if (saved) flash(t("Saved")); }).catch(fail);
 $("resetno").onclick = () => $("resetdlg").close();
 $("resetyes").onclick = () => {
   $("resetdlg").close();
   const keepRooms = $("keeprooms").checked;
   if (!keepRooms) unstore((k) => k.startsWith(planKey("")));
-  run("reset", { keepRooms }, null);
+  run("reset", { keep_rooms: keepRooms }, null);
 };
 $("hotkey").onclick = () => {
   listening = true;
@@ -705,8 +705,8 @@ $("hotkey").onkeydown = (e) => {
   $("hotkey").textContent = keys;
   invoke("set_hotkey", { keys }).then(() => { $("hotkeyerr").hidden = true; refresh(); }).catch((err) => { $("hotkeyerr").textContent = t(String(err)); $("hotkeyerr").hidden = false; $("hotkey").textContent = st.hotkey; });
 };
-$("rfolder").onclick = () => run("open_data_folder", null, null);
-$("rreport").onclick = () => run("debug_report", { audioProcess: "", save: true }, (p) => { $("rinfo").textContent = p; });
+$("rfolder").onclick = () => dialog("open_data_folder").catch(fail);
+$("rreport").onclick = () => run("debug_report", { save: true }, (p) => { $("rinfo").textContent = p; });
 $("rreset").onclick = openReset;
 $("rcontinue").onclick = () => run("dismiss_recovery");
 for (const d of document.querySelectorAll("dialog")) {
@@ -717,8 +717,8 @@ for (const d of document.querySelectorAll("dialog")) {
   });
 }
 
-$("importfolder").onclick = () => invoke("pick_import", { folder: true }).then((spec) => { if (spec) planImport(spec); }).catch(fail);
-$("importfiles").onclick = () => invoke("pick_import", { folder: false }).then((spec) => { if (spec) planImport(spec); }).catch(fail);
+$("importfolder").onclick = () => dialog("pick_folder").then((folder) => { if (folder) planImport({ folder }); }).catch(fail);
+$("importfiles").onclick = () => dialog("pick_files").then((files) => { if (files.length) planImport({ files }); }).catch(fail);
 $("importgo").onclick = startImport;
 $("importtitle").onkeydown = (e) => { if (e.key === "Enter" && !composing(e) && !$("importgo").disabled) $("importgo").click(); };
 $("folderno").onclick = () => $("folderdlg").close();

@@ -85,10 +85,6 @@ fn write_info(dir: &Path, token: &str) -> std::io::Result<()> {
     made
 }
 
-pub fn open_docs() {
-    crate::shell::open_link(&format!("http://{}/llms.txt", address()));
-}
-
 pub fn forget(dir: &Path) {
     let _ = std::fs::remove_file(dir.join(INFO_FILE));
 }
@@ -296,7 +292,6 @@ fn state_of(row: &Row) -> &'static str {
 pub trait Backend {
     fn app(&self) -> Value;
     fn status(&self) -> Vec<Row>;
-    fn open(&self, room: &str) -> Result<(), String>;
     fn me(&self) -> String;
     fn now_us(&self) -> i64;
     fn heads(&self) -> Vec<Head>;
@@ -304,8 +299,7 @@ pub trait Backend {
     fn plugins(&self, room: &str) -> Vec<Value>;
     fn jobs(&self, room: &str) -> Value;
     fn add(&self, room: &str, record: Value) -> Result<(), String>;
-    fn import(&self, room: &str, spec: &Value) -> Result<Value, (u16, String)>;
-    fn export(&self, room: &str, set: &str, folder: &str, aligned: bool) -> Result<Value, (u16, String)>;
+    fn call(&self, name: &str, args: Value) -> Option<Result<Value, String>>;
     fn diagnostics(&self, everyone: bool) -> Result<String, String>;
 }
 
@@ -354,13 +348,6 @@ fn status_reply(be: &dyn Backend) -> Response {
     let members: Vec<Value> = rows.iter().map(|r| json!({"id": r.id, "name": names.get(&r.id).filter(|n| !n.is_empty()).cloned().unwrap_or_else(|| crate::short(&r.id)), "online": r.online, "state": state_of(r)})).collect();
     let own = rows.iter().find(|r| r.id == me).map_or("idle", state_of);
     reply(200, json!({"room": app["room"], "recording": app["recording"], "state": own, "members": members}))
-}
-
-fn open_room(be: &dyn Backend, room: &str) -> Response {
-    match be.open(room) {
-        Ok(()) => reply(200, json!({"room": room})),
-        Err(e) => error(409, &e),
-    }
 }
 
 fn recording_json(l: &Loaded, set: &Set, debriefs: &HashMap<String, Vec<Value>>, now_us: i64) -> Value {
@@ -595,47 +582,13 @@ fn put_board(be: &dyn Backend, l: &Loaded, req: &Request) -> Response {
     reply(200, board_json(&Loaded::new(be, l.head.clone())))
 }
 
-fn text_field(body: &serde_json::Map<String, Value>, key: &str) -> Result<Option<String>, Response> {
-    match body.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(text)) if !text.trim().is_empty() => Ok(Some(text.clone())),
-        Some(_) => Err(error(400, &format!("{key} must be a text."))),
-    }
-}
-
-fn import_recording(be: &dyn Backend, l: &Loaded, req: &Request) -> Response {
-    let spec = match body_of(req) {
-        Ok(body) => Value::Object(body),
-        Err(response) => return response,
-    };
-    let fine = |key: &str, kind: fn(&Value) -> bool| spec.get(key).is_none_or(|v| v.is_null() || kind(v));
-    if !fine("folder", Value::is_string) || !fine("title", Value::is_string) || !fine("files", |v| v.as_array().is_some_and(|a| a.iter().all(Value::is_string))) || !fine("names", |v| v.as_array().is_some_and(|a| a.iter().all(Value::is_string))) {
-        return error(400, "Send folder, or files (a list of paths), and optionally title and names.");
-    }
-    match be.import(&l.head.id, &spec) {
-        Ok(done) => reply(201, done),
-        Err((status, text)) => error(status, &text),
-    }
-}
-
-fn export_recording(be: &dyn Backend, l: &Loaded, set: &Set, req: &Request) -> Response {
-    let built = (|| {
-        let body = body_of(req)?;
-        let folder = text_field(&body, "folder")?.ok_or_else(|| error(400, "folder is needed: a new or empty folder on this PC."))?;
-        let aligned = match body.get("aligned") {
-            None | Some(Value::Null) => false,
-            Some(Value::Bool(b)) => *b,
-            Some(_) => return Err(error(400, "aligned must be true or false.")),
-        };
-        Ok((folder, aligned))
-    })();
-    let (folder, aligned) = match built {
-        Ok(parts) => parts,
-        Err(response) => return response,
-    };
-    match be.export(&l.head.id, &set.id, &folder, aligned) {
-        Ok(done) => reply(201, done),
-        Err((status, text)) => error(status, &text),
+fn operation(be: &dyn Backend, name: &str, req: &Request) -> Response {
+    let args = if req.body.is_empty() { Ok(serde_json::Map::new()) } else { body_of(req) };
+    match args.map(|map| be.call(name, Value::Object(map))) {
+        Err(response) => response,
+        Ok(None) => error(404, "No such operation."),
+        Ok(Some(Ok(value))) => reply(200, value),
+        Ok(Some(Err(e))) => error(400, &e),
     }
 }
 
@@ -645,12 +598,10 @@ fn segments(path: &str) -> Option<Vec<String>> {
 
 fn route(req: &Request, be: &dyn Backend, parts: &[&str]) -> Response {
     let allowed: &[&str] = match parts {
-        ["v1", "rooms", _, "recordings", "import"] => &["POST"],
-        ["v1", "rooms", _, "open"] => &["POST"],
+        ["v1", "ops", _] => &["POST"],
         ["v1"] | ["v1", "status"] | ["v1", "diagnostics"] | ["v1", "rooms"] | ["v1", "rooms", _, "recordings"] | ["v1", "rooms", _, "recordings", _] => &["GET"],
         ["v1", "rooms", _, "recordings", _, "chapters" | "transcript"] | ["v1", "rooms", _, "plugins" | "jobs"] => &["GET"],
         ["v1", "rooms", _, "recordings", _, "events"] => &["GET", "POST"],
-        ["v1", "rooms", _, "recordings", _, "export"] => &["POST"],
         ["v1", "rooms", _, "board"] => &["GET", "PUT"],
         _ => return error(404, "No such endpoint."),
     };
@@ -665,18 +616,17 @@ fn route(req: &Request, be: &dyn Backend, parts: &[&str]) -> Response {
                 Ok(text) => reply(200, json!({"text": text})),
                 Err(e) => error(500, &e),
             },
+            ["v1", "ops", name] => operation(be, name, req),
             _ => reply(200, be.app()),
         };
     };
     let Some(head) = be.heads().into_iter().find(|h| h.id == *room && !h.id.starts_with("pending-")) else { return error(404, "No such room.") };
     let l = Loaded::new(be, head);
     match rest {
-        ["open"] => open_room(be, room),
         ["board"] if req.method == "PUT" => put_board(be, &l, req),
         ["board"] => reply(200, board_json(&l)),
         ["plugins"] => reply(200, plugins_json(&l, be.plugins(room))),
         ["jobs"] => reply(200, jobs_json(&l, &be.jobs(room))),
-        ["recordings", "import"] => import_recording(be, &l, req),
         ["recordings"] => {
             let debriefs = party::records(&l.logs);
             let now = be.now_us();
@@ -688,7 +638,6 @@ fn route(req: &Request, be: &dyn Backend, parts: &[&str]) -> Response {
                 [] => reply(200, recording_json(&l, &set, &party::records(&l.logs), be.now_us())),
                 ["events"] if req.method == "POST" => add_event(be, &l, &set, req),
                 ["events"] => events_reply(&l, &set, req),
-                ["export"] => export_recording(be, &l, &set, req),
                 ["chapters"] => chapters_reply(&l, &set, be.now_us()),
                 _ => transcript_reply(&l, &set, req),
             }
@@ -741,10 +690,6 @@ impl Backend for Live {
                 Row { id: id.clone(), online: peer.is_some_and(|p| p.alive().is_some()), sharing: peer.is_some_and(|p| p.live.is_some()), recording: recording.contains(id.as_str()) }
             })
             .collect()
-    }
-
-    fn open(&self, room: &str) -> Result<(), String> {
-        room::enter_room(&self.0, room)
     }
 
     fn now_us(&self) -> i64 {
@@ -802,23 +747,12 @@ impl Backend for Live {
         Ok(())
     }
 
-    fn import(&self, room: &str, spec: &Value) -> Result<Value, (u16, String)> {
-        if self.0.room_id().as_deref() != Some(room) {
-            return Err((409, "Enter the room first: the app writes only to the room that is open.".into()));
-        }
-        if crate::import::busy().is_some() {
-            return Err((409, "An import is already running.".into()));
-        }
-        crate::import::run(&self.0, spec).map_err(|e| (400, e))
-    }
-
-    fn export(&self, room: &str, set: &str, folder: &str, aligned: bool) -> Result<Value, (u16, String)> {
-        crate::bundle::run(&self.0, room, set, std::path::Path::new(folder), aligned).map_err(|e| (if e.contains("already running") || e.contains("Stop recording") { 409 } else { 400 }, e))
+    fn call(&self, name: &str, args: Value) -> Option<Result<Value, String>> {
+        crate::ops::find(name).map(|op| op(&self.0, args))
     }
 
     fn diagnostics(&self, everyone: bool) -> Result<String, String> {
-        let audio_process = self.0.audio_process.lock().unwrap().clone();
-        tauri::async_runtime::block_on(crate::debug::diagnostics(self.0.clone(), everyone, audio_process, None))
+        crate::debug::diagnostics(&self.0, everyone, None)
     }
 }
 
@@ -955,14 +889,6 @@ mod tests {
         fn status(&self) -> Vec<Row> {
             vec![Row { id: "a".into(), online: true, sharing: true, recording: false }, Row { id: "b".into(), online: true, sharing: true, recording: true }, Row { id: "c".into(), online: false, sharing: true, recording: true }, Row { id: "d".into(), online: true, sharing: false, recording: false }]
         }
-        fn open(&self, room: &str) -> Result<(), String> {
-            if self.heads.iter().any(|(id, _)| id == room) && room != "r2" {
-                self.calls.lock().unwrap().push(format!("open {room}"));
-                Ok(())
-            } else {
-                Err("Leave the room before entering another.".into())
-            }
-        }
         fn now_us(&self) -> i64 {
             self.clock.fetch_add(1, Ordering::Relaxed)
         }
@@ -986,19 +912,12 @@ mod tests {
             Arc::make_mut(&mut self.logs.lock().unwrap()[0].records).push(record);
             Ok(())
         }
-        fn import(&self, room: &str, spec: &Value) -> Result<Value, (u16, String)> {
-            if room != "r1" {
-                return Err((409, "Enter the room first.".into()));
+        fn call(&self, name: &str, args: Value) -> Option<Result<Value, String>> {
+            if name == "nothing" {
+                return None;
             }
-            self.calls.lock().unwrap().push(format!("import {spec}"));
-            Ok(json!({"id": "2026-10-19 21-30-00", "views": 1, "notes": 0}))
-        }
-        fn export(&self, room: &str, set: &str, folder: &str, aligned: bool) -> Result<Value, (u16, String)> {
-            if folder.contains("busy") {
-                return Err((409, "An export is already running.".into()));
-            }
-            self.calls.lock().unwrap().push(format!("export {room} {set} {folder} {aligned}"));
-            Ok(json!({"folder": folder, "files": 2, "skipped": []}))
+            self.calls.lock().unwrap().push(format!("{name} {args}"));
+            Some(if args["bad"] == true { Err("Refused.".into()) } else { Ok(json!({"did": name})) })
         }
         fn diagnostics(&self, everyone: bool) -> Result<String, String> {
             if self.report_fails.load(Ordering::Relaxed) {
@@ -1297,33 +1216,6 @@ mod tests {
     }
 
     #[test]
-    fn recordings_can_be_imported_and_exported() {
-        let fake = fixture();
-        let (status, made) = call(&fake, "POST", "/v1/rooms/r1/recordings/import", r#"{"folder": "C:/videos/scrim", "title": "Scrim", "names": ["Ann"]}"#);
-        assert_eq!((status, made["id"].as_str()), (201, Some("2026-10-19 21-30-00")));
-        let (status, _) = call(&fake, "POST", "/v1/rooms/r1/recordings/import", r#"{"files": ["C:/a.mp4", "C:/b.mp4"]}"#);
-        assert_eq!(status, 201);
-        for bad in ["[]", "nonsense", r#"{"folder": 3}"#, r#"{"files": "a.mp4"}"#, r#"{"files": [1]}"#, r#"{"title": []}"#, r#"{"names": "x"}"#] {
-            assert_eq!(call(&fake, "POST", "/v1/rooms/r1/recordings/import", bad).0, 400, "{bad}");
-        }
-        assert_eq!(call(&fake, "POST", "/v1/rooms/r2/recordings/import", r#"{"folder": "C:/x"}"#).0, 409);
-        assert_eq!(get(&fake, "/v1/rooms/r1/recordings/import").0, 405);
-        let (status, done) = call(&fake, "POST", "/v1/rooms/r1/recordings/s1/export", r#"{"folder": "C:/out/s1", "aligned": true}"#);
-        assert_eq!((status, done["files"].as_i64()), (201, Some(2)));
-        assert_eq!(call(&fake, "POST", "/v1/rooms/r1/recordings/s1/export", r#"{"folder": "C:/out/raw"}"#).0, 201);
-        assert_eq!(call(&fake, "POST", "/v1/rooms/r1/recordings/s1/export", "{}").0, 400);
-        assert_eq!(call(&fake, "POST", "/v1/rooms/r1/recordings/s1/export", r#"{"folder": "C:/out", "aligned": "yes"}"#).0, 400);
-        assert_eq!(call(&fake, "POST", "/v1/rooms/r1/recordings/s1/export", r#"{"folder": "busy"}"#).0, 409);
-        assert_eq!(call(&fake, "POST", "/v1/rooms/r1/recordings/nope/export", r#"{"folder": "C:/out"}"#).0, 404);
-        assert_eq!(get(&fake, "/v1/rooms/r1/recordings/s1/export").0, 405);
-        let calls = fake.calls.lock().unwrap().clone();
-        assert_eq!(calls.len(), 4);
-        assert!(calls[0].starts_with("import {") && calls[0].contains("\"names\":[\"Ann\"]"));
-        assert_eq!(calls[2], "export r1 s1 C:/out/s1 true");
-        assert_eq!(calls[3], "export r1 s1 C:/out/raw false");
-    }
-
-    #[test]
     fn an_imported_recording_shows_its_title_importer_and_views() {
         let importer = iroh::SecretKey::generate().public().to_string();
         let view = iroh::SecretKey::generate().public().to_string();
@@ -1337,6 +1229,21 @@ mod tests {
         assert_eq!((one["title"].as_str(), one["imported_by"]["id"].as_str(), one["members"][0]["imported"].as_bool(), one["members"][0]["id"].as_str()), (Some("What went wrong"), Some(importer.as_str()), Some(true), Some(view.as_str())));
         let (_, plain) = get(&fixture(), "/v1/rooms/r1/recordings/s1");
         assert_eq!((plain["title"].clone(), plain["imported_by"].clone(), plain["members"][0]["imported"].clone()), (Value::Null, Value::Null, json!(false)));
+    }
+
+    #[test]
+    fn an_operation_is_called_by_name_with_its_json_arguments() {
+        let fake = fixture();
+        assert_eq!(call(&fake, "POST", "/v1/ops/create_room", r#"{"name": "Team", "n": 2}"#), (200, json!({"did": "create_room"})));
+        assert_eq!(call(&fake, "POST", "/v1/ops/state", ""), (200, json!({"did": "state"})));
+        assert_eq!(fake.calls.lock().unwrap().as_slice(), [r#"create_room {"n":2,"name":"Team"}"#, "state {}"]);
+        assert_eq!(call(&fake, "POST", "/v1/ops/mark", r#"{"bad": true}"#), (400, json!({"error": "Refused."})));
+        assert_eq!(call(&fake, "POST", "/v1/ops/nothing", "{}"), (404, json!({"error": "No such operation."})));
+        assert_eq!(call(&fake, "GET", "/v1/ops/state", "").0, 405);
+        for bad in ["[]", "null", "nonsense", "3"] {
+            assert_eq!(call(&fake, "POST", "/v1/ops/state", bad), (400, json!({"error": "Send a JSON object."})), "{bad}");
+        }
+        assert_eq!(fake.calls.lock().unwrap().len(), 3);
     }
 
     #[test]
@@ -1390,17 +1297,6 @@ mod tests {
     }
 
     #[test]
-    fn a_room_is_opened_without_a_body_and_a_refusal_is_a_conflict() {
-        let fake = fixture();
-        assert_eq!(call(&fake, "POST", "/v1/rooms/r1/open", ""), (200, json!({"room": "r1"})));
-        assert_eq!(fake.calls.lock().unwrap().as_slice(), ["open r1"]);
-        assert_eq!(call(&fake, "POST", "/v1/rooms/r2/open", "").0, 409);
-        assert_eq!(call(&fake, "POST", "/v1/rooms/nope/open", "").0, 404);
-        assert_eq!(call(&fake, "POST", "/v1/rooms/pending-x/open", "").0, 404);
-        assert_eq!(call(&fake, "GET", "/v1/rooms/r1/open", "").0, 405);
-    }
-
-    #[test]
     fn diagnostics_give_this_pcs_report_or_everyones() {
         let fake = fixture();
         assert_eq!(get(&fake, "/v1/diagnostics"), (200, json!({"text": "report everyone=false"})));
@@ -1418,14 +1314,14 @@ mod tests {
         let titles: Vec<&str> = list.iter().map(|e| e["title"].as_str().unwrap()).collect();
         let page = include_str!("../../docs/api.md");
         let documented: Vec<&str> = page.lines().filter_map(|l| l.strip_prefix("### `")?.strip_suffix('`')).filter(|e| *e != "GET /llms.txt").collect();
-        assert!(documented.len() > 15);
+        assert!(documented.len() > 10);
         for endpoint in documented {
             assert!(titles.iter().any(|t| t.split('[').next().unwrap() == endpoint), "{endpoint}");
         }
         for entry in &list {
             assert!(!entry["lines"].as_array().unwrap().is_empty(), "{entry}");
         }
-        assert!(list.iter().any(|e| e["title"] == "GET /v1/status") && list.iter().any(|e| e["title"] == "POST /v1/rooms/{room}/open"));
+        assert!(list.iter().any(|e| e["title"] == "GET /v1/status") && list.iter().any(|e| e["title"] == "POST /v1/ops/{name}"));
     }
 
     #[test]
@@ -1446,7 +1342,7 @@ mod tests {
 
     #[test]
     fn llms_txt_describes_every_endpoint() {
-        for path in ["/v1/rooms", "recordings", "events", "chapters", "transcript", "board", "plugins", "jobs", "/v1/status", "/v1/diagnostics", "/open", "api.json", "--api"] {
+        for path in ["/v1/rooms", "recordings", "events", "chapters", "transcript", "board", "plugins", "jobs", "/v1/status", "/v1/diagnostics", "/v1/ops", "create_room", "start_recording", "api.json", "--api"] {
             assert!(LLMS.contains(path), "{path}");
         }
         assert!(LLMS.contains("Authorization: Bearer") && LLMS.contains("127.0.0.1"));

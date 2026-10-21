@@ -40,7 +40,7 @@ function mdVouched(url, label) {
 
 async function openWeb(url, label) {
   if (!mdVouched(url, label) && !(await ask(t("Open {host}?", { host: new URL(url).host }), t("Open"), false, url))) return;
-  invoke("open_link", { url }).catch(warn);
+  dialog("open_link", { url }).catch(warn);
 }
 const mdHooks = (over = {}) => ({ onTag: filterTag, onLink: openLink, onOpen: openWeb, onTask: null, ...over });
 

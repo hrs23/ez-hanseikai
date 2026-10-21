@@ -193,16 +193,12 @@ async function pressAndConfirm(app, call, yes = true) {
   return title;
 }
 
-const invoke = (app, cmd, args = {}) => evaluate(app, `window.__TAURI__.core.invoke(${JSON.stringify(cmd)}, ${JSON.stringify(args)})`);
+async function invoke(app, name, args = {}, seconds = CALL_S) {
+  const r = await api(app, "POST", `/v1/ops/${name}`, { token: app.token, body: args, timeout: seconds });
+  return r.status === 200 ? r.json : fail(r.json?.error || r.text);
+}
 const state = (app) => invoke(app, "state");
 const onLive = (app) => evaluate(app, `page === "player" && navActive() === "live" && $("sidenav").querySelector("[aria-current=page]").dataset.nav === "live"`);
-
-async function invokeLong(app, cmd, args, seconds, label) {
-  await evaluate(app, `window.e2eLong = null; window.__TAURI__.core.invoke(${JSON.stringify(cmd)}, ${JSON.stringify(args)}).then((r) => { window.e2eLong = { ok: r }; }, (e) => { window.e2eLong = { error: String(e) }; }); true`);
-  const done = await waitFor(label, within(seconds), () => evaluate(app, "window.e2eLong"));
-  check(!done.error, `${label}: ${done.error}`);
-  return done.ok;
-}
 
 function frame(record) {
   const body = Buffer.from(JSON.stringify(record));
@@ -268,6 +264,7 @@ function start(key) {
   const env = {
     ...process.env,
     EZH_TEST: String(PORTS[key]),
+    EZH_API: "1",
     EZH_API_PORT: String(API_PORTS[key]),
     EZH_DIR: app.data,
     WEBVIEW2_USER_DATA_FOLDER: path.join(home, "webview"),
@@ -309,6 +306,7 @@ async function attach(app) {
   });
   app.cdp = await openSocket(target.webSocketDebuggerUrl);
   await waitFor(`${app.key} UI ready`, within(COLD_START_S), () => evaluate(app, "typeof refresh === 'function' && !!window.__TAURI__ && ready === true"));
+  app.token = await waitFor(`${app.key} api.json`, within(COLD_START_S), () => readJson(path.join(app.data, "api.json"))?.token);
   app.id = (await state(app)).id;
   return app;
 }
@@ -374,16 +372,16 @@ async function watchLive(app, b, seconds, until = () => false) {
 }
 
 async function connects(app, peer, since = 0) {
-  const view = await invoke(app, "debug_view", { tab: "connections", since, set: null, addresses: false });
+  const view = await invoke(app, "debug_view", { tab: "connections", since, set: null });
   return view.events.filter((e) => e.text.startsWith(peer.id.slice(0, 10)) && e.text.includes(": connected")).length;
 }
 
-function api(app, method, route, { token, host, body, connect } = {}) {
+function api(app, method, route, { token, host, body, connect, timeout = CALL_S } = {}) {
   const port = API_PORTS[app.key];
   return new Promise((resolve, reject) => {
     const payload = body === undefined ? null : Buffer.from(typeof body === "string" ? body : JSON.stringify(body));
     const headers = { Host: host || `127.0.0.1:${port}`, ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(payload ? { "Content-Type": "application/json", "Content-Length": payload.length } : {}) };
-    const req = http.request({ host: connect || "127.0.0.1", port, method, path: route, headers, agent: false, timeout: CALL_S * 1000 }, (res) => {
+    const req = http.request({ host: connect || "127.0.0.1", port, method, path: route, headers, agent: false, timeout: timeout * 1000 }, (res) => {
       const chunks = [];
       res.on("data", (c) => chunks.push(c));
       res.on("end", () => {
@@ -678,7 +676,7 @@ async function scenario(ctx) {
     const offset = (st, x) => st.peers.find((p) => p.id === x.id)?.offset_us;
     await waitFor("A measures B 8.2 s ahead and C in step", within(SYNC_ROUND_S * 2), async () => { const st = await state(a); return Math.abs(offset(st, b) - CLOCK_SHIFT_S * 1e6) < 1e6 && Math.abs(offset(st, c)) < 1e6; });
     check((await state(c)).clock.offset_us === null && (await evaluate(c, `pcCards(st)[0].rows.find((r) => r.key === "Clock").text === t("Unreachable")`)), "C's own card does not say its time check is unreachable");
-    const flow = await invoke(c, "debug_view", { tab: "flow", since: 0, set: null, addresses: false });
+    const flow = await invoke(c, "debug_view", { tab: "flow", since: 0, set: null });
     check(await evaluate(c, `flowRows(st, ${JSON.stringify(flow)}, (k) => k).find((r) => r.key === "Time check").level === "warn"`), "C's Where data goes does not warn about the time check");
     const players = setOf(await state(a), ctx.set).players;
     const begins = (x) => { const p = players.find((y) => y.owner === x.id); return (p.start_us - p.offset_us) / 1e6; };
@@ -794,7 +792,7 @@ async function scenario(ctx) {
   });
 
   await step("A's encoder is killed and A keeps recording the set in a new part", async () => {
-    const sink = (await invoke(a, "debug_view", { tab: "recording", since: 0, set: null, addresses: false })).engine.sink;
+    const sink = (await invoke(a, "debug_view", { tab: "recording", since: 0, set: null })).engine.sink;
     check(sink && sink.pid, "A has no encoder");
     spawnSync("taskkill", ["/PID", String(sink.pid), "/F"], { stdio: "ignore" });
     const parts = () => segsOf(logOf(a, ctx.room, a.id), ctx.set, "v").filter((r) => r.capture !== sink.capture).length;
@@ -836,10 +834,11 @@ async function scenario(ctx) {
     await invoke(a, "stop_recording");
     const lastOf = (app) => Math.max(...segsOf(logOf(app, ctx.room, c.id), ctx.set).map((s) => s.t_us + s.d_us));
     await allSee([a, b], "the set shown ended at once, not before C's last segment", within(LOG_SYNC_S * 2), (st, app) => { const set = setOf(st, ctx.set); return !st.active_set && set && !set.live && set.end_us >= lastOf(app) - set.players.find((p) => p.owner === c.id).offset_us; });
+    const ended = setOf(await state(a), ctx.set);
+    ctx.durationS = (ended.end_us - ended.start_us) / 1e6;
     await listenExport(b);
-    check((await invoke(b, "export_set", { room: ctx.room, set: ctx.set }))?.skipped, "B cannot export the set while C is down");
-    await invoke(b, "cancel_export");
-    await waitFor("B's export stops", within(COLD_START_S), () => evaluate(b, "window.e2eExport"));
+    check((await invoke(b, "export_set", { room: ctx.room, set: ctx.set, path: path.join(b.data, `${ctx.set}.mp4`) }))?.skipped, "B cannot export the set while C is down");
+    await waitFor("B's export finishes", within(ctx.durationS / EXPORT_SPEED), () => evaluate(b, "window.e2eExport"));
     start("c");
     await attach(c);
     await share(c);
@@ -861,7 +860,6 @@ async function scenario(ctx) {
     const missing = holdEverything(all, ctx.room, ctx.set, all);
     check(!missing, missing);
     const count = all.reduce((n, owner) => n + pieces(logOf(owner, ctx.room, owner.id), ctx.set).length, 0);
-    ctx.durationS = (setOf(st, ctx.set).end_us - setOf(st, ctx.set).start_us) / 1e6;
     ctx.notes.push(`verified ${count} pieces by SHA-256 on each of ${all.length} members, set of ${ctx.durationS.toFixed(1)} s`);
   });
 
@@ -1093,6 +1091,12 @@ async function scenario(ctx) {
     check(Math.max(...clocks) - Math.min(...clocks) < JUMP_MIN_S, `clocks differ: ${brief(clocks)}`);
     check(Math.min(...clocks) >= SEEK_TO_S, `played from before the seek: ${brief(clocks)}`);
     await evaluate(a, `act("pause", nowM()); true`);
+    await invoke(b, "party_typing", { on: true });
+    await waitFor("A sees B typing", seconds, async () => (await state(a)).party.typing.includes(b.id));
+    await invoke(b, "party_typing", { on: false });
+    await evaluate(a, `window.e2eDraw = null; window.__TAURI__.event.listen("draw", (e) => { window.e2eDraw = e.payload; }).then(() => true)`);
+    await invoke(b, "draw", { stroke: { clear: true, set: ctx.set } });
+    await waitFor("A receives B's stroke", seconds, async () => (await evaluate(a, "window.e2eDraw"))?.from === b.id);
   });
 
   await step("dragging a name label swaps two tiles", async () => {
@@ -1153,13 +1157,11 @@ async function scenario(ctx) {
     ctx.notes.push(`review session with ${(await state(a)).sets.find((s) => s.id === ctx.review).party.length} party records replayed`);
   });
 
-  await step("the local API is off until the page switches it on, then reads recordings and takes a note and a game plan that everyone sees", async () => {
-    const refused = await api(a, "GET", "/llms.txt").then(() => false, () => true);
-    check(refused && (await state(a)).api.on === false, "the API answers before it was switched on");
+  await step("the local API is on from launch, reads recordings and takes a note and a game plan that everyone sees, and the page switches it off and on", async () => {
+    check((await state(a)).api.on && fs.existsSync(path.join(a.data, "api.json")), "the API is not on from launch");
     await evaluate(a, `openSettings("api"); true`);
-    await evaluate(a, `$("apion").click(); true`);
-    await waitFor("A switches the API on", within(UI_REFRESH_S * 5), () => evaluate(a, `st.api.on && !$("apirows").hidden && $("apiaddr").textContent === "http://127.0.0.1:${API_PORTS.a}"`));
-    const { token } = await invoke(a, "api_info");
+    await waitFor("A shows the API on", within(UI_REFRESH_S * 5), () => evaluate(a, `st.api.on && !$("apirows").hidden && $("apiaddr").textContent === "http://127.0.0.1:${API_PORTS.a}"`));
+    const token = a.token;
     check(token.length === TOKEN_CHARS, `the token has ${token.length} characters`);
     const llms = await api(a, "GET", "/llms.txt");
     check(llms.status === 200 && llms.text.includes("Authorization: Bearer") && !llms.text.includes(token), `llms.txt: ${llms.status}`);
@@ -1202,9 +1204,12 @@ async function scenario(ctx) {
     const diagText = diag.json && diag.json.text || "";
     check(diag.status === 200 && diagText.includes("=== this PC ===\nez-hanseikai") && diagText.includes("recent log") && diagText.split("=== member ").length === 3, `diagnostics: ${diag.status} ${brief(diagText.slice(0, 200))}`);
     for (const secret of [NAMES.a, NAMES.b, NAMES.c, a.id, b.id]) check(!diagText.includes(secret), `the API report holds ${secret.slice(0, 4)}`);
-    const opened = await api(a, "POST", `${room}/open`, { token });
-    check(opened.status === 200 && opened.json.room === ctx.room, `open: ${opened.status} ${brief(opened.text)}`);
-    check((await api(a, "POST", "/v1/rooms/nope/open", { token })).status === 404 && (await api(a, "GET", `${room}/open`, { token })).status === 405, "open takes any room or method");
+    const operation = (name, body) => api(a, "POST", `/v1/ops/${name}`, { token, body });
+    const opened = await operation("enter_room", { id: ctx.room });
+    check(opened.status === 200 && opened.json === null, `enter_room: ${opened.status} ${brief(opened.text)}`);
+    check((await operation("enter_room", { id: "nope" })).status === 400 && (await operation("enter_room", {})).json.error === "id is missing or not valid.", "enter_room takes a room that is not in the list");
+    check((await operation("nothing", {})).status === 404 && (await api(a, "GET", "/v1/ops/state", { token })).status === 405 && (await operation("state", "[]")).status === 400, "an operation takes any name, method or body");
+    check((await operation("state")).json.id === a.id, "an operation without a body is refused");
     const board = "# Through the API\n**Goal: hold the high ground**";
     const put = await api(a, "PUT", `${room}/board`, { token, body: { text: board } });
     check(put.status === 200 && put.json.text === board, `the game plan: ${put.status} ${brief(put.text)}`);
@@ -1215,7 +1220,7 @@ async function scenario(ctx) {
     await waitFor("A shows the API badge", within(UI_REFRESH_S * 5), () => evaluate(a, `!$("apibadge").hidden && !$("apibadge").classList.contains("lan")`));
     await evaluate(a, `$("apibadge").click(); true`);
     check(await evaluate(a, `$("settings").open && settingsPane === "api" && !$("settings").querySelector('section[data-pane="api"]').hidden`), "the badge does not open Settings > API");
-    await waitFor("A lists the endpoints", within(UI_REFRESH_S * 5), () => evaluate(a, `$("apiref").querySelectorAll("details").length > 15 && $("apiref").textContent.includes("/v1/status") && $("apiref").querySelector("pre") !== null`));
+    await waitFor("A lists the endpoints", within(UI_REFRESH_S * 5), () => evaluate(a, `$("apiref").querySelectorAll("details").length >= 15 && $("apiref").textContent.includes("/v1/status") && $("apiref").querySelector("pre") !== null`));
     await evaluate(a, `$("settings").close(); go("room"); true`);
     await evaluate(a, `$("aibtn").click(); true`);
     await waitFor("A opens the AI menu", within(UI_REFRESH_S * 5), () => evaluate(a, `!$("menu").hidden && $("menu").querySelectorAll("button").length === 3`));
@@ -1228,12 +1233,13 @@ async function scenario(ctx) {
     for (const part of [token, `http://127.0.0.1:${API_PORTS.a}/llms.txt`, ctx.room, ctx.review]) check(prompt.includes(part), `the prompt lacks ${part === token ? "the token" : part}`);
     await evaluate(a, `openSettings("api"); true`);
     await pressAndConfirm(a, `$("apinew").click()`);
-    const fresh = await waitFor("A has a new token", within(UI_REFRESH_S * 5), async () => {
-      const next = (await invoke(a, "api_info")).token;
+    const fresh = await waitFor("A has a new token", within(UI_REFRESH_S * 5), () => {
+      const next = readJson(path.join(a.data, "api.json"))?.token;
       return next !== token && next;
     });
+    a.token = fresh;
     check((await api(a, "GET", "/v1", { token })).status === 401 && (await api(a, "GET", "/v1", { token: fresh })).status === 200, "the old token still works or the new one does not");
-    check(readJson(path.join(a.data, "api.json"))?.token === fresh, "api.json keeps the old token");
+    check((await invoke(a, "api_info")).token === fresh, "the app keeps the old token");
     const hosts = (await invoke(a, "api_info")).hosts;
     check(hosts.length === 0, "the PC's addresses are listed while only this PC may connect");
     await evaluate(a, `document.querySelector('#apiaccess [data-lan="1"]').click(); true`);
@@ -1258,6 +1264,9 @@ async function scenario(ctx) {
     check(await api(a, "GET", "/llms.txt").then(() => false, () => true), "the API still answers after it was switched off");
     check(readJson(path.join(a.data, "settings.json")).api === false, "settings.json does not keep the switch");
     check(!fs.existsSync(path.join(a.data, "api.json")), "api.json stays after the API stopped");
+    await evaluate(a, `$("apion").click(); true`);
+    await waitFor("A switches the API on again", within(UI_REFRESH_S * 5), () => evaluate(a, `st.api.on && !$("apirows").hidden`));
+    check((await api(a, "GET", "/v1", { token: fresh })).status === 200 && readJson(path.join(a.data, "api.json"))?.token === fresh, "the API does not answer with the same token after it was switched on again");
     await evaluate(a, `$("settings").close(); true`);
   });
 
@@ -1280,11 +1289,11 @@ async function scenario(ctx) {
 
   await step("export the set on A to a playable file", async () => {
     await listenExport(a);
-    const started = await invoke(a, "export_set", { room: ctx.room, set: ctx.set });
+    const file = path.join(a.data, `${ctx.set}.mp4`);
+    const started = await invoke(a, "export_set", { room: ctx.room, set: ctx.set, path: file });
     check(started && started.skipped.length === 0, `export skipped ${brief(started)}`);
     const done = await waitFor("the export finished", within(ctx.durationS / EXPORT_SPEED), () => evaluate(a, "window.e2eExport"));
     check(!done.error, `export failed: ${done.error}`);
-    const file = path.join(a.data, `${ctx.set}.mp4`);
     const probe = ffmpeg("ffprobe", ["-v", "error", "-show_entries", "format=duration:stream=codec_type", "-of", "json", file]);
     check(probe.ok, `ffprobe failed: ${probe.err}`);
     const info = JSON.parse(probe.out);
@@ -1301,7 +1310,7 @@ async function scenario(ctx) {
   await step("the set exports to a folder of plain files and imports back as a recording everyone receives", async () => {
     const all = [a, b, c];
     const names = all.map((x) => x.name).sort().join();
-    const raw = await invokeLong(a, "export_folder", { room: ctx.room, set: ctx.set, aligned: false }, EXPORT_FOLDER_S, "the folder export");
+    const raw = await invoke(a, "export_folder", { room: ctx.room, set: ctx.set, folder: path.join(a.data, "bundles", ctx.set), aligned: false }, EXPORT_FOLDER_S);
     check(raw.files === 3 && raw.skipped.length === 0, `folder export: ${brief(raw)}`);
     const session = readJson(path.join(raw.folder, "session.json"));
     check(session?.id === ctx.set && session.start && session.views?.length === 3 && session.views.map((v) => v.name).sort().join() === names, `session.json: ${brief(session)}`);
@@ -1323,7 +1332,7 @@ async function scenario(ctx) {
       plain(path.join(raw.folder, v.voice), "audio");
     }
     check(fs.readFileSync(path.join(raw.folder, "notes.csv"), "utf8").includes("Noted through the API"), "notes.csv lacks the note written through the API");
-    const aligned = await invokeLong(a, "export_folder", { room: ctx.room, set: ctx.set, aligned: true }, EXPORT_FOLDER_S, "the aligned folder export");
+    const aligned = await invoke(a, "export_folder", { room: ctx.room, set: ctx.set, folder: path.join(a.data, "bundles", `${ctx.set} aligned`), aligned: true }, EXPORT_FOLDER_S);
     const second = readJson(path.join(aligned.folder, "session.json"));
     check(second.views.every((v) => v.offset_ms === 0), `aligned offsets ${brief(second.views.map((v) => v.offset_ms))}`);
     for (const v of second.views) {
@@ -1331,7 +1340,7 @@ async function scenario(ctx) {
       check(Math.abs(seconds - ctx.durationS) <= SEGMENT_S, `${v.file} lasts ${seconds} s in the aligned export, the set ${ctx.durationS} s`);
     }
 
-    const made = await invokeLong(a, "import_recording", { spec: { folder: raw.folder } }, IMPORT_S, "the import of the exported folder");
+    const made = await invoke(a, "import_recording", { spec: { folder: raw.folder } }, IMPORT_S);
     ctx.imported = made.id;
     check(made.views === 3 && made.id !== ctx.set, `import: ${brief(made)}`);
     await allSee(all, "the imported recording", within(LOG_SYNC_S * 3), (st) => setOf(st, made.id)?.imported_by === a.name);
@@ -1391,7 +1400,7 @@ async function scenario(ctx) {
     await evaluate(b, `$("importdlg").close(); true`);
     await invoke(a, "set_plugin_runner", { id: PLUGIN, runner: c.id });
     for (const app of [a, b, c]) await waitFor(`${app.key} sees C as the Apex runner`, within(LOG_SYNC_S * 3), async () => (await invoke(app, "room_plugins")).find((x) => x.id === PLUGIN).runner === c.id);
-    const made = await invokeLong(b, "import_recording", { spec: { folder: media } }, IMPORT_S, "the import of the hand-made folder");
+    const made = await invoke(b, "import_recording", { spec: { folder: media } }, IMPORT_S);
     check(made.views === 3 && made.notes === 2, `import: ${brief(made)}`);
     await allSee(all, "the walkthrough", within(LOG_SYNC_S * 3), (st) => setOf(st, made.id)?.imported_by === b.name && setOf(st, made.id).title === "Walkthrough");
     await onlyOnDownload([a, c], b, made.id);
@@ -1437,32 +1446,29 @@ async function scenario(ctx) {
       const r = ffmpeg("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=160x90:rate=10:duration=4", "-f", "lavfi", "-i", `sine=frequency=${hz}:duration=4`, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", path.join(bare, `${name}.mp4`)]);
       check(r.ok, `ffmpeg ${name}: ${r.err}`);
     }
-    await invoke(a, "set_api", { on: true });
-    await waitFor("the API answers", within(UI_REFRESH_S * 5), () => api(a, "GET", "/llms.txt").then((r) => r.status === 200, () => false));
     const llms = await api(a, "GET", "/llms.txt");
-    check(llms.text.includes("recordings/import") && llms.text.includes("/export"), "llms.txt does not describe import and export");
-    const { token } = await invoke(a, "api_info");
+    check(llms.text.includes("import_recording") && llms.text.includes("export_folder"), "llms.txt does not describe import and export");
+    const refusal = (call) => call.then(() => "", (e) => e.message);
     const room = `/v1/rooms/${ctx.room}`;
-    check((await api(a, "POST", `${room}/recordings/import`, { token, body: { folder: path.join(OUT, "media", "Nothing here") } })).status === 400, "a missing folder was not refused");
-    check((await api(a, "POST", `${room}/recordings/import`, { token, body: { files: "x" } })).status === 400, "a bad body was not refused");
-    const made = await api(a, "POST", `${room}/recordings/import`, { token, body: { folder: bare } });
-    check(made.status === 201 && made.json.views === 2, `import: ${made.status} ${brief(made.text)}`);
-    ctx.bare = made.json.id;
-    const one = await api(a, "GET", `${room}/recordings/${encodeURIComponent(made.json.id)}`, { token });
+    check(await refusal(invoke(a, "import_recording", { spec: { folder: path.join(OUT, "media", "Nothing here") } })), "a missing folder was not refused");
+    check(await refusal(invoke(a, "import_recording", { spec: { files: "x" } })), "a bad body was not refused");
+    const made = await invoke(a, "import_recording", { spec: { folder: bare } }, IMPORT_S);
+    check(made.views === 2, `import: ${brief(made)}`);
+    ctx.bare = made.id;
+    const one = await api(a, "GET", `${room}/recordings/${encodeURIComponent(made.id)}`, { token: a.token });
     check(one.status === 200 && one.json.title === "Review night" && one.json.imported_by?.id === a.id && one.json.members.length === 2 && one.json.members.every((m) => m.imported) && one.json.members.map((m) => m.name).sort().join() === "Ann POV,Ben POV", `recording: ${brief(one.json)}`);
-    await allSee([b, c], "the bare folder's recording", within(LOG_SYNC_S * 3), (st) => setOf(st, made.json.id)?.imported_by === a.name);
+    await allSee([b, c], "the bare folder's recording", within(LOG_SYNC_S * 3), (st) => setOf(st, made.id)?.imported_by === a.name);
     const out = path.join(OUT, "api-export");
-    check((await api(a, "POST", `${room}/recordings/${encodeURIComponent(made.json.id)}/export`, { token, body: {} })).status === 400, "an export without a folder was accepted");
-    const exported = await api(a, "POST", `${room}/recordings/${encodeURIComponent(made.json.id)}/export`, { token, body: { folder: out, aligned: true } });
-    check(exported.status === 201 && exported.json.files === 2, `export: ${exported.status} ${brief(exported.text)}`);
+    check(await refusal(invoke(a, "export_folder", { room: ctx.room, set: made.id, aligned: true })), "an export without a folder was accepted");
+    const exported = await invoke(a, "export_folder", { room: ctx.room, set: made.id, folder: out, aligned: true }, EXPORT_FOLDER_S);
+    check(exported.files === 2, `export: ${brief(exported)}`);
     const session = readJson(path.join(out, "session.json"));
     check(session.views.map((v) => v.file).sort().join() === "Ann POV.mp4,Ben POV.mp4" && session.views.every((v) => v.offset_ms === 0), `exported session.json ${brief(session)}`);
     for (const v of session.views) {
       const probe = ffmpeg("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", path.join(out, v.file)]);
       check(probe.ok && Math.abs(Number(probe.out) - 4) <= 1.5, `${v.file} lasts ${probe.out.trim()} s`);
     }
-    check((await api(a, "POST", `${room}/recordings/${encodeURIComponent(made.json.id)}/export`, { token, body: { folder: out } })).status === 400, "an export into a folder that is not empty was accepted");
-    await invoke(a, "set_api", { on: false });
+    check(await refusal(invoke(a, "export_folder", { room: ctx.room, set: made.id, folder: out, aligned: false }, EXPORT_FOLDER_S)), "an export into a folder that is not empty was accepted");
   });
 
   const confirmDeletion = async (app, set, form) => {
@@ -1524,6 +1530,21 @@ async function scenario(ctx) {
     check(readJson(path.join(b.data, "settings.json")).channel === "beta", "settings.json does not keep the beta channel");
     check(await invoke(b, "check_update").then(() => true, (e) => String(e).length > 0), "checking the beta channel failed");
     await invoke(b, "set_channel", { channel: "stable" });
+  });
+
+  await step("the microphone, the mix and the hotkey are kept in the settings", async () => {
+    const { capture, hotkey } = await state(b);
+    await invoke(b, "set_mic", { id: "none" });
+    await invoke(b, "set_mix", { kind: "mic", volume: 0.5, muted: true });
+    await invoke(b, "set_hotkey", { keys: "Ctrl+Alt+F11" });
+    const now = await state(b);
+    check(now.capture.mic === "none" && now.capture.mix.mic.volume === 0.5 && now.capture.mix.mic.muted === true && now.hotkey === "Ctrl+Alt+F11", `settings read back as ${brief({ mic: now.capture.mic, mix: now.capture.mix.mic, hotkey: now.hotkey })}`);
+    const saved = readJson(path.join(b.data, "settings.json"));
+    check(saved.mic === "none" && saved.mix.mic.muted === true && saved.hotkey === "Ctrl+Alt+F11", "settings.json does not keep them");
+    check(await invoke(b, "set_hotkey", { keys: "K" }).then(() => false, () => true), "a hotkey without Ctrl or Alt was accepted");
+    await invoke(b, "set_mic", { id: capture.mic });
+    await invoke(b, "set_mix", { kind: "mic", ...capture.mix.mic });
+    await invoke(b, "set_hotkey", { keys: hotkey });
   });
 
   await step("C kept every file of an older version it found in its data folder", async () => {

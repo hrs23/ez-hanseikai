@@ -1,6 +1,6 @@
 # Local API
 
-A local HTTP API lets a person, an AI agent or another program read a room's recordings, write notes and the game plan, and import and export recordings as [session folders](session-format.md). It uses the same room-log events as the app, so other members see what is written. [llms.txt](llms.txt) is a short description of it for AI agents; the app serves the same text at `GET /llms.txt`.
+A local HTTP API lets a person, an AI agent or another program read a room's recordings and do everything the app's window does, except open windows. Recordings come in and go out as [session folders](session-format.md). It uses the same room-log events as the app, so other members see what is written. [llms.txt](llms.txt) is a short description of it for AI agents; the app serves the same text at `GET /llms.txt`.
 
 ## Turn it on
 
@@ -22,12 +22,13 @@ The traffic is plain HTTP, not encrypted: use it on networks you trust only. Win
 
 - It listens on `127.0.0.1` only, unless Other devices is on. A request whose `Host` header is not `127.0.0.1:<port>` or `localhost:<port>` gets 403, which stops DNS rebinding; with Other devices on, this PC's own IPv4 addresses and its computer name (with the port) are accepted too, and anything else still gets 403. There are no CORS headers.
 - Every request except `GET /llms.txt` needs `Authorization: Bearer <token>`; otherwise 401. The token is 48 random hex characters.
-- JSON in and out, UTF-8, one request per connection. Errors are `{"error": "..."}` with 400, 401, 403, 404, 405, 409, 413, 500 or 503.
+- JSON in and out, UTF-8, one request per connection. Errors are `{"error": "..."}` with 400 (also for an operation the app refuses, with the message the window would show), 401, 403, 404 (also for an unknown operation), 405, 409, 413, 500 or 503.
 - Times inside a recording are seconds from its start, rounded to 0.1 (`at_s`, `from_s`, `to_s`). Clock times are milliseconds since 1970 (`start_ms`, `end_ms`, `updated_ms`).
-- Reads work for every room on this PC. Writes work only for the room that is open in the app, because only that room is shared with the others; otherwise 409.
+- Reads work for every room on this PC. Operations act on the open room as the window does, and events and the board are written only to the open room, because only that room is shared with the others; otherwise 409.
+- Operations run at once, without the window's confirmations (starting and stopping a recording, deleting, discarding, removing a room, resetting). `delete_set`, `discard_set`, `remove_room` and `reset` with `keep_rooms: false` remove recordings or the app's data with no undo: call them only when the person asked for exactly that. The token gives the same control as the window, also from the LAN with Other devices.
 - Ids with spaces (a recording id looks like `2026-10-19 21-30-00`) are written percent-encoded in the path.
 - Notes are at most 500 characters and the game plan at most 4000. Bodies are at most 64 kB.
-- There are no endpoints for clips. A recording leaves as a folder of plain files (`export`), and comes in from video files or such a folder (`import`).
+- There are no endpoints for clips. A recording leaves as a folder of plain files (`export_folder`), and comes in from video files or such a folder (`import_recording`).
 - Paths are on this PC. In JSON write `/` (`C:/videos/scrim`) or double the backslashes.
 
 ## Endpoints
@@ -134,37 +135,70 @@ Replaces the game plan for the whole room and answers 200 with the new board (sa
 
 `kind` is `note` (default) or `mark`. A note needs `text`; `at_s` is optional, and a note without it belongs to the whole recording. A mark needs `at_s` and has no text. `tags` are appended to the text as `#tag` unless it already has them. Answers 201 with the event, shaped as in the list.
 
-### `POST /v1/rooms/{room}/open`
+### `POST /v1/ops/{name}`
 
-No body. Opens the room in the app, so that writes go to it, and answers 200 `{"room": "ab12"}`. 409 "Leave the room before entering another." while this PC records. Starting and stopping a recording is not in the API: it needs the person's confirmation in the app.
+The body is a JSON object with the operation's arguments (empty means `{}`). Answers 200 with the operation's value exactly as the window gets it (`null` for most), 404 `No such operation.` for a name that does not exist, 400 `{"error": "..."}` when the app refuses (the message the window would show). `src-tauri/src/ops.rs` is the one list: the window and this route call the same functions, so whatever the window can do is here.
 
-### `POST /v1/rooms/{room}/recordings/import`
+Long operations hold the connection until they are done: `import_recording`, `export_folder`, `prepare_plugin`, `check_peer` (up to 12 s for this PC), `check_update`. `reset` and `install_update` restart the app, so their request ends without an answer. After `set_api` with `on: false` the API is off, after `new_api_token` the next request needs the new token (read `api.json`), and `set_api_lan` restarts the listener on the new address. Arguments marked `?` are optional; the rest are required (`<name> is missing or not valid.`). Ids and values are those of `GET` answers and of the window's state.
 
-```json
-{"folder": "C:/videos/Scrim night", "title": "Scrim night", "names": ["Ann", "Ben"]}
-```
+| Operation | Arguments | What it does |
+|---|---|---|
+| `create_room` | `name` | Makes a room and opens it; answers its id. An empty name becomes "<your name>'s room". Refused while recording. |
+| `join_room` | `code` | Joins with an invite code (`ezh-<id>-<token>`); the room is pending until a member approves. |
+| `enter_room` | `id` | Opens a room from the list. Refused while recording. |
+| `close_room` | `id` | Leaves the open room (ends this PC's recording there); the room stays in the list. |
+| `remove_room` | `id` | Leaves and deletes the room with its recordings and notes on this PC. Refused while it is exported or imported into. |
+| `rename_room` | `name` | Renames the open room for everyone. |
+| `create_invite` | `reuse` | Answers an invite code; `reuse: true` returns the open one if there is one. |
+| `cancel_invites` | | Cancels open invites and pending join requests. |
+| `answer_ask` | `id`, `approve` | Approves or refuses a join request. |
+| `remove_peer` | `id` | Removes a member from the open room. |
+| `check_peer` | `id` | The environment check of that member, or of this PC for its own id. |
+| `start_recording` | `debrief?` | Starts recording in the open room for everyone; `debrief: true` records voices only. |
+| `stop_recording` | | Stops it for everyone. |
+| `mark` | | Marks this moment while recording; answers the event id (what the hotkey does). |
+| `list_sources` | | The screens and windows that can be captured; `id` is what `set_source` takes. |
+| `set_source` | `source` | An `id` from `list_sources`, or `null` to stop sharing. |
+| `list_mics` | | Microphones as `{id, name}`. |
+| `set_mic`, `set_audio_process`, `set_quality`, `set_limit`, `set_codecs` | `id`, `name`, `id`, `mbps`, `list` | The microphone, the app whose sound is recorded, the quality (`light`, `standard` or `high`), the upload limit (`null` for none), and what the window can decode (it sends that at start). |
+| `set_mix` | `kind`, `volume`, `muted` | `kind` is `app` or `mic`; `volume` is 0 to 1. |
+| `list_processes` | | Names of running apps whose sound can be recorded. |
+| `set_name`, `set_channel`, `set_warn_hours`, `set_layout`, `log_layout` | `name`, `channel`, `hours`, `layout`, `layout` | Your name, the update channel (`stable` or `beta`), the hours of recording before the warning, the player layout, and a record of it in the room log. |
+| `set_language` | `language` | `""` (the system's), `en` or `ja`. |
+| `set_hotkey` | `keys` | Such as `Ctrl+Alt+M`; refused when another app holds it. |
+| `check_update` | | The available version, or `null`. |
+| `install_update` | | Downloads, installs and restarts; refused while recording or exporting. |
+| `data_info` | | `{dir, used_bytes, free_bytes}`. |
+| `reset` | `keep_rooms` | Resets the app and restarts; `keep_rooms: false` deletes rooms and recordings. |
+| `dismiss_recovery`, `retry_ffmpeg` | | Dismisses the recovery notice; retries the video tools download. |
+| `add_event` | `kind`, `text`, `target`, `values` | The raw form of a note, drawing or board card; `kind` is `note`, `drawing` or `board`; `target` is `{t_us, set}` with wall-clock microseconds. Answers the event id. |
+| `event_action` | `kind`, `id`, `text` | `edit`, `delete` or `restore` an event of this PC. |
+| `party_on` | `on`, `view` | Joins or leaves Watch Party; `view` is `{set, playing, live, wall_us, at_us, rate, focus, mode, slots, order}`. |
+| `party_act`, `party_typing`, `draw` | `view`, `on`, `stroke` | Shares a play, pause or seek as the new `view`; shows that you are typing; sends a drawing stroke to the room. |
+| `room_plugins` | | The room's plugins with settings, readiness and workers. |
+| `set_room_plugin` | `id`, `on`, `settings` | Turns a plugin on or off for the room. |
+| `set_plugin_runner` | `id`, `runner` | The member who runs it, or `null` for Auto. |
+| `set_process_plugin` | `id`, `on` | This PC's processing switch. |
+| `prepare_plugin` | `id` | Downloads the plugin's files. |
+| `jobs` | | `{jobs, running, tags}`. |
+| `retry_job`, `run_job_next`, `cancel_job` | `job`, `job` | Retries a job, runs it next, cancels the running one. |
+| `delete_set` | `room`, `set` | Deletes a recording's files on this PC; answers whether anything was deleted. |
+| `discard_set` | `room`, `set` | Deletes a recording for everyone. |
+| `download_set` | `room`, `set` | Fetches the others' parts. |
+| `focus_set` | `set` | Which recording to fetch first. |
+| `export_set` | `room`, `set`, `path` | Starts the MP4 export into `path`; answers `{skipped}`, the members whose parts are not here. Progress is only in the window. |
+| `export_folder` | `room`, `set`, `folder`, `aligned` | Writes a [session folder](session-format.md) into a new or empty folder and answers `{folder, files, skipped}` when done. `aligned` pads every file so all start together. |
+| `import_plan` | `spec` | What an import would make. |
+| `import_recording` | `spec` | Imports a recording and answers `{id, views, notes}`. `spec` is `{folder, title?, names?}` or `{files}` (paths on this PC). Refused while another import runs. |
+| `cancel_import` | | Cancels the import. |
+| `set_api`, `set_api_lan`, `new_api_token` | `on`, `lan` | Turns the API on or off, Other devices on or off, and makes a new token. |
+| `api_info` | | `{on, lan, address, hosts, token, error}`. |
+| `api_reference` | | The endpoint list shown in Settings. |
+| `state` | | The window's whole state. |
+| `debug_view` | `tab`, `since`, `set` | One Diagnostics view (`tab` is `connections`, `network`, `recording`, `data`, `jobs`, `flow` or `log`), addresses hidden. |
+| `debug_report` | `save`, `head` | The report text, or the path of `report.txt` in the data folder when `save` is true. |
 
-or `{"files": ["C:/videos/ann.mp4", "C:/videos/ben.mp4"]}`. Makes a recording from a [session folder](session-format.md) or from video files, shares it with the room like a recorded one, and answers 201 when it is done (as long as the copying takes):
-
-```json
-{"id": "2026-10-19 21-30-00", "views": 2, "notes": 3}
-```
-
-`title` and `names` (one name per view, in order) are optional and replace the folder's own. 400 says what is wrong with the files (nothing is imported then), 409 means the room is not the open one or another import is running.
-
-### `POST /v1/rooms/{room}/recordings/{recording}/export`
-
-```json
-{"folder": "C:/exports/scrim", "aligned": false}
-```
-
-Writes the recording into a new or empty folder on this PC as a [session folder](session-format.md), and answers 201 when it is done:
-
-```json
-{"folder": "C:/exports/scrim", "files": 2, "skipped": []}
-```
-
-`aligned` (default `false`) pads every file so all start together. `skipped` lists views that are not on this PC yet. 400 for a folder that is not empty, 409 while a recording or another export runs.
+Not available: the operations that open a window, that is choosing files or folders, opening links and folders, and the identity file.
 
 ### `GET /v1/rooms/{room}/plugins`
 
@@ -198,10 +232,10 @@ The plain-text report of Help > Diagnostics > Copy report, without its summary l
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:47625/v1/rooms
 curl -H "Authorization: Bearer $TOKEN" -d '{"text":"Good call #callout","at_s":84}' \
   "http://127.0.0.1:47625/v1/rooms/ab12/recordings/2026-10-19%2021-30-00/events"
-curl -H "Authorization: Bearer $TOKEN" -d '{"folder":"C:/videos/Scrim night"}' \
-  http://127.0.0.1:47625/v1/rooms/ab12/recordings/import
+curl -H "Authorization: Bearer $TOKEN" -d '{"spec":{"folder":"C:/videos/Scrim night"}}' \
+  http://127.0.0.1:47625/v1/ops/import_recording
 ```
 
 ## Code
 
-`src-tauri/src/api.rs` holds the server, the checks (host, token, request size) and the handlers, which work on a small `Backend` trait so that tests run on plain data. `docs/llms.txt` is embedded in the app at build time.
+`src-tauri/src/api.rs` holds the server, the checks (host, token, request size) and the handlers, which work on a small `Backend` trait so that tests run on plain data. `src-tauri/src/ops.rs` holds the one list of operations that the window's `call` command and the API's `/v1/ops` route dispatch into. `docs/llms.txt` is embedded in the app at build time.

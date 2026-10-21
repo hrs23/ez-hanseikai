@@ -414,7 +414,7 @@ test("Settings > API has the access choice with its warning, the endpoint refere
   const pages = read("pages.js");
   assert.match(pages, /\$\("apibadge"\)\.onclick = \(\) => openSettings\("api"\)/);
   assert.match(pages, /run\("set_api_lan"/);
-  assert.match(pages, /run\("open_llms"/);
+  assert.match(pages, /dialog\("open_link", \{ url: `\$\{apiUrl\(st\.api\.address\)\}\/llms\.txt` \}\)/);
   assert.match(pages, /invoke\("api_reference"\)/);
   assert.match(pages, /el\("details"/);
   for (const word of ["Access", "This PC only", "Other devices", "Other devices on your network can control the app", "The local API is on", "Endpoints", "Open llms.txt"]) assert.ok(word in ui$.JA, word);

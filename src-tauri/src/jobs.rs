@@ -8,10 +8,11 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use tauri::{Emitter, State};
+use tauri::Emitter;
 
 use crate::plugins::{self, Found, Media, Output, Plugin, Reply};
 use crate::room::{self, File, Log, Seg, SERIES};
+use crate::ops::arg;
 use crate::{ffmpeg, hex, now_us, party, stream, Core};
 
 const CHECK: Duration = Duration::from_secs(2);
@@ -689,21 +690,18 @@ pub fn plugins_json(core: &Core, room: &str) -> Vec<Value> {
         .collect()
 }
 
-#[tauri::command]
-pub async fn room_plugins(core: State<'_, Arc<Core>>) -> Result<Vec<Value>, String> {
-    let core = core.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || plugins_json(&core, &core.active_room_id())).await.map_err(|e| e.to_string())
+pub fn room_plugins(core: &Arc<Core>, _: Value) -> Result<Value, String> {
+    Ok(json!(plugins_json(core, &core.active_room_id())))
 }
 
-#[tauri::command]
-pub fn set_room_plugin(core: State<Arc<Core>>, id: String, on: bool, settings: Value) -> Result<(), String> {
-    let plugin = plugins::find(&id).ok_or("Unknown plugin.")?;
+pub fn set_room_plugin(core: &Arc<Core>, args: Value) -> Result<Value, String> {
+    let plugin = plugins::find(&arg::<String>(&args, "id")?).ok_or("Unknown plugin.")?;
     let room = core.active_room_id();
-    let logs = room::logs(&core, &room);
-    let runner = room_configs(&core, &room, &logs).remove(plugin.id).and_then(|c| c.runner);
-    let config = Config { on, version: plugin.version.into(), settings: plugins::normalize(plugin, &settings), runner };
+    let logs = room::logs(core, &room);
+    let runner = room_configs(core, &room, &logs).remove(plugin.id).and_then(|c| c.runner);
+    let config = Config { on: arg(&args, "on")?, version: plugin.version.into(), settings: plugins::normalize(plugin, &args["settings"]), runner };
     core.append_log(&room, &plugin_record(plugin.id, &config, change_time(now_us(), &logs, plugin.id)));
-    Ok(())
+    Ok(Value::Null)
 }
 
 fn plugin_record(id: &str, config: &Config, t_us: i64) -> Value {
@@ -719,39 +717,36 @@ fn runner_record(plugin: &Plugin, runner: Option<String>, logs: &[Log], now: i64
     plugin_record(plugin.id, &Config { runner, ..config }, change_time(now, logs, plugin.id))
 }
 
-#[tauri::command]
-pub fn set_plugin_runner(core: State<Arc<Core>>, id: String, runner: Option<String>) -> Result<(), String> {
-    let plugin = plugins::find(&id).ok_or("Unknown plugin.")?;
+pub fn set_plugin_runner(core: &Arc<Core>, args: Value) -> Result<Value, String> {
+    let plugin = plugins::find(&arg::<String>(&args, "id")?).ok_or("Unknown plugin.")?;
     let room = core.active_room_id();
-    let logs = room::logs(&core, &room);
-    let runner = runner.filter(|m| !m.is_empty());
-    if runner.as_ref().is_some_and(|m| !room_members(&core, &room).contains(m)) {
+    let logs = room::logs(core, &room);
+    let runner = arg::<Option<String>>(&args, "runner")?.filter(|m| !m.is_empty());
+    if runner.as_ref().is_some_and(|m| !room_members(core, &room).contains(m)) {
         return Err("Unknown member.".into());
     }
     core.append_log(&room, &runner_record(plugin, runner, &logs, now_us()));
-    Ok(())
+    Ok(Value::Null)
 }
 
-#[tauri::command]
-pub fn set_process_plugin(core: State<Arc<Core>>, id: String, on: bool) -> Result<(), String> {
-    let plugin = plugins::find(&id).ok_or("Unknown plugin.")?;
+pub fn set_process_plugin(core: &Arc<Core>, args: Value) -> Result<Value, String> {
+    let plugin = plugins::find(&arg::<String>(&args, "id")?).ok_or("Unknown plugin.")?;
     {
         let mut skip = core.skip_plugins.lock().unwrap();
-        if on { skip.remove(plugin.id) } else { skip.insert(plugin.id.to_string()) };
+        if arg(&args, "on")? { skip.remove(plugin.id) } else { skip.insert(plugin.id.to_string()) };
     }
     core.save_settings();
     let room = core.active_room_id();
-    let logs = room::logs(&core, &room);
-    publish(&core, &room, &logs, &configs(&logs, None));
-    Ok(())
+    let logs = room::logs(core, &room);
+    publish(core, &room, &logs, &configs(&logs, None));
+    Ok(Value::Null)
 }
 
-#[tauri::command]
-pub async fn prepare_plugin(core: State<'_, Arc<Core>>, id: String) -> Result<(), String> {
-    let plugin = plugins::find(&id).ok_or("Unknown plugin.")?;
-    let settings = configs(&room::logs(&core, &core.active_room_id()), None).get(plugin.id).map_or_else(|| plugins::normalize(plugin, &Value::Null), |c| c.settings.clone());
-    let dir = plugin_dir(&core, plugin.id);
-    tauri::async_runtime::spawn_blocking(move || plugins::fetch_group(plugin.id, &dir, &plugins::missing(plugin, &dir, &settings))).await.map_err(|e| e.to_string())?
+pub fn prepare_plugin(core: &Arc<Core>, args: Value) -> Result<Value, String> {
+    let plugin = plugins::find(&arg::<String>(&args, "id")?).ok_or("Unknown plugin.")?;
+    let settings = configs(&room::logs(core, &core.active_room_id()), None).get(plugin.id).map_or_else(|| plugins::normalize(plugin, &Value::Null), |c| c.settings.clone());
+    let dir = plugin_dir(core, plugin.id);
+    plugins::fetch_group(plugin.id, &dir, &plugins::missing(plugin, &dir, &settings)).map(|_| Value::Null)
 }
 
 pub fn jobs_json(core: &Core, room: &str) -> Value {
@@ -776,20 +771,18 @@ pub fn jobs_json(core: &Core, room: &str) -> Value {
     json!({"jobs": list, "running": running_json(), "tags": tag_names(&logs, core.party.lock().unwrap().caps().as_ref())})
 }
 
-#[tauri::command]
-pub async fn jobs(core: State<'_, Arc<Core>>) -> Result<Value, String> {
-    let core = core.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || jobs_json(&core, &core.active_room_id())).await.map_err(|e| e.to_string())
+pub fn jobs(core: &Arc<Core>, _: Value) -> Result<Value, String> {
+    Ok(jobs_json(core, &core.active_room_id()))
 }
 
-#[tauri::command]
-pub fn retry_job(core: State<Arc<Core>>, job: String) {
-    core.append_log(&core.active_room_id(), &job_record("retry", &job, 0, Value::Null));
+pub fn retry_job(core: &Arc<Core>, args: Value) -> Result<Value, String> {
+    core.append_log(&core.active_room_id(), &job_record("retry", &arg::<String>(&args, "job")?, 0, Value::Null));
+    Ok(Value::Null)
 }
 
-#[tauri::command]
-pub fn run_job_next(job: String) {
-    *FIRST.lock().unwrap() = job;
+pub fn run_job_next(_: &Arc<Core>, args: Value) -> Result<Value, String> {
+    *FIRST.lock().unwrap() = arg(&args, "job")?;
+    Ok(Value::Null)
 }
 
 pub fn cancel_set(room: &str, set: &str) {
@@ -803,11 +796,11 @@ pub fn cancel_set(room: &str, set: &str) {
     }
 }
 
-#[tauri::command]
-pub fn cancel_job() {
+pub fn cancel_job(_: &Arc<Core>, _: Value) -> Result<Value, String> {
     if RUNNING.lock().unwrap().is_some() {
         CANCEL.store(true, Ordering::Relaxed);
     }
+    Ok(Value::Null)
 }
 
 pub fn stop_now(core: &Core) {
