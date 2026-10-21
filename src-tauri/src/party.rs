@@ -245,7 +245,7 @@ pub fn receive(core: &Arc<Core>, from: &str, msg: &Value, offset_us: i64) -> boo
 pub fn state_json(core: &Core, own: &Heads) -> Value {
     let party = core.party.lock().unwrap();
     let now = Instant::now();
-    let watching = party.watching(&core.ep.id().to_string(), now);
+    let watching = party.watching(&core.me(), now);
     if !party.on {
         return json!({"on": false, "watching": watching});
     }

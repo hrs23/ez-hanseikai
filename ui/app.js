@@ -21,7 +21,6 @@ const CHIME = { start: [660, 880], end: [880, 660], join: [784, 988] };
 const CHIME_NOTE_S = 0.14;
 const CHIME_GAIN = 0.15;
 const TAG_HINTS = 5;
-const AVATARS_SHOWN = 5;
 const ROOM_NAME_MAX = 40;
 const DRAG_START_PX = 4;
 const CODEC_PROBE = { width: 1280, height: 720, bitrate: 6000000, framerate: 30 };
@@ -111,7 +110,7 @@ function markLive() {
   for (const e of document.querySelectorAll("[data-speak]")) markVoice(e, speaking.has(e.dataset.speak), e.dataset.speak === st.id && st.capture.mix.mic.muted);
 }
 
-function avatars(ids, size = "sm", max = AVATARS_SHOWN) {
+function avatars(ids, size = "sm", max = ids.length) {
   return el("span", { className: "avs" }, ...ids.slice(0, max).map((id) => avatar(id, size)));
 }
 
@@ -1329,7 +1328,12 @@ async function update() {
   const l = liveSet();
   const voice = st.active_set && st.active_set.voice;
   if (nowView && !voice) followNow();
-  if (nowView && !l && nowSet) { nowView = false; nowSet = null; }
+  if (nowView && !l && nowSet) {
+    const ended = setById(nowSet);
+    nowView = false;
+    nowSet = null;
+    if (ended && !ended.of && page === "player") { selectSet(null); openSession(ended.id); }
+  }
   if (voice) debriefOpen = st.active_set.id;
   const roomId = st.room ? st.room.id : "";
   if (partyRoom !== roomId) { partyRoom = roomId; editing = null; await joinParty(); st = await invoke("state"); idx = indexOf(st); }

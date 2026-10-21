@@ -84,8 +84,8 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 ## Watch Party
 
 - Watch Party converges on a seek and a play, and a member who joins midway converges too. `e2e` (`library`)
-- stopping a recording opens it from the start for everyone in the Watch Party, and leaves a PC elsewhere alone. `e2e` (`library`)
-- a session started while watching together records voices and the Watch Party; ending a debrief moves nobody. `e2e` (`library`)
+- stopping a recording opens it from the start for everyone in the Watch Party, and leaves a PC watching another recording alone. `e2e` (`library`)
+- a session started while watching together records voices and the Watch Party; ending a debrief moves nobody, not even a PC on Live. `e2e` (`library`)
 - A real Watch Party of a recording from several PCs stays in step through seeks and pauses. `manual`
 - party: newest wins by seq then time then origin; simultaneous actions converge; a joiner adopts the running state; turning on joins the party without moving it; rejoining takes the running state again; party messages for another recording are not followed; watching lists the viewers per recording and includes me while in the party; positions move to the receivers clock; heads only grow and show who is behind; typing shows while the viewer is seen; other rooms and off are ignored but viewers are counted; a review starts only while watching a session together; party records come back on the local clock in order. `unit`
 
