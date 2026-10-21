@@ -18,9 +18,12 @@ pub const SERIES: [&str; 2] = ["v", "m"];
 pub const INIT: &str = "init.mp4";
 pub const RECORDINGS: &str = "recordings";
 pub const STANDBY: &str = "standby";
+pub const LOGS: &str = "logs";
+pub const PENDING: &str = "pending.bin";
 pub const TOKEN_BYTES: usize = 8;
 pub const UNREACHABLE_AFTER: Duration = Duration::from_secs(60);
 const ROOM_ID_BYTES: usize = 4;
+const TITLE_MAX: usize = 80;
 
 pub fn seg_name(n: u32) -> String {
     format!("{n:06}.m4s")
@@ -32,6 +35,10 @@ pub fn seg_number(name: &str) -> Option<u32> {
 
 pub fn recording_dir(room_dir: &Path, set: &str) -> PathBuf {
     room_dir.join(RECORDINGS).join(set)
+}
+
+pub fn log_file(room_dir: &Path, id: &str) -> PathBuf {
+    room_dir.join(LOGS).join(format!("{id}.bin"))
 }
 
 pub fn series_dir(room_dir: &Path, set: Option<&str>, owner: &str, capture: &str, series: &str) -> PathBuf {
@@ -682,7 +689,7 @@ pub fn view_info(records: &[Value]) -> Option<ViewInfo> {
     let r = records.iter().find(|r| r["k"] == "rec")?;
     let by = r["imported"].as_str().filter(|b| b.parse::<EndpointId>().is_ok())?;
     let name = crate::clean_name(r["view"].as_str()?);
-    (!name.is_empty()).then(|| ViewInfo { name, by: by.to_string(), title: r["title"].as_str().map(|t| crate::clean_text(t, crate::session::TITLE_MAX)).filter(|t| !t.is_empty()) })
+    (!name.is_empty()).then(|| ViewInfo { name, by: by.to_string(), title: r["title"].as_str().map(|t| crate::clean_text(t, TITLE_MAX)).filter(|t| !t.is_empty()) })
 }
 
 impl File {
@@ -1292,6 +1299,59 @@ pub mod tests {
         let dropped_by_b = [log("a", 0, vec![json!({"k": "rec", "set": "s2"})]), log("b", 0, vec![json!({"k": "set_del", "set": "s2"})])];
         assert_eq!(derive_sets("r", &dropped_by_b).len(), 0);
         assert_eq!(dropped(&dropped_by_b), HashSet::from(["s2".to_string()]));
+    }
+
+    #[test]
+    fn records_from_other_versions_never_break_reading() {
+        let valid = vec![
+            json!({"k": "rec", "set": "s1", "start_us": 5, "room": "r", "by": "a", "voice": false}),
+            json!({"k": "cap", "capture": "1000", "start_us": 0, "width": 1280, "init": {"v": {"size": 4, "sha256": "i"}}}),
+            seg("1000", "v", 1, "s1"),
+            json!({"k": "rec_end", "set": "s1", "t_us": 9, "stop": true}),
+            user_event(1, "note", "hi #a", json!({"set": "s1", "t_us": 6}), json!({})),
+            json!({"k": "event_edit", "id": 1, "t_us": 7, "text": "edited"}),
+            json!({"k": "event_del", "id": 2, "t_us": 7}),
+            json!({"k": "event_restore", "id": 2, "t_us": 8}),
+            json!({"k": "set_del", "set": "gone"}),
+            json!({"k": "remove", "member": "m1", "t_us": 9}),
+            json!({"k": "admit", "member": "m2", "t_us": 9}),
+            json!({"k": "room_name", "name": "Squad", "t_us": 9}),
+            json!({"k": "offset", "peer": "p", "t_us": 9, "rtt_us": 1, "offset_us": 2}),
+            json!({"k": "layout", "set": "s1", "t_us": 9, "layout": {"order": ["a"]}}),
+            json!({"k": "plugin", "plugin": "p1", "on": true, "version": "1", "settings": {"model": "base"}, "t_us": 9}),
+            json!({"k": "job", "job": "p1@1/ab/s1/a", "state": "done", "run": 1, "plugin": "p1", "version": "1", "file": "s1/a", "tags": {}, "t_us": 9}),
+            json!({"k": "worker", "plugin": "p1", "on": true, "ready": true}),
+            json!({"k": "party", "set": "s1", "t_us": 9, "shared": {"set": "s1", "playing": false}}),
+            json!({"k": "file_bad", "room": "r", "set": "s1", "file": "a/1000/000001.m4s", "size": 4, "t_us": 9}),
+        ];
+        let wrong = [json!("x"), Value::Null, json!([1]), json!(-1), json!(5_000_000_000i64), json!({})];
+        let mut records = valid.clone();
+        for r in &valid {
+            for field in r.as_object().unwrap().keys().filter(|f| *f != "k") {
+                for bad in &wrong {
+                    let mut changed = r.clone();
+                    changed[field.as_str()] = bad.clone();
+                    records.push(changed);
+                }
+                let mut missing = r.clone();
+                missing.as_object_mut().unwrap().remove(field);
+                records.push(missing);
+            }
+            let mut extra = r.clone();
+            extra["from_the_future"] = json!({"new": [1, 2]});
+            records.push(extra);
+        }
+        records.extend([json!({"k": "from_the_future", "n": 1}), json!({"k": "file", "set": "s1", "size": 15}), json!({"k": "note", "text": "hi"}), json!({"k": 7}), json!("text"), Value::Null, json!([1])]);
+        let logs = [log("a", 0, valid), log("b", 3, records)];
+        assert_eq!(derive_sets("r", &logs).iter().find(|s| s.id == "s1").map(|s| s.files.len()), Some(2));
+        assert!(events(&logs, None).iter().any(|e| e["text"] == "edited"));
+        assert!(removals(&logs).contains_key("m1"));
+        let _ = set_layout(&logs, "s1");
+        assert!(latest_name(&logs).is_some());
+        assert!(crate::party::records(&logs).contains_key("s1"));
+        assert!(crate::jobs::configs(&logs, None).contains_key("p1") && crate::jobs::tracks(&logs, None).contains_key("p1@1/ab/s1/a"));
+        assert!(crate::jobs::chosen(&logs, None).contains_key("s1") && crate::jobs::workers(&logs).contains_key(&("p1".to_string(), "a".to_string())));
+        assert!(dropped(&logs).contains("gone"));
     }
 
     #[test]

@@ -25,11 +25,20 @@ pub const LIVE_KEEP: u32 = 2 * crate::stream::LIVE_WINDOW + 1;
 pub type Listing = Arc<HashMap<String, u64>>;
 pub type Files = Mutex<HashMap<PathBuf, Listing>>;
 
+const OLD_ROOT: [&str; 5] = ["log.bin", "peer", "peer.txt", "peers.txt", "running.marker"];
+const OLD_ROOM: [&str; 2] = ["sets", "live"];
+const OLD_CAPTURE: [&str; 2] = ["verified.json", "cap.json"];
+const OLD_SERIES: &str = "open.json";
+
+fn member_id(text: &str) -> bool {
+    text.parse::<iroh::EndpointId>().is_ok()
+}
+
 pub fn repair_logs(dir: &Path) {
     for (_, room) in crate::entries(&dir.join("rooms")) {
-        log::repair(&room.join("pending.bin"));
-        for (_, path) in crate::entries(&room.join("logs")) {
-            if path.extension().is_some_and(|e| e == "bin") && path.file_stem().is_some_and(|s| s.to_string_lossy().parse::<iroh::EndpointId>().is_ok()) {
+        log::repair(&room.join(room::PENDING));
+        for (_, path) in crate::entries(&room.join(room::LOGS)) {
+            if path.extension().is_some_and(|e| e == "bin") && path.file_stem().is_some_and(|s| member_id(&s.to_string_lossy())) {
                 log::repair(&path);
             }
         }
@@ -88,16 +97,51 @@ pub fn clear_standby(dir: &Path) {
     }
 }
 
-fn old_folders(dir: &Path) -> usize {
-    let rooms = crate::entries(&dir.join("rooms"));
-    rooms.iter().flat_map(|(_, room)| crate::entries(room)).filter(|(name, path)| name.parse::<iroh::EndpointId>().is_ok() && path.is_dir()).count()
+fn old_recording(name: &str) -> bool {
+    name.strip_prefix("rec-").and_then(|rest| rest.strip_suffix(".mp4")).is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
 }
 
-pub fn note_old_layout(core: &Core) {
-    let old = old_folders(&core.dir);
-    if old > 0 {
-        debug::event(core, core.started, format!("{old} media folders of an older version are kept and not read"));
+pub fn old_files(dir: &Path) -> Vec<PathBuf> {
+    let mut old: Vec<PathBuf> = crate::entries(dir).into_iter().filter(|(name, _)| OLD_ROOT.contains(&name.as_str()) || old_recording(name)).map(|(_, path)| path).collect();
+    for (_, room) in crate::entries(&dir.join("rooms")) {
+        old.extend(crate::entries(&room).into_iter().filter(|(name, path)| OLD_ROOM.contains(&name.as_str()) || (member_id(name) && path.is_dir())).map(|(_, path)| path));
+        old.extend(crate::entries(&room.join(room::LOGS)).into_iter().filter(|(name, _)| name.strip_suffix(".bin").is_some_and(|stem| !member_id(stem))).map(|(_, path)| path));
+        for (_, set) in crate::entries(&room.join(room::RECORDINGS)) {
+            for (_, capture) in crate::entries(&set).iter().flat_map(|(_, owner)| crate::entries(owner)) {
+                old.extend(OLD_CAPTURE.iter().map(|name| capture.join(name)));
+                old.extend(SERIES.iter().map(|series| capture.join(series).join(OLD_SERIES)));
+            }
+        }
     }
+    old.retain(|path| path.exists());
+    old
+}
+
+fn size_of(path: &Path) -> u64 {
+    if path.is_dir() { used_bytes(path) } else { file_len(path) }
+}
+
+pub fn old_bytes(dir: &Path) -> u64 {
+    old_files(dir).iter().map(|path| size_of(path)).sum()
+}
+
+fn remove_old(dir: &Path, files: &Files) -> Result<u64, String> {
+    let mut freed = 0;
+    for path in old_files(dir) {
+        let size = size_of(&path);
+        if let Err(e) = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) } {
+            return Err(format!("Delete failed: {e}"));
+        }
+        forget(files, &path);
+        freed += size;
+    }
+    Ok(freed)
+}
+
+pub fn delete_old_files(core: &Core) -> Result<u64, String> {
+    let freed = remove_old(&core.dir, &core.files)?;
+    debug::event(core, core.started, format!("deleted old files, {freed} bytes"));
+    Ok(freed)
 }
 
 fn in_standby(dir: &Path, depth: usize) -> bool {
@@ -448,7 +492,7 @@ mod tests {
     }
 
     #[test]
-    fn a_restart_removes_nothing_under_recordings_and_never_touches_old_folders() {
+    fn a_restart_removes_nothing_under_recordings_and_never_touches_old_files() {
         let dir = temp("restart");
         let (me, other) = (iroh::SecretKey::generate().public().to_string(), iroh::SecretKey::generate().public().to_string());
         let (one, two) = (fragment(&[(1, 0)], b"aaaa"), fragment(&[(1, 1000)], b"bbbb"));
@@ -463,7 +507,9 @@ mod tests {
         let (joined, logged) = (["s1", "s2", "s3"], [("1000", "v", 1), ("1000", "v", 2), ("3000", "m", 1), ("4000", "v", 1)]);
         let found = crate::record::recover_files(&dir, &me, |r| !joined.contains(&r.set.as_str()) || logged.contains(&(r.capture.as_str(), r.series, r.n)));
         clear_standby(&dir);
-        assert_eq!(old_folders(&dir), 2);
+        let mut older: Vec<String> = ["rooms/r/ME", "rooms/r/OT", "rooms/r/live", "rooms/r/sets", "rooms/r/recordings/s1/ME/1000/verified.json"].iter().map(|p| name(p)).collect();
+        older.sort();
+        assert_eq!(relative(&dir, old_files(&dir)), older);
         assert!(leftovers(&dir, true, SystemTime::now()).is_empty());
         for path in leftovers(&dir, false, SystemTime::now() + OLD_AFTER + Duration::from_secs(60)) {
             let _ = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
@@ -475,6 +521,41 @@ mod tests {
         }
         before.insert(name("rooms/r/recordings/s2/ME/3000/v/000002.m4s"), [one, two].concat());
         assert_eq!(tree(&dir), before);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn relative(dir: &Path, paths: Vec<PathBuf>) -> Vec<String> {
+        let mut out: Vec<String> = paths.iter().map(|p| p.strip_prefix(dir).unwrap().to_string_lossy().replace('\\', "/")).collect();
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn old_files_are_exactly_the_older_shapes() {
+        let dir = temp("oldfiles");
+        let (me, other) = (iroh::SecretKey::generate().public().to_string(), iroh::SecretKey::generate().public().to_string());
+        let room_dir = dir.join("rooms/r");
+        let current: Vec<PathBuf> = {
+            let (live, kept) = (room::series_dir(&room_dir, None, &other, "2000", "v"), |series| room::series_dir(&room_dir, Some("s1"), &me, "1000", series));
+            let mut out = vec![room::log_file(&room_dir, &me), room::log_file(&room_dir, &other), room_dir.join(room::PENDING), crate::thumbs::path(&room_dir, "s1"), live.join(seg_name(3)), part_of(&live.join(seg_name(4)))];
+            for series in SERIES {
+                out.extend([kept(series).join(INIT), kept(series).join(seg_name(1)), part_of(&kept(series).join(seg_name(2))), part_of(&kept(series).join(INIT))]);
+            }
+            out.into_iter().map(|p| p.strip_prefix(&dir).unwrap().to_path_buf()).collect()
+        };
+        let unknown = ["key.bin.old", "legacy/x", "key.bin", "rooms.json", "settings.json", "app.lock", "rooms/r/recordings/orphan/OT/9/v/000001.m4s", "rooms/unlisted/logs/OT.bin", "rooms/r/newer.dat", "rooms/r/newer/x", "rooms/r/logs/OT.bin.part", "rooms/r/recordings/s1/ME/1000/newer.json"];
+        let older = ["log.bin", "peer/a/log.bin", "peer.txt", "peers.txt", "running.marker", "rec-1700000000000.mp4", "rooms/r/ME/1000/v/init.mp4", "rooms/r/sets/s1/a.mp4", "rooms/r/live/a.mp4", "rooms/r/logs/someone.bin", "rooms/r/recordings/s1/ME/1000/verified.json", "rooms/r/recordings/s1/ME/1000/cap.json", "rooms/r/recordings/s1/ME/1000/v/open.json", "rooms/r/recordings/s1/ME/1000/m/open.json"];
+        seed(&dir, unknown.iter().chain(&older).map(|n| n.replace("ME", &me).replace("OT", &other)));
+        seed(&dir, current.iter().map(|p| p.to_string_lossy().to_string()));
+        let expected = ["log.bin", "peer", "peer.txt", "peers.txt", "running.marker", "rec-1700000000000.mp4", "rooms/r/ME", "rooms/r/sets", "rooms/r/live", "rooms/r/logs/someone.bin", "rooms/r/recordings/s1/ME/1000/verified.json", "rooms/r/recordings/s1/ME/1000/cap.json", "rooms/r/recordings/s1/ME/1000/v/open.json", "rooms/r/recordings/s1/ME/1000/m/open.json"];
+        let mut expected: Vec<String> = expected.iter().map(|n| n.replace("ME", &me)).collect();
+        expected.sort();
+        assert_eq!(relative(&dir, old_files(&dir)), expected);
+        assert_eq!((old_bytes(&dir), remove_old(&dir, &Files::default())), (older.len() as u64, Ok(older.len() as u64)));
+        let mut left: Vec<String> = unknown.iter().map(|n| n.replace("ME", &me).replace("OT", &other)).chain(current.iter().map(|p| p.to_string_lossy().replace('\\', "/"))).collect();
+        left.sort();
+        assert_eq!(tree(&dir).into_keys().collect::<Vec<_>>(), left);
+        assert_eq!((old_bytes(&dir), old_files(&dir).len()), (0, 0));
         let _ = std::fs::remove_dir_all(dir);
     }
 

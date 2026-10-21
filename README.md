@@ -6,7 +6,7 @@ Record your team's games and review them together.
 
 A Windows app for recording and reviewing team games together. Each player records their own screen, game sound and voice; recordings and notes reach the others while they are still recording, so the team can review the last match while the next one records.
 
-Existing videos import as recordings, and any recording exports as a plain folder for a video editor: see [the session format](docs/session-format.md).
+Any recording exports as a folder of plain files for a video editor.
 
 Work in progress. See [the design](docs/design.md).
 
@@ -65,11 +65,11 @@ Data lives in `%LOCALAPPDATA%\dev.ggi-hanseikai.app`; File > Open data folder op
 9. No hard-coded numbers without a reason; keep the needed ones in one place.
 10. Logic comes with automated tests, kept in plain functions that run without the network, capture or UI.
 11. The repository is public: English only, made-up examples, and no secrets, personal data, real recordings or private addresses.
-12. While in early development, breaking changes are fine and no migration code is added: the latest version only has to work with its own data. It must still start and work when files from older versions are present, ignoring what it does not understand and never deleting them.
+12. While in early development, breaking changes are fine and no migration code is added: the latest version only has to work with its own data. It must still start and work when files from older versions are present, ignoring what it does not understand and deleting it only when asked (Delete old files in Settings).
 
 ## Development
 
-See [docs/development.md](docs/development.md).
+See [docs/development.md](docs/development.md). The docs are [the design](docs/design.md), [the storage format](docs/session-format.md), [the protocol](docs/protocol.md), [the local API](docs/api.md) and [development](docs/development.md).
 
 ## License
 

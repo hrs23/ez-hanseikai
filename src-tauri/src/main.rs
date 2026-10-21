@@ -2,7 +2,6 @@
 
 mod api;
 mod audio;
-mod bundle;
 mod capture;
 mod check;
 mod clock;
@@ -12,7 +11,6 @@ mod download;
 mod export;
 mod ffmpeg;
 mod hw;
-mod import;
 mod jobs;
 mod log;
 mod media;
@@ -23,7 +21,6 @@ mod plugins;
 mod proc;
 mod record;
 mod room;
-mod session;
 mod shell;
 mod sources;
 mod stream;
@@ -60,6 +57,14 @@ static TEST_PORT: LazyLock<Option<String>> = LazyLock::new(|| std::env::var("EZH
 
 pub fn test_mode() -> bool {
     TEST_PORT.is_some()
+}
+
+pub fn test_flag(dir: &Path, name: &str) -> bool {
+    test_mode() && dir.join(name).exists()
+}
+
+pub fn tenth(x: f64) -> f64 {
+    (x * 10.0).round() / 10.0
 }
 
 fn open_main(app: &tauri::App, dir: &Path) -> tauri::Result<()> {
@@ -231,11 +236,11 @@ impl Core {
     }
 
     pub fn log_path(&self, room: &str, id: &str) -> PathBuf {
-        self.dir.join("rooms").join(room).join("logs").join(format!("{id}.bin"))
+        room::log_file(&self.room_dir(room), id)
     }
 
     fn pending_path(&self, room: &str) -> PathBuf {
-        self.dir.join("rooms").join(room).join("pending.bin")
+        self.room_dir(room).join(room::PENDING)
     }
 
     pub fn log_ready(&self, room: &str) -> bool {
@@ -333,7 +338,7 @@ impl Core {
     }
 
     pub fn disk_full(&self) -> bool {
-        self.disk_below(data::FULL_SHARE)
+        self.disk_below(data::FULL_SHARE) || test_flag(&self.dir, "full")
     }
 }
 
@@ -377,19 +382,6 @@ fn open_link(url: String) {
 async fn pick_folder(core: State<'_, Arc<Core>>) -> Result<Option<String>, String> {
     let app = core.app.clone();
     off_thread(move || shell::pick_folder(&app).map(|p| p.to_string_lossy().into_owned())).await
-}
-
-#[tauri::command]
-async fn pick_files(core: State<'_, Arc<Core>>) -> Result<Vec<String>, String> {
-    let app = core.app.clone();
-    let extensions: Vec<&str> = session::VIDEO_EXTENSIONS.iter().chain(session::AUDIO_EXTENSIONS.iter()).copied().collect();
-    off_thread(move || shell::pick_files(&app, "Video", &extensions).iter().map(|f| f.to_string_lossy().into_owned()).collect()).await
-}
-
-#[tauri::command]
-async fn save_file(core: State<'_, Arc<Core>>, name: String) -> Result<Option<String>, String> {
-    let app = core.app.clone();
-    off_thread(move || shell::save_file(&app, &name).map(|p| p.to_string_lossy().into_owned())).await
 }
 
 #[tauri::command]
@@ -583,7 +575,6 @@ fn main() {
             shell::setup(app, core.clone())?;
             record::recover(&core);
             data::clear_standby(&core.dir);
-            data::note_old_layout(&core);
             let c = core.clone();
             std::thread::spawn(move || data::keeper(c));
             tauri::async_runtime::spawn(net::accept_loop(core.clone()));
@@ -611,7 +602,7 @@ fn main() {
             std::thread::spawn(move || thumbs::keeper(c));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![call, identity, open_set_folder, open_data_folder, open_link, pick_folder, pick_files, save_file, save_text])
+        .invoke_handler(tauri::generate_handler![call, identity, open_set_folder, open_data_folder, open_link, pick_folder, save_text])
         .build(tauri::generate_context!())
         .expect("failed to start");
     app.run(|app, event| {
@@ -627,8 +618,44 @@ fn main() {
 }
 
 #[cfg(test)]
+pub fn names(pattern: &str, text: &str) -> Vec<String> {
+    regex::Regex::new(pattern).unwrap().captures_iter(text).map(|c| c[1].to_string()).collect()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
+
+    fn section<'a>(doc: &'a str, heading: &str) -> &'a str {
+        let from = doc.find(&format!("\n## {heading}\n")).unwrap_or_else(|| panic!("no section {heading}")) + 1;
+        doc[from + 3..].split("\n## ").next().unwrap()
+    }
+
+    #[test]
+    fn the_docs_name_every_record_kind_and_message_the_code_writes() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let (mut kinds, mut messages) = (BTreeSet::new(), BTreeSet::new());
+        for (name, path) in entries(&root.join("src")).into_iter().filter(|(name, _)| name.ends_with(".rs")) {
+            let text = std::fs::read_to_string(path).unwrap();
+            let code = text.split("#[cfg(test)]").next().unwrap();
+            for key in ["k", "t"] {
+                assert!(names(&format!(r#""{key}":\s*([^"\s])"#), code).is_empty(), "{name} writes a {key} that is not a literal");
+            }
+            kinds.extend(names(r#""k":\s*"([a-z_]+)""#, code));
+            messages.extend(names(r#""t":\s*"([a-z_]+)""#, code));
+        }
+        let listed = |file: &str, heading: &str| -> BTreeSet<String> {
+            let doc = std::fs::read_to_string(root.join("../docs").join(file)).unwrap();
+            names(r"(?m)^\| `([a-z_]+)` \|", section(&doc, heading)).into_iter().collect()
+        };
+        assert_eq!(listed("session-format.md", "Records"), kinds, "docs/session-format.md Records does not match the record kinds the code writes");
+        assert_eq!(listed("protocol.md", "Messages"), messages, "docs/protocol.md Messages does not match the messages the code sends");
+        let protocol = std::fs::read_to_string(root.join("../docs/protocol.md")).unwrap();
+        for needle in [String::from_utf8_lossy(ALPN).to_string(), String::from_utf8_lossy(OLD_ALPN).to_string(), format!("Protocol version: {PROTOCOL}")] {
+            assert!(protocol.contains(&needle), "docs/protocol.md does not say {needle}");
+        }
+    }
 
     #[test]
     fn notes_keep_line_breaks_and_tabs_and_drop_other_control_and_direction_characters() {

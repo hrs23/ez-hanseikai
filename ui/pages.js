@@ -202,12 +202,6 @@ function renderDrawer() {
     me ? "" : el("button", { className: "danger", onclick: () => removeMember(id), textContent: t("Remove from room…") }),
   );
 }
-function exportMenu(set, anchor) {
-  openMenu([
-    { label: t("Export video…"), icon: "film", disabled: voiceOnly(set), run: () => exportSet(set) },
-    { label: t("Export to folder…"), icon: "upload", run: () => exportFolder(set) },
-  ], anchor);
-}
 function recordingCard(r) {
   const s = r.s;
   const here = onThisPc(s);
@@ -215,7 +209,7 @@ function recordingCard(r) {
   const meta = state && (state.kind === "bar" || state.kind === "line")
     ? el("div", { className: "meta" }, icon(state.icon, "sm"), el("span", { className: state.cls || "", textContent: state.text }), el("span", { className: "sp" }), el("span", { className: "muted", textContent: state.right || "" }))
     : el("div", { className: "meta" }, el("span", { textContent: setLength(s) }), detailText(s) ? el("span", { className: "faint", textContent: detailText(s) }) : null, ...marksOf(s));
-  const exportBtn = iconButton("upload", t("Export"), (e) => { e.stopPropagation(); exportMenu(s, e.currentTarget); });
+  const exportBtn = iconButton("upload", t("Export"), (e) => { e.stopPropagation(); exportFolder(s); });
   const deleteBtn = iconButton("trash", t("Delete…"), (e) => { e.stopPropagation(); confirmDelete([s.id]); });
   exportBtn.disabled = !here;
   deleteBtn.disabled = !canDelete(s);
@@ -230,8 +224,7 @@ function recordingCard(r) {
   return card;
 }
 const recBar = el("div", { className: "recbar" },
-  el("div", { className: "selbox grow" }, el("span", { className: "lead" }, icon("search", "sm")), el("input", { id: "recfilter", type: "search", autocomplete: "off", oninput: (e) => { recFilter = e.target.value; delete sigs.roomtab; renderRoom(); } })),
-  el("button", { id: "recimport", onclick: () => openImport() }, icon("download", "sm"), el("span", { textContent: t("Import…") })));
+  el("div", { className: "selbox grow" }, el("span", { className: "lead" }, icon("search", "sm")), el("input", { id: "recfilter", type: "search", autocomplete: "off", oninput: (e) => { recFilter = e.target.value; delete sigs.roomtab; renderRoom(); } })));
 const recGrid = el("div", { className: "reccards" });
 function renderRecordings() {
   const rows = recordingRows();
@@ -242,7 +235,6 @@ function renderRecordings() {
   if ($("roomtab").firstElementChild !== recBar) $("roomtab").replaceChildren(recBar, recGrid);
   $("recfilter").placeholder = t("Filter");
   $("recfilter").setAttribute("aria-label", t("Filter"));
-  $("recimport").lastChild.textContent = t("Import…");
   const a = st.active_set;
   const live = a ? [el("div", { className: "reccard live", role: "button", tabIndex: 0, onclick: openNow, onkeydown: (e) => { if (e.key === "Enter") openNow(); } }, thumbBox(null, liveSet() ? liveSet().players.map((p) => p.owner) : [], "sm", CARD_FACES, true), el("div", { className: "rtxt" }, el("b", {}, el("i", { className: "recdot" }), t("Recording")), el("div", { className: "meta" }, a.voice ? pill("accent", "mic", t("Debrief")) : null, el("span", { textContent: t("by {name}", { name: a.by || "" }) }))))] : [];
   const cards = shown.map(recordingCard);
@@ -478,12 +470,15 @@ function loadStorage() {
 function renderStorage() {
   const d = st.disk;
   const used = storageInfo ? storageInfo.used_bytes : 0;
+  const old = storageInfo ? storageInfo.old_bytes : 0;
   const totalBytes = d.total || 1;
   const other = Math.max(0, totalBytes - d.free - used);
   const sets = st.sets.filter((s) => !s.live);
-  const sig = [used, d, sets.map((s) => [s.id, s.progress.have, s.progress.total, s.shared]), [...picked], st.warn_hours, lang];
+  const sig = [used, old, d, sets.map((s) => [s.id, s.progress.have, s.progress.total, s.shared]), [...picked], st.warn_hours, lang];
   if (!changed("storage", sig)) return;
   $("storedir").textContent = storageInfo ? storageInfo.dir : "";
+  $("oldfiles").hidden = !old;
+  $("oldfiles").lastChild.textContent = t("Delete old files ({size})", { size: bytes(old) });
   const seg = (cls, n) => { const i = el("i", { className: cls }); i.style.width = (n / totalBytes) * 100 + "%"; return i; };
   $("usage").replaceChildren(seg("app", used), seg("other", other));
   const rate = d.per_hour ? t("About {size} per hour · room for about {h} h", { size: bytes(d.per_hour), h: Math.floor(d.hours_left) }) : "";
@@ -678,6 +673,9 @@ $("warnhours").onchange = () => run("set_warn_hours", { hours: Number($("warnhou
 $("selnone").onclick = () => { picked.clear(); delete sigs.storage; renderStorage(); };
 $("selold").onclick = () => { picked = new Set(oldSessions(st.sets.filter((s) => !s.live))); delete sigs.storage; renderStorage(); };
 $("deletesel").onclick = () => confirmDelete([...picked]);
+$("oldfiles").onclick = async () => {
+  if (await ask(t("Delete old files?"), t("Delete"), true)) run("delete_old_files", null, loadStorage);
+};
 $("delno").onclick = () => $("deletedlg").close();
 for (const b of $("diagdlg").querySelectorAll("[data-dtab]")) b.onclick = () => openDiagnostics(b.dataset.dtab);
 $("diagcopy").onclick = () => diagnosticsText().then((text) => navigator.clipboard.writeText(text)).then(() => flash(t("Copied"))).catch(fail);
@@ -719,19 +717,7 @@ for (const d of document.querySelectorAll("dialog")) {
   });
 }
 
-$("importfolder").onclick = () => dialog("pick_folder").then((folder) => { if (folder) planImport({ folder }); }).catch(fail);
-$("importfiles").onclick = () => dialog("pick_files").then((files) => { if (files.length) planImport({ files }); }).catch(fail);
-$("importgo").onclick = startImport;
-$("importtitle").onkeydown = (e) => { if (e.key === "Enter" && !composing(e) && !$("importgo").disabled) $("importgo").click(); };
-$("folderno").onclick = () => $("folderdlg").close();
-$("folderyes").onclick = startFolderExport;
-window.__TAURI__.event.listen("tauri://drag-drop", (e) => {
-  const paths = (e.payload && e.payload.paths) || [];
-  if (paths.length && inRoom() && !importing) openImport({ files: paths });
-});
-
 const menuActions = {
-  "import-recording": () => openImport(),
   "export-folder": () => exportFolder(playSet()),
   "settings": () => openSettings(),
   "copy-invite": copyInvite,
@@ -741,7 +727,6 @@ const menuActions = {
   "add-note": openQuick,
   "prev-session": () => stepSet(-1),
   "next-session": () => stepSet(1),
-  "export-session": () => exportSet(playSet()),
   "delete-session": () => deleteSession(playSet()),
   "page-live": () => navigate("live"),
   "page-board": () => navigate("board"),

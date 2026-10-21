@@ -445,34 +445,19 @@ test("an imported recording is named by its title and the others by their time",
   ui$.setTitles({});
 });
 
-test("the import and folder export dialogs, menu actions and phrases exist", () => {
-  const html = read("index.html");
-  for (const id of ["importdlg", "importfolder", "importfiles", "importtitle", "importviews", "importgo", "folderdlg", "folderaligned", "folderyes", "folderno"]) assert.match(html, new RegExp(`id="${id}"`), id);
-  const pages = read("pages.js");
-  for (const action of ["import-recording", "export-folder"]) assert.match(pages, new RegExp(`"${action}":`), action);
-  assert.match(pages, /tauri:\/\/drag-drop/);
-  for (const word of ["Imported", "Imported by {name}", "Import recording", "Choose folder…", "Choose files…", "Importing {n}%", "Import finished", "Export to folder…", "Start every video together"]) assert.ok(word in ui$.JA, word);
+test("the folder export action, the old files button and their phrases exist", () => {
+  assert.match(read("index.html"), /id="oldfiles"/);
+  assert.match(read("pages.js"), /"export-folder":/);
+  for (const word of ["Imported", "Imported by {name}", "Export to folder…", "Delete old files ({size})", "Delete old files?"]) assert.ok(word in ui$.JA, word);
 });
 
-test("errors about a session folder read in Japanese too", () => {
-  ui$.setLanguage("ja");
-  assert.equal(ui$.t("Row 3 of the notes file: A note needs text."), "メモのファイルの 3 行目: メモには文章が必要です。");
-  assert.equal(ui$.t("Row 3 of the notes file has no valid time."), "メモのファイルの 3 行目の時刻が正しくありません。");
-  assert.equal(ui$.t("gone.mp4 is missing."), "gone.mp4 が見つかりません。");
-  assert.equal(ui$.t("views must be a list."), "views はリストでなければなりません。");
-  assert.equal(ui$.t("../x.mp4 must be a file inside the folder."), "../x.mp4 はフォルダの中のファイルでなければなりません。");
-  assert.equal(ui$.t("Something nobody translated."), "Something nobody translated.");
-  ui$.setLanguage("en");
-  assert.equal(ui$.t("gone.mp4 is missing."), "gone.mp4 is missing.");
-});
-
-test("every fixed message the import and export code can send has a Japanese one", () => {
-  const sources = ["session.rs", "import.rs", "bundle.rs"].map((f) => fs.readFileSync(path.join(ui, "..", "src-tauri", "src", f), "utf8").split("#[cfg(test)]")[0]);
+test("every fixed message the export code can send has a Japanese one", () => {
+  const source = fs.readFileSync(path.join(ui, "..", "src-tauri", "src", "export.rs"), "utf8").split("#[cfg(test)]")[0];
   const used = new Set();
-  for (const text of sources) for (const m of text.matchAll(/(?:Err\(|ok_or\(|ok_or_else\(\|\| |return Err\()"((?:[^"\\]|\\.)*)"/g)) used.add(JSON.parse(`"${m[1]}"`));
-  for (const text of sources) for (const m of text.matchAll(/"((?:[A-Z][^"{}\\]*)\.)"(?:\.into\(\)|\.to_string\(\))/g)) used.add(JSON.parse(`"${m[1]}"`));
+  for (const m of source.matchAll(/(?:Err\(|ok_or\(|ok_or_else\(\|\| |return Err\()"((?:[^"\\]|\\.)*)"/g)) used.add(JSON.parse(`"${m[1]}"`));
+  for (const m of source.matchAll(/"((?:[A-Z][^"{}\\]*)\.)"(?:\.into\(\)|\.to_string\(\))/g)) used.add(JSON.parse(`"${m[1]}"`));
   const fixed = [...used].filter((x) => /^[A-Z]/.test(x) && x.includes(" ") && !x.includes("{"));
-  assert.ok(fixed.length > 20, `found ${fixed.length} messages`);
+  assert.ok(fixed.length > 5, `found ${fixed.length} messages`);
   assert.deepEqual(fixed.filter((x) => !(x in ui$.JA)), []);
 });
 

@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
@@ -7,7 +7,7 @@ use iroh::Watcher;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
-use crate::{api, audio, bundle, check, clean_name, clean_note, data, debug, export, ffmpeg, import, jobs, net, now_us, party, record, room, shell, sources, Core, BOARD_MAX, CHANNELS, EVENT_KINDS, NOTE_MAX, REPO, VALUES_MAX};
+use crate::{api, audio, check, clean_name, clean_note, data, debug, export, ffmpeg, jobs, merge, net, now_us, party, record, room, shell, sources, Core, BOARD_MAX, CHANNELS, EVENT_KINDS, NOTE_MAX, REPO, VALUES_MAX};
 
 pub type Op = fn(&Arc<Core>, Value) -> Result<Value, String>;
 
@@ -45,6 +45,7 @@ pub const OPS: &[(&str, Op)] = &[
     ("check_update", check_update),
     ("install_update", install_update),
     ("data_info", data_info),
+    ("delete_old_files", delete_old_files),
     ("reset", reset),
     ("dismiss_recovery", dismiss_recovery),
     ("retry_ffmpeg", retry_ffmpeg),
@@ -68,12 +69,8 @@ pub const OPS: &[(&str, Op)] = &[
     ("discard_set", discard_set),
     ("download_set", download_set),
     ("focus_set", focus_set),
-    ("export_set", export_set),
     ("export_check", export_check),
     ("export_folder", export_folder),
-    ("import_plan", import_plan),
-    ("import_recording", import_recording),
-    ("cancel_import", cancel_import),
     ("set_api", set_api),
     ("set_api_lan", set_api_lan),
     ("new_api_token", new_api_token),
@@ -140,9 +137,6 @@ fn remove_room(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     }
     if core.export.lock().unwrap().as_ref().is_some_and(|e| e.set.0 == id) {
         return Err("This recording is being exported. Cancel the export first.".into());
-    }
-    if import::busy().as_deref() == Some(id.as_str()) {
-        return Err("A recording is being imported into this room. Cancel the import first.".into());
     }
     quit_room(core, &id);
     room::forget_room(core, &id);
@@ -392,7 +386,11 @@ fn install_update(core: &Arc<Core>, _: Value) -> Result<Value, String> {
 }
 
 fn data_info(core: &Arc<Core>, _: Value) -> Result<Value, String> {
-    Ok(json!({"dir": core.dir, "used_bytes": data::used_bytes(&core.dir), "free_bytes": core.free_bytes.load(Ordering::Relaxed)}))
+    Ok(json!({"dir": core.dir, "used_bytes": data::used_bytes(&core.dir), "old_bytes": data::old_bytes(&core.dir), "free_bytes": core.free_bytes.load(Ordering::Relaxed)}))
+}
+
+fn delete_old_files(core: &Arc<Core>, _: Value) -> Result<Value, String> {
+    data::delete_old_files(core).map(|freed| json!({"freed": freed}))
 }
 
 fn reset(core: &Arc<Core>, args: Value) -> Result<Value, String> {
@@ -431,14 +429,15 @@ fn add_event(core: &Arc<Core>, args: Value) -> Result<Value, String> {
 }
 
 fn event_action(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    let kind = match arg::<String>(&args, "kind")?.as_str() {
-        "edit" => "event_edit",
-        "delete" => "event_del",
-        "restore" => "event_restore",
+    let mut record = match arg::<String>(&args, "kind")?.as_str() {
+        "edit" => json!({"k": "event_edit"}),
+        "delete" => json!({"k": "event_del"}),
+        "restore" => json!({"k": "event_restore"}),
         other => return Err(format!("unknown kind {other}")),
     };
     let text = clean_note(&arg::<String>(&args, "text")?, BOARD_MAX);
-    core.append_log(&core.active_room_id(), &json!({"k": kind, "id": arg::<i64>(&args, "id")?, "t_us": now_us(), "text": text, "tags": room::tags(&text)}));
+    merge(&mut record, &json!({"id": arg::<i64>(&args, "id")?, "t_us": now_us(), "text": text, "tags": room::tags(&text)}));
+    core.append_log(&core.active_room_id(), &record);
     party::send(core);
     Ok(Value::Null)
 }
@@ -493,31 +492,13 @@ fn focus_set(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     Ok(Value::Null)
 }
 
-fn export_set(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    let (room, set) = recording(&args)?;
-    export::start(core, &room, &set, PathBuf::from(arg::<String>(&args, "path")?)).map(|skipped| json!({"skipped": skipped}))
-}
-
 fn export_check(core: &Arc<Core>, _: Value) -> Result<Value, String> {
     export::check(core).map(|_| Value::Null)
 }
 
 fn export_folder(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     let (room, set) = recording(&args)?;
-    bundle::run(core, &room, &set, Path::new(&arg::<String>(&args, "folder")?), arg(&args, "aligned")?)
-}
-
-fn import_plan(_: &Arc<Core>, args: Value) -> Result<Value, String> {
-    import::plan_from_spec(&args["spec"]).map(|plan| import::plan_json(&plan))
-}
-
-fn import_recording(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    import::run(core, &args["spec"])
-}
-
-fn cancel_import(_: &Arc<Core>, _: Value) -> Result<Value, String> {
-    import::cancel();
-    Ok(Value::Null)
+    export::folder(core, &room, &set, Path::new(&arg::<String>(&args, "folder")?))
 }
 
 pub fn enable_api(core: &Arc<Core>, on: bool) {
@@ -565,18 +546,15 @@ fn state(core: &Arc<Core>, _: Value) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::names;
 
-    const WINDOW_COMMANDS: [&str; 8] = ["identity", "open_set_folder", "open_data_folder", "open_link", "pick_folder", "pick_files", "save_file", "save_text"];
+    const WINDOW_COMMANDS: [&str; 6] = ["identity", "open_set_folder", "open_data_folder", "open_link", "pick_folder", "save_text"];
 
     fn files(dir: &str, ext: &str) -> Vec<(String, String)> {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join(dir);
         let mut out: Vec<(String, String)> = std::fs::read_dir(dir).unwrap().flatten().filter(|e| e.path().extension().is_some_and(|x| x == ext)).map(|e| (e.file_name().to_string_lossy().to_string(), std::fs::read_to_string(e.path()).unwrap())).collect();
         out.sort();
         out
-    }
-
-    fn names(pattern: &str, text: &str) -> Vec<String> {
-        regex::Regex::new(pattern).unwrap().captures_iter(text).map(|c| c[1].to_string()).collect()
     }
 
     #[test]

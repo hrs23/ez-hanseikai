@@ -25,10 +25,10 @@ The traffic is plain HTTP, not encrypted: use it on networks you trust only. Win
 - JSON in and out, UTF-8, one request per connection. Errors are `{"error": "..."}` with 400 (also for an operation the app refuses, with the message the window would show), 401, 403, 404 (also for an unknown operation), 405, 409, 413, 500 or 503.
 - Times inside a recording are seconds from its start, rounded to 0.1 (`at_s`, `from_s`, `to_s`). Clock times are milliseconds since 1970 (`start_ms`, `end_ms`, `updated_ms`).
 - Reads work for every room on this PC. Operations act on the open room as the window does, and events and the board are written only to the open room, because only that room is shared with the others; otherwise 409.
-- Operations run at once, without the window's confirmations (starting and stopping a recording, deleting, discarding, removing a room, resetting). `delete_set`, `discard_set`, `remove_room` and `reset` with `keep_rooms: false` remove recordings or the app's data with no undo: call them only when the person asked for exactly that. The token gives the same control as the window, also from the LAN with Other devices.
+- Operations run at once, without the window's confirmations (starting and stopping a recording, deleting, discarding, removing a room, resetting). `delete_set`, `discard_set`, `remove_room`, `delete_old_files` and `reset` with `keep_rooms: false` remove recordings or the app's data with no undo: call them only when the person asked for exactly that. The token gives the same control as the window, also from the LAN with Other devices.
 - Ids with spaces (a recording id looks like `2026-10-19 21-30-00`) are written percent-encoded in the path.
 - Notes are at most 500 characters and the game plan at most 4000. Bodies are at most 64 kB.
-- There are no endpoints for clips. A recording leaves as a folder of plain files (`export_folder`), and comes in from video files or such a folder (`import_recording`).
+- There are no endpoints for clips. A recording leaves as a folder of plain files (`export_folder {room, set, folder}`); see [the storage format](session-format.md#export-folder).
 - Paths are on this PC. In JSON write `/` (`C:/videos/scrim`) or double the backslashes.
 
 ## Endpoints
@@ -72,7 +72,7 @@ Newest first.
 }]}
 ```
 
-`kind` is `play`, or `debrief` for a recording of voices made while watching another one together. `end_ms` is `null` while recording. An imported recording has its `title`, `imported_by` (`{"id", "name"}` of the person who imported it) and `imported: true` on each member, which is a view with the name it was given.
+`kind` is `play`, or `debrief` for a recording of voices made while watching another one together. `end_ms` is `null` while recording. A recording placed from outside (see [the storage format](session-format.md#placing-a-recording-made-elsewhere)) has its `title`, `imported_by` (`{"id", "name"}` of the member who placed it) and `imported: true` on each member, which is a view with the name it was given.
 
 ### `GET /v1/rooms/{room}/recordings/{recording}`
 
@@ -139,7 +139,7 @@ Replaces the game plan for the whole room and answers 200 with the new board (sa
 
 The body is a JSON object with the operation's arguments (empty means `{}`). Answers 200 with the operation's value exactly as the window gets it (`null` for most), 404 `No such operation.` for a name that does not exist, 400 `{"error": "..."}` when the app refuses (the message the window would show). `src-tauri/src/ops.rs` is the one list: the window and this route call the same functions, so whatever the window can do is here.
 
-Long operations hold the connection until they are done: `import_recording`, `export_folder`, `prepare_plugin`, `check_peer` (up to 12 s for this PC), `check_update`, `debug_report`. `reset` and `install_update` restart the app, so their request ends without an answer. After `set_api` with `on: false` the API is off, after `new_api_token` the next request needs the new token (read `api.json`), and `set_api_lan` restarts the listener on the new address. Arguments marked `?` are optional; the rest are required (`<name> is missing or not valid.`). Ids and values are those of `GET` answers and of the window's state.
+Long operations hold the connection until they are done: `export_folder`, `prepare_plugin`, `check_peer` (up to 12 s for this PC), `check_update`, `debug_report`. `reset` and `install_update` restart the app, so their request ends without an answer. After `set_api` with `on: false` the API is off, after `new_api_token` the next request needs the new token (read `api.json`), and `set_api_lan` restarts the listener on the new address. Arguments marked `?` are optional; the rest are required (`<name> is missing or not valid.`). Ids and values are those of `GET` answers and of the window's state.
 
 The operations, with their arguments and answers, are listed in [llms.txt](llms.txt) (also under Settings > API).
 
@@ -177,8 +177,8 @@ The plain-text report of Help > Diagnostics > Copy report, without its summary l
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:47625/v1/rooms
 curl -H "Authorization: Bearer $TOKEN" -d '{"text":"Good call #callout","at_s":84}' \
   "http://127.0.0.1:47625/v1/rooms/ab12/recordings/2026-10-19%2021-30-00/events"
-curl -H "Authorization: Bearer $TOKEN" -d '{"spec":{"folder":"C:/videos/Scrim night"}}' \
-  http://127.0.0.1:47625/v1/ops/import_recording
+curl -H "Authorization: Bearer $TOKEN" -d '{"room":"ab12","set":"2026-10-19 21-30-00","folder":"C:/videos/Scrim night"}' \
+  http://127.0.0.1:47625/v1/ops/export_folder
 ```
 
 ## Code

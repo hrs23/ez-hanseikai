@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 use windows_capture::monitor::Monitor;
 
-use crate::{clean_text, debug, ffmpeg, now_us, record, session};
+use crate::{clean_text, debug, ffmpeg, now_us, record};
 use crate::Core;
 
 const TEXT_MAX: usize = 80;
@@ -96,7 +96,7 @@ pub fn pc(hw: &Hardware, encoder: Option<(&str, &str)>, live: Option<Live>) -> V
         out["codec"] = json!(codec);
     }
     if let Some(l) = live {
-        out["fps"] = json!(session::tenth(l.fps));
+        out["fps"] = json!(crate::tenth(l.fps));
         out["dropped"] = json!(l.dropped);
     }
     out

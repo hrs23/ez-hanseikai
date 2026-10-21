@@ -15,7 +15,7 @@ use crate::{room, Core, REPO, VERSION};
 
 pub const DEFAULT_HOTKEY: &str = "Ctrl+Alt+M";
 const STATUS_POLL: Duration = Duration::from_secs(1);
-const JA: [(&str, &str); 53] = [
+const JA: [(&str, &str); 51] = [
     ("GGI Hanseikai is already running with this data folder.", "GGI反省会はこのデータフォルダですでに動いています。"),
     ("GGI Hanseikai", "GGI反省会"),
     ("File", "ファイル"),
@@ -41,9 +41,7 @@ const JA: [(&str, &str); 53] = [
     ("Add note", "メモを追加"),
     ("Previous recording", "前の録画"),
     ("Next recording", "次の録画"),
-    ("Export video…", "動画をエクスポート…"),
     ("Export to folder…", "フォルダにエクスポート…"),
-    ("Import recording…", "録画をインポート…"),
     ("Delete…", "削除…"),
     ("Live", "ライブ"),
     ("Game plan", "作戦ボード"),
@@ -117,14 +115,6 @@ pub fn pick_folder(app: &AppHandle) -> Option<PathBuf> {
         dialog = dialog.set_directory(dir);
     }
     dialog.blocking_pick_folder().and_then(|p| p.into_path().ok())
-}
-
-pub fn pick_files(app: &AppHandle, kind: &str, extensions: &[&str]) -> Vec<PathBuf> {
-    let mut dialog = app.dialog().file().add_filter(kind, extensions);
-    if let Some(dir) = documents(app) {
-        dialog = dialog.set_directory(dir);
-    }
-    dialog.blocking_pick_files().into_iter().flatten().filter_map(|p| p.into_path().ok()).collect()
 }
 
 fn open_file(app: &AppHandle, kind: &str, ext: &str) -> Option<PathBuf> {
@@ -303,8 +293,6 @@ fn toggle_text(recording: bool, reviewing: bool) -> &'static str {
 fn build_menu(app: &AppHandle, lang: &str, toggle: &MenuItem<Wry>, mark: &MenuItem<Wry>) -> tauri::Result<Menu<Wry>> {
     let it = |id: &str, text: &'static str, accel: Option<&str>| item(app, lang, id, text, accel);
     let file = SubmenuBuilder::new(app, tr(lang, "File"))
-        .item(&it("import-recording", "Import recording…", None)?)
-        .separator()
         .item(&it("open-folder", "Open data folder", None)?)
         .separator()
         .item(&it("export-identity", "Export identity…", None)?)
@@ -329,7 +317,6 @@ fn build_menu(app: &AppHandle, lang: &str, toggle: &MenuItem<Wry>, mark: &MenuIt
         .item(&it("prev-session", "Previous recording", None)?)
         .item(&it("next-session", "Next recording", None)?)
         .separator()
-        .item(&it("export-session", "Export video…", None)?)
         .item(&it("export-folder", "Export to folder…", None)?)
         .item(&it("delete-session", "Delete…", None)?)
         .build()?;

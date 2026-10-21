@@ -15,9 +15,9 @@ The API is off by default. A person turns it on in the app: Settings > API > Loc
 - JSON in, JSON out (UTF-8). Errors are `{"error": "..."}` with the status 400, 401, 403, 404, 405, 409, 413, 500 or 503.
 - Times in a recording are seconds from its start (`at_s`, `from_s`, `to_s`, rounded to 0.1). Clock times are milliseconds since 1970 (`start_ms`, `end_ms`).
 - Reads work for every room on this PC. Operations act on the room that is open in the app, as the window does; events and the board are written only to the open room (409 otherwise): open it with enter_room.
-- Operations run at once, without the window's confirmations. delete_set, discard_set, remove_room and reset {keep_rooms: false} delete recordings or the app's data with no undo: call them only when the person asked for exactly that. The token gives the same control as the window.
+- Operations run at once, without the window's confirmations. delete_set, discard_set, remove_room, delete_old_files and reset {keep_rooms: false} delete recordings or the app's data with no undo: call them only when the person asked for exactly that. The token gives the same control as the window.
 - Notes are at most 500 characters and the game plan at most 4000. Write `#tag` in a note text to tag it, or send `tags`.
-- Paths are on this PC (write them like C:/videos/scrim). A recording comes in (import_recording) as video files or a session folder and leaves (export_folder) as a folder of plain files; the format is in docs/session-format.md of the repository.
+- Paths are on this PC (write them like C:/videos/scrim). A recording leaves (export_folder) as a folder of plain files; the format is in docs/session-format.md of the repository.
 
 ## Read
 
@@ -76,26 +76,24 @@ PUT /v1/rooms/{room}/board
   Replaces the game plan for the whole room. Read it first and keep what still applies. Answer 200 with the board. The format: `#` is the title, a bold line is the goal, each `##` is a card of bullet points; [text](ezh://moment/<recording id>/<seconds>/all) links open a moment.
 
 POST /v1/ops/{name}
-  Runs one operation of the app. The body is a JSON object with its arguments (empty means {}). Answer 200 with the operation's value (null for most); 404 for a name that does not exist; 400 {"error": "..."} when the app refuses, with the message the window would show. A long one (import_recording, export_folder, check_peer, check_update, prepare_plugin, debug_report) answers when it is done. reset and install_update restart the app, so their request ends without an answer. Arguments marked ? are optional. The operations:
+  Runs one operation of the app. The body is a JSON object with its arguments (empty means {}). Answer 200 with the operation's value (null for most); 404 for a name that does not exist; 400 {"error": "..."} when the app refuses, with the message the window would show. A long one (export_folder, check_peer, check_update, prepare_plugin, debug_report) answers when it is done. reset and install_update restart the app, so their request ends without an answer. Arguments marked ? are optional. The operations:
   Rooms and invites: create_room {name} (empty: "<your name>'s room") -> room id, join_room {code} (ezh-<id>-<token>; pending until a member approves), enter_room {id}, close_room {id}, remove_room {id}, rename_room {name}, create_invite {reuse} -> invite code, cancel_invites, answer_ask {id, approve}, remove_peer {id}, check_peer {id} (this PC for its own id; up to 12 s)
   Recording: start_recording {debrief?} (true: voices only), stop_recording, mark -> event id
   Capture and devices: list_sources, set_source {source} (an id from list_sources, or null), list_mics, set_mic {id}, set_mix {kind, volume, muted} (kind app or mic, volume 0 to 1), list_processes, set_audio_process {name}, set_quality {id} (light, standard, high), set_limit {mbps} (null for none), set_codecs {list} (what the window can decode)
-  Settings: set_name {name}, set_language {language} ("", en, ja), set_hotkey {keys}, set_channel {channel} (stable, beta), set_warn_hours {hours}, set_layout {layout}, check_update -> version or null, install_update, data_info -> {dir, used_bytes, free_bytes}, reset {keep_rooms}, dismiss_recovery, retry_ffmpeg
+  Settings: set_name {name}, set_language {language} ("", en, ja), set_hotkey {keys}, set_channel {channel} (stable, beta), set_warn_hours {hours}, set_layout {layout}, check_update -> version or null, install_update, data_info -> {dir, used_bytes, old_bytes, free_bytes}, delete_old_files -> {freed} (files of older versions only), reset {keep_rooms}, dismiss_recovery, retry_ffmpeg
   Notes and events: add_event {kind, text, target, values} (kind note, drawing or board; target {t_us, set}) -> event id, event_action {kind, id, text} (kind edit, delete or restore), log_layout {layout}
   Watch Party: party_on {on, view} (view is {set, playing, live, wall_us, at_us, rate, focus, mode, slots, order}), party_act {view}, party_typing {on}, draw {stroke}
   Extensions: room_plugins, set_room_plugin {id, on, settings}, set_plugin_runner {id, runner}, set_process_plugin {id, on}, prepare_plugin {id}, jobs -> {jobs, running, tags}, retry_job {job}, run_job_next {job}, cancel_job
-  Recordings on this PC: delete_set {room, set} (this PC's files; answers whether any), discard_set {room, set} (for everyone), download_set {room, set}, focus_set {set}, export_set {room, set, path} (an mp4; answers {skipped}, the members whose parts are not here; progress is only in the window), export_folder {room, set, folder, aligned} (a new or empty folder; aligned pads every file to start together; answers {folder, files, skipped}), export_check (refused when an export cannot start), import_plan {spec}, import_recording {spec} (spec is {folder, title?, names?} or {files}; answers {id, views, notes}), cancel_import
+  Recordings on this PC: delete_set {room, set} (this PC's files; answers whether any), discard_set {room, set} (for everyone), download_set {room, set}, focus_set {set}, export_folder {room, set, folder} (a new or empty folder; every file starts at the recording's start; answers {folder, files, skipped}, the members whose parts are not here), export_check (refused when an export cannot start)
   API: set_api {on}, set_api_lan {lan}, new_api_token (then read api.json), api_info -> {on, lan, address, hosts, token, error}, api_reference
   Diagnostics and page state: state (the window's whole state), debug_view {tab, since, set} (tab connections, network, recording, data, jobs, flow or log), debug_report {save, head} (answers the report text, or with save true the path of report.txt in the data folder)
   Not available: the operations that open a window (choosing files or folders, opening links and folders, the identity file).
 
-A session folder works without session.json: every video file is a view named after the file, offsets 0, and the folder name is the title. session.json example (every field optional): {"title": "Scrim vs Team B", "start": "2026-10-19T12:30:00Z", "views": [{"name": "Ann", "file": "Ann.mp4"}, {"name": "Ben", "file": "Ben.mp4", "offset_ms": 2500}], "events": [{"at_s": 84.5, "text": "Late rotate #rotate"}, {"at_s": 0, "to_s": 612.3, "text": "Match 1"}]}. Times in a recording are seconds from start.
 
 ## Recipes
 
 - Notes from the transcript: GET the transcript and chapters, read them, then POST a note at the time of each decision or mistake with a tag. Check the existing events first so you do not repeat notes.
 - Game plan from a recording: GET events, chapters and transcript, then PUT a short board: a goal and a few cards of what to do next.
-- A made video (a walkthrough, a highlight reel): put the mp4 in a folder, call import_recording with the folder, then POST notes at the moments that matter; everyone in the room can watch it in the player.
 - Mistakes in a match: GET chapters, take one match's from_s and to_s, read the transcript and events between them, and POST a note with the tag mistake at each moment.
 
 Examples (replace the token and ids):

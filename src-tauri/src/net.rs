@@ -14,7 +14,7 @@ use tokio::time::{sleep, timeout};
 
 use crate::record::{self, LiveStep};
 use crate::room::{self, capture_id, part_of, seg_name, valid_id, INIT, SERIES};
-use crate::{data, debug, default_codecs, file_len, hw, log, merge, now_us, party, short, strings, Core, ALPN, OLD_ALPN, PROTOCOL, VERSION};
+use crate::{data, debug, default_codecs, file_len, hw, log, merge, now_us, party, short, strings, test_flag, Core, ALPN, OLD_ALPN, PROTOCOL, VERSION};
 
 const CHUNK: usize = 64 << 10;
 pub const LOG_SYNC: Duration = Duration::from_secs(2);
@@ -217,7 +217,7 @@ fn learn_holdings(core: &Core, id: &EndpointId, message: &Value) {
 }
 
 fn hello_message(core: &Core) -> Value {
-    let mut message = json!({"app": VERSION, "proto": PROTOCOL, "name": *core.name.lock().unwrap(), "room": room_info(core), "set": core.active_set_json(), "codecs": *core.codecs.lock().unwrap(), "asks": pending_asks(core), "hw": hw::share(core)});
+    let mut message = json!({"t": "hello", "app": VERSION, "proto": PROTOCOL, "name": *core.name.lock().unwrap(), "room": room_info(core), "set": core.active_set_json(), "codecs": *core.codecs.lock().unwrap(), "asks": pending_asks(core), "hw": hw::share(core)});
     merge(&mut message, &holdings(core));
     message
 }
@@ -480,8 +480,7 @@ pub async fn check_peer(core: &Arc<Core>, id: &str) -> Value {
 }
 
 pub async fn farewell(core: &Arc<Core>) {
-    let mut message = hello_message(core);
-    message["t"] = json!("hello");
+    let message = hello_message(core);
     let sends: Vec<_> = core
         .connections()
         .into_iter()
@@ -591,6 +590,10 @@ pub async fn accept_loop(core: Arc<Core>) {
             let Ok(accepting) = incoming.accept() else { return };
             let Ok(conn) = accepting.await else { return };
             let from = conn.remote_id();
+            if test_flag(&core.dir, "offline") {
+                conn.close(2u32.into(), b"offline");
+                return;
+            }
             if !core.has_peer(&from) && !admitted(&core, from, &conn).await {
                 conn.close(1u32.into(), b"not a member");
                 return;
@@ -894,9 +897,7 @@ async fn measure(core: &Core, id: &EndpointId, conn: &Connection, samples: &mut 
 }
 
 async fn hello(core: &Arc<Core>, id: &EndpointId, conn: &Connection) -> bool {
-    let mut message = hello_message(core);
-    message["t"] = json!("hello");
-    let reply = request(conn, &message).await;
+    let reply = request(conn, &hello_message(core)).await;
     let Ok(reply) = reply.and_then(|r| Ok(serde_json::from_slice::<Value>(&r)?)) else { return true };
     learn_hello(core, id, &reply) == PROTOCOL
 }
@@ -936,6 +937,9 @@ async fn sync(core: &Arc<Core>, id: &EndpointId, conn: &Connection) -> Result<()
     let mut tick = 0u32;
     let mut told: Option<Value> = None;
     loop {
+        if test_flag(&core.dir, "offline") {
+            anyhow::bail!("offline");
+        }
         let held = holdings(core);
         if tick % HELLO_EVERY == HELLO_EVERY - 1 || told.as_ref() != Some(&held) {
             hello(core, id, conn).await;
@@ -1064,7 +1068,7 @@ pub async fn peer_loop(core: Arc<Core>, id: EndpointId) {
             continue;
         }
         let inviter = core.active_room().and_then(|r| r.invite).is_some_and(|(peer, _)| peer == id.to_string());
-        if !dials(&core.ep.id(), &id, inviter) {
+        if test_flag(&core.dir, "offline") || !dials(&core.ep.id(), &id, inviter) {
             continue;
         }
         let dialing = Instant::now();

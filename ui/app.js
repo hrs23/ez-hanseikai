@@ -67,7 +67,6 @@ let updateText = "";
 let menuReturn = null;
 let menuAnchor = null;
 let exporting = null;
-let importing = null;
 let importedIds = new Set();
 let side = "review";
 let scope = "session";
@@ -1369,7 +1368,6 @@ function notices() {
   for (const p of st.peers.filter((x) => x.connected && x.other_version)) list.push({ key: "v:" + p.id, level: "warn", icon: "alert", text: t("{name} is on a different version. Both of you need the latest one.", { name: nameOf(p.id) }) });
   if (available && installAfter) list.push({ key: "after", level: "info", icon: "download", text: t("Version {version} installs after recording", { version: available.version }), action: { label: t("Cancel"), run: () => { installAfter = false; renderNotices(); } }, sticky: true });
   else if (available) list.push({ key: "update", level: "info", icon: "download", text: t("Version {version} is available", { version: available.version }), action: st.recording ? { label: t("Install after recording"), run: () => { installAfter = true; renderNotices(); } } : { label: t("Install"), primary: true, run: installUpdate } });
-  if (importing) list.push({ key: "import", level: "info", icon: "spinner", spin: true, text: t("Importing {n}%", { n: Math.floor(importing.percent) }), sticky: true, action: { label: t("Cancel"), run: () => invoke("cancel_import") } });
   if (updateText) list.push({ key: "updating", level: "info", icon: "spinner", spin: true, text: updateText, sticky: true });
   return list.filter((n) => !dismissed.has(n.key));
 }
@@ -1381,67 +1379,17 @@ function renderNotices() {
     n.action ? el("button", { className: "sm" + (n.action.primary ? " primary" : ""), textContent: n.action.label, onclick: n.action.run }) : null,
     n.sticky ? null : iconButton("x", t("Close"), () => { dismissed.add(n.key); delete sigs.notices; renderNotices(); }))));
 }
-function exportSet(set) {
-  if (!set) { flash(t("Open a recording first")); return; }
-  invoke("export_check").then(() => dialog("save_file", { name: `${set.id}.mp4` })).then((path) => path && invoke("export_set", { room: set.room, set: set.id, path }).then((r) => {
-    exporting = { set: set.id, percent: 0 };
-    if (r.skipped.length) flash(t("Exporting without {names}: not on this PC yet", { names: r.skipped.map(nameOf).join(", ") }));
-    refresh();
-  })).catch(fail);
-}
-let folderSet = null;
 function exportFolder(set) {
   if (!set) { flash(t("Open a recording first")); return; }
-  invoke("export_check").then(() => {
-    folderSet = set;
-    $("folderaligned").checked = false;
-    $("folderdlg").showModal();
-  }).catch(fail);
-}
-function startFolderExport() {
-  const set = folderSet;
-  const aligned = $("folderaligned").checked;
-  $("folderdlg").close();
-  dialog("pick_folder").then((folder) => {
+  invoke("export_check").then(() => dialog("pick_folder")).then((folder) => {
     if (!folder) return;
     exporting = { set: set.id, percent: 0 };
     refresh();
-    return invoke("export_folder", { room: set.room, set: set.id, folder, aligned }).then((r) => {
+    return invoke("export_folder", { room: set.room, set: set.id, folder }).then((r) => {
       if (r.skipped.length) flash(t("Exporting without {names}: not on this PC yet", { names: r.skipped.join(", ") }));
     }).catch((e) => { if (exporting) { exporting = null; fail(e); refresh(); } });
   }).catch(fail);
 }
-function openImport(spec) {
-  if (!inRoom()) { flash(t("Enter a room first.")); return; }
-  importSpec = null;
-  renderImport(null);
-  $("importdlg").showModal();
-  if (spec) planImport(spec);
-}
-let importSpec = null;
-function planImport(spec) {
-  invoke("import_plan", { spec }).then((plan) => { importSpec = spec; renderImport(plan); }).catch((e) => { importSpec = null; renderImport(null); fail(e); });
-}
-function renderImport(plan) {
-  $("importplan").hidden = !plan;
-  $("importgo").disabled = !plan;
-  if (!plan) return;
-  $("importtitle").value = plan.title;
-  $("importviews").replaceChildren(...plan.views.map((v) => el("div", { className: "importview" }, el("input", { value: v.name, maxLength: 24, ariaLabel: t("Name") }), el("span", { className: "file", textContent: v.file }))));
-}
-function startImport() {
-  const names = [...$("importviews").querySelectorAll("input")].map((i) => i.value);
-  const spec = { ...importSpec, title: $("importtitle").value, names };
-  $("importdlg").close();
-  importing = { percent: 0 };
-  renderNotices();
-  invoke("import_recording", { spec }).then((r) => { importing = null; flash(t("Import finished")); return refresh().then(() => openSession(r.id)); }).catch((e) => { importing = null; fail(e); }).finally(() => { delete sigs.notices; renderNotices(); });
-}
-window.__TAURI__.event.listen("import", (e) => {
-  if (!importing || e.payload.done) return;
-  importing.percent = e.payload.percent;
-  renderNotices();
-});
 window.__TAURI__.event.listen("export", (e) => {
   const x = e.payload;
   if (x.done) { exporting = null; if (x.error) fail(x.error); else flash(t("Export finished")); refresh(); return; }
@@ -1465,7 +1413,7 @@ async function checkUpdate(manual) {
 }
 function busy() {
   const party = watchParty && st.party.on && st.party.watching.some((id) => id !== st.id);
-  return st.recording || party || clock.playing || (review && review.playing) || !!exporting || !!importing || !!(jobInfo && jobInfo.running);
+  return st.recording || party || clock.playing || (review && review.playing) || !!exporting || !!(jobInfo && jobInfo.running);
 }
 async function askUpdate() {
   askingUpdate = true;

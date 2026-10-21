@@ -589,7 +589,7 @@ fn data_json(core: &Core, set: Option<&str>) -> Value {
                 .iter()
                 .map(|l| json!({"id": l.owner, "short": short(&l.owner), "name": room::display_name(core, &l.owner), "head": l.records.len(), "bytes": crate::file_len(&core.log_path(&r.id, &l.owner)), "kinds": kinds(&l.records)}))
                 .collect();
-            let pending = core.dir.join("rooms").join(&r.id).join("pending.bin");
+            let pending = core.room_dir(&r.id).join(room::PENDING);
             json!({"id": r.id, "name": r.name, "active": r.id == active, "members": members, "pending": crate::file_len(&pending)})
         })
         .collect();

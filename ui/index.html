@@ -197,7 +197,7 @@
       <dl id="keylist" class="keys"></dl>
     </section>
     <section data-pane="storage">
-      <div class="row"><h2 data-t="Recordings">Recordings</h2><span class="sp"></span><span id="storedir" class="mono muted small ellip"></span><button id="storeopen" class="sm"><span data-icon="folder" data-icon-class="sm"></span><span data-t="Open">Open</span></button></div>
+      <div class="row"><h2 data-t="Recordings">Recordings</h2><span class="sp"></span><span id="storedir" class="mono muted small ellip"></span><button id="oldfiles" class="sm danger" hidden><span data-icon="trash" data-icon-class="sm"></span><span></span></button><button id="storeopen" class="sm"><span data-icon="folder" data-icon-class="sm"></span><span data-t="Open">Open</span></button></div>
       <div id="usage" class="usage"></div>
       <div id="legend" class="legend"></div>
       <div class="warnbox"><span data-icon="alert" data-icon-class="sm"></span><span data-t="Warn when free space is below">Warn when free space is below</span><select id="warnhours"></select><span class="sp"></span><span class="muted small" data-t="Recording stops when the disk is nearly full">Recording stops when the disk is nearly full</span></div>
@@ -242,24 +242,10 @@
   <label class="check"><input id="keeprooms" type="checkbox" checked><span data-t="Keep my ID, rooms and recordings">Keep my ID, rooms and recordings</span></label>
   <div class="row end"><button id="resetno" data-t="Cancel">Cancel</button><button id="resetyes" class="dangerfill" data-t="Reset">Reset</button></div>
 </dialog>
-<dialog id="importdlg" class="wide">
-  <div class="dlghead"><h2 data-t="Import recording">Import recording</h2><button class="icon close" data-icon="x" data-t-label="Close"></button></div>
-  <div class="row"><button id="importfolder"><span data-icon="folder" data-icon-class="sm"></span><span data-t="Choose folder…">Choose folder…</span></button><button id="importfiles"><span data-icon="film" data-icon-class="sm"></span><span data-t="Choose files…">Choose files…</span></button></div>
-  <div id="importplan" class="importplan" hidden>
-    <label class="fl"><span data-t="Title">Title</span><input id="importtitle" maxlength="80" autocomplete="off"></label>
-    <div id="importviews" class="importviews"></div>
-  </div>
-  <div class="row end"><button id="importgo" class="primary" data-t="Import" disabled>Import</button></div>
-</dialog>
 <dialog id="promptdlg" class="wide">
   <div class="dlghead"><h2 id="prompttitle"></h2><button class="icon close" data-icon="x" data-t-label="Close"></button></div>
   <textarea id="prompttext" class="prompttext" readonly spellcheck="false" data-t-label="Prompt"></textarea>
   <div class="row end"><button id="promptcopy" class="primary"><span data-icon="copy" data-icon-class="sm"></span><span data-t="Copy prompt">Copy prompt</span></button></div>
-</dialog>
-<dialog id="folderdlg">
-  <div class="dlghead"><h2 data-t="Export to folder">Export to folder</h2><button class="icon close" data-icon="x" data-t-label="Close"></button></div>
-  <label class="check"><input id="folderaligned" type="checkbox"><span data-t="Start every video together">Start every video together</span></label>
-  <div class="row end"><button id="folderno" data-t="Cancel">Cancel</button><button id="folderyes" class="primary" data-t="Export">Export</button></div>
 </dialog>
 <dialog id="confirm">
   <h2 id="confirmtitle"></h2>

@@ -17,6 +17,7 @@ const HELLO_EVERY = 3;
 const DIAL_RETRY_S = 2;
 const CONNECT_TIMEOUT_S = 15;
 const REQUEST_TIMEOUT_S = 10;
+const OFFLINE_S = 20;
 const JOB_CHECK_S = 2;
 const FINISH_WAIT_S = 10;
 const KEEP_EVERY_S = 5;
@@ -36,7 +37,6 @@ const SEGMENTS_AFTER_RESTART = 2;
 const SHORT_SET_SEGMENTS = 5;
 const LIVE_ROUNDS = 2;
 const KEYFRAME_DECODE_SPEED = 10;
-const EXPORT_SPEED = 0.5;
 const SEEK_TO_S = 5;
 const LOG_TAIL_LINES = 15;
 const APPROVAL_WAIT_S = LOG_SYNC_S * 3;
@@ -44,11 +44,7 @@ const SOURCE = { kind: "display", index: 1 };
 const MODEL_BYTES = { base: 147_951_465, medium: 1_533_763_059 };
 const WHISPER_BYTES = 8_573_270;
 const LOG_LINE_CHARS = 200;
-const IMPORT_S = 60;
 const EXPORT_FOLDER_S = 240;
-const MEDIA_SECONDS = { coach: 8, camera: 6, commentary: 7 };
-const PLAN_START = "2026-10-19T12:30:00Z";
-const START_TOLERANCE_US = 5e6;
 const GONE = { kind: "window", exe: "gone.exe", title: "Gone" };
 const CLOCK_SHIFT_S = 8.2;
 const NTP_EPOCH_S = 2208988800;
@@ -236,7 +232,7 @@ function oldFiles() {
     [path.join(kept, "v", "init.mp4")]: "old init",
     [path.join(kept, "v", "000001.m4s")]: "old segment",
     [path.join(room, "recordings", "orphan", OLD_OWNER, OLD_CAPTURE, "v", "000001.m4s")]: "orphan segment",
-    "rec-20260101-000000.mp4": "old recording",
+    "rec-1767225600000.mp4": "old recording",
     "log.bin": frame({ k: "note", text: "old note", t_us: 1 }),
     "peer.txt": "old peer",
     "peers.txt": "old peers",
@@ -247,6 +243,12 @@ function oldFiles() {
     [path.join(room, "live", "someone.mp4")]: "old live file",
     [path.join(room, "logs", "someone.bin")]: Buffer.concat([frame({ k: "rec", set: "s1", room: OLD_ROOM, start_us: 1 }), frame({ k: "file", set: "s1", size: 15 }), frame({ k: "note", text: "hi" })]),
   };
+}
+
+function keptOldFiles() {
+  const room = path.join("rooms", OLD_ROOM);
+  const kept = path.join(room, "recordings", OLD_SET, OLD_OWNER, OLD_CAPTURE);
+  return [path.join("legacy", "notes.json"), path.join(kept, "v", "init.mp4"), path.join(kept, "v", "000001.m4s"), path.join(room, "recordings", "orphan", OLD_OWNER, OLD_CAPTURE, "v", "000001.m4s")];
 }
 
 const oldStandby = () => path.join("rooms", OLD_ROOM, "standby", OLD_OWNER, OLD_CAPTURE, "v", "000001.m4s");
@@ -261,9 +263,10 @@ function seedOld(dir) {
   fs.writeFileSync(path.join(dir, "rooms.json"), JSON.stringify({ active: null, list: [{ id: "oldshape", title: "from an older version" }] }));
 }
 
-function start(key) {
+function start(key, extra) {
   const home = path.join(OUT, "apps", key);
   const app = apps[key] || { key, name: NAMES[key], data: path.join(home, "data") };
+  if (extra) app.extra = extra;
   if (key === "c" && !apps[key]) seedOld(app.data);
   fs.mkdirSync(app.data, { recursive: true });
   const env = {
@@ -273,6 +276,7 @@ function start(key) {
     EZH_API_PORT: String(API_PORTS[key]),
     EZH_DIR: app.data,
     EZH_NTP: NTP[key],
+    ...app.extra,
   };
   app.proc = spawn(EXE, [], { env, stdio: "ignore", windowsHide: true });
   app.killed = false;
@@ -320,8 +324,8 @@ async function share(app) {
   await invoke(app, "set_source", { source: SOURCE });
 }
 
-async function launch(key) {
-  const app = await attach(start(key));
+async function launch(key, extra) {
+  const app = await attach(start(key, extra));
   await invoke(app, "set_name", { name: app.name });
   await invoke(app, "set_language", { language: "en" });
   await invoke(app, "set_quality", { id: "light" });
@@ -355,9 +359,10 @@ async function recordsAgain(app, room, set, old) {
   });
 }
 
+const marker = (app, name, on) => (on ? fs.writeFileSync(path.join(app.data, name), "") : fs.rmSync(path.join(app.data, name), { force: true }));
+
 const lastJoin = (app, room, set) => logOf(app, room, app.id).findLast((r) => r.set === set && (r.k === "rec" || r.k === "rec_end"));
 
-const listenExport = (app) => evaluate(app, `window.e2eExport = null; window.__TAURI__.event.listen("export", (e) => { if (e.payload.done) window.e2eExport = e.payload; }).then(() => true)`);
 
 async function watchLive(app, b, seconds, until = () => false) {
   const end = Date.now() + seconds * 1000;
@@ -655,10 +660,16 @@ async function live(ctx) {
     await allSee([b], "recording the same set", within(LOG_SYNC_S * 2), (st) => st.active_set?.id === ctx.set);
   });
 
-  await step("C joins late through B's invite, approved on A", async () => {
+  await step("C joins late through B's invite while B is cut off, approved on A once B is back", async () => {
     await waitFor(`A has logged ${SEGMENTS_BEFORE_LATE_JOIN} segments`, within(SEGMENT_S * (SEGMENTS_BEFORE_LATE_JOIN + 1)), () => segsOf(logOf(a, ctx.room, a.id), ctx.set, "v").length >= SEGMENTS_BEFORE_LATE_JOIN);
     c = await launch("c");
-    await asks(a, c, b);
+    const code = await invoke(b, "create_invite", { reuse: false });
+    marker(b, "offline", true);
+    await invoke(c, "join_room", { code });
+    await sleep(DIAL_S * 1000);
+    check(!(await state(a)).asks.some((x) => x.id === c.id) && (await state(c)).room?.pending, "C's join did not wait for its inviter");
+    marker(b, "offline", false);
+    await waitFor("A sees C asking to join", within(DIAL_S * 2), async () => (await state(a)).asks.some((x) => x.id === c.id));
     await invoke(a, "answer_ask", { id: c.id, approve: true });
     const all = [a, b, c];
     await meshed(all, ctx.room);
@@ -777,7 +788,14 @@ async function live(ctx) {
     await allSee([a, b], "C's note written after the restore", within(REQUEST_TIMEOUT_S + DIAL_S + LOG_SYNC_S), (st) => st.events.some((e) => e.key === `${c.id}/${id}`));
   });
 
-  await step("removing C for the whole room stops it fetching", async () => {
+  await step("removing C for the whole room while a recording runs stops it fetching and leaves the others recording", async () => {
+    await invoke(a, "start_recording");
+    const running = (await state(a)).active_set.id;
+    await allSee([b, c], "recording the new set", within(LOG_SYNC_S * 2), (st) => st.active_set?.id === running);
+    const logged = (x) => segsOf(logOf(x, ctx.room, x.id), running, "v").length;
+    await waitFor("A and C log two segments", within(SEGMENT_S * 4), () => logged(a) >= 2 && logged(c) >= 2);
+    const held = pieces(logOf(c, ctx.room, c.id), running);
+    await waitFor("A and B hold C's segments so far", within((SEGMENT_S + SYNC_ROUND_S) * 2), () => ![a, b].some((x) => badCopies(x, ctx.room, c.id, held).length));
     await invoke(a, "remove_peer", { id: c.id });
     await allSee([a, b], "C no longer a peer", within(LOG_SYNC_S * 2), (st) => !st.peers.some((p) => p.id === c.id));
     await sleep(LOG_SYNC_S * 1000);
@@ -785,10 +803,14 @@ async function live(ctx) {
     const id = await invoke(a, "add_event", { kind: "note", text: "After the removal", target: {}, values: null });
     const key = `${a.id}/${id}`;
     await allSee([b], "the new note", within(LOG_SYNC_S * 2), (st) => st.events.some((e) => e.key === key));
-    await sleep(SYNC_ROUND_S * 2 * 1000);
+    const more = { a: logged(a) + 2, b: logged(b) + 2 };
+    await waitFor("A and B record on without C", within(SEGMENT_S * 4), () => logged(a) >= more.a && logged(b) >= more.b);
     check(fileSize(logFile(c, ctx.room, a.id)) === before, "C still received A's log after its removal");
-    const st = await state(c);
-    check(!st.events.some((e) => e.key === key), "C shows a note written after its removal");
+    check(!(await state(c)).events.some((e) => e.key === key), "C shows a note written after its removal");
+    for (const holder of [a, b]) check(!badCopies(holder, ctx.room, c.id, held).length, `${holder.key} lost C's segments after the removal`);
+    await invoke(a, "stop_recording");
+    await allSee([a, b], "the set ended", within(LOG_SYNC_S * 2), (st) => !st.active_set && setOf(st, running) && !setOf(st, running).live);
+    await invoke(c, "stop_recording");
   });
 
   await step("B leaves the room from its menu, enters it again with its recordings and notes, and deletes it from the list, which forgets B's personal plan", async () => {
@@ -825,10 +847,10 @@ async function live(ctx) {
   });
 }
 
-async function gather(ctx) {
+async function gather(ctx, extra) {
   const a = await launch("a");
   const b = await launch("b");
-  const c = await launch("c");
+  const c = await launch("c", extra);
   ctx.room = await invoke(a, "create_room", { name: "Practice" });
   await asks(a, b, a);
   await invoke(a, "answer_ask", { id: b.id, approve: true });
@@ -846,8 +868,9 @@ async function gather(ctx) {
 
 async function recover(ctx) {
   let a, b, c;
-  await step("A, B and C record the same set, C joining late", async () => {
-    [a, b, c] = await gather(ctx);
+  await step("A, B and C record the same set, C joining late and reaching the others only through the relay", async () => {
+    [a, b, c] = await gather(ctx, { EZH_RELAY_ONLY: "1" });
+    await allSee([a, b], "C's path is the relay", within(DIAL_S), (st) => st.peers.find((p) => p.id === c.id)?.path === "relay");
     await allSee([b, c], "A's live picture available", within(COLD_START_S), (st) => st.peers.find((p) => p.id === a.id)?.live);
   });
 
@@ -893,6 +916,20 @@ async function recover(ctx) {
     await recordsAgain(b, ctx.room, ctx.set, [capture]);
   });
 
+  await step("B loses its network while everyone records, keeps recording its part, and everything reaches everyone once it is back", async () => {
+    const all = [a, b, c];
+    const logged = (x) => segsOf(logOf(x, ctx.room, x.id), ctx.set, "v").length;
+    const before = { a: logged(a), b: logged(b) };
+    marker(b, "offline", true);
+    await allSee([a, c], "B gone", within(DIAL_S), (st) => !connected(st, [b.id]));
+    await waitFor("B records on while cut off", within(OFFLINE_S + SEGMENT_S * 2), () => logged(b) >= before.b + OFFLINE_S / SEGMENT_S);
+    check((await state(b)).active_set?.id === ctx.set && logged(a) >= before.a + OFFLINE_S / SEGMENT_S, "B or A stopped recording while B was cut off");
+    marker(b, "offline", false);
+    await meshed(all);
+    const limits = Object.fromEntries(all.map((x) => [x.key, logged(x)]));
+    await waitFor(`everyone holds what was logged by now (${brief(limits)})`, within((SEGMENT_S + SYNC_ROUND_S) * 4), () => !holdEverything(all, ctx.room, ctx.set, all, limits));
+  });
+
   await step("A's encoder is killed and A keeps recording the set in a new part", async () => {
     const sink = (await invoke(a, "debug_view", { tab: "recording", since: 0, set: null })).engine.sink;
     check(sink && sink.pid, "A has no encoder");
@@ -917,6 +954,25 @@ async function recover(ctx) {
     await invoke(a, "set_source", { source: SOURCE });
     await recordsAgain(a, ctx.room, ctx.set, [...before, voice]);
     await waitFor("B holds A's voice-only part", within(SEGMENT_S + LOG_SYNC_S * 2), () => !badCopies(b, ctx.room, a.id, pieces(logOf(a, ctx.room, a.id), ctx.set).filter((p) => p.capture === voice)).length);
+  });
+
+  await step("C's disk is full during the recording: its part ends with a notice, the others go on, and C completes its copy once there is room", async () => {
+    const logged = (x) => segsOf(logOf(x, ctx.room, x.id), ctx.set).length;
+    marker(c, "full", true);
+    await waitFor("C ends its part and says the disk is almost full", within(KEEP_EVERY_S * 3), async () => lastJoin(c, ctx.room, ctx.set)?.k === "rec_end" && (await state(c)).notice.includes("disk is almost full"));
+    check((await state(a)).active_set?.id === ctx.set && (await state(b)).active_set?.id === ctx.set, "A or B stopped recording when C's disk filled");
+    const refused = await invoke(c, "start_recording").then(() => "", (e) => String(e));
+    check(refused.includes("disk is almost full"), `C was not refused a start: "${refused}"`);
+    const held = () => pieces(logOf(a, ctx.room, a.id), ctx.set).filter((p) => fs.existsSync(mediaFile(c, ctx.room, p.set, a.id, p.capture, p.series, p.name))).length;
+    await sleep(SYNC_ROUND_S * 1000);
+    const stuck = held();
+    const target = logged(a) + 2;
+    await waitFor("A logs two more segments", within(SEGMENT_S * 3), () => logged(a) >= target);
+    await sleep(SYNC_ROUND_S * 1000);
+    check(held() === stuck, "C received files although its disk was full");
+    marker(c, "full", false);
+    const limits = Object.fromEntries([a, b].map((x) => [x.key, segsOf(logOf(x, ctx.room, x.id), ctx.set, "v").length]));
+    await waitFor("C completes its copy of A and B", within((SEGMENT_S + SYNC_ROUND_S) * 4), () => !holdEverything([c], ctx.room, ctx.set, [a, b], limits));
   });
 
   await step("B leaving ends only its part and rejoins, a crashed C does not keep the stopped set open, and everyone has it", async () => {
@@ -983,7 +1039,7 @@ async function library(ctx) {
     check(file[0] === 0xff && file[1] === 0xd8 && file.length > 500, "the thumbnail file is not a JPEG");
     await evaluate(a, `$("recsopen").click(); true`);
     await waitFor("A lists the set as a card with a picture", within(UI_REFRESH_S * 5), () => evaluate(a, `[...$("roomtab").querySelectorAll(".reccard")].some((c) => c.querySelector("img") && c.querySelectorAll(".acts button").length === 2) && $("homename").textContent === t("Recordings") && $("recsopen").getAttribute("aria-current") === "page"`));
-    check(await evaluate(a, `!!$("sessions").querySelector(".srow:not(.liverow) .thumb img") && !$("allrecs") && $("sessions").querySelectorAll(".srow:not(.liverow)").length === recordingRows().length && !!$("recfilter") && !!$("recimport")`), "the sidebar does not list every recording with a thumbnail, or the filter and Import are not in the main area");
+    check(await evaluate(a, `!!$("sessions").querySelector(".srow:not(.liverow) .thumb img") && !$("allrecs") && $("sessions").querySelectorAll(".srow:not(.liverow)").length === recordingRows().length && !!$("recfilter")`), "the sidebar does not list every recording with a thumbnail, or the filter is not in the main area");
     await evaluate(a, `$("recfilter").value = "zzzz"; $("recfilter").dispatchEvent(new Event("input")); true`);
     check(await evaluate(a, `$("roomtab").querySelectorAll(".reccard").length === 0`), "the filter did not hide the cards");
     await evaluate(a, `$("recfilter").value = ""; $("recfilter").dispatchEvent(new Event("input")); true`);
@@ -1164,7 +1220,7 @@ async function library(ctx) {
     check(rows.length === 3 && rows.every((x) => x === "Standby" || /^Receiving \d+%$/.test(x)), `member states ${brief(rows)}`);
   });
 
-  await step("Watch Party converges on a seek and a play", async () => {
+  await step("Watch Party converges on a seek and a play, and a member who joins midway converges too", async () => {
     const all = [a, b, c];
     const seconds = within(PARTY_REPEAT_S + UI_REFRESH_S * 2);
     const follow = async (from, others, playing, position) => {
@@ -1178,10 +1234,15 @@ async function library(ctx) {
         return same && evaluate(app, `selected === ${JSON.stringify(ctx.set)} && clock.playing === ${playing} && Math.abs(nowM() - ${position}) < ${JUMP_MIN_S}`);
       })));
     };
+    await evaluate(c, `setParty(false); true`);
+    await waitFor("C leaves the party", seconds, async () => !(await state(c)).party.on);
     await evaluate(a, `openSet(${JSON.stringify(ctx.set)}); act("seek", ${SEEK_TO_S}); true`);
-    await follow(a, [b, c], false, SEEK_TO_S);
-    await evaluate(c, `act("play", nowM()); true`);
-    await follow(c, [a, b], true, "nowM()");
+    await follow(a, [b], false, SEEK_TO_S);
+    await evaluate(b, `act("play", nowM()); true`);
+    await follow(b, [a], true, "nowM()");
+    check(await evaluate(c, `!clock.playing`), "C moved with a party it had left");
+    await evaluate(c, `setParty(true); true`);
+    await follow(b, [c], true, "nowM()");
     const clocks = await Promise.all(all.map((app) => evaluate(app, "nowM()")));
     check(Math.max(...clocks) - Math.min(...clocks) < JUMP_MIN_S, `clocks differ: ${brief(clocks)}`);
     check(Math.min(...clocks) >= SEEK_TO_S, `played from before the seek: ${brief(clocks)}`);
@@ -1382,194 +1443,25 @@ async function library(ctx) {
     await evaluate(a, `$("diagdlg").close(); true`);
   });
 
-  await step("export the set on A to a playable file while C is down", async () => {
-    kill(c);
-    await stopped(c);
-    await listenExport(a);
-    const file = path.join(a.data, `${ctx.set}.mp4`);
-    const started = await invoke(a, "export_set", { room: ctx.room, set: ctx.set, path: file });
-    check(started && started.skipped.length === 0, `export skipped ${brief(started)}`);
-    const done = await waitFor("the export finished", within(ctx.durationS / EXPORT_SPEED), () => evaluate(a, "window.e2eExport"));
-    check(!done.error, `export failed: ${done.error}`);
-    const probe = ffmpeg("ffprobe", ["-v", "error", "-show_entries", "format=duration:stream=codec_type", "-of", "json", file]);
-    check(probe.ok, `ffprobe failed: ${probe.err}`);
-    const info = JSON.parse(probe.out);
-    const kinds = info.streams.map((s) => s.codec_type);
-    check(kinds.filter((k) => k === "video").length === 1 && kinds.filter((k) => k === "audio").length === 4, `streams ${brief(kinds)}`);
-    const duration = Number(info.format.duration);
-    check(Math.abs(duration - ctx.durationS) <= SEGMENT_S, `export lasts ${duration} s, the set ${ctx.durationS} s`);
-    const decode = ffmpeg("ffmpeg", ["-v", "error", "-i", file, "-map", "0", "-f", "null", "-"]);
-    check(decode.ok && !decode.err, `export does not decode cleanly: ${decode.err.slice(0, 400)}`);
-    ctx.notes.push(`export of ${duration.toFixed(1)} s with streams ${kinds.join(" ")}`);
-    ffmpeg("ffmpeg", ["-v", "error", "-y", "-ss", String(duration / 2), "-i", file, "-frames:v", "1", path.join(OUT, "export-frame.png")]);
-    start("c");
-    await attach(c);
-    await share(c);
-    await meshed([a, b, c]);
-  });
-
-  await step("the set exports to a folder of plain files and imports back as a recording everyone receives", async () => {
-    const all = [a, b, c];
-    const names = all.map((x) => x.name).sort().join();
-    const raw = await invoke(a, "export_folder", { room: ctx.room, set: ctx.set, folder: path.join(a.data, "bundles", ctx.set), aligned: false }, EXPORT_FOLDER_S);
-    check(raw.files === 3 && raw.skipped.length === 0, `folder export: ${brief(raw)}`);
-    const session = readJson(path.join(raw.folder, "session.json"));
-    check(session?.id === ctx.set && session.start && session.views?.length === 3 && session.views.map((v) => v.name).sort().join() === names, `session.json: ${brief(session)}`);
-    const offsets = session.views.map((v) => v.offset_ms);
-    check(Math.min(...offsets) === 0 && Math.max(...offsets) >= SEGMENT_S * 1000, `raw offsets ${brief(offsets)}`);
-    const plain = (file, kinds) => {
-      const probe = ffmpeg("ffprobe", ["-v", "error", "-show_entries", "format=duration:stream=codec_type", "-of", "json", file]);
-      check(probe.ok, `ffprobe ${path.basename(file)}: ${probe.err}`);
-      const info = JSON.parse(probe.out);
-      const got = info.streams.map((x) => x.codec_type).sort().join();
-      check(got === kinds, `${path.basename(file)} has streams ${got}, not ${kinds}`);
-      const decode = ffmpeg("ffmpeg", ["-v", "error", "-i", file, "-f", "null", "-"]);
-      check(decode.ok && !decode.err, `${path.basename(file)} does not decode cleanly: ${decode.err.slice(0, 300)}`);
-      return Number(info.format.duration);
-    };
-    for (const v of session.views) {
-      check(v.file.endsWith(".mp4") && v.voice?.endsWith(".m4a"), `view ${brief(v)}`);
-      plain(path.join(raw.folder, v.file), "audio,video");
-      plain(path.join(raw.folder, v.voice), "audio");
+  await step("the set exports to a folder of plain files lined up on its start", async () => {
+    const start = setOf(await state(a), ctx.set).start_us;
+    await invoke(a, "add_event", { kind: "note", text: "Warm up", target: { set: ctx.set, from_us: start, to_us: start + 3e6 }, values: null });
+    const out = await invoke(a, "export_folder", { room: ctx.room, set: ctx.set, folder: path.join(a.data, "bundles", ctx.set) }, EXPORT_FOLDER_S);
+    check(out.files === 3 && out.skipped.length === 0, `folder export: ${brief(out)}`);
+    for (const x of [a, b, c]) {
+      for (const [file, kinds] of [[`${x.name}.mp4`, "audio,video"], [`${x.name} voice.m4a`, "audio"]]) {
+        const probe = ffmpeg("ffprobe", ["-v", "error", "-show_entries", "format=duration:stream=codec_type", "-of", "json", path.join(out.folder, file)]);
+        check(probe.ok, `ffprobe ${file}: ${probe.err}`);
+        const info = JSON.parse(probe.out);
+        check(info.streams.map((y) => y.codec_type).sort().join() === kinds, `${file} has streams ${brief(info.streams)}`);
+        check(Math.abs(Number(info.format.duration) - ctx.durationS) <= SEGMENT_S, `${file} lasts ${info.format.duration} s, the set ${ctx.durationS} s`);
+      }
     }
-    check(fs.readFileSync(path.join(raw.folder, "notes.csv"), "utf8").includes("Noted through the API"), "notes.csv lacks the note written through the API");
-    const aligned = await invoke(a, "export_folder", { room: ctx.room, set: ctx.set, folder: path.join(a.data, "bundles", `${ctx.set} aligned`), aligned: true }, EXPORT_FOLDER_S);
-    const second = readJson(path.join(aligned.folder, "session.json"));
-    check(second.views.every((v) => v.offset_ms === 0), `aligned offsets ${brief(second.views.map((v) => v.offset_ms))}`);
-    for (const v of second.views) {
-      const seconds = plain(path.join(aligned.folder, v.file), "audio,video");
-      check(Math.abs(seconds - ctx.durationS) <= SEGMENT_S, `${v.file} lasts ${seconds} s in the aligned export, the set ${ctx.durationS} s`);
-    }
-
-    const made = await invoke(a, "import_recording", { spec: { folder: raw.folder } }, IMPORT_S);
-    ctx.imported = made.id;
-    check(made.views === 3 && made.id !== ctx.set, `import: ${brief(made)}`);
-    await allSee(all, "the imported recording", within(LOG_SYNC_S * 3), (st) => setOf(st, made.id)?.imported_by === a.name);
-    const owners = setOf(await state(a), made.id).players.map((p) => p.owner);
-    for (const app of all) {
-      const st = await state(app);
-      const set = setOf(st, made.id);
-      check(set.title === path.basename(raw.folder) && set.players.length === 3 && set.players.every((p) => p.imported), `${app.key} lists the import as ${brief({ title: set.title, players: set.players.map((p) => p.imported) })}`);
-      check(owners.every((o) => !all.some((x) => x.id === o) && names.split(",").includes(st.names[o])), `${app.key} names the imported views ${brief(owners.map((o) => st.names[o]))}`);
-      check(st.rooms.find((r) => r.id === ctx.room).members.length === 3 && st.peers.length === 2, `${app.key} counts ${st.peers.length} peers and ${st.rooms.find((r) => r.id === ctx.room).members.length} members`);
-    }
-    await onlyOnDownload([b, c], a, made.id);
-    await allSee(all, "everyone has the imported recording", within((SEGMENT_S + SYNC_ROUND_S) * 3), (st) => heldByAll(st, made.id, all));
-    for (const owner of owners) {
-      const list = pieces(logOf(a, ctx.room, owner), made.id);
-      check(list.length > 2, `the imported view has ${list.length} pieces`);
-      for (const holder of [a, b, c]) check(!badCopies(holder, ctx.room, owner, list).length, `${holder.key} lacks pieces of an imported view`);
-    }
-    await allSee([b, c], "the note of the imported folder", within(LOG_SYNC_S * 2), (st) => st.events.some((e) => e.set === made.id && e.text.includes("Noted through the API")));
-    await evaluate(a, `openSession(${JSON.stringify(made.id)}); true`);
-    await waitFor("A plays the three imported views", within(UI_REFRESH_S * 10), () => evaluate(a, `play.keys.length === 3 && play.keys.filter((k) => play.tiles[k].media.video.videoWidth > 0).length === 3`));
-    check(await evaluate(a, `$("pchips").textContent.includes("Imported by")`), "the player header does not say the recording is imported");
-    check(await evaluate(a, `play.keys.every((k) => !play.tiles[k].imp.hidden)`), "a tile of an imported view has no Imported mark");
-    await screenshot(a, "imported-player");
-    ctx.notes.push(`folder export of ${session.views.length} views imported back and received by SHA-256 on 3 members`);
-  });
-
-  await step("a folder made by hand, with a transcoded file and a sound-only file, imports on B and plays for everyone", async () => {
-    const all = [a, b, c];
-    const media = path.join(OUT, "media", "Walkthrough");
-    fs.mkdirSync(media, { recursive: true });
-    const make = (inputs, out) => {
-      const r = ffmpeg("ffmpeg", ["-v", "error", "-y", ...inputs.flatMap((i) => ["-f", "lavfi", "-i", i]), ...out]);
-      check(r.ok, `ffmpeg ${out.at(-1)}: ${r.err}`);
-    };
-    make([`testsrc2=size=320x180:rate=15:duration=${MEDIA_SECONDS.coach}`, `sine=frequency=440:duration=${MEDIA_SECONDS.coach}`], ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-g", "15", "-c:a", "aac", "-shortest", path.join(media, "Coach.mp4")]);
-    make([`testsrc2=size=160x120:rate=10:duration=${MEDIA_SECONDS.camera}`, `sine=frequency=660:duration=${MEDIA_SECONDS.camera}`], ["-c:v", "mpeg4", "-c:a", "pcm_s16le", "-shortest", path.join(media, "Old camera.avi")]);
-    make([`sine=frequency=880:duration=${MEDIA_SECONDS.commentary}`], ["-c:a", "aac", path.join(media, "Commentary.m4a")]);
-    fs.writeFileSync(path.join(media, "session.json"), JSON.stringify({
-      title: "Walkthrough", start: PLAN_START,
-      views: [{ name: "Coach", file: "Coach.mp4" }, { name: "Old camera", file: "Old camera.avi", offset_ms: 2000 }, { name: "Commentary", file: "Commentary.m4a" }],
-      events: [{ at_s: 3, text: "The ring closes here #callout" }, { at_s: 0, to_s: 4, text: "Intro" }],
-    }));
-    const plan = await invoke(b, "import_plan", { spec: { folder: media } });
-    check(plan.title === "Walkthrough" && plan.views.length === 3 && plan.notes === 2 && plan.start === "2026-10-19T12:30:00.000Z", `plan ${brief(plan)}`);
-    const broken = path.join(OUT, "media", "Broken");
-    fs.mkdirSync(broken, { recursive: true });
-    fs.writeFileSync(path.join(broken, "session.json"), "{oops");
-    const refused = await invoke(b, "import_plan", { spec: { folder: broken } }).then(() => "", (e) => String(e));
-    check(refused.includes("is not valid"), `a broken session.json was answered with "${refused}"`);
-    const before = (await state(b)).sets.length;
-    check((await invoke(b, "import_recording", { spec: { folder: broken } }).then(() => "", (e) => String(e))).includes("is not valid") && (await state(b)).sets.length === before, "a refused import changed the recordings");
-    await evaluate(b, `openImport({ folder: ${JSON.stringify(media)} }); true`);
-    await waitFor("B's import dialog lists the three views", within(UI_REFRESH_S * 5), () => evaluate(b, `$("importdlg").open && $("importviews").children.length === 3 && !$("importgo").disabled`));
-    check(await evaluate(b, `$("importtitle").value === "Walkthrough" && [...$("importviews").querySelectorAll("input")].map((i) => i.value).join() === "Coach,Old camera,Commentary"`), "the import dialog does not show the title and the view names");
-    await screenshot(b, "import-dialog");
-    await evaluate(b, `$("importdlg").close(); true`);
-    await invoke(a, "set_plugin_runner", { id: PLUGIN, runner: c.id });
-    for (const app of [a, b, c]) await waitFor(`${app.key} sees C as the Apex runner`, within(LOG_SYNC_S * 3), async () => (await invoke(app, "room_plugins")).find((x) => x.id === PLUGIN).runner === c.id);
-    const made = await invoke(b, "import_recording", { spec: { folder: media } }, IMPORT_S);
-    check(made.views === 3 && made.notes === 2, `import: ${brief(made)}`);
-    await allSee(all, "the walkthrough", within(LOG_SYNC_S * 3), (st) => setOf(st, made.id)?.imported_by === b.name && setOf(st, made.id).title === "Walkthrough");
-    await onlyOnDownload([a, c], b, made.id);
-    await allSee(all, "everyone has the walkthrough", within((SEGMENT_S + SYNC_ROUND_S) * 3), (st) => heldByAll(st, made.id, all));
-    await waitFor("B makes the walkthrough's thumbnail", within(30), async () => setOf(await state(b), made.id)?.thumb === true);
-    const seen = await state(a);
-    const set = setOf(seen, made.id);
-    const view = (name) => set.players.find((p) => seen.names[p.owner] === name);
-    const [coach, camera, commentary] = ["Coach", "Old camera", "Commentary"].map(view);
-    check(coach && camera && commentary, `views ${brief(set.players.map((p) => seen.names[p.owner]))}`);
-    const start = setOf(await state(b), made.id).start_us;
-    check(Math.abs(start - Date.parse(PLAN_START) * 1000) <= START_TOLERANCE_US, `start ${start}`);
-    check(Math.abs(Math.abs(camera.start_us - coach.start_us) - 2e6) <= 1, `the second view starts ${camera.start_us - coach.start_us} us after the first`);
-    check(coach.parts.every((part) => part.v && !part.m) && camera.parts.every((part) => part.v) && commentary.parts.every((part) => !part.v && part.m), "the views have the wrong series");
-    const codecs = [coach, camera].map((p) => logOf(b, ctx.room, p.owner).find((r) => r.k === "cap")?.codec);
-    check(codecs.join() === "h264,h264", `the stored codecs are ${codecs}`);
-    await waitFor("A shows the notes and the chapter", within(LOG_SYNC_S * 2), async () => {
-      const st = await state(a);
-      const callout = st.events.find((e) => e.set === made.id && e.text === "The ring closes here #callout");
-      const intro = st.events.find((e) => e.set === made.id && e.text === "Intro");
-      return callout?.tags.includes("callout") && intro?.end_us > intro?.local_us;
-    });
-    await evaluate(c, `openSession(${JSON.stringify(made.id)}); true`);
-    await waitFor("C plays the two pictures", within(UI_REFRESH_S * 10), () => evaluate(c, `play.keys.length === 3 && play.keys.filter((k) => play.tiles[k].media.video.videoWidth > 0).length === 2`));
-    await waitFor("the walkthrough has one finished Apex job", within(JOB_CHECK_S + LOG_SYNC_S + 60), async () => {
-      const jobs = (await invoke(a, "jobs")).jobs.filter((j) => j.plugin === PLUGIN && j.set === made.id);
-      check(!jobs.some((j) => j.state === "failed"), `the Apex job failed: ${brief(jobs)}`);
-      return jobs.length === 1 && jobs[0].state === "done";
-    });
-    const walk = (await invoke(a, "jobs")).jobs.filter((j) => j.plugin === PLUGIN && j.set === made.id)[0];
-    check(walk.by === c.id && walk.runner === c.id, `the chosen runner did not run the job: by ${walk.by}, runner ${walk.runner}`);
-    const claims = [a, b, c].flatMap((owner) => logOf(a, ctx.room, owner.id).filter((r) => r.k === "job" && r.job === walk.job && r.state === "claim").map(() => owner.key));
-    check(claims.length > 0 && claims.every((k) => k === c.key), `the job was claimed by ${claims}`);
-    await invoke(a, "set_plugin_runner", { id: PLUGIN, runner: null });
-    await evaluate(c, `openSession(${JSON.stringify(ctx.set)}); true`);
-    ctx.notes.push("hand-made folder with a copied, a transcoded and a sound-only file imported on B and played on C");
-  });
-
-  await step("the local API imports a bare folder of videos and exports a recording to a folder", async () => {
-    const bare = path.join(OUT, "media", "Review night");
-    fs.mkdirSync(bare, { recursive: true });
-    for (const [name, hz] of [["Ann POV", 440], ["Ben POV", 660]]) {
-      const r = ffmpeg("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=160x90:rate=10:duration=4", "-f", "lavfi", "-i", `sine=frequency=${hz}:duration=4`, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", path.join(bare, `${name}.mp4`)]);
-      check(r.ok, `ffmpeg ${name}: ${r.err}`);
-    }
-    const llms = await api(a, "GET", "/llms.txt");
-    check(llms.text.includes("import_recording") && llms.text.includes("export_folder"), "llms.txt does not describe import and export");
-    const refusal = (call) => call.then(() => "", (e) => e.message);
-    const room = `/v1/rooms/${ctx.room}`;
-    check(await refusal(invoke(a, "import_recording", { spec: { folder: path.join(OUT, "media", "Nothing here") } })), "a missing folder was not refused");
-    check(await refusal(invoke(a, "import_recording", { spec: { files: "x" } })), "a bad body was not refused");
-    const made = await invoke(a, "import_recording", { spec: { folder: bare } }, IMPORT_S);
-    check(made.views === 2, `import: ${brief(made)}`);
-    ctx.bare = made.id;
-    const one = await api(a, "GET", `${room}/recordings/${encodeURIComponent(made.id)}`, { token: a.token });
-    check(one.status === 200 && one.json.title === "Review night" && one.json.imported_by?.id === a.id && one.json.members.length === 2 && one.json.members.every((m) => m.imported) && one.json.members.map((m) => m.name).sort().join() === "Ann POV,Ben POV", `recording: ${brief(one.json)}`);
-    await allSee([b, c], "the bare folder's recording", within(LOG_SYNC_S * 3), (st) => setOf(st, made.id)?.imported_by === a.name);
-    const out = path.join(OUT, "api-export");
-    check(await refusal(invoke(a, "export_folder", { room: ctx.room, set: made.id, aligned: true })), "an export without a folder was accepted");
-    const exported = await invoke(a, "export_folder", { room: ctx.room, set: made.id, folder: out, aligned: true }, EXPORT_FOLDER_S);
-    check(exported.files === 2, `export: ${brief(exported)}`);
-    const session = readJson(path.join(out, "session.json"));
-    check(session.views.map((v) => v.file).sort().join() === "Ann POV.mp4,Ben POV.mp4" && session.views.every((v) => v.offset_ms === 0), `exported session.json ${brief(session)}`);
-    for (const v of session.views) {
-      const probe = ffmpeg("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", path.join(out, v.file)]);
-      check(probe.ok && Math.abs(Number(probe.out) - 4) <= 1.5, `${v.file} lasts ${probe.out.trim()} s`);
-    }
-    check(await refusal(invoke(a, "export_folder", { room: ctx.room, set: made.id, folder: out, aligned: false }, EXPORT_FOLDER_S)), "an export into a folder that is not empty was accepted");
+    const decode = ffmpeg("ffmpeg", ["-v", "error", "-i", path.join(out.folder, `${c.name}.mp4`), "-f", "null", "-"]);
+    check(decode.ok && !decode.err, `${c.name}.mp4 does not decode cleanly: ${decode.err.slice(0, 300)}`);
+    check(fs.readFileSync(path.join(out.folder, "notes.csv"), "utf8").includes("Noted through the API"), "notes.csv lacks the note written through the API");
+    check(fs.readFileSync(path.join(out.folder, "chapters.vtt"), "utf8").includes("Warm up"), "chapters.vtt lacks the chapter");
+    check(await invoke(a, "export_folder", { room: ctx.room, set: ctx.set, folder: out.folder }, EXPORT_FOLDER_S).then(() => false, () => true), "an export into a folder that is not empty was accepted");
   });
 
   const confirmDeletion = async (app, set, form) => {
@@ -1597,19 +1489,29 @@ async function library(ctx) {
 
   await step("deleting a recording nobody else holds removes it, its jobs and its entry everywhere", async () => {
     const all = [a, b, c];
-    const bare = ctx.bare;
-    await allSee(all, "the bare recording listed", within(LOG_SYNC_S * 3), (st) => !!setOf(st, bare));
+    marker(b, "offline", true);
+    marker(c, "offline", true);
+    await allSee([a], "A alone", within(DIAL_S), (st) => !connected(st, [b.id]) && !connected(st, [c.id]));
+    await invoke(a, "start_recording");
+    const bare = (await state(a)).active_set.id;
+    await waitFor("A logs two segments", within(SEGMENT_S * 4), () => segsOf(logOf(a, ctx.room, a.id), bare, "v").length >= 2);
+    await invoke(a, "stop_recording");
+    await waitFor("A ended it", within(UI_REFRESH_S * 5), async () => { const st = await state(a); return !st.active_set && setOf(st, bare) && !setOf(st, bare).live; });
+    marker(b, "offline", false);
+    marker(c, "offline", false);
+    await meshed(all);
+    await allSee(all, "the recording nobody else holds listed", within(LOG_SYNC_S * 3), (st) => !!setOf(st, bare));
     const rowsOf = async (app) => (await invoke(app, "jobs")).jobs.filter((j) => j.set === bare).length;
-    await waitFor("A and B list a job row for the bare recording", within(JOB_CHECK_S + LOG_SYNC_S * 3), async () => (await rowsOf(a)) > 0 && (await rowsOf(b)) > 0);
-    check((await state(a)).sets.find((x) => x.id === bare).shared === false, "A thinks others hold the bare recording");
+    await waitFor("A and B list a job row for the recording nobody else holds", within(JOB_CHECK_S + LOG_SYNC_S * 3), async () => (await rowsOf(a)) > 0 && (await rowsOf(b)) > 0);
+    check((await state(a)).sets.find((x) => x.id === bare).shared === false, "A thinks others hold the recording nobody else holds");
     check(await evaluate(b, `!canDelete(setById(${JSON.stringify(bare)}))`), "B may delete a recording it does not hold while A does");
     await waitFor("A made the thumbnail", within(30), async () => setOf(await state(a), bare)?.thumb === true);
     await confirmDeletion(a, bare, "This deletes it completely");
-    await allSee(all, "the bare recording gone from the list", within(LOG_SYNC_S * 3), (st) => !setOf(st, bare));
+    await allSee(all, "the recording nobody else holds gone from the list", within(LOG_SYNC_S * 3), (st) => !setOf(st, bare));
     for (const app of all) await waitFor(`${app.key} has no job row for it`, within(JOB_CHECK_S + LOG_SYNC_S), async () => (await rowsOf(app)) === 0);
     check(logOf(a, ctx.room, a.id).some((r) => r.k === "set_del" && r.set === bare), "A did not log the removal");
     check(mediaLeft(a, bare) === 0 && !fs.existsSync(path.join(roomDir(a, ctx.room), "recordings", bare)) && !fs.existsSync(path.join(roomDir(a, ctx.room), "thumbs", `${bare}.jpg`)), "A kept media or the thumbnail");
-    await waitFor("B's sidebar drops the bare recording", within(UI_REFRESH_S * 5), () => evaluate(b, `![...document.querySelectorAll("#sessions .srow")].some((r) => r.textContent.includes(sessionName(${JSON.stringify(bare)})))`));
+    await waitFor("B's sidebar drops the recording nobody else holds", within(UI_REFRESH_S * 5), () => evaluate(b, `![...document.querySelectorAll("#sessions .srow")].some((r) => r.textContent.includes(sessionName(${JSON.stringify(bare)})))`));
   });
 
   await step("a short recording is offered for discarding when stopped and goes everywhere", async () => {
@@ -1623,6 +1525,42 @@ async function library(ctx) {
     await evaluate(a, `$("confirmyes").click(); true`);
     await allSee(all, "the short recording gone", within(LOG_SYNC_S * 3), (st) => !st.active_set && !setOf(st, ctx.short));
     for (const app of all) await waitFor(`${app.key} removed the media`, within(SYNC_ROUND_S * 2), () => mediaLeft(app, ctx.short) === 0 && !fs.existsSync(path.join(roomDir(app, ctx.room), "recordings", ctx.short)));
+  });
+
+  await step("a member cut off for a whole recording lists it as not on this PC and fetches it only when asked", async () => {
+    const all = [a, b, c];
+    marker(c, "offline", true);
+    await allSee([a, b], "C gone", within(DIAL_S), (st) => !connected(st, [c.id]));
+    await invoke(a, "start_recording");
+    const apart = (await state(a)).active_set.id;
+    await allSee([b], "recording the set", within(LOG_SYNC_S * 2), (st) => st.active_set?.id === apart);
+    await waitFor("A logs two segments", within(SEGMENT_S * 4), () => segsOf(logOf(a, ctx.room, a.id), apart, "v").length >= 2);
+    await invoke(a, "stop_recording");
+    await allSee([a, b], "the set ended and both hold it", within((SEGMENT_S + SYNC_ROUND_S) * 3), (st) => !st.active_set && setOf(st, apart) && !setOf(st, apart).live && heldByAll(st, apart, [a, b]));
+    marker(c, "offline", false);
+    await meshed(all);
+    await allSee([c], "the set listed", within(LOG_SYNC_S * 3), (st) => !!setOf(st, apart));
+    check(!logOf(c, ctx.room, c.id).some((r) => r.set === apart), "C joined a recording it was cut off from");
+    await onlyOnDownload([c], a, apart);
+    await allSee(all, "everyone has it", within((SEGMENT_S + SYNC_ROUND_S) * 3), (st) => heldByAll(st, apart, all));
+  });
+
+  await step("Start pressed on A and B together makes one recording on every PC", async () => {
+    const all = [a, b, c];
+    const sets = () => new Set(all.flatMap((x) => logOf(x, ctx.room, x.id).filter((r) => r.k === "rec").map((r) => r.set)));
+    const known = sets();
+    await allSee(all, "encoding its test source", within(COLD_START_S), (st) => st.capture.live);
+    await Promise.all([invoke(a, "start_recording"), invoke(b, "start_recording")]);
+    const winner = await waitFor("all three record the same set", within(SYNC_ROUND_S * 2), async () => {
+      const ids = (await Promise.all(all.map(state))).map((st) => st.active_set?.id);
+      return ids[0] && ids.every((id) => id === ids[0]) && ids[0];
+    });
+    await waitFor("each logs a segment of it", within(SEGMENT_S * 3), () => all.every((x) => segsOf(logOf(x, ctx.room, x.id), winner).length > 0));
+    for (const other of [...sets()].filter((id) => !known.has(id) && id !== winner)) {
+      for (const x of all) check(!lastJoin(x, ctx.room, other) || lastJoin(x, ctx.room, other).k === "rec_end", `${x.key} still records ${other}`);
+    }
+    await invoke(a, "stop_recording");
+    await allSee(all, "the set ended", within(LOG_SYNC_S * 3), (st) => !st.active_set && setOf(st, winner) && !setOf(st, winner).live);
   });
 
   await step("the update channel is kept in the settings", async () => {
@@ -1648,12 +1586,32 @@ async function library(ctx) {
     await invoke(b, "set_hotkey", { keys: hotkey });
   });
 
-  await step("C kept every file of an older version it found in its data folder", async () => {
+  await step("C kept every file of an older version until Delete old files, which removes exactly those", async () => {
+    const data = c.data;
+    const old = Object.keys(oldFiles()).filter((name) => !keptOldFiles().includes(name));
     for (const [name, body] of Object.entries(oldFiles())) {
-      const file = path.join(apps.c.data, name);
+      const file = path.join(data, name);
       check(fs.existsSync(file) && fs.readFileSync(file).equals(Buffer.from(body)), `${name} was changed or removed`);
     }
-    check(!fs.existsSync(path.join(apps.c.data, oldStandby())), "C kept a live segment of an earlier run");
+    check(!fs.existsSync(path.join(data, oldStandby())), "C kept a live segment of an earlier run");
+    const bytesOld = old.reduce((n, name) => n + Buffer.from(oldFiles()[name]).length, 0);
+    const info = await invoke(c, "data_info");
+    check(info.old_bytes === bytesOld, `data_info counts ${info.old_bytes} B of old files, not ${bytesOld}`);
+    const rooms = path.join(data, "rooms", OLD_ROOM);
+    const rootBefore = fs.readdirSync(data);
+    const insideBefore = filesUnder(rooms).map((f) => path.relative(data, f));
+    await evaluate(c, `loadStorage(); true`);
+    await waitFor("C offers to delete the old files", within(UI_REFRESH_S * 5), () => evaluate(c, `!$("oldfiles").hidden && $("oldfiles").textContent === t("Delete old files ({size})", { size: bytes(${info.old_bytes}) })`));
+    const title = await pressAndConfirm(c, `$("oldfiles").click()`);
+    check(title === "Delete old files?" && c.confirmText === "", `C asked "${title}" with "${c.confirmText}"`);
+    await waitFor("the old files are gone and the button hides", within(UI_REFRESH_S * 5), async () => old.every((name) => !fs.existsSync(path.join(data, name))) && (await invoke(c, "data_info")).old_bytes === 0 && evaluate(c, `$("oldfiles").hidden`));
+    for (const name of keptOldFiles()) check(fs.existsSync(path.join(data, name)), `${name} was removed`);
+    check(fs.existsSync(path.join(data, "key.bin")), "key.bin was removed");
+    const rootGone = rootBefore.filter((name) => !fs.existsSync(path.join(data, name))).sort().join();
+    check(rootGone === ["log.bin", "peer", "peer.txt", "peers.txt", "rec-1767225600000.mp4"].sort().join(), `the data folder lost ${rootGone}`);
+    const insideGone = insideBefore.filter((f) => !fs.existsSync(path.join(data, f))).sort().join();
+    check(insideGone === old.filter((name) => name.startsWith(path.join("rooms", OLD_ROOM))).sort().join(), `the old room lost ${insideGone}`);
+    await allSee([a, b, c], "every recording still held", within(SYNC_ROUND_S), (st) => heldByAll(st, ctx.set, [a, b, c]));
   });
 }
 

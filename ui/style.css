@@ -472,13 +472,6 @@ body.boardfull .boardwrap { background: var(--bg); }
 #playtiles .nl { cursor: pointer; }
 .nl .nm { overflow: hidden; text-overflow: ellipsis; }
 .nl .imp { font-size: var(--t-xs); font-weight: var(--w-semibold); padding: 1px 6px; border-radius: var(--r-full); background: rgba(255, 255, 255, .2); }
-.importplan { display: grid; gap: var(--s3); margin: var(--s3) 0; }
-.importplan .fl { display: flex; align-items: center; gap: var(--s3); }
-.importplan .fl input { flex: 1; }
-.importviews { display: grid; gap: 6px; }
-.importview { display: flex; align-items: center; gap: var(--s3); }
-.importview input { width: 180px; flex: none; }
-.importview .file { color: var(--soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nl .rd { width: 7px; height: 7px; border-radius: 50%; background: var(--rec); flex: none; }
 .subt { position: absolute; left: 50%; bottom: 8%; transform: translateX(-50%); max-width: 90%; padding: 2px 10px; border-radius: var(--r-xs); background: rgba(0, 0, 0, .72); color: var(--white); font-size: var(--t-lg); text-align: center; white-space: pre-line; z-index: 2; pointer-events: none; }
 .ink { position: absolute; pointer-events: none; z-index: 1; overflow: visible; }
