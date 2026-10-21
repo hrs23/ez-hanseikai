@@ -75,6 +75,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - clicking a tile picks whose app sound plays and clicks keep no focus: the clicked tile is heard and marked, the app sound button picks the next member, and after clicks on the volume and play buttons Space and the arrows still work (`e2e`, `library`).
 - repeated seeks in one direction add up and a change of direction starts over (`ui-test`); the seek bezel shows the sum, for example 15 s back after three quick left arrows, and releasing a seekbar drag shows the target time in the centre bezel (`manual`).
 - a voice counts as speaking until the hang has passed and not after (`ui-test`); the bezel and a run of seeks end after the bezel time even with animations off (`manual`).
+- the page scripts load as one scope without a name declared twice. `ui-test`
 - dragging the volume and the popover ranges still works with clicks not taking focus; Tab still reaches the controls with a visible focus ring. `manual`
 
 ## Watch Party

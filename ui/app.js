@@ -682,7 +682,7 @@ function tick() {
     feedParts(tl, p, m, b);
     if (tl.mic) {
       tl.loud = clock.playing && !away ? talking(tl.loud, peakOf(tl.mic.tap), now) : -Infinity;
-      markVoice(tl.box, speaking(tl.loud, now), recv(p.key).voice.muted);
+      markVoice(tl.box, stillTalking(tl.loud, now), recv(p.key).voice.muted);
     }
     const end = wallEnd(tl.media);
     const pictured = !!(partAt(p, wall) || {}).v;

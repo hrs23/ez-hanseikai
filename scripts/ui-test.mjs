@@ -9,10 +9,15 @@ const ui = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "ui");
 const read = (f) => fs.readFileSync(path.join(ui, f), "utf8");
 const source = ["util.js", "i18n.js", "live.js", "media.js", "layout.js", "dock.js", "events.js", "markdown.js", "members.js", "recordings.js", "extensions.js", "ai.js", "diag.js"].map(read).join("\n");
 const context = vm.createContext({ window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id, location: { search: "" } });
-const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, memberStatus, viewLine, viewText, tileProblem, livePlayers, ordered, extensionLine, analysisReason, recordingAnalysis, cardParts, dropPos, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, talking, speaking, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, aiPreview, aiDebrief, apiUrl, apiBadge, apiReferenceBlocks, rateOf, liveEdge, netState, summaryLines, leftText, pcCards, clockSummary, flowRows, skewText, liveStep, liveFollow, liveAvail, plan, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, memberStatus, viewLine, viewText, tileProblem, livePlayers, ordered, extensionLine, analysisReason, recordingAnalysis, cardParts, dropPos, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, talking, stillTalking, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, aiPreview, aiDebrief, apiUrl, apiBadge, apiReferenceBlocks, rateOf, liveEdge, netState, summaryLines, leftText, pcCards, clockSummary, flowRows, skewText, liveStep, liveFollow, liveAvail, plan, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 const plain = (v) => JSON.parse(JSON.stringify(v));
 
 const moment = (m, extra = {}) => ({ role: "moment", m, plugin: { id: "apex-matches" }, tags: ["match"], ...extra });
+
+test("the page scripts together declare no name twice", () => {
+  const files = [...read("index.html").matchAll(/<script src="([^"]+)"/g)].map((m) => m[1]);
+  assert.doesNotThrow(() => new vm.Script(files.map(read).join("\n")));
+});
 
 test("match ends come only from plugin moments tagged match", () => {
   const list = [moment(300), moment(100), moment(200, { tags: ["other"] }), moment(250, { plugin: null }), { role: "chapter", m: 50, tags: ["match"], plugin: {} }];
@@ -334,8 +339,8 @@ test("a voice counts as talking while loud and for the hang after", () => {
   const last = ui$.talking(-Infinity, 0.5, 1000);
   assert.equal(last, 1000);
   assert.equal(ui$.talking(last, 0.001, 1100), 1000);
-  assert.equal(ui$.speaking(last, 1000 + ui$.SPEAK_HANG_MS - 1), true);
-  assert.equal(ui$.speaking(last, 1000 + ui$.SPEAK_HANG_MS), false);
+  assert.equal(ui$.stillTalking(last, 1000 + ui$.SPEAK_HANG_MS - 1), true);
+  assert.equal(ui$.stillTalking(last, 1000 + ui$.SPEAK_HANG_MS), false);
   assert.equal(ui$.talking(last, 0.5, 1500), 1500);
 });
 
