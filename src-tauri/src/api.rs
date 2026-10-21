@@ -297,7 +297,8 @@ pub trait Backend {
     fn heads(&self) -> Vec<Head>;
     fn logs(&self, room: &str) -> Vec<Log>;
     fn plugins(&self, room: &str) -> Vec<Value>;
-    fn jobs(&self, room: &str) -> Value;
+    fn analysis(&self, room: &str) -> HashMap<String, Vec<Value>>;
+    fn voice(&self, room: &str, set: &str, member: &str, capture: &str) -> Option<Vec<u8>>;
     fn add(&self, room: &str, record: Value) -> Result<(), String>;
     fn call(&self, name: &str, args: Value) -> Option<Result<Value, String>>;
     fn diagnostics(&self, everyone: bool) -> Result<String, String>;
@@ -322,9 +323,6 @@ impl Loaded {
         self.head.names.get(id).filter(|n| !n.is_empty()).cloned().unwrap_or_else(|| crate::short(id))
     }
 
-    fn offset(&self, owner: &str) -> i64 {
-        self.logs.iter().find(|l| l.owner == owner).map_or(0, |l| l.offset_us)
-    }
 }
 
 fn seconds(set: &Set, us: Option<i64>) -> Value {
@@ -350,9 +348,19 @@ fn status_reply(be: &dyn Backend) -> Response {
     reply(200, json!({"room": app["room"], "recording": app["recording"], "state": own, "members": members}))
 }
 
-fn recording_json(l: &Loaded, set: &Set, debriefs: &HashMap<String, Vec<Value>>, now_us: i64) -> Value {
-    let voice_only = !set.files.is_empty() && set.files.iter().all(|f| f.series(room::SERIES[0]).is_empty());
-    let debrief = voice_only && debriefs.contains_key(&set.id);
+struct Extras {
+    watch: HashMap<String, Vec<Value>>,
+    analysis: HashMap<String, Vec<Value>>,
+}
+
+impl Extras {
+    fn new(be: &dyn Backend, l: &Loaded) -> Self {
+        Self { watch: party::records(&l.logs), analysis: be.analysis(&l.head.id) }
+    }
+}
+
+fn recording_json(l: &Loaded, set: &Set, extras: &Extras, now_us: i64) -> Value {
+    let parent = room::debrief_of(&set.id, &l.logs);
     let start = set.start();
     let end = set.end_shown();
     let members: Vec<Value> = set
@@ -361,12 +369,31 @@ fn recording_json(l: &Loaded, set: &Set, debriefs: &HashMap<String, Vec<Value>>,
         .map(|f| json!({"id": f.owner, "name": l.name(&f.owner), "voice_only": f.series(room::SERIES[0]).is_empty(), "imported": f.view.is_some(), "start_ms": (f.start_us - f.offset_us) / 1000, "end_ms": f.end_us.map(|e| (e - f.offset_us) / 1000)}))
         .collect();
     let imported = set.files.iter().find_map(|f| f.view.as_ref());
-    json!({
-        "id": set.id, "kind": if debrief { "debrief" } else { "play" }, "recording": set.recording(),
+    let mut out = json!({
+        "id": set.id, "kind": if parent.is_some() { "debrief" } else { "play" }, "recording": set.recording(),
         "title": imported.and_then(|v| v.title.clone()), "imported_by": imported.map(|v| json!({"id": v.by, "name": l.name(&v.by)})),
         "start_ms": start / 1000, "end_ms": end.map(|e| e / 1000), "length_s": ((end.unwrap_or(now_us) - start).max(0) as f64 / 1e5).round() / 10.0,
-        "members": members,
-    })
+        "members": members, "analysis": extras.analysis.get(&set.id).cloned().unwrap_or_default(),
+    });
+    if let Some(parent) = parent {
+        out["of"] = json!(parent);
+        out["watch"] = party::watch_json(extras.watch.get(&set.id).map(Vec::as_slice).unwrap_or(&[]));
+    }
+    out
+}
+
+fn voice_reply(be: &dyn Backend, room: &str, set: &Set, member: &str, asked: Option<&str>) -> Response {
+    let captures: Vec<&str> = set.files.iter().find(|f| f.owner == member).map_or_else(Vec::new, |f| f.captures().into_iter().filter(|c| f.segs.iter().any(|s| s.capture == *c && s.series == room::SERIES[1])).collect());
+    let capture = match (asked, captures.as_slice()) {
+        (Some(c), all) if all.contains(&c) => c,
+        (None, [only]) => only,
+        (None, [_, ..]) => return error(409, &format!("This voice has several captures ({}): add one to the path.", captures.join(", "))),
+        _ => return error(404, "No voice of that member in this recording."),
+    };
+    match be.voice(room, &set.id, member, capture) {
+        Some(body) => Response { status: 200, kind: "audio/mp4", body },
+        None => error(404, "No voice of that member in this recording."),
+    }
 }
 
 fn find_set(l: &Loaded, id: &str) -> Option<Set> {
@@ -439,13 +466,10 @@ fn transcript_reply(l: &Loaded, set: &Set, req: &Request) -> Response {
 }
 
 fn board_json(l: &Loaded) -> Value {
-    let at = |e: &Value| e["id"].as_i64().unwrap_or(0) - l.offset(e["author"].as_str().unwrap_or_default());
-    let events = room::events(&l.logs, None);
-    let newest = events.iter().filter(|e| e["kind"] == "board" && (e["values"]["card"].is_null() || e["values"]["card"] == "" || e["values"]["card"] == "team")).max_by_key(|e| at(e));
-    match newest {
-        Some(e) => json!({"text": e["text"], "author": e["author"], "author_name": l.name(e["author"].as_str().unwrap_or_default()), "updated_ms": at(e) / 1000}),
-        None => json!({"text": "", "author": null, "author_name": null, "updated_ms": null}),
-    }
+    let cards = room::board_cards(&room::events(&l.logs, None), &[]);
+    let team = cards.iter().find(|c| c["card"] == "team").unwrap_or(&Value::Null);
+    let author = team["by"].as_str();
+    json!({"text": team["text"], "author": author, "author_name": author.map(|a| l.name(a)), "updated_ms": team["at_us"].as_i64().map(|us| us / 1000)})
 }
 
 fn pick(value: &Value, keys: &[&str]) -> Value {
@@ -453,30 +477,17 @@ fn pick(value: &Value, keys: &[&str]) -> Value {
 }
 
 fn plugins_json(l: &Loaded, list: Vec<Value>) -> Value {
+    let name = |id: &Value| id.as_str().map_or(Value::Null, |id| json!(l.name(id)));
     let plugins: Vec<Value> = list
         .iter()
         .map(|p| {
-            let mut out = pick(p, &["id", "name", "version", "on", "settings", "ready", "process_here"]);
-            out["workers"] = p["workers"].as_array().into_iter().flatten().map(|w| json!({"id": w["id"], "name": l.name(w["id"].as_str().unwrap_or_default()), "on": w["on"], "ready": w["ready"]})).collect();
+            let mut out = pick(p, &["id", "name", "version", "on", "settings", "ready", "runner", "left", "failed", "waiting_for"]);
+            out["runner_name"] = name(&p["runner"]);
+            out["waiting_for_name"] = name(&p["waiting_for"]);
             out
         })
         .collect();
     json!({"plugins": plugins})
-}
-
-fn jobs_json(l: &Loaded, jobs: &Value) -> Value {
-    let list: Vec<Value> = jobs["jobs"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|j| {
-            let mut out = pick(j, &["job", "plugin", "version", "set", "owner", "whole", "state", "by", "error"]);
-            out["owner_name"] = json!(l.name(j["owner"].as_str().unwrap_or_default()));
-            out
-        })
-        .collect();
-    let running = if jobs["running"].is_null() { Value::Null } else { pick(&jobs["running"], &["job", "plugin", "progress"]) };
-    json!({"jobs": list, "running": running})
 }
 
 fn text_of(body: &serde_json::Map<String, Value>, key: &str) -> Result<String, Response> {
@@ -554,7 +565,9 @@ fn add_event(be: &dyn Backend, l: &Loaded, set: &Set, req: &Request) -> Response
         Err(response) => return response,
     };
     let id = be.now_us();
-    if let Err(e) = be.add(&l.head.id, room::user_event(id, kind, &text, target, Value::Null)) {
+    let mut record = room::user_event(id, kind, &text, target, Value::Null);
+    record["source"] = json!("ai");
+    if let Err(e) = be.add(&l.head.id, record) {
         return error(409, &e);
     }
     let key = format!("{}/{id}", be.me());
@@ -600,7 +613,7 @@ fn route(req: &Request, be: &dyn Backend, parts: &[&str]) -> Response {
     let allowed: &[&str] = match parts {
         ["v1", "ops", _] => &["POST"],
         ["v1"] | ["v1", "status"] | ["v1", "diagnostics"] | ["v1", "rooms"] | ["v1", "rooms", _, "recordings"] | ["v1", "rooms", _, "recordings", _] => &["GET"],
-        ["v1", "rooms", _, "recordings", _, "chapters" | "transcript"] | ["v1", "rooms", _, "plugins" | "jobs"] => &["GET"],
+        ["v1", "rooms", _, "recordings", _, "chapters" | "transcript"] | ["v1", "rooms", _, "recordings", _, "voices", _] | ["v1", "rooms", _, "recordings", _, "voices", _, _] | ["v1", "rooms", _, "plugins"] => &["GET"],
         ["v1", "rooms", _, "recordings", _, "events"] => &["GET", "POST"],
         ["v1", "rooms", _, "board"] => &["GET", "PUT"],
         _ => return error(404, "No such endpoint."),
@@ -626,16 +639,16 @@ fn route(req: &Request, be: &dyn Backend, parts: &[&str]) -> Response {
         ["board"] if req.method == "PUT" => put_board(be, &l, req),
         ["board"] => reply(200, board_json(&l)),
         ["plugins"] => reply(200, plugins_json(&l, be.plugins(room))),
-        ["jobs"] => reply(200, jobs_json(&l, &be.jobs(room))),
         ["recordings"] => {
-            let debriefs = party::records(&l.logs);
+            let extras = Extras::new(be, &l);
             let now = be.now_us();
-            reply(200, json!({"recordings": l.sets().iter().map(|s| recording_json(&l, s, &debriefs, now)).collect::<Vec<_>>()}))
+            reply(200, json!({"recordings": l.sets().iter().map(|s| recording_json(&l, s, &extras, now)).collect::<Vec<_>>()}))
         }
         ["recordings", id, tail @ ..] => {
             let Some(set) = find_set(&l, id) else { return error(404, "No such recording.") };
             match tail {
-                [] => reply(200, recording_json(&l, &set, &party::records(&l.logs), be.now_us())),
+                [] => reply(200, recording_json(&l, &set, &Extras::new(be, &l), be.now_us())),
+                ["voices", member, capture @ ..] => voice_reply(be, room, &set, member, capture.first().copied()),
                 ["events"] if req.method == "POST" => add_event(be, &l, &set, req),
                 ["events"] => events_reply(&l, &set, req),
                 ["chapters"] => chapters_reply(&l, &set, be.now_us()),
@@ -734,8 +747,19 @@ impl Backend for Live {
         crate::jobs::plugins_json(&self.0, room)
     }
 
-    fn jobs(&self, room: &str) -> Value {
-        crate::jobs::jobs_json(&self.0, room)
+    fn analysis(&self, room: &str) -> HashMap<String, Vec<Value>> {
+        let core = &self.0;
+        let logs = room::logs(core, room);
+        let sets = room::sets(core, room, &logs);
+        crate::jobs::analysis_by_set(core, room, &logs, &sets, &crate::data::have_counts(core, room, &sets))
+    }
+
+    fn voice(&self, room: &str, set: &str, member: &str, capture: &str) -> Option<Vec<u8>> {
+        let core = &self.0;
+        let found = room::sets(core, room, &room::logs(core, room)).into_iter().find(|s| s.id == set)?;
+        let file = found.files.iter().find(|f| f.owner == member)?;
+        let pieces = crate::stream::set_pieces(core, room, file, capture, room::SERIES[1]);
+        crate::stream::read(core, &pieces, 0, crate::stream::size(&pieces)).ok().filter(|bytes| !bytes.is_empty())
     }
 
     fn add(&self, room: &str, record: Value) -> Result<(), String> {
@@ -900,10 +924,13 @@ mod tests {
             self.logs.lock().unwrap().iter().map(|l| Log { owner: l.owner.clone(), offset_us: l.offset_us, records: l.records.clone() }).collect()
         }
         fn plugins(&self, _: &str) -> Vec<Value> {
-            vec![json!({"id": "transcribe", "name": "Transcription", "summary": "x", "version": "1", "on": true, "settings": {"model": "small"}, "ready": true, "process_here": true, "workers": [{"id": "b", "on": true, "ready": null}]})]
+            vec![json!({"id": "transcribe", "name": "Transcription", "summary": "x", "version": "1", "on": true, "settings": {"model": "small"}, "ready": true, "runner": "a", "left": 1, "failed": 0, "waiting_for": "b"})]
         }
-        fn jobs(&self, _: &str) -> Value {
-            json!({"jobs": [{"job": "t@1/x/s1/b", "plugin": "transcribe", "version": "1", "settings": {}, "set": "s1", "owner": "b", "whole": false, "here": true, "state": "waiting", "by": null, "error": null, "next": false}], "running": null, "tags": {}})
+        fn analysis(&self, _: &str) -> HashMap<String, Vec<Value>> {
+            HashMap::from([("s1".to_string(), vec![json!({"plugin": "transcribe", "state": "left", "reason": "waiting", "waiting_for": "b"})])])
+        }
+        fn voice(&self, _: &str, set: &str, member: &str, _: &str) -> Option<Vec<u8>> {
+            (set == "s2" && member == "b").then(|| b"\0\0\0\x18ftypmp42".to_vec())
         }
         fn add(&self, room: &str, record: Value) -> Result<(), String> {
             if room != "r1" {
@@ -929,7 +956,7 @@ mod tests {
 
     fn plugin_records(id: &str, owner: &str) -> Vec<Value> {
         let p = crate::plugins::find(id).unwrap();
-        let config = crate::jobs::Config { on: true, version: p.version.to_string(), settings: crate::plugins::normalize(p, &Value::Null), runner: None };
+        let config = crate::jobs::Config { on: true, version: p.version.to_string(), settings: crate::plugins::normalize(p, &Value::Null), runner: Some(owner.to_string()) };
         let key = format!("{}s1/{owner}", crate::jobs::prefix(id, &config));
         vec![
             json!({"k": "plugin", "plugin": id, "on": true, "version": p.version, "settings": config.settings, "t_us": 1}),
@@ -951,7 +978,7 @@ mod tests {
             json!({"k": "rec", "set": "s1", "start_us": START}),
             json!({"k": "seg", "capture": "111", "series": "v", "n": 1, "set": "s1", "t_us": START, "d_us": 4 * S, "size": 1, "sha256": "x"}),
             json!({"k": "rec_end", "set": "s1", "t_us": START + 90 * S}),
-            json!({"k": "rec", "set": "s2", "start_us": START + 200 * S}),
+            json!({"k": "rec", "set": "s2", "start_us": START + 200 * S, "voice": true}),
             json!({"k": "rec_end", "set": "s2", "t_us": START + 260 * S}),
             json!({"k": "party", "set": "s2", "t_us": START + 210 * S, "shared": {"set": "s1"}}),
             room::user_event(START + 10 * S, "note", "Late rotate #rotate", json!({"t_us": START + 30 * S, "set": "s1"}), Value::Null),
@@ -962,7 +989,8 @@ mod tests {
         ];
         a.extend(plugin_records("apex-matches", "a"));
         a.extend(plugin_events_a());
-        let mut b = vec![json!({"k": "rec", "set": "s1", "start_us": START + 2 * S}), json!({"k": "rec_end", "set": "s1", "t_us": START + 88 * S})];
+        let voice = |capture: &str| json!({"k": "seg", "capture": capture, "series": "m", "n": 1, "set": "s2", "t_us": START + 200 * S, "d_us": 4 * S, "size": 1, "sha256": "x"});
+        let mut b = vec![json!({"k": "rec", "set": "s1", "start_us": START + 2 * S}), json!({"k": "rec_end", "set": "s1", "t_us": START + 88 * S}), json!({"k": "rec", "set": "s2", "start_us": START + 200 * S, "voice": true}), voice("111"), voice("222")];
         b.extend(plugin_records("transcribe", "b"));
         b.push(plugin_event("transcribe", "b", "speech", 20, Some(24), "Drop north", json!([])));
         b.push(plugin_event("transcribe", "b", "speech", 5, Some(8), "Ready", json!([])));
@@ -1184,6 +1212,7 @@ mod tests {
         assert_eq!((made["kind"].as_str(), made["at_s"].as_f64(), made["author_name"].as_str()), (Some("note"), Some(12.3), Some("Ann")));
         assert_eq!(made["text"], "Check the ring #ring #Mistake #badtag");
         assert_eq!(made["tags"], json!(["ring", "Mistake", "badtag"]));
+        assert_eq!(fake.logs.lock().unwrap()[0].records.last().unwrap()["source"], "ai");
         let (_, list) = get(&fake, "/v1/rooms/r1/recordings/s1/events?tag=mistake");
         assert_eq!(list["events"].as_array().unwrap().len(), 1);
         assert_eq!(list["events"][0]["key"], made["key"]);
@@ -1260,20 +1289,36 @@ mod tests {
     }
 
     #[test]
-    fn plugins_and_jobs_show_their_state_and_who_works_on_them() {
+    fn plugins_show_their_runner_and_what_is_left_and_recordings_their_analysis() {
         let fake = fixture();
         let (status, plugins) = get(&fake, "/v1/rooms/r1/plugins");
         assert_eq!(status, 200);
-        assert_eq!(plugins["plugins"][0]["id"], "transcribe");
-        assert_eq!(plugins["plugins"][0]["on"], true);
-        assert_eq!(plugins["plugins"][0]["workers"], json!([{"id": "b", "name": "Ben", "on": true, "ready": null}]));
-        assert!(plugins["plugins"][0].get("summary").is_none());
-        let (status, jobs) = get(&fake, "/v1/rooms/r1/jobs");
-        assert_eq!(status, 200);
-        assert_eq!(jobs["jobs"][0]["state"], "waiting");
-        assert_eq!(jobs["jobs"][0]["owner_name"], "Ben");
-        assert!(jobs["jobs"][0].get("settings").is_none());
-        assert!(jobs.get("running").is_some());
+        let first = &plugins["plugins"][0];
+        assert_eq!((first["id"].as_str(), first["on"].as_bool(), first["runner_name"].as_str(), first["left"].as_u64(), first["waiting_for_name"].as_str()), (Some("transcribe"), Some(true), Some("Ann"), Some(1), Some("Ben")));
+        assert!(first.get("summary").is_none() && first.get("workers").is_none());
+        assert_eq!(get(&fake, "/v1/rooms/r1/jobs").0, 404);
+        let (_, s1) = get(&fake, "/v1/rooms/r1/recordings/s1");
+        assert_eq!(s1["analysis"][0], json!({"plugin": "transcribe", "state": "left", "reason": "waiting", "waiting_for": "b"}));
+        assert_eq!(get(&fake, "/v1/rooms/r1/recordings/s2").1["analysis"], json!([]));
+    }
+
+    #[test]
+    fn a_debrief_names_its_recording_carries_the_watch_and_serves_its_voices() {
+        let fake = fixture();
+        let (_, s2) = get(&fake, "/v1/rooms/r1/recordings/s2");
+        assert_eq!((s2["kind"].as_str(), s2["of"].as_str()), (Some("debrief"), Some("s1")));
+        assert_eq!(s2["watch"].as_array().unwrap().len(), 1);
+        assert_eq!(s2["watch"][0]["set"], "s1");
+        let (_, s1) = get(&fake, "/v1/rooms/r1/recordings/s1");
+        assert!(s1.get("of").is_none() && s1.get("watch").is_none());
+        assert_eq!(get(&fake, "/v1/rooms/r1/recordings/s2/voices/b").0, 409);
+        let text = format!("GET /v1/rooms/r1/recordings/s2/voices/b/222 HTTP/1.1\r\nHost: 127.0.0.1:{PORT_FOR_TESTS}\r\nAuthorization: Bearer {TOKEN}\r\n\r\n");
+        let voice = handle(&read_request(&mut text.as_bytes()).ok().unwrap(), &fake, TOKEN, PORT_FOR_TESTS, &[]);
+        assert_eq!((voice.status, voice.kind), (200, "audio/mp4"));
+        assert_eq!(&voice.body[4..8], b"ftyp");
+        assert_eq!(get(&fake, "/v1/rooms/r1/recordings/s2/voices/b/333").0, 404);
+        assert_eq!(get(&fake, "/v1/rooms/r1/recordings/s2/voices/a").0, 404);
+        assert_eq!(call(&fake, "POST", "/v1/rooms/r1/recordings/s2/voices/b", "{}").0, 405);
     }
 
     #[test]
@@ -1342,7 +1387,7 @@ mod tests {
 
     #[test]
     fn llms_txt_describes_every_endpoint() {
-        for path in ["/v1/rooms", "recordings", "events", "chapters", "transcript", "board", "plugins", "jobs", "/v1/status", "/v1/diagnostics", "/v1/ops", "create_room", "start_recording", "api.json", "--api"] {
+        for path in ["/v1/rooms", "recordings", "events", "chapters", "transcript", "voices", "board", "plugins", "/v1/status", "/v1/diagnostics", "/v1/ops", "create_room", "start_recording", "api.json", "--api"] {
             assert!(LLMS.contains(path), "{path}");
         }
         assert!(LLMS.contains("Authorization: Bearer") && LLMS.contains("127.0.0.1"));

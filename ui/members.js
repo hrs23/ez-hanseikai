@@ -1,34 +1,48 @@
-const RECEIVE_RECENT_US = 12 * 3600 * 1e6;
-
-function receivingPercent(sets, id, now, me) {
-  let have = 0;
-  let total = 0;
-  for (const s of sets) {
-    if (s.live || !s.end_us || now - s.end_us > RECEIVE_RECENT_US) continue;
-    if (!(s.lacking || []).some((l) => l.id === id)) continue;
-    if (id === me) {
-      have += s.progress.have;
-      total += s.progress.total;
-    } else {
-      total += s.players.length;
-      have += s.players.filter((p) => p.verified_by.includes(id)).length;
-    }
-  }
-  return total ? Math.min(99, Math.floor((have / total) * 100)) : null;
-}
+const VOICE_QUIET_S = 60;
+const PICTURE_LAG_S = 10;
 
 function memberStatus(m, now) {
-  if (!m.connected) {
-    const seen = m.seen_us ? t("Offline · last seen {time}", { time: seenLabel(m.seen_us, now) }) : t("Offline");
-    return { kind: "off", text: seen };
-  }
-  if (m.recording) return { kind: "rec", text: t("Recording") };
-  if (m.receiving !== null && m.receiving !== undefined) return { kind: "recv", text: t("Receiving {n}%", { n: m.receiving }) };
-  if (m.sharing) return { kind: "standby", text: t("Standby") };
-  return { kind: "idle", text: t("Not sharing a screen") };
+  if (!m.connected) return { kind: "off", text: m.seen_us ? t("Offline · last seen {time}", { time: seenLabel(m.seen_us, now) }) : t("Offline") };
+  return m.sharing ? { kind: "standby", text: t("Standby") } : { kind: "idle", text: t("Not sharing") };
 }
 
 function seenLabel(us, now) {
   const at = new Date(us / 1000);
   return `${dayLabel(dayOf(at), now, language)} ${at.toTimeString().slice(0, 5)}`;
+}
+
+const noScreen = (p) => (p.parts || []).length > 0 && p.parts.every((part) => !part.v);
+
+function playerLine(set, p, ctx) {
+  if (p.recording || !p.end_us) return null;
+  const name = ctx.name(p.owner);
+  if (p.verified_by.includes(ctx.me)) return noScreen(p) ? { kind: "nopicture", text: t("{name} didn't record a screen", { name }) } : null;
+  const holders = p.verified_by.filter((id) => id !== ctx.me);
+  if (!holders.some(ctx.online)) return { kind: "away", text: t("{name}'s video is only on {holder}'s PC", { name, holder: ctx.name(holders[0] || p.owner) }) };
+  if (set.wanted || p.have > 0) {
+    const left = ctx.left(set);
+    return { kind: "receiving", text: [t("Receiving {name}'s video", { name }), left ? leftText(left) : null].filter(Boolean).join(" · ") };
+  }
+  return { kind: "missing", text: t("{name}'s video missing", { name }), action: t("Download") };
+}
+
+function viewLine(set, ctx, key) {
+  if (set.live) return null;
+  const lines = set.players.filter((p) => !key || p.owner === key).map((p) => playerLine(set, p, ctx));
+  return lines.find((line) => line && (key || line.kind !== "nopicture")) || null;
+}
+
+const viewText = (line) => (line.action ? `${line.text} · ${line.action}` : line.text);
+
+const ageOf = (now, ...ends) => {
+  const at = ends.find((e) => e !== null && e !== undefined);
+  return at === undefined ? 0 : (now - at) / 1e6;
+};
+
+function tileProblem(m) {
+  if (!m.recording) return null;
+  if (!m.sharing) return t("Not recording screen");
+  if (ageOf(m.now, m.voiceEnd, m.start) > VOICE_QUIET_S) return t("No voice for 1 min");
+  const lag = ageOf(m.now, m.pictureEnd, m.start);
+  return lag > PICTURE_LAG_S ? t("{n} s behind", { n: Math.round(lag) }) : null;
 }

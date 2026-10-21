@@ -7,9 +7,9 @@ import { fileURLToPath } from "node:url";
 
 const ui = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "ui");
 const read = (f) => fs.readFileSync(path.join(ui, f), "utf8");
-const source = ["util.js", "i18n.js", "live.js", "layout.js", "dock.js", "events.js", "markdown.js", "review.js", "members.js", "recordings.js", "plugins.js", "ai.js", "diag.js"].map(read).join("\n");
-const context = vm.createContext({ window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id });
-const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, flowAt, flowBands, flowSteps, isReview, voiceOnly, BOARD_TEMPLATE, memberStatus, receivingPercent, recordingRows, recordingMatches, recordingWords, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, discardable, DISCARD_MAX_S, soundKey, pluginProgress, isBusy, workerState, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, aiPreview, apiUrl, apiBadge, apiReferenceBlocks, rateOf, liveEdge, netState, summaryLines, leftText, pcCards, clockSummary, flowRows, skewText, liveStep, liveFollow, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, toggleTask, boardParts, boardDom, mdHooks, runBy, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const source = ["util.js", "i18n.js", "live.js", "layout.js", "dock.js", "events.js", "markdown.js", "members.js", "recordings.js", "extensions.js", "ai.js", "diag.js"].map(read).join("\n");
+const context = vm.createContext({ window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id, location: { search: "" } });
+const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, memberStatus, viewLine, viewText, tileProblem, livePlayers, ordered, extensionLine, analysisReason, recordingAnalysis, cardParts, dropPos, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, aiPreview, aiDebrief, apiUrl, apiBadge, apiReferenceBlocks, rateOf, liveEdge, netState, summaryLines, leftText, pcCards, clockSummary, flowRows, skewText, liveStep, liveFollow, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 const plain = (v) => JSON.parse(JSON.stringify(v));
 
 const moment = (m, extra = {}) => ({ role: "moment", m, plugin: { id: "apex-matches" }, tags: ["match"], ...extra });
@@ -61,46 +61,10 @@ test("shortcuts need Ctrl or Alt and read like the native menu", () => {
   assert.equal(key("ControlLeft", { ctrlKey: true }), null);
 });
 
-const S = 1e6;
-const party = (t, set, wall, playing, by = "a") => ({ t_us: t, by, shared: { set, wall_us: wall, at_us: t, playing, rate: 1, mode: "grid", order: [] } });
-const flow = [party(100 * S, "s1", 1000 * S, true), party(130 * S, "s1", 1030 * S, false, "b"), party(160 * S, "s1", 1200 * S, true), party(200 * S, "s2", 50 * S, true, "b")];
-
-test("a review replays what the Watch Party watched at each moment", () => {
-  assert.deepEqual(plain(ui$.flowAt(flow, 90 * S)), { set: "s1", playing: false, wall_us: 1000 * S, rate: 1, focus: null, mode: "grid", slots: 0, order: [], by: "a", at: 100 * S });
-  assert.equal(ui$.flowAt(flow, 110 * S).wall_us, 1010 * S);
-  const paused = ui$.flowAt(flow, 150 * S);
-  assert.equal(paused.playing, false);
-  assert.equal(paused.wall_us, 1030 * S);
-  assert.equal(ui$.flowAt(flow, 170 * S).wall_us, 1210 * S);
-  assert.equal(ui$.flowAt(flow, 260 * S).set, "s2");
-  assert.equal(ui$.flowAt([], 1), null);
-});
-
-test("the bands under a review's seekbar show which session was watched", () => {
-  assert.deepEqual(plain(ui$.flowBands(flow, 90 * S, 300 * S)), [{ set: "s1", from: 90 * S, to: 200 * S }, { set: "s2", from: 200 * S, to: 300 * S }]);
-  assert.deepEqual(plain(ui$.flowBands(flow, 140 * S, 180 * S)), [{ set: "s1", from: 140 * S, to: 180 * S }]);
-});
-
-test("what was shown lists openings, plays, pauses and jumps", () => {
-  assert.deepEqual(plain(ui$.flowSteps(flow).map((s) => [s.kind, s.by])), [["open", "a"], ["pause", "b"], ["play", "a"], ["open", "b"]]);
-  const seek = [party(0, "s1", 0, false), party(10 * S, "s1", 1 * S, false), party(20 * S, "s1", 90 * S, false)];
-  assert.deepEqual(plain(ui$.flowSteps(seek).map((s) => s.kind)), ["open", "seek"]);
-});
-
-test("a review session has voices only and Watch Party records", () => {
-  const voice = { players: [{ parts: [{ m: {} }] }], party: [flow[0]] };
-  assert.equal(ui$.isReview(voice), true);
-  assert.equal(ui$.isReview({ ...voice, party: [] }), false);
-  assert.equal(ui$.isReview({ players: [{ parts: [{ v: {}, m: {} }] }], party: [flow[0]] }), false);
-  assert.equal(ui$.voiceOnly({ players: [] }), false);
-  const starting = { players: [{ parts: [] }], party: [flow[0]] };
-  assert.equal(ui$.isReview(starting), false);
-  assert.equal(ui$.isReview({ ...starting, players: [{ parts: [] }, { parts: [{ m: {} }] }] }), true);
-});
 
 test("the delete preview lists every part that is here and says whether the recording goes completely", () => {
-  const set = { id: "s1", shared: true, progress: { have: 30 }, players: [{ owner: "me", have: 10 }, { owner: "b", have: 20 }, { owner: "c", have: 0 }] };
-  assert.deepEqual(plain(ui$.deletePreview([set])), [{ id: "s1", bytes: 30, form: "Others still have it", players: [{ owner: "me", bytes: 10 }, { owner: "b", bytes: 20 }] }]);
+  const set = { id: "s1", shared: true, progress: { have: 30 }, players: [{ owner: "me", have: 10 }, { owner: "b", have: 20 }, { owner: "c", have: 0 }], debriefs: ["d1"] };
+  assert.deepEqual(plain(ui$.deletePreview([set])), [{ id: "s1", bytes: 30, form: "Others still have it", players: [{ owner: "me", bytes: 10 }, { owner: "b", bytes: 20 }], debriefs: ["d1"] }]);
   assert.equal(ui$.deletePreview([{ ...set, shared: false }])[0].form, "This deletes it completely");
   const sets = ["s5", "s4", "s3", "s2", "s1"].map((id) => ({ id, live: false, progress: { have: id === "s2" ? 0 : 1 } }));
   assert.deepEqual([...ui$.oldSessions(sets, 2)], ["s3", "s1"]);
@@ -127,20 +91,6 @@ test("the two delete confirmations read the same in both languages", () => {
     assert.equal(ui$.t(text), ja);
     ui$.setLanguage("en");
   }
-  assert.equal(ui$.t("Discard this recording?"), "Discard this recording?");
-  ui$.setLanguage("ja");
-  assert.match(ui$.t("Discard this recording?"), /破棄しますか/);
-  ui$.setLanguage("en");
-});
-
-test("a recording of 30 seconds or less is offered for discarding when it is stopped", () => {
-  assert.equal(ui$.DISCARD_MAX_S, 30);
-  assert.equal(ui$.discardable(0), true);
-  assert.equal(ui$.discardable(30), true);
-  assert.equal(ui$.discardable(30.5), false);
-  const app = read("app.js");
-  assert.match(app, /discardable\(seconds\) && \(await ask\(t\("Discard this recording\?"\)/);
-  assert.match(app, /run\("discard_set"/);
 });
 
 test("receiving speed and the live edge", () => {
@@ -167,7 +117,7 @@ test("the diagnostics overview marks problems", () => {
     disk: { free: 1e9, hours_left: 2, low: true, full: false },
   };
   const levels = Object.fromEntries(ui$.summaryLines(st, 1).map((l) => [l.key, l.level]));
-  assert.deepEqual(levels, { Connections: "warn", Capture: "info", Microphone: "info", Transfers: "warn", Storage: "warn", Versions: "warn", Clocks: "info", Plugins: "fail" });
+  assert.deepEqual(levels, { Connections: "warn", Capture: "info", Microphone: "info", Transfers: "warn", Storage: "warn", Versions: "warn", Clocks: "info", Extensions: "fail" });
 });
 
 const hw = { gpu: "Test Graphics 9000", driver: "31.0.15.1234", encoder: "NVENC", codec: "hevc", cpu: "Fake CPU 3.5GHz", ram_mb: 16384, display: [2560, 1440], os: "Test Windows 10.0.99999", fps: 29.9, dropped: 2 };
@@ -288,7 +238,7 @@ test("the new Diagnostics texts have Japanese translations", () => {
 
 test("every fixed text has a Japanese translation", () => {
   const used = new Set();
-  for (const f of ["app.js", "side.js", "pages.js", "review.js", "events.js", "util.js", "draw.js", "ai.js", "members.js", "recordings.js", "plugins.js", "diag.js", "markdown.js"]) {
+  for (const f of ["app.js", "side.js", "pages.js", "board.js", "extensions.js", "events.js", "util.js", "draw.js", "ai.js", "members.js", "recordings.js", "diag.js", "markdown.js"]) {
     const s = read(f);
     for (const m of s.matchAll(/\bt\(\s*"((?:[^"\\]|\\.)*)"/g)) used.add(JSON.parse(`"${m[1]}"`));
     for (const m of s.matchAll(/\bt\([^)]*\?\s*"((?:[^"\\]|\\.)*)"\s*:\s*"((?:[^"\\]|\\.)*)"/g)) { used.add(JSON.parse(`"${m[1]}"`)); used.add(JSON.parse(`"${m[2]}"`)); }
@@ -304,18 +254,6 @@ test("the all-players view plays the viewer's own sound and a focused player pla
   assert.equal(ui$.soundKey(0, ["a"], "z"), "a");
   assert.equal(ui$.soundKey(3, ["a", "b", "c"], "a"), "c");
   assert.equal(ui$.soundKey(0, [], "a"), null);
-});
-
-test("a plugin's progress counts its finished sessions and its busy members", () => {
-  const jobs = [{ plugin: "t", state: "done" }, { plugin: "t", state: "claimed", by: "b" }, { plugin: "t", state: "waiting" }, { plugin: "x", state: "done" }];
-  assert.deepEqual(plain(ui$.pluginProgress(jobs, "t")), { done: 1, total: 3 });
-  assert.deepEqual(plain(ui$.pluginProgress(jobs, "none")), { done: 0, total: 0 });
-  assert.equal(ui$.isBusy(jobs, "t", "b"), true);
-  assert.equal(ui$.isBusy(jobs, "t", "a"), false);
-  assert.equal(ui$.workerState({ on: false, ready: true }, true), "off");
-  assert.equal(ui$.workerState({ on: true, ready: false }, false), "missing");
-  assert.equal(ui$.workerState({ on: true, ready: true }, true), "busy");
-  assert.equal(ui$.workerState({ on: true, ready: null }, false), "ready");
 });
 
 test("a download shows its percent, speed and time left", () => {
@@ -338,7 +276,7 @@ test("everyone is told who started or stopped recording", () => {
 test("the pages call a recording a recording, never a session", () => {
   const texts = [...Object.keys(ui$.JA), ...Object.values(ui$.JA)];
   assert.deepEqual(texts.filter((x) => /session|セッション/i.test(x)), []);
-  for (const f of ["app.js", "side.js", "pages.js", "review.js", "events.js", "util.js", "plugins.js", "ai.js", "markdown.js", "index.html"]) {
+  for (const f of ["app.js", "side.js", "pages.js", "board.js", "extensions.js", "events.js", "util.js", "ai.js", "markdown.js", "index.html"]) {
     const shown = [...read(f).matchAll(/\bt\(\s*"((?:[^"\\]|\\.)*)"|data-t(?:-title|-placeholder|-label)?="([^"]*)"/g)].map((m) => m[1] || m[2]);
     assert.deepEqual(shown.filter((x) => /session/i.test(x)), [], f);
   }
@@ -375,8 +313,6 @@ test("the AI menu offers a few prompts, or the switch when the API is off", () =
   assert.deepEqual(plain(off.map((i) => i.label)), ["Turn on the local API"]);
   off[0].run();
   assert.equal(calls[1], "enable");
-  const html = read("index.html");
-  assert.match(html, /<dialog id="promptdlg"[^]*?id="prompttext"[^>]*readonly[^]*?id="promptcopy"/);
   assert.ok("Copy prompt" in ui$.JA);
 });
 
@@ -395,29 +331,6 @@ test("a prompt names the API address, the token, llms.txt, the room and the reco
   assert.deepEqual(plain(ui$.aiPurposes().map((p) => p.label)), ["文字起こしからメモを書く", "録画を作戦ボードにまとめる", "試合のミスを探す"]);
   ui$.setLanguage("en");
   assert.equal(ui$.apiUrl("127.0.0.1:1"), "http://127.0.0.1:1");
-});
-
-test("Settings has one switch for the local API with its address and token buttons, and the room and player offer AI", () => {
-  const html = read("index.html");
-  assert.match(html, /<section data-pane="api">[^]*?<input id="apion" type="checkbox" class="switch" role="switch">[^]*?id="apiaddr"[^]*?id="apicopy"[^]*?id="apinew"[^]*?<\/section>/);
-  assert.match(html, /<button data-pane="api">/);
-  assert.match(html, /<button id="aibtn"[^>]*>[^]*?data-t="AI"/);
-  assert.match(html, /<button id="aiplay"[^>]*>[^]*?data-t="AI"/);
-  assert.equal((html.match(/id="apion"/g) || []).length, 1);
-  for (const word of ["API", "Local API", "Copy token", "New token", "AI", "The port is in use"]) assert.ok(word in ui$.JA, word);
-});
-
-test("Settings > API has the access choice with its warning, the endpoint reference and llms.txt, and the sidebar has a badge that opens it", () => {
-  const html = read("index.html");
-  assert.match(html, /<section data-pane="api">[^]*?id="apiaccess"[^]*?data-lan="0"[^]*?data-lan="1"[^]*?id="apilanbox"[^]*?data-t="Other devices on your network can control the app"[^]*?id="apidoc"[^]*?id="apiref"[^]*?<\/section>/);
-  assert.match(html, /<div class="facesrow"><span id="roomfaces" class="roomfaces"><\/span><button id="apibadge" class="apibadge" hidden><\/button><\/div>/);
-  const pages = read("pages.js");
-  assert.match(pages, /\$\("apibadge"\)\.onclick = \(\) => openSettings\("api"\)/);
-  assert.match(pages, /run\("set_api_lan"/);
-  assert.match(pages, /dialog\("open_link", \{ url: `\$\{apiUrl\(st\.api\.address\)\}\/llms\.txt` \}\)/);
-  assert.match(pages, /invoke\("api_reference"\)/);
-  assert.match(pages, /el\("details"/);
-  for (const word of ["Access", "This PC only", "Other devices", "Other devices on your network can control the app", "The local API is on", "Endpoints", "Open llms.txt"]) assert.ok(word in ui$.JA, word);
 });
 
 test("the badge shows only while the API runs and warns when other devices can reach it", () => {
@@ -461,70 +374,31 @@ test("every fixed message the export code can send has a Japanese one", () => {
   assert.deepEqual(fixed.filter((x) => !(x in ui$.JA)), []);
 });
 
-test("the browser's own context menu is replaced by an edit menu in text fields and for selected text", () => {
-  const app = read("app.js");
-  assert.match(app, /document\.addEventListener\("contextmenu", \(e\) => \{\s*if \(e\.defaultPrevented\) return;\s*e\.preventDefault\(\);/);
-  assert.match(app, /t\("Cut"\)[^]*?t\("Copy"\)[^]*?t\("Paste"\)[^]*?t\("Select all"\)/);
-  const shell = fs.readFileSync(path.join(ui, "..", "src-tauri", "src", "shell.rs"), "utf8");
-  assert.match(shell, /SetAreBrowserAcceleratorKeysEnabled\(false\)/);
-  for (const word of ["Cut", "Copy", "Paste", "Select all"]) assert.ok(word in ui$.JA, word);
-});
-
-test("a board that was never written starts from a short template in both languages", () => {
-  for (const lang of ["en", "ja"]) {
-    const text = ui$.BOARD_TEMPLATE[lang];
-    const lines = text.split("\n");
-    assert.ok(lines.length <= 12, `${lang} has ${lines.length} lines`);
-    assert.match(lines[0], /^# /);
-    assert.equal(lines.filter((l) => l.startsWith("## ")).length, 3);
-    assert.ok(lines.filter((l) => l.startsWith("- ")).length >= 4);
-  }
-});
-
-const HOUR = 3600e6;
-const NOW = 100 * HOUR;
-const finished = (id, extra = {}) => ({ id, live: false, end_us: NOW - HOUR, progress: { have: 40, total: 100 }, lacking: [], players: [{ owner: "a", verified_by: ["a", "b"] }, { owner: "b", verified_by: ["a"] }], ...extra });
-
 test("a member row says one short state", () => {
   const at = new Date(2026, 9, 19, 12, 0);
   ui$.setLanguage("en");
-  const say = (m) => ui$.memberStatus({ connected: true, sharing: false, recording: false, receiving: null, ...m }, at).text;
-  assert.equal(say({}), "Not sharing a screen");
+  const say = (m) => ui$.memberStatus({ connected: true, sharing: false, ...m }, at).text;
+  assert.equal(say({}), "Not sharing");
   assert.equal(say({ sharing: true }), "Standby");
-  assert.equal(say({ sharing: true, receiving: 42 }), "Receiving 42%");
-  assert.equal(say({ sharing: true, receiving: 42, recording: true }), "Recording");
   assert.equal(say({ connected: false }), "Offline");
   assert.equal(say({ connected: false, seen_us: new Date(2026, 9, 19, 9, 5).getTime() * 1000 }), "Offline · last seen Today 09:05");
   ui$.setLanguage("ja");
-  assert.equal(say({}), "画面を選んでいません");
+  assert.equal(say({}), "共有していません");
   assert.equal(say({ sharing: true }), "待機中");
-  assert.equal(say({ recording: true }), "録画中");
-  assert.equal(say({ receiving: 42 }), "受信中 42%");
   assert.match(say({ connected: false }), /^オフライン/);
   ui$.setLanguage("en");
 });
-
-test("receiving counts only recent recordings a member still lacks", () => {
-  const lacking = [{ id: "b", n: 1 }];
-  assert.equal(ui$.receivingPercent([finished("s1", { lacking })], "b", NOW, "a"), 50);
-  assert.equal(ui$.receivingPercent([finished("s1")], "b", NOW, "a"), null);
-  assert.equal(ui$.receivingPercent([finished("old", { lacking, end_us: NOW - 24 * HOUR })], "b", NOW, "a"), null);
-  assert.equal(ui$.receivingPercent([finished("s1", { lacking: [{ id: "a", n: 1 }] })], "a", NOW, "a"), 40);
-  assert.equal(ui$.receivingPercent([finished("s1", { live: true, lacking })], "b", NOW, "a"), null);
-});
-
-test("the recordings list is one newest-first list of every recording, and search reads names and marks", () => {
-  const sets = Array.from({ length: 9 }, (_, i) => ({ id: `2026-10-0${i + 1} 10-00-00`, live: false, players: [{ owner: "a" }], party: [], imported_by: i === 2 ? "Ann" : null }));
-  sets.push({ id: "live", live: true, players: [] });
+test("a recording is hidden from the list when it is a debrief of another, and debriefs are found by the recording they name", () => {
+  const sets = [{ id: "s1", live: false, of: null }, { id: "d1", live: false, of: "s1" }, { id: "d2", live: false, of: "s1" }, { id: "s2", live: false, of: null }, { id: "live", live: true, of: null }];
   ui$.setStorage({ sets });
-  const rows = ui$.recordingRows();
-  assert.equal(rows.length, 9);
-  assert.equal(rows[0].id, "2026-10-09 10-00-00");
-  assert.ok(rows.every((r, i) => !i || rows[i - 1].id > r.id));
-  assert.ok(ui$.recordingMatches(rows.find((r) => r.id.startsWith("2026-10-03")), ui$.recordingWords("imported")));
-  assert.ok(!ui$.recordingMatches(rows.find((r) => r.id.startsWith("2026-10-04")), ui$.recordingWords("imported")));
+  const { recordingRows, debriefsOf } = vm.runInContext("({ recordingRows, debriefsOf })", context);
+  assert.deepEqual(plain(recordingRows().map((r) => r.id)), ["s2", "s1"]);
+  assert.deepEqual(plain(debriefsOf("s1").map((d) => d.id)), ["d1", "d2"]);
+  assert.deepEqual(debriefsOf("s2"), []);
+  assert.equal(ui$.noPicture({ players: [{ parts: [{ m: {} }] }] }), true);
+  assert.equal(ui$.noPicture({ players: [{ parts: [{ v: {}, m: {} }] }] }), false);
+  assert.equal(ui$.noPicture({ players: [] }), false);
 });
-
 test("the sidebar width stays between limits and the splitter takes the arrow keys", () => {
   assert.equal(ui$.clampSide(100), ui$.SIDE_MIN);
   assert.equal(ui$.clampSide(900), ui$.SIDE_MAX);
@@ -542,29 +416,20 @@ test("the sidebar width stays between limits and the splitter takes the arrow ke
 const blocks = (text) => plain(ui$.mdParse(text));
 const kinds = (text) => blocks(text).map((b) => b.type);
 
-test("markdown reads headings, lists, task lists, tables, code, quotes and rules", () => {
-  assert.deepEqual(kinds("# A\ntext\n\n- a\n- b\n\n1. x\n2. y\n\n> q\n\n---\n\n```js\ncode\n```"), ["heading", "paragraph", "list", "list", "quote", "rule", "code"]);
-  const list = blocks("- [ ] one\n- [x] two\n  - nested\n- plain")[0];
-  assert.deepEqual(list.items.map((i) => i.task), [false, true, null]);
+test("markdown reads headings, lists and paragraphs only", () => {
+  assert.deepEqual(kinds("# A\ntext\n\n- a\n- b\n\n1. x\n2. y"), ["heading", "paragraph", "list", "list"]);
+  const list = blocks("- one\n- two\n  - nested\n- plain")[0];
+  assert.deepEqual(list.items.map((i) => i.inline[0].text), ["one", "two", "plain"]);
   assert.equal(list.items[1].blocks[0].type, "list");
-  assert.deepEqual(list.items.map((i) => i.n), [0, 1, 3]);
   assert.equal(blocks("1. a\n2. b")[0].ordered, true);
   assert.deepEqual(blocks("1. Drop\n2. Loot\n\nThen regroup.\n\n3. Rotate\n\nok\n\n0. zero").filter((b) => b.type === "list").map((b) => b.start), [1, 3, 0]);
   assert.equal(blocks("- a")[0].start, null);
-  const table = blocks("| Name | Score |\n|:--|--:|\n| Aki | 3 |\n| Ren | 5 \\| 6 |")[0];
-  assert.equal(table.type, "table");
-  assert.deepEqual(table.align, ["", "right"]);
-  assert.equal(table.rows.length, 2);
-  assert.equal(table.rows[1][1][0].text, "5 | 6");
-  assert.deepEqual(table.rows.map((r) => r.length), [2, 2]);
-  assert.deepEqual(blocks("| a | b |\n|---|---|\n| 1 |\n| 1 | 2 | 3 |")[0].rows.map((r) => r.length), [1, 2]);
-  const wide = `${"|".repeat(501)}\n${"-|".repeat(500)}\n${"|\n".repeat(990)}`;
-  assert.equal(blocks(wide)[0].rows.flat().length, 990);
-  assert.deepEqual(kinds("a | b\nnot a table"), ["paragraph"]);
-  assert.equal(blocks("```\n## not a heading\n```")[0].text, "## not a heading");
+  assert.deepEqual(kinds("| a | b |\n|---|---|\n| 1 | 2 |"), ["paragraph"]);
+  assert.deepEqual(kinds("```\ncode\n```"), ["paragraph"]);
+  assert.deepEqual(kinds("> quote\n\n---"), ["paragraph", "paragraph"]);
+  assert.equal(blocks("- [x] done")[0].items[0].inline[0].text, "[x] done");
   assert.deepEqual(kinds("- a\n1. b"), ["list", "list"]);
 });
-
 test("markdown inline reads emphasis, code, links and tags, and only safe links become links", () => {
   const node = (text) => plain(ui$.mdInline(text));
   assert.deepEqual(node("**b** *i* ~~s~~ ==m== `c`").filter((n) => !n.text).map((n) => Object.keys(n)[0]), ["strong", "em", "strike", "mark", "code"]);
@@ -591,35 +456,23 @@ test("markdown inline reads emphasis, code, links and tags, and only safe links 
   assert.ok(performance.now() - started < 100);
 });
 
-test("a task is ticked by changing only its line", () => {
-  const text = "# Plan\n- [ ] a\n- [x] b\n  - [ ] c\nplain [ ] d";
-  assert.equal(ui$.toggleTask(text, 1), "# Plan\n- [x] a\n- [x] b\n  - [ ] c\nplain [ ] d");
-  assert.equal(ui$.toggleTask(text, 2), "# Plan\n- [ ] a\n- [ ] b\n  - [ ] c\nplain [ ] d");
-  assert.equal(ui$.toggleTask(text, 3), "# Plan\n- [ ] a\n- [x] b\n  - [x] c\nplain [ ] d");
-  assert.equal(ui$.toggleTask(text, 4), text);
-  assert.equal(ui$.toggleTask(text, 99), text);
-  assert.equal(ui$.toggleTask("> - [ ] rotate\n> > 1. [x] hold", 0), "> - [x] rotate\n> > 1. [x] hold");
-  assert.equal(ui$.toggleTask("> - [ ] rotate\n> > 1. [x] hold", 1), "> - [ ] rotate\n> > 1. [ ] hold");
-  assert.equal(blocks(text)[1].items[0].n, 1);
+test("a card is a bold first line over short markdown, with marked text, scene links and tags", () => {
+  const head = (text) => plain(ui$.cardParts(text).head);
+  assert.deepEqual(head("Win the first fight\n- a\n- b").map((n) => n.text), ["Win the first fight"]);
+  assert.deepEqual(plain(ui$.cardParts("Goal\n- a\n- b").body).map((b) => b.type), ["list"]);
+  assert.deepEqual(head("# Plan ==now==").map((n) => Object.keys(n)[0]), ["text", "mark"]);
+  assert.equal(ui$.cardParts("").head.length, 0);
+  assert.equal(ui$.cardParts("only a line").body.length, 0);
+  const node = plain(ui$.mdInline("go [push](ezh://moment/s1/12.5/all) #rotate ==hold=="));
+  assert.deepEqual(node.filter((n) => !n.text).map((n) => (n.link ? "link" : n.tag ? "tag" : "mark")), ["link", "tag", "mark"]);
 });
 
-test("a board is a title, a goal and cards, split by the same parser that renders them", () => {
-  const title = (inline) => inline.map((n) => n.text).join("");
-  const parts = plain(ui$.boardParts("# Title\n**Goal**\n## One\n- a\n```\n## nope\n```\n## Two\ntext"));
-  assert.equal(title(parts.title), "Title");
-  assert.deepEqual(parts.lead.map((b) => b.type), ["paragraph"]);
-  assert.deepEqual(parts.sections.map((s) => title(s.title)), ["One", "Two"]);
-  assert.equal(parts.sections[0].blocks[1].text, "## nope");
-  assert.equal(plain(ui$.boardParts("no title\n## A\nb")).sections.length, 1);
-  const early = plain(ui$.boardParts("Warm up together\n# Week 12\n- [ ] Win first fight\n## Rules\n- [ ] x"));
-  assert.equal(title(early.title), "Week 12");
-  assert.equal(early.lead.find((b) => b.type === "list").items[0].n, 2);
-  assert.equal(early.sections[0].blocks[0].items[0].n, 4);
-  const closed = plain(ui$.boardParts("# Plan #\n## Rules ##\nhold\n   ## Calls\n- b"));
-  assert.equal(title(closed.title), "Plan");
-  assert.deepEqual(closed.sections.map((s) => title(s.title)), ["Rules", "Calls"]);
+test("dropping a card between two others takes the middle position, and at the ends one step beyond", () => {
+  assert.equal(ui$.dropPos([1, 2, 3], 0), 0);
+  assert.equal(ui$.dropPos([1, 2, 3], 1), 1.5);
+  assert.equal(ui$.dropPos([1, 2, 3], 3), 4);
+  assert.equal(ui$.dropPos([], 0), 0);
 });
-
 class Text {
   constructor(text) { this.text = text; }
   get textContent() { return this.text; }
@@ -636,88 +489,56 @@ class Fake {
 function page(files, globals = {}) {
   const boxes = {};
   const document = { createElement: (tag) => new Fake(tag), createElementNS: (ns, tag) => new Fake(tag), getElementById: (id) => (boxes[id] ||= new Fake("div")), querySelectorAll: () => [], documentElement: {} };
-  const ctx = vm.createContext({ window: { __TAURI__: { core: {} } }, document, console, Intl, Date, URL, ...globals });
+  const ctx = vm.createContext({ window: { __TAURI__: { core: {} } }, document, console, Intl, Date, URL, location: { search: "" }, ...globals });
   vm.runInContext(files.map(read).join("\n"), ctx);
   return { ctx, boxes };
 }
 
-test("a plugins page never prints the word null, whatever is on or off", () => {
-  const plugin = (id, on) => ({ id, name: id, summary: "x", sample: "chapters", on, settings: {}, options: [], workers: [{ id: "me", on: true, ready: true }], runner: null, ready: true, download: null, download_bytes: 0, process_here: true });
-  const { ctx, boxes } = page(["util.js", "icons.js", "i18n.js", "layout.js", "events.js", "markdown.js", "members.js", "plugins.js"], { st: { id: "me", name: "Aki", names: {}, colors: {}, palette: [] }, nameOf: () => "Aki", avatar: () => new Fake("span"), pill: (cls, name, text) => { const p = new Fake("span"); p.append(text); return p; }, pollPlugins() {}, fail() {}, ask: () => Promise.resolve(false), renderRoom() {}, showRoomTab() {}, jobInfo: null, roomTab: "plugins", lang: "en" });
-  for (const [on, off] of [[["a", "b"], []], [[], ["a", "b"]], [["a"], ["b"]]]) {
-    vm.runInContext(`plugins = ${JSON.stringify([...on.map((id) => plugin(id, true)), ...off.map((id) => plugin(id, false))])}; sigs.roomtab = undefined; delete sigs.roomtab; openPlugin = ${JSON.stringify(on[0] || null)}; renderPlugins();`, ctx);
-    assert.doesNotMatch(boxes.roomtab.textContent, /null|undefined/, `${on} on, ${off} off`);
-  }
-});
-
-test("a game plan shows tables, code and tasks, and nothing a note can write runs or navigates", () => {
-  const { ctx } = page(["util.js", "icons.js", "i18n.js", "layout.js", "events.js", "markdown.js"], { st: { palette: [] }, jobInfo: null, filterTag() {}, openLink() {} });
-  const text = ["# Plan", "**Goal**", "## Cards", "- [ ] a task", "- [x] done", "| A | B |", "|---|---|", "| 1 | 2 |", "```", "let x = 1;", "```", "[bad](javascript:alert(1)) <img src=x onerror=alert(1)> [ok](https://example.com/p) [m](ezh://moment/s1/5/all)"].join("\n");
-  const card = vm.runInContext(`boardDom(${JSON.stringify(text)}, mdHooks({ onTask: () => {}, onOpen: () => {} }))`, ctx);
-  assert.equal(card.find("table").length, 1);
-  assert.equal(card.find("pre").length, 1);
-  assert.equal(card.find("input").length, 2);
-  assert.deepEqual(card.find("input").map((i) => i.checked), [false, true]);
+test("a card shows nothing a note can write as running or navigating", () => {
+  const { ctx } = page(["util.js", "icons.js", "i18n.js", "layout.js", "events.js", "markdown.js"], { st: { palette: [] }, filterTag() {}, openLink() {} });
+  const text = ["Plan", "[bad](javascript:alert(1)) <img src=x onerror=alert(1)> [ok](https://example.com/p) [m](ezh://moment/s1/5/all)", "- [ ] not a task", "| A | B |"].join("\n");
+  const card = vm.runInContext(`cardDom(${JSON.stringify(text)}, mdHooks({ onOpen: () => {} }))`, ctx);
+  assert.equal(card.find("table").length + card.find("pre").length + card.find("input").length, 0);
   assert.deepEqual(card.find("a").map((a) => a.title), ["https://example.com/p"]);
   assert.ok(card.find("a").every((a) => a.href === undefined));
-  assert.equal(card.find("img").length, 0);
-  assert.equal(card.find("script").length, 0);
+  assert.equal(card.find("img").length + card.find("script").length, 0);
   assert.match(card.textContent, /javascript:alert\(1\)/);
   assert.match(card.textContent, /<img src=x onerror=alert\(1\)>/);
   assert.equal(card.find("button").filter((b) => b.className === "link").length, 1);
   const labels = [];
   ctx.onOpen = (url, label) => labels.push(label);
-  const links = vm.runInContext(`boardDom("https://a.example/x <https://a.example@evil.example/y> [b](https://b.example/z)", mdHooks({ onOpen }))`, ctx).find("a");
+  const links = vm.runInContext(`cardDom("x\\nhttps://a.example/x <https://a.example@evil.example/y> [b](https://b.example/z)", mdHooks({ onOpen }))`, ctx).find("a");
   for (const a of links) a.onclick({ preventDefault() {}, stopPropagation() {} });
   assert.deepEqual(labels, ["https://a.example/x", "https://a.example@evil.example/y", "b"]);
-  const preview = vm.runInContext(`boardDom(${JSON.stringify("- [ ] a")}, mdHooks({ onTask: null }))`, ctx);
-  assert.equal(preview.find("input")[0].disabled, true);
-  const dom = (text) => vm.runInContext(`boardDom(${JSON.stringify(text)}, mdHooks())`, ctx);
-  assert.deepEqual(dom("5. five\n6. six\n\n- x").find("ol").map((o) => o.start), [5]);
-  assert.deepEqual(dom("# Mine\n- a\n- b").children.map((c) => c.className), ["title", "md"]);
-  assert.deepEqual(dom("# Plan\nGoal\n## Calls\n- a\n## Moments\n- [push](ezh://moment/s1/5/all)").find("section").map((x) => x.className), ["bsec md", "bsec md wide"]);
-  assert.equal(dom("# Plan\nGoal\n## Calls\n- a").children[1].className, "lead md");
+  const dom = (t) => vm.runInContext(`cardDom(${JSON.stringify(t)}, mdHooks())`, ctx);
+  assert.deepEqual(dom("Lead\n5. five\n6. six\n\n- x").find("ol").map((o) => o.start), [5]);
+  assert.equal(dom("Lead\nbody").children[0].className, "chead");
 });
-
-test("a moment link keeps a formatted label, and deep quotes and lists render without running out of stack", () => {
-  const { ctx } = page(["util.js", "icons.js", "i18n.js", "layout.js", "events.js", "markdown.js"], { st: { palette: [] }, jobInfo: null, filterTag() {}, openLink() {} });
-  const label = (text) => vm.runInContext(`boardDom(${JSON.stringify(text)}, mdHooks())`, ctx).find("button").filter((b) => b.className === "link")[0].textContent;
+test("a moment link keeps a formatted label, and deep lists render without running out of stack", () => {
+  const { ctx } = page(["util.js", "icons.js", "i18n.js", "layout.js", "events.js", "markdown.js"], { st: { palette: [] }, filterTag() {}, openLink() {} });
+  const label = (text) => vm.runInContext(`cardDom(${JSON.stringify("x\n" + text)}, mdHooks())`, ctx).find("button").filter((b) => b.className === "link")[0].textContent;
   assert.equal(label("[**Opening** push](ezh://moment/s1/5/all)"), "Opening push 0:05");
   assert.equal(label("[Rotate `B`](ezh://moment/s1/5/all)"), "Rotate B 0:05");
   assert.equal(label("ezh://moment/s1/5/all"), "Moment 0:05");
-  for (const text of [">".repeat(4000), "- x\n" + Array.from({ length: 80 }, (_, k) => " ".repeat(2 * k + 2) + "- x").join("\n")]) {
-    const card = vm.runInContext(`boardDom(${JSON.stringify(text)}, mdHooks())`, ctx);
-    assert.ok(card.find("blockquote").length + card.find("ul").length <= 9);
-  }
-  const depth = (b) => (b.type === "quote" ? 1 + Math.max(0, ...b.blocks.map(depth)) : 0);
-  assert.equal(depth(blocks("> ".repeat(20) + "x")[0]), 8);
-  assert.equal(depth(blocks("> > a")[0]), 2);
+  const text = "- x\n" + Array.from({ length: 80 }, (_, k) => " ".repeat(2 * k + 2) + "- x").join("\n");
+  const card = vm.runInContext(`cardDom(${JSON.stringify(text)}, mdHooks())`, ctx);
+  assert.ok(card.find("ul").length <= 9);
 });
-
-test("a link's text vouches only for the host it names, and the jobs list names whose PC runs a job", () => {
+test("a link's text vouches only for the host it names", () => {
   const hides = (label, url) => !ui$.mdVouched(new URL(url).href, label);
   for (const [label, url] of [["g\u043e\u043egle.com", "https://g\u043e\u043egle.com/login"], ["https://g\u043e\u043egle.com/login", "https://g\u043e\u043egle.com/login"], ["xn--ggle-55da.com", "https://xn--ggle-55da.com"], ["dropbox.com", "https://x.com/a"], ["paypal.com", "https://l.com"], ["google.com/search?q=evil.io", "https://evil.io/x"], ["https://www.google.com/search?q=evil.io", "https://evil.io/x"], ["google.com@evil.io", "https://evil.io"], ["Open the plan", "https://example.com"]]) assert.ok(hides(label, url), label);
   for (const [label, url] of [["example.com", "https://example.com/p"], ["https://www.example.com/a", "https://example.com/b"], ["the example.com page", "https://www.example.com"]]) assert.ok(!hides(label, url), label);
   assert.ok("Open {host}?" in ui$.JA);
-  ui$.setLanguage("en");
-  assert.equal(ui$.runBy({ by: "b", runner: "a" }), "b's PC");
-  assert.equal(ui$.runBy({ by: null, runner: "a" }), "a's PC");
-  assert.equal(ui$.runBy({ by: null, runner: null }), "Auto");
-  ui$.setLanguage("ja");
-  assert.equal(ui$.runBy({ by: null, runner: null }), "自動");
-  ui$.setLanguage("en");
 });
 
-test("the screen and microphone buttons share one state: off, on, recording or a warning", () => {
-  const cap = (source, muted, extra = {}) => ({ source, mix: { mic: { muted } }, working: true, ...extra });
-  assert.deepEqual(plain(ui$.captureStates(cap(null, true), false, "")), { screen: "off", mic: "off" });
-  assert.deepEqual(plain(ui$.captureStates(cap({ kind: "display" }, false), false, "")), { screen: "on", mic: "on" });
-  assert.deepEqual(plain(ui$.captureStates(cap({ kind: "display" }, false), true, "")), { screen: "recording", mic: "recording" });
-  assert.deepEqual(plain(ui$.captureStates(cap({ kind: "display" }, true), true, "")), { screen: "recording", mic: "off" });
-  assert.equal(ui$.captureStates(cap({ kind: "display" }, false), false, "Capture stopped").screen, "warn");
-  assert.equal(ui$.captureStates(cap(null, false), true, "").screen, "off");
+test("the screen and microphone buttons share one state: off, on or a warning", () => {
+  const cap = (source, muted) => ({ source, mix: { mic: { muted } } });
+  assert.deepEqual(plain(ui$.captureStates(cap(null, true), "")), { screen: "off", mic: "off" });
+  assert.deepEqual(plain(ui$.captureStates(cap({ kind: "display" }, false), "")), { screen: "on", mic: "on" });
+  assert.deepEqual(plain(ui$.captureStates(cap({ kind: "display" }, true), "")), { screen: "on", mic: "off" });
+  assert.equal(ui$.captureStates(cap({ kind: "display" }, false), "Capture stopped").screen, "warn");
+  assert.equal(ui$.captureStates(cap(null, false), "").screen, "off");
 });
-
 test("the microphone button shows a live level that sits flat while muted", () => {
   assert.equal(ui$.micLevel(0, false), 0);
   assert.equal(ui$.micLevel(1, false), 1);
@@ -728,3 +549,91 @@ test("the microphone button shows a live level that sits flat while muted", () =
   assert.equal(ui$.meterPos(-60), 0);
 });
 
+const ctx = (extra = {}) => ({ me: "me", name: (id) => ({ me: "Aki", ren: "Ren", koya: "Koya" })[id] || id, online: (id) => id !== "koya", left: () => null, ...extra });
+const view = (owner, extra = {}) => ({ owner, recording: false, end_us: 9, have: 5, total: 10, verified_by: ["me"], parts: [{ v: {}, m: {} }], ...extra });
+const finishedSet = (players, extra = {}) => ({ id: "s1", live: false, wanted: false, players, ...extra });
+
+test("the view line names the first member who blocks the playback, in one sentence", () => {
+  ui$.setLanguage("en");
+  const line = (set, c = ctx(), key) => ui$.viewLine(set, c, key);
+  assert.equal(line(finishedSet([view("me"), view("ren")])), null);
+  const missing = line(finishedSet([view("me"), view("ren", { verified_by: ["ren"], have: 0 })]));
+  assert.deepEqual(plain({ text: missing.text, action: missing.action }), { text: "Ren's video missing", action: "Download" });
+  assert.equal(ui$.viewText(missing), "Ren's video missing · Download");
+  const receiving = (left) => line(finishedSet([view("me"), view("ren", { verified_by: ["ren"] })]), ctx({ left: () => left })).text;
+  assert.equal(receiving(150), "Receiving Ren's video · 3 min left");
+  assert.equal(receiving(null), "Receiving Ren's video");
+  assert.equal(line(finishedSet([view("me"), view("ren", { verified_by: ["ren"], have: 0 })], { wanted: true })).text, "Receiving Ren's video");
+  assert.equal(line(finishedSet([view("koya", { verified_by: ["koya"] })])).text, "Koya's video is only on Koya's PC");
+  assert.equal(line(finishedSet([view("koya", { verified_by: ["ren", "koya"] })]), ctx({ online: () => false })).text, "Koya's video is only on Ren's PC");
+  const silent = finishedSet([view("me", { parts: [{ m: {} }] })]);
+  assert.equal(line(silent), null);
+  assert.equal(line(silent, ctx(), "me").text, "Aki didn't record a screen");
+  assert.equal(line(finishedSet([view("ren", { verified_by: ["ren"], recording: true })])), null);
+  assert.equal(line({ ...finishedSet([view("ren", { verified_by: ["ren"] })]), live: true }), null);
+  assert.equal(line(finishedSet([view("ren", { verified_by: ["ren"], have: 0 }), view("koya", { verified_by: ["koya"] })])).text, "Ren's video missing");
+  ui$.setLanguage("ja");
+  assert.equal(line(finishedSet([view("koya", { verified_by: ["koya"] })])).text, "Koya の映像は Koya のPCにしかありません");
+  ui$.setLanguage("en");
+});
+
+test("a Live tile tells at most one problem, only while this PC records", () => {
+  ui$.setLanguage("en");
+  const now = 1000 * 1e6;
+  const m = (extra) => ({ recording: true, sharing: true, now, start: now - 600e6, voiceEnd: now - 2e6, pictureEnd: now - 5e6, ...extra });
+  assert.equal(ui$.tileProblem(m({})), null);
+  assert.equal(ui$.tileProblem(m({ recording: false, sharing: false })), null);
+  assert.equal(ui$.tileProblem(m({ sharing: false })), "Not recording screen");
+  assert.equal(ui$.tileProblem(m({ voiceEnd: now - 61e6 })), "No voice for 1 min");
+  assert.equal(ui$.tileProblem(m({ voiceEnd: now - 60e6 })), null);
+  assert.equal(ui$.tileProblem(m({ pictureEnd: now - 15e6 })), "15 s behind");
+  assert.equal(ui$.tileProblem(m({ sharing: false, voiceEnd: now - 90e6 })), "Not recording screen");
+  assert.equal(ui$.tileProblem(m({ voiceEnd: null, start: null, pictureEnd: undefined })), null);
+  assert.equal(ui$.tileProblem(m({ voiceEnd: null, start: now - 90e6 })), "No voice for 1 min");
+  ui$.setLanguage("ja");
+  assert.equal(ui$.tileProblem(m({ voiceEnd: now - 61e6 })), "1分間声がありません");
+  ui$.setLanguage("en");
+});
+
+test("Live lists every room member in the saved order and then in join order, whatever their connection", () => {
+  const state = (extra = {}) => ({
+    id: "me", layout: { order: ["koya", "me"] }, capture: { source: null, live: null, working: false },
+    peers: [{ id: "ren", connected: true, sharing: true, live: { size: 5, path: "p" } }, { id: "koya", connected: false, sharing: false }, { id: "mia", connected: true, sharing: false }],
+    sets: [], ...extra,
+  });
+  const list = ui$.livePlayers(state());
+  assert.deepEqual(plain(list.map((p) => p.key)), ["koya", "me", "ren", "mia"]);
+  assert.deepEqual(plain(list.map((p) => p.online)), [false, true, true, true]);
+  assert.deepEqual(plain(list.map((p) => p.sharing)), [false, false, true, false]);
+  assert.equal(list[2].file.size, 5);
+  assert.equal(ui$.livePlayers(state({ layout: null })).map((p) => p.key).join(), "me,ren,koya,mia");
+  const recording = ui$.livePlayers(state({ capture: { source: {}, live: { size: 9 }, working: true }, sets: [{ live: true, players: [{ owner: "me", recording: true, last_us: { v: 3, m: 4 }, start_us: 10, offset_us: 2 }, { owner: "ren", recording: true }] }] }));
+  const me = recording.find((p) => p.key === "me");
+  assert.deepEqual(plain({ r: me.recording, s: me.sharing, last: me.last, start: me.start }), { r: true, s: true, last: { v: 3, m: 4 }, start: 8 });
+  assert.equal(ui$.livePlayers(state({ capture: { source: {}, live: null, working: false }, sets: [{ live: true, players: [{ owner: "me", recording: true }] }] })).find((p) => p.key === "me").recording, false);
+});
+
+test("an extension row says one thing: no runner, what failed, who it waits for, or what is left", () => {
+  ui$.setLanguage("en");
+  const name = (id) => ({ a: "Ren", b: "Koya" })[id];
+  const line = (p) => ui$.extensionLine({ on: true, runner: "a", left: 0, failed: 0, waiting_for: null, ...p }, name);
+  assert.equal(line({}), "");
+  assert.equal(line({ left: 3 }), "3 left · Ren's PC");
+  assert.equal(line({ failed: 1, left: 3 }), "1 failed · Retry");
+  assert.equal(line({ left: 2, waiting_for: "b" }), "Waiting for Koya's PC");
+  assert.equal(line({ runner: null, left: 2, failed: 1 }), "No runner");
+  assert.equal(line({ on: false, runner: null }), "");
+  assert.equal(ui$.analysisReason({ state: "left", reason: "waiting", waiting_for: "a" }, name), "Waiting for Ren's PC");
+  assert.equal(ui$.analysisReason({ state: "left", reason: "receiving" }, name), "Receiving");
+  assert.equal(ui$.analysisReason({ state: "left", reason: "queue" }, name), "Waiting");
+  assert.equal(ui$.analysisReason({ state: "failed" }, name), "Failed");
+  assert.equal(ui$.analysisReason({ state: "running", progress: 0.424 }, name), "Analyzing 42%");
+  assert.equal(ui$.recordingAnalysis({ analysis: [{ state: "done" }, { state: "running", progress: 0.42 }] }).text, "Analyzing 42%");
+  assert.equal(ui$.analysisReason({ state: "running", progress: null }, name), "Analyzing");
+  assert.equal(ui$.recordingAnalysis({ analysis: [{ state: "running" }] }).text, "Analyzing");
+  assert.equal(ui$.recordingAnalysis({ analysis: [{ state: "running", progress: 0.1 }, { state: "failed" }] }).text, "Analysis failed");
+  assert.equal(ui$.recordingAnalysis({ analysis: [{ state: "done" }, { state: "left" }] }), null);
+  ui$.setLanguage("ja");
+  assert.equal(line({ left: 3 }), "残り 3 件 · Ren のPC");
+  ui$.setLanguage("en");
+});

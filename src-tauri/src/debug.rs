@@ -17,7 +17,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::room::{self, part_of, SERIES};
 use crate::ops::arg;
-use crate::{check, data, download, ffmpeg, hw, net, now_us, party, record, short, sources, Core, NO_WINDOW};
+use crate::{check, data, download, ffmpeg, hw, net, now_us, party, record, short, Core, NO_WINDOW};
 
 const MAX_LOG: u64 = 10 << 20;
 pub const LOG_FILES: [&str; 3] = ["log.txt", "log.old.txt", "log.older.txt"];
@@ -603,7 +603,7 @@ fn data_json(core: &Core, set: Option<&str>) -> Value {
     let viewers: Value = party
         .viewers
         .iter()
-        .map(|(id, v)| (short(id), json!({"set": v.set, "heads": v.heads, "progress": v.progress, "stuck": v.stuck, "seen_ms": now.duration_since(v.seen).as_millis() as u64})))
+        .map(|(id, v)| (short(id), json!({"set": v.set, "heads": v.heads, "seen_ms": now.duration_since(v.seen).as_millis() as u64})))
         .collect::<serde_json::Map<String, Value>>()
         .into();
     let party = json!({"on": party.on, "room": party.room, "lamport": party.lamport, "shared": party.shared, "heads": party.heads, "own": room::holdings(&logs), "viewers": viewers, "repeat_ms": party::REPEAT.as_millis() as u64});
@@ -674,7 +674,7 @@ pub fn debug_report(core: &Arc<Core>, args: Value) -> Result<Value, String> {
 
 pub fn diagnostics(core: &Arc<Core>, everyone: bool, head: Option<String>) -> Result<String, String> {
     crate::ops::warm(core);
-    let lines = check::run(core, sources::pid_of(&core.audio_process.lock().unwrap().clone()));
+    let lines = check::run(core);
     let own = report_text(core, Some(&check::text(&lines)));
     let own = match head.filter(|h| !h.is_empty()) {
         Some(h) => format!("{}\n\n{own}", redact(&h, &home(), &known_names(core))),

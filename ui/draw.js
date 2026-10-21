@@ -155,7 +155,7 @@ function inkUp(e) {
   return true;
 }
 
-window.__TAURI__.event.listen("draw", (e) => {
+listenMain("draw", (e) => {
   const { from, stroke } = e.payload;
   if (!watchParty || !stroke || stroke.set !== selected) return;
   if (stroke.clear) { clearInk(true); return; }

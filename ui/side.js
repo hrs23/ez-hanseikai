@@ -5,6 +5,8 @@ const meters = { app: { v: 0, peak: 0, at: 0, clip: 0 }, mic: { v: 0, peak: 0, a
 const rates = {};
 
 let sideWidth = clampSide(stored("sideWidth", SIDE_DEFAULT));
+let debriefMode = null;
+const debriefNow = () => (debriefMode === null ? reviewing() : debriefMode);
 
 function renderSide() {
   if (!inRoom()) return;
@@ -24,8 +26,8 @@ function renderRoomHead() {
   $("roomname").setAttribute("aria-label", name);
 }
 function navActive() {
-  if (page === "player") return !nowView && !playSet() && !review ? "live" : "";
-  return navOf(roomTab);
+  if (page === "player") return !nowView && !playSet() ? "live" : "";
+  return roomTab;
 }
 function renderNav() {
   const active = navActive();
@@ -35,18 +37,16 @@ function renderNav() {
     if (on) b.setAttribute("aria-current", "page");
     else b.removeAttribute("aria-current");
   }
-  const failed = failedJobs();
   $("askcount").hidden = !st.asks.length;
   $("askcount").textContent = String(st.asks.length);
-  $("jobcount").hidden = !failed;
-  $("jobcount").textContent = String(failed);
   const badge = apiBadge(st.api);
-  $("apibadge").hidden = !badge;
-  if (badge) {
-    $("apibadge").className = "apibadge" + (badge.lan ? " lan" : "");
-    $("apibadge").replaceChildren(icon(badge.lan ? "alert" : "terminal", "sm"), "API");
-    $("apibadge").title = badge.title;
-    $("apibadge").setAttribute("aria-label", badge.title);
+  for (const b of document.querySelectorAll(".apibadge")) {
+    b.hidden = !badge;
+    if (!badge) continue;
+    b.className = "apibadge" + (badge.lan ? " lan" : "");
+    b.replaceChildren(icon(badge.lan ? "alert" : "terminal", "sm"), "API");
+    b.title = badge.title;
+    b.setAttribute("aria-label", badge.title);
   }
 }
 function setSideWidth(px, keep = true) {
@@ -94,17 +94,16 @@ function tickSide() {
   const timer = $("livetimer");
   if (a && timer) timer.textContent = fmt((nowUs() - a.start_us) / 1e6);
   if (page === "player") {
-    if (a && a.voice) $("reviewrec").replaceChildren(el("i", { className: "recdot" }), t("Debrief {time}", { time: fmt((nowUs() - a.start_us) / 1e6) }));
+    if (a && a.voice) $("reviewrec").replaceChildren(el("i", { className: "recdot" }), t("Recording {time}", { time: fmt((nowUs() - a.start_us) / 1e6) }));
     const chip = $("pchips").querySelector(".pill.rec");
-    if (chip && a && !review && playSet() && playSet().live) chip.lastChild.textContent = t("Recording {time}", { time: fmt((nowUs() - a.start_us) / 1e6) });
+    if (chip && a && playSet() && playSet().live) chip.lastChild.textContent = t("Recording {time}", { time: fmt((nowUs() - a.start_us) / 1e6) });
   }
 }
 
 function memberDot(id) {
-  if (recOf(id)) return "rec";
-  if (id === st.id) return "on";
-  const p = peerOf(id);
-  return p && p.connected ? "on" : null;
+  const online = id === st.id || !!(peerOf(id) || {}).connected;
+  if (!online) return null;
+  return st.recording && !recOf(id) ? "warn" : "on";
 }
 function renderFaces() {
   const ids = people();
@@ -121,30 +120,23 @@ function renderFaces() {
 
 function startState() {
   if (st.active_set) return "end";
-  return reviewing() ? "review" : "start";
+  return debriefNow() ? "review" : "start";
 }
 function renderStartButton() {
   const state = startState();
   const online = 1 + st.peers.filter((p) => p.connected).length;
   if (!changed("startbtn", [state, lang, online])) return;
   const b = $("startbtn");
-  b.className = "startbtn " + (state === "end" ? "end" : "go");
+  b.className = "startbtn";
   $("startmore").hidden = state === "end";
-  $("startmore").className = "startmore go";
   $("standby").hidden = state === "end";
   $("standby").replaceChildren(icon("radio", "sm"), el("span", { textContent: `${t("Standby")} · ${t("{n} online", { n: online })}` }));
   if (state === "end") b.replaceChildren(el("i", { className: "recdot" }), el("span", { textContent: t("Stop recording") }), el("span", { className: "timer", id: "livetimer", textContent: fmt((nowUs() - st.active_set.start_us) / 1e6) }));
-  else if (state === "review") b.replaceChildren(icon("mic"), el("span", { textContent: t("Record debrief") }));
-  else b.replaceChildren(el("i", { className: "rd" }), el("span", { textContent: t("Start recording") }));
+  else b.replaceChildren(el("i", { className: "rd" }), el("span", { textContent: state === "review" ? t("Record debrief") : t("Start recording") }));
   b.title = state === "start" ? t("Starts recording for everyone. Everything until Stop recording is one recording; matches are chapters in it.") : state === "review" ? t("Records everyone's voice and what the Watch Party watches, with no picture.") : "";
-  b.parentElement.classList.toggle("end", state === "end");
-  b.parentElement.parentElement.classList.toggle("end", state === "end");
 }
 function startMenu(anchor) {
-  openMenu([
-    { label: t("Start recording"), icon: "rec", run: () => toggleRecording("start") },
-    { label: t("Record debrief"), icon: "mic", run: () => toggleRecording("debrief") },
-  ], anchor);
+  openMenu([{ label: debriefNow() ? t("Switch to recording") : t("Switch to debrief"), icon: "mic", run: () => { debriefMode = !debriefNow(); delete sigs.startbtn; renderStartButton(); } }], anchor);
 }
 
 function noteCount(s) {
@@ -164,44 +156,37 @@ function receiving(s) {
   return { n: Math.floor((p.have / p.total) * 100), stuck: p.stuck, speed, left: speed ? (p.total - p.have) / speed : null };
 }
 function sessionState(s) {
-  const watching = watchParty && st.party.on && st.party.shared.set === s.id ? st.party.watching.filter((id) => id !== st.id).length : 0;
-  const running = jobInfo && jobInfo.running;
-  const runningJob = running && jobInfo.jobs.find((j) => j.job === running.job);
   if (exporting && exporting.set === s.id) return { kind: "bar", icon: "film", text: t("Exporting {n}%", { n: Math.floor(exporting.percent) }), frac: exporting.percent / 100 };
+  const line = viewLine(s, viewContext());
   const recv = receiving(s);
-  if (recv && recv.stuck) return { kind: "line", icon: "alert", cls: "warn", text: t("Stopped at {n}%", { n: recv.n }), title: lackingText(s) };
-  if (recv) return { kind: "bar", icon: "download", text: [`${recv.n}%`, recv.speed ? `${bytes(recv.speed)}/s` : null].filter(Boolean).join(" · "), right: recv.left ? leftText(recv.left) : "", frac: recv.n / 100, title: lackingText(s) };
-  if (watching) return { kind: "tail", icon: "users", cls: "acc", text: String(watching + 1), title: t("{n} watching", { n: watching + 1 }) };
-  if (runningJob && runningJob.set === s.id) return { kind: "tail", icon: "cpu", text: `${Math.floor((running.progress || 0) * 100)}%`, title: pluginName(running.plugin) };
-  if (jobInfo && jobInfo.jobs.some((j) => j.set === s.id && j.state === "failed")) return { kind: "tail", icon: "alert", cls: "warn", text: "", title: t("Analysis failed") };
-  return null;
-}
-function lackingText(s) {
-  return (s.lacking || []).map((l) => t("{name}: {n} files left", { name: nameOf(l.id), n: l.n })).join(" · ");
+  if (recv && !recv.stuck) return { kind: "bar", icon: "download", text: [`${recv.n}%`, recv.speed ? `${bytes(recv.speed)}/s` : null].filter(Boolean).join(" · "), right: recv.left ? leftText(recv.left) : "", frac: recv.n / 100, title: line ? viewText(line) : "" };
+  if (line) return { kind: "line", icon: line.kind === "away" ? "alert" : "download", cls: line.kind === "away" ? "warn" : "", text: line.text, action: line.action };
+  return recordingAnalysis(s);
 }
 function liveRow() {
   const a = st.active_set;
   const who = liveSet() ? liveSet().players.map((p) => p.owner) : [];
-  const on = page === "player" && nowView && !review;
+  const on = page === "player" && nowView;
   const detail = a.voice ? null : matchNow(nowM()) || t("by {name}", { name: a.by || "" });
-  const row = el("div", { className: "srow liverow recording" + (on ? " on" : ""), role: "option", tabIndex: 0, ariaSelected: on },
+  const row = el("div", { className: "srow liverow" + (on ? " on" : ""), role: "option", tabIndex: 0, ariaSelected: on },
     thumbBox(null, who, "xs", THUMB_FACES, true),
-    el("div", { className: "txt" }, el("div", { className: "l1" }, el("i", { className: "recdot" }), el("b", { textContent: t("Recording") })), el("div", { className: "l2" }, a.voice ? pill("accent", "mic", t("Debrief")) : null, detail ? el("span", { textContent: detail }) : null)));
+    el("div", { className: "txt" }, el("div", { className: "l1" }, icon("rec", "sm"), el("b", { textContent: t("Recording") })), el("div", { className: "l2" }, a.voice ? pill("accent", "mic", t("Debrief")) : null, detail ? el("span", { textContent: detail }) : null)));
   row.onclick = openNow;
   row.onkeydown = (e) => { if (e.key === "Enter") openNow(); };
   return row;
 }
 function sessionRow(s) {
-  const on = page === "player" && !showingNow() && (review ? review.id === s.id : selected === s.id);
+  const on = page === "player" && !showingNow() && selected === s.id;
   const here = onThisPc(s);
-  const state = here ? sessionState(s) : null;
+  const state = sessionState(s);
+  const watching = st.party.watching[s.id];
   let l2;
   if (state && state.kind === "bar") l2 = el("div", { className: "prog", title: state.title || "" }, el("div", { className: "l2" }, icon(state.icon, "sm"), el("span", { textContent: state.text }), el("span", { className: "r", textContent: state.right || "" })), el("div", { className: "bar" }, el("i", { style: `width:${Math.round(state.frac * 100)}%` })));
-  else if (state && state.kind === "line") l2 = el("div", { className: "l2 " + (state.cls || ""), title: state.title || "" }, icon(state.icon, "sm"), el("span", { textContent: state.text }));
-  else l2 = el("div", { className: "l2" }, el("span", { textContent: setLength(s) }), ...marksOf(s), state ? el("span", { className: "r " + (state.cls || ""), title: state.title || "" }, icon(state.icon, "sm"), state.text) : null);
-  const row = el("div", { className: "srow" + (on ? " on" : "") + (here ? "" : " gone") + (state && state.icon === "users" ? " wp" : ""), role: "option", tabIndex: 0, ariaSelected: on },
+  else if (state && state.kind === "line") l2 = el("div", { className: "l2 " + (state.cls || "") }, icon(state.icon, "sm"), el("span", { textContent: state.text }), state.action ? el("button", { className: "sm", textContent: state.action, onclick: (e) => { e.stopPropagation(); run("download_set", { room: s.room, set: s.id }); } }) : null);
+  else l2 = el("div", { className: "l2" }, el("span", { textContent: setLength(s) }), s.imported_by ? importedPill(s) : null, state ? el("span", { className: "r " + (state.cls || ""), title: state.title || "" }, icon(state.icon, "sm"), state.text) : null);
+  const row = el("div", { className: "srow" + (on ? " on" : "") + (here ? "" : " gone"), role: "option", tabIndex: 0, ariaSelected: on },
     thumbBox(s, s.players.map((p) => p.owner), "xs", THUMB_FACES, false),
-    el("div", { className: "txt" }, el("div", { className: "l1" }, el("b", { textContent: sessionName(s.id) })), l2, whereLine(s)));
+    el("div", { className: "txt" }, el("div", { className: "l1" }, el("b", { textContent: sessionName(s.id) }), watching ? el("span", { className: "wpn", title: t("{n} watching", { n: watching }) }, icon("users", "sm"), String(watching)) : null), l2, whereLine(s)));
   row.onclick = () => { if (onThisPc(s)) openSession(s.id); };
   row.onkeydown = (e) => { if (e.key === "Enter" && onThisPc(s)) openSession(s.id); };
   row.oncontextmenu = (e) => { e.preventDefault(); sessionMenu(s.id, e); };
@@ -210,20 +195,22 @@ function sessionRow(s) {
 function renderSessions() {
   if (!inRoom()) return;
   const rows = recordingRows();
-  const sig = [rows.map(rowSignature), page, nowView, selected, review && review.id, st.active_set, st.peers.map((p) => p.connected), lang, st.colors, st.names, dayOf(new Date())];
+  const sig = [rows.map(rowSignature), page, nowView, selected, st.active_set, st.peers.map((p) => p.connected), lang, st.colors, st.names, dayOf(new Date())];
   if (!changed("sessions", sig)) return;
   $("sessions").replaceChildren(...(st.active_set ? [liveRow()] : []), ...rows.map((r) => sessionRow(r.s)), rows.length || st.active_set ? "" : el("div", { className: "none", textContent: t("No recordings yet") }));
 }
 function sessionMenu(id, anchor) {
   const set = setById(id);
   if (!set) return;
-  const failed = jobInfo ? jobInfo.jobs.filter((j) => j.set === id && j.state === "failed") : [];
+  const keys = new Set(set.events);
+  const hasAi = st.events.some((e) => e.source === "ai" && keys.has(e.key));
   openMenu([
     { heading: `${sessionName(id)} · ${bytes(sizeOf(set))}` },
     { label: t("Export to folder…"), icon: "upload", disabled: set.live || !onThisPc(set), run: () => exportFolder(set) },
     { label: t("Open folder"), icon: "folder", disabled: set.live || set.progress.have === 0, run: () => dialog("open_set_folder", { room: set.room, set: set.id }).catch(fail) },
     { label: t("Copy link"), icon: "link", run: () => navigator.clipboard.writeText(momentLink(set.id, 0, null)).then(() => flash(t("Link copied"))).catch(fail) },
-    ...(failed.length ? [{ label: t("Retry analysis"), icon: "rotate-cw", run: () => Promise.all(failed.map((j) => invoke("retry_job", { job: j.job }))).then(pollPlugins).catch(fail) }] : []),
+    { label: t("Re-run analysis"), icon: "rotate-cw", disabled: set.live || !onThisPc(set) || !plugins.some((p) => p.on), run: () => retryAnalysis(set) },
+    { label: t("Delete AI notes"), icon: "trash", disabled: !hasAi, run: () => ask(t("Delete AI notes?"), t("Delete"), true).then((yes) => yes && run("delete_ai_notes", { room: set.room, set: set.id })) },
     { separator: true },
     { label: t("Delete…"), icon: "trash", danger: true, disabled: !canDelete(set), run: () => confirmDelete([set.id]) },
   ], anchor);
@@ -244,8 +231,8 @@ function sourceLabel(c) {
 function renderDock() {
   const c = st.capture;
   const problem = captureProblem(c);
-  const { screen: state, mic: micState } = captureStates(c, st.recording, problem);
-  const sub = { off: t("Click to choose"), warn: problem, recording: t("Recording · live"), on: c.sharing && c.live ? t("Sending live") : t("Starting…") }[state];
+  const { screen: state, mic: micState } = captureStates(c, problem);
+  const sub = { off: t("Click to choose"), warn: problem, on: st.recording ? "" : c.sharing && c.live ? t("Standby") : t("Starting…") }[state];
   if (changed("screencap", [state, sourceLabel(c), sub, lang])) {
     $("screencap").className = "cap " + state;
     $("screenicon").replaceChildren(icon(!c.source ? "monitor-off" : c.source.kind === "display" ? "monitor" : "window"));
@@ -265,11 +252,10 @@ function renderDock() {
     $("mename").textContent = st.name;
     $("meid").textContent = shortId(st.id);
   }
-  const net = netState(st.peers);
-  if (changed("net", [net, lang])) {
-    $("netbadge").hidden = !net;
-    $("netbadge").className = "net " + (net || "");
-    $("netbadge").replaceChildren(icon("relay", "sm"), net === "relay" ? t("Via relay") : t("Direct"));
+  const relay = netState(st.peers) === "relay";
+  if (changed("net", [relay, lang])) {
+    $("netbadge").hidden = !relay;
+    $("netbadge").replaceChildren(icon("relay", "sm"), t("Via relay"));
     $("netbadge").title = t("Where data goes");
   }
 }
@@ -283,7 +269,6 @@ function popHead(text) {
 }
 async function openSource(anchor) {
   const list = await invoke("list_sources").catch((e) => { fail(e); return []; });
-  const names = await invoke("list_processes").catch(() => []);
   const c = st.capture;
   const current = JSON.stringify(c.source);
   const item = (s) => {
@@ -294,16 +279,12 @@ async function openSource(anchor) {
   };
   const wins = list.filter((s) => s.id.kind === "window");
   const disps = list.filter((s) => s.id.kind === "display");
-  const proc = el("select", { ariaLabel: t("App sound") }, el("option", { value: "", textContent: t("Chosen window") }), ...names.map((n) => el("option", { value: n, textContent: n })));
-  if (st.audio_process && !names.includes(st.audio_process)) proc.append(el("option", { value: st.audio_process, textContent: st.audio_process }));
-  proc.value = st.audio_process;
-  proc.onchange = () => run("set_audio_process", { name: proc.value });
   showPop([
     popHead(t("Windows")), ...(wins.length ? wins.map(item) : [el("div", { className: "none", textContent: t("No windows") })]),
     el("hr"), popHead(t("Displays")), ...disps.map(item),
     ...(c.source ? [el("button", { className: "pi off", onclick: () => { closePop(); stopScreen(); } }, icon("monitor-off"), el("span", { className: "nm", textContent: t("Turn screen off") }))] : []),
     el("hr"),
-    el("div", { className: "mixer" }, el("label", { className: "fl" }, el("span", { textContent: t("App sound") }), proc), meterBox("app")),
+    el("div", { className: "mixer" }, el("div", { className: "fl" }, el("span", { textContent: t("App sound") })), meterBox("app")),
   ], anchor, true, "capture");
   drawMeter("app", meters.app.v);
 }
@@ -350,7 +331,7 @@ function drawMeter(kind, v) {
   const db = toDb(m.peak);
   $(kind + "db").textContent = db > METER_MIN_DB ? `${String(Math.round(db)).replace("-", "−")} dB` : "";
 }
-window.__TAURI__.event.listen("levels", (e) => {
+listenMain("levels", (e) => {
   for (const kind of ["app", "mic"]) drawMeter(kind, Math.max(0, e.payload[kind] || 0));
   if (st) $("miclvl").style.setProperty("--lvl", String(micLevel(Math.max(0, e.payload.mic || 0), st.capture.mix.mic.muted)));
 });

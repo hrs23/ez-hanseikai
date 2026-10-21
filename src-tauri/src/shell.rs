@@ -14,8 +14,9 @@ use tauri_plugin_notification::NotificationExt;
 use crate::{room, Core, REPO, VERSION};
 
 pub const DEFAULT_HOTKEY: &str = "Ctrl+Alt+M";
+const BOARD: &str = "board";
 const STATUS_POLL: Duration = Duration::from_secs(1);
-const JA: [(&str, &str); 51] = [
+const JA: [(&str, &str); 46] = [
     ("GGI Hanseikai is already running with this data folder.", "GGI反省会はこのデータフォルダですでに動いています。"),
     ("GGI Hanseikai", "GGI反省会"),
     ("File", "ファイル"),
@@ -33,24 +34,19 @@ const JA: [(&str, &str); 51] = [
     ("Room settings…", "ルームの設定…"),
     ("Leave room", "ルームを離れる"),
     ("Members", "メンバー"),
-    ("Plugins", "プラグイン"),
+    ("Extensions", "拡張機能"),
     ("Start recording", "録画開始"),
     ("Stop recording", "録画終了"),
     ("Record debrief", "反省会を録画"),
     ("Mark this moment", "この瞬間をマーク"),
     ("Add note", "メモを追加"),
-    ("Previous recording", "前の録画"),
-    ("Next recording", "次の録画"),
     ("Export to folder…", "フォルダにエクスポート…"),
     ("Delete…", "削除…"),
     ("Live", "ライブ"),
     ("Game plan", "作戦ボード"),
     ("Sidebar", "サイドバー"),
-    ("Side panel", "サイドパネル"),
     ("Full screen", "全画面"),
     ("All players", "全員"),
-    ("Next player", "次のプレイヤー"),
-    ("Previous player", "前のプレイヤー"),
     ("Keyboard shortcuts", "キーボードショートカット"),
     ("Diagnostics", "診断"),
     ("Check for updates", "アップデートを確認"),
@@ -154,6 +150,29 @@ pub fn already_running() {
     use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONINFORMATION, MB_OK};
     let text = tr(crate::os_language(), "GGI Hanseikai is already running with this data folder.");
     unsafe { MessageBoxW(None, &HSTRING::from(text), &HSTRING::from(tr(crate::os_language(), "GGI Hanseikai")), MB_OK | MB_ICONINFORMATION) };
+}
+
+pub fn set_fullscreen(app: &AppHandle, label: &str, on: bool) -> Result<(), String> {
+    let window = app.get_webview_window(label).ok_or("No such window.")?;
+    window.set_fullscreen(on).map_err(|e| e.to_string())?;
+    (if on { window.hide_menu() } else { window.show_menu() }).map_err(|e| e.to_string())
+}
+
+pub fn open_board(app: &AppHandle, dir: &Path) {
+    if let Some(window) = app.get_webview_window(BOARD) {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        return;
+    }
+    let (handle, dir) = (app.clone(), dir.to_path_buf());
+    let _ = app.run_on_main_thread(move || {
+        let builder = tauri::WebviewWindowBuilder::new(&handle, BOARD, tauri::WebviewUrl::App("index.html?board".into())).title(tr("", "GGI Hanseikai")).decorations(false).maximized(true).theme(Some(tauri::Theme::Dark)).background_color(tauri::window::Color(12, 14, 18, 255));
+        match crate::profile(builder, &dir).build() {
+            Ok(window) => crate::shell::plain_keys(&window),
+            Err(e) => tracing::warn!("the board window did not open: {e}"),
+        }
+    });
 }
 
 pub fn show_window(app: &AppHandle) {
@@ -314,9 +333,6 @@ fn build_menu(app: &AppHandle, lang: &str, toggle: &MenuItem<Wry>, mark: &MenuIt
         .item(mark)
         .item(&it("add-note", "Add note", None)?)
         .separator()
-        .item(&it("prev-session", "Previous recording", None)?)
-        .item(&it("next-session", "Next recording", None)?)
-        .separator()
         .item(&it("export-folder", "Export to folder…", None)?)
         .item(&it("delete-session", "Delete…", None)?)
         .build()?;
@@ -324,15 +340,12 @@ fn build_menu(app: &AppHandle, lang: &str, toggle: &MenuItem<Wry>, mark: &MenuIt
         .item(&it("page-live", "Live", Some("CmdOrCtrl+1"))?)
         .item(&it("page-board", "Game plan", Some("CmdOrCtrl+2"))?)
         .item(&it("page-members", "Members", Some("CmdOrCtrl+3"))?)
-        .item(&it("page-plugins", "Plugins", Some("CmdOrCtrl+4"))?)
+        .item(&it("page-extensions", "Extensions", Some("CmdOrCtrl+4"))?)
         .separator()
         .item(&it("sidebar", "Sidebar", Some("CmdOrCtrl+B"))?)
-        .item(&it("events-panel", "Side panel", None)?)
         .item(&it("fullscreen", "Full screen", Some("F11"))?)
         .separator()
         .item(&it("all-players", "All players", None)?)
-        .item(&it("next-player", "Next player", None)?)
-        .item(&it("prev-player", "Previous player", None)?)
         .separator()
         .item(&it("shortcuts", "Keyboard shortcuts", None)?)
         .build()?;
@@ -359,7 +372,11 @@ fn install_menus(app: &AppHandle, core: &Core) -> tauri::Result<()> {
     let toggle = item(app, &lang, "toggle-recording", text, None)?;
     let mark = item(app, &lang, "mark", "Mark this moment", hotkey(&keys).map(|_| keys.as_str()))?;
     mark.set_enabled(recording)?;
-    app.set_menu(build_menu(app, &lang, &toggle, &mark)?)?;
+    let menu = build_menu(app, &lang, &toggle, &mark)?;
+    if let Some(window) = app.get_webview_window("main") {
+        window.set_theme(Some(tauri::Theme::Dark))?;
+        window.set_menu(menu)?;
+    }
     *ITEMS.lock().unwrap() = Items { toggle: Some(toggle), mark: Some(mark) };
     Ok(())
 }

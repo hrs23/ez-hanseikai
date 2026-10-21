@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 use windows_capture::monitor::Monitor;
 use windows_capture::window::Window;
 
-use crate::Core;
+use crate::audio::Loopback;
 
 #[derive(Clone, Copy)]
 pub enum Item {
@@ -18,7 +18,8 @@ pub struct Found {
     pub key: usize,
     pub kind: &'static str,
     pub name: String,
-    pub game: (String, u32),
+    pub game: String,
+    pub audio: Loopback,
 }
 
 pub fn processes() -> Vec<(String, u32)> {
@@ -37,21 +38,6 @@ pub fn processes() -> Vec<(String, u32)> {
         let _ = CloseHandle(snapshot);
     }
     out
-}
-
-fn process(name: &str) -> Option<(String, u32)> {
-    processes().into_iter().find(|(n, _)| n.eq_ignore_ascii_case(name))
-}
-
-pub fn audio_target(wanted: &str) -> (String, u32) {
-    if wanted.is_empty() {
-        return Default::default();
-    }
-    process(wanted).unwrap_or_default()
-}
-
-pub fn pid_of(name: &str) -> Option<u32> {
-    process(name).map(|(_, pid)| pid)
 }
 
 fn cloaked(w: &Window) -> bool {
@@ -111,22 +97,21 @@ pub fn same_window<'a, T>(list: &'a [(T, String, String, u32)], exe: &str, title
     list.iter().filter(exe_matches).find(|w| w.2 == title).or_else(|| list.iter().filter(exe_matches).find(|w| Some(key(&w.0)) == last))
 }
 
-pub fn find(core: &Core, source: &Value, last: Option<usize>) -> Option<Found> {
+pub fn find(source: &Value, last: Option<usize>) -> Option<Found> {
     if crate::test_mode() {
-        return (source["kind"] == "display").then(|| Found { item: Item::Test, key: 0, kind: "test", name: "Test picture".into(), game: ("Test tone".into(), 0) });
+        return (source["kind"] == "display").then(|| Found { item: Item::Test, key: 0, kind: "test", name: "Test picture".into(), game: "Test tone".into(), audio: Loopback::ExcludeSelf });
     }
     match source["kind"].as_str()? {
         "window" => {
             let (exe, title) = (source["exe"].as_str()?, source["title"].as_str()?);
             let list = windows();
             let (w, exe, title, pid) = same_window(&list, exe, title, |w| w.as_raw_hwnd() as usize, last)?.clone();
-            Some(Found { item: Item::Window(w), key: w.as_raw_hwnd() as usize, kind: "window", name: format!("{title} ({exe})"), game: (exe, pid) })
+            Some(Found { item: Item::Window(w), key: w.as_raw_hwnd() as usize, kind: "window", name: format!("{title} ({exe})"), game: exe, audio: Loopback::Include(pid) })
         }
         "display" => {
             let index = source["index"].as_u64()? as usize;
             let monitor = *Monitor::enumerate().ok()?.get(index.checked_sub(1)?)?;
-            let game = audio_target(&core.audio_process.lock().unwrap());
-            Some(Found { item: Item::Display(monitor), key: monitor.as_raw_hmonitor() as usize, kind: "display", name: format!("Display {index}"), game })
+            Some(Found { item: Item::Display(monitor), key: monitor.as_raw_hmonitor() as usize, kind: "display", name: format!("Display {index}"), game: String::new(), audio: Loopback::ExcludeSelf })
         }
         _ => None,
     }

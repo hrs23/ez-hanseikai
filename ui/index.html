@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GGI Hanseikai</title>
+<link rel="stylesheet" href="tokens.css">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -17,7 +18,7 @@
       <div id="roomsbox" class="rooms"><div class="lab" data-t="Recent rooms">Recent rooms</div><div id="roomlist"></div></div>
       <div id="roomsor" class="or" data-t="or">or</div>
       <div class="row"><input id="joincode" class="lg grow" autocomplete="off" data-t-placeholder="Invite code" data-t-label="Invite code"><button id="join" class="lg" data-t="Join">Join</button></div>
-      <button id="newroom" class="lg wide outline"><span data-icon="plus"></span><span data-t="Create room">Create room</span></button>
+      <button id="newroom" class="lg wide"><span data-icon="plus"></span><span data-t="Create room">Create room</span></button>
     </div>
   </div>
 </main>
@@ -26,16 +27,15 @@
   <aside id="side" class="side">
     <div class="sidehead">
       <button id="roomname" class="roombtn" aria-haspopup="menu"><span class="nm"></span><span class="chev" data-icon="chevron-down" data-icon-class="sm"></span></button>
-      <div class="facesrow"><span id="roomfaces" class="roomfaces"></span><button id="apibadge" class="apibadge" hidden></button></div>
+      <div class="facesrow"><span id="roomfaces" class="roomfaces"></span></div>
     </div>
     <nav id="sidenav" class="sidenav" data-t-label="Room">
       <button data-nav="live"><span data-icon="monitor" data-icon-class="sm"></span><span class="nm" data-t="Live">Live</span></button>
       <button data-nav="board"><span data-icon="board" data-icon-class="sm"></span><span class="nm" data-t="Game plan">Game plan</span></button>
       <button data-nav="members"><span data-icon="users" data-icon-class="sm"></span><span class="nm" data-t="Members">Members</span><span id="askcount" class="badge" hidden></span></button>
-      <button data-nav="plugins"><span data-icon="puzzle" data-icon-class="sm"></span><span class="nm" data-t="Plugins">Plugins</span><span id="jobcount" class="count" hidden></span></button>
+      <button data-nav="extensions"><span data-icon="puzzle" data-icon-class="sm"></span><span class="nm" data-t="Extensions">Extensions</span></button>
     </nav>
     <div class="startbox"><div class="startgroup"><button id="startbtn" class="startbtn go"></button><button id="startmore" class="startmore go" data-icon="chevron-down" data-t-label="Recording options" data-t-title="Recording options" aria-haspopup="menu"></button></div><button id="standby" class="standby"></button></div>
-    <button id="recsopen" class="sechead" data-nav="recordings"><span data-t="Recordings">Recordings</span><span data-icon="chevron-right" data-icon-class="sm"></span></button>
     <div id="sessions" class="sessions" role="listbox" data-t-label="Recordings"></div>
     <div id="diskbanner" class="sidebanner" role="button" tabindex="0" hidden></div>
     <div class="dock">
@@ -61,25 +61,18 @@
         <h1 id="homename"></h1>
         <span id="homesub" class="sub"></span>
         <span class="sp"></span>
-        <button id="aibtn" class="ghost" aria-haspopup="menu"><span data-icon="sparkles" data-icon-class="sm"></span><span data-t="AI">AI</span></button>
+        <button class="apibadge" hidden></button>
+        <button id="aibtn" aria-haspopup="menu"><span data-icon="sparkles" data-icon-class="sm"></span><span data-t="AI">AI</span></button>
       </div>
       <div id="boardpane" class="boardpane" hidden>
         <div class="bbar">
-          <span id="boardscope" class="seg" role="group" data-t-label="Game plan"><button data-scope="room" data-t="Room">Room</button><button data-scope="personal" data-t="Personal">Personal</button></span>
-          <span id="boardbadge" class="pill accent" data-t="Editing" hidden>Editing</span>
+          <button id="boardadd"><span data-icon="plus" data-icon-class="sm"></span><span data-t="Add card">Add card</span></button>
           <span class="sp"></span>
-          <span id="boardview" class="row">
-            <span class="zoom"><button id="zoomout" data-icon="minus" data-t-label="Zoom out" data-t-title="Zoom out"></button><button id="zoomfit" class="zv"></button><button id="zoomin" data-icon="plus" data-t-label="Zoom in" data-t-title="Zoom in"></button></span>
-            <button id="boardfull" class="icon" data-icon="maximize" data-t-label="Full screen" data-t-title="Full screen (F)"></button>
-            <button id="boardedit"><span data-icon="edit" data-icon-class="sm"></span><span data-t="Edit">Edit</span></button>
-          </span>
-          <span id="boardedits" class="row" hidden>
-            <button id="boardcancel" data-t="Cancel">Cancel</button>
-            <button id="boardsave" class="primary"><span data-t="Save">Save</span><kbd>Ctrl+Enter</kbd></button>
-          </span>
+          <span class="zoom"><button id="zoomout" data-icon="minus" data-t-label="Zoom out" data-t-title="Zoom out"></button><button id="zoomfit" class="zv"></button><button id="zoomin" data-icon="plus" data-t-label="Zoom in" data-t-title="Zoom in"></button></span>
+          <button id="boardwin" class="icon" data-icon="window" data-t-label="Board window" data-t-title="Board window"></button>
+          <button id="boardfull" class="icon" data-icon="maximize" data-t-label="Full screen" data-t-title="Full screen (F)"></button>
         </div>
         <div id="boardwrap" class="boardwrap"><div id="canvas" class="canvas"></div></div>
-        <div id="editor" class="editor" hidden><textarea id="boardtext" spellcheck="false" maxlength="4000" data-t-label="Game plan"></textarea><div class="preview"><div id="minicanvas" class="canvas"></div></div></div>
       </div>
       <div class="roombody">
         <div id="roomtab" class="roomtab"></div>
@@ -95,7 +88,8 @@
           <span id="psub" class="sub"></span>
           <span class="sp"></span>
           <span id="reviewrec" class="pill rec" hidden></span>
-          <button id="aiplay" class="ghost" aria-haspopup="menu"><span data-icon="sparkles" data-icon-class="sm"></span><span data-t="AI">AI</span></button>
+          <button class="apibadge" hidden></button>
+          <button id="aiplay" aria-haspopup="menu"><span data-icon="sparkles" data-icon-class="sm"></span><span data-t="AI">AI</span></button>
           <div id="wpbox" class="wpbox"></div>
           <button id="panelbtn" class="icon" data-icon="panel" data-t-title="Side panel" data-t-label="Side panel"></button>
         </div>
@@ -111,7 +105,6 @@
               </div>
               <span id="partystatus" class="chips"></span>
               <span class="sp"></span>
-              <div id="flowbar" class="flowbar" hidden><span data-icon="eye" data-icon-class="sm"></span><span id="flowtext"></span><button id="flowopen" class="sm" data-t="Open this moment">Open this moment</button></div>
             </div>
             <div id="stage" class="stage">
               <div id="livetiles" class="tiles"></div>
@@ -123,10 +116,9 @@
               <div id="osd" class="osd" hidden><span id="osdav"></span><span id="osdtext"></span></div>
             </div>
             <div id="transport" class="transport">
-              <div id="bandlabels" class="bandlabels" hidden></div>
               <div id="chapters" class="chaps" hidden></div>
               <div id="lane" class="lane"></div>
-              <div id="seek" class="seek" role="slider" tabindex="0" data-t-label="Position" aria-valuemin="0"><i class="got"></i><i class="missing"></i><i class="fill"></i><i class="grow"></i><div id="bands" class="bands"></div><i class="thumb"></i><div id="seekwho" class="seekwho" hidden></div><div id="peek" class="peek" hidden><canvas width="192" height="108"></canvas><span id="peekchapter"></span><span id="peektime"></span></div></div>
+              <div id="seek" class="seek" role="slider" tabindex="0" data-t-label="Position" aria-valuemin="0"><i class="got"></i><i class="missing"></i><i class="fill"></i><i class="grow"></i><i class="thumb"></i><div id="seekwho" class="seekwho" hidden></div><div id="peek" class="peek" hidden><canvas width="192" height="108"></canvas><span id="peekchapter"></span><span id="peektime"></span></div></div>
               <div class="crow">
                 <button id="play" class="icon" data-t-label="Play"></button>
                 <button id="back" class="icon" data-icon="rotate-ccw" data-t-title="Back 5 s" data-t-label="Back 5 s"></button>
@@ -154,7 +146,6 @@
         <div id="reviewlist" class="list review"></div>
         <div id="notelist" class="list"></div>
         <div id="convolist" class="list convo"></div>
-        <div id="flowlist" class="list flow"></div>
       </aside>
     </div>
   </section>
@@ -200,7 +191,6 @@
       <div class="row"><h2 data-t="Recordings">Recordings</h2><span class="sp"></span><span id="storedir" class="mono muted small ellip"></span><button id="oldfiles" class="sm danger" hidden><span data-icon="trash" data-icon-class="sm"></span><span></span></button><button id="storeopen" class="sm"><span data-icon="folder" data-icon-class="sm"></span><span data-t="Open">Open</span></button></div>
       <div id="usage" class="usage"></div>
       <div id="legend" class="legend"></div>
-      <div class="warnbox"><span data-icon="alert" data-icon-class="sm"></span><span data-t="Warn when free space is below">Warn when free space is below</span><select id="warnhours"></select><span class="sp"></span><span class="muted small" data-t="Recording stops when the disk is nearly full">Recording stops when the disk is nearly full</span></div>
       <div class="row"><span class="h3" data-t="Recordings">Recordings</span><span class="sp"></span><span class="muted small" data-t="Select">Select</span><div class="seg"><button id="selnone" data-t="None">None</button><button id="selold"></button></div></div>
       <div id="storetable" class="tablebox"></div>
       <div class="row"><span id="selsum" class="muted"></span><span class="sp"></span><button id="deletesel" class="danger"><span data-icon="trash" data-icon-class="sm"></span><span data-t="Delete videos…">Delete videos…</span></button></div>
@@ -229,10 +219,10 @@
   <h2 id="deltitle"></h2>
   <div id="dellist" class="dellist"></div>
   <div class="stays"><div><span data-icon="check" data-icon-class="sm"></span><span data-t="Notes, marks, drawings, debriefs and the game plan stay">Notes, marks, drawings, debriefs and the game plan stay</span></div><div><span data-icon="check" data-icon-class="sm"></span><span data-t="Others keep theirs. Download brings it back from anyone who has it">Others keep theirs. Download brings it back from anyone who has it</span></div></div>
-  <div class="row end"><button id="delno" data-t="Cancel">Cancel</button><button id="delyes" class="dangerfill"></button></div>
+  <div class="row end"><button id="delno" data-t="Cancel">Cancel</button><button id="delyes" class="danger"></button></div>
 </dialog>
 <dialog id="diagdlg" class="diag">
-  <div class="dlghead"><div class="ptabs" role="tablist"><button data-dtab="summary" role="tab"><span data-icon="ok" data-icon-class="sm"></span><span data-t="Summary">Summary</span></button><button data-dtab="flow" role="tab"><span data-icon="shield" data-icon-class="sm"></span><span data-t="Where data goes">Where data goes</span></button><button data-dtab="pcs" role="tab"><span data-icon="monitor" data-icon-class="sm"></span><span data-t="PCs">PCs</span></button><button data-dtab="traffic" role="tab"><span data-icon="activity" data-icon-class="sm"></span><span data-t="Traffic">Traffic</span></button><button data-dtab="log" role="tab"><span data-icon="terminal" data-icon-class="sm"></span><span data-t="Log">Log</span></button><button data-dtab="jobs" role="tab"><span data-icon="cpu" data-icon-class="sm"></span><span data-t="Jobs">Jobs</span></button></div><button class="icon close" data-icon="x" data-t-label="Close"></button></div>
+  <div class="dlghead"><div class="ptabs" role="tablist"><button data-dtab="summary" role="tab"><span data-icon="ok" data-icon-class="sm"></span><span data-t="Summary">Summary</span></button><button data-dtab="flow" role="tab"><span data-icon="shield" data-icon-class="sm"></span><span data-t="Where data goes">Where data goes</span></button><button data-dtab="pcs" role="tab"><span data-icon="monitor" data-icon-class="sm"></span><span data-t="PCs">PCs</span></button><button data-dtab="traffic" role="tab"><span data-icon="activity" data-icon-class="sm"></span><span data-t="Traffic">Traffic</span></button><button data-dtab="log" role="tab"><span data-icon="terminal" data-icon-class="sm"></span><span data-t="Log">Log</span></button><button data-dtab="jobs" role="tab"><span data-icon="cpu" data-icon-class="sm"></span><span data-t="Analysis">Analysis</span></button></div><button class="icon close" data-icon="x" data-t-label="Close"></button></div>
   <div id="diagbody" class="diagbody"></div>
   <div class="row foot"><span class="sp"></span><button id="diagcopy"><span data-icon="copy" data-icon-class="sm"></span><span data-t="Copy report">Copy report</span></button><button id="diagsave"><span data-icon="download" data-icon-class="sm"></span><span data-t="Save as file…">Save as file…</span></button></div>
 </dialog>
@@ -240,7 +230,7 @@
   <h2 data-t="Reset the app?">Reset the app?</h2>
   <p class="muted" data-t="Settings, downloads and logs are removed and the app restarts.">Settings, downloads and logs are removed and the app restarts.</p>
   <label class="check"><input id="keeprooms" type="checkbox" checked><span data-t="Keep my ID, rooms and recordings">Keep my ID, rooms and recordings</span></label>
-  <div class="row end"><button id="resetno" data-t="Cancel">Cancel</button><button id="resetyes" class="dangerfill" data-t="Reset">Reset</button></div>
+  <div class="row end"><button id="resetno" data-t="Cancel">Cancel</button><button id="resetyes" class="danger" data-t="Reset">Reset</button></div>
 </dialog>
 <dialog id="promptdlg" class="wide">
   <div class="dlghead"><h2 id="prompttitle"></h2><button class="icon close" data-icon="x" data-t-label="Close"></button></div>
@@ -252,7 +242,7 @@
   <p id="confirmtext" class="muted" hidden></p>
   <div class="row end"><button id="confirmno" data-t="Cancel">Cancel</button><button id="confirmyes"></button></div>
 </dialog>
-<div id="toast" class="toast" hidden><span id="toasttext"></span><button id="toastaction" class="ghost sm" hidden></button></div>
+<div id="toast" class="toast" hidden><span id="toasttext"></span><button id="toastaction" class="sm" hidden></button></div>
 <div id="menu" class="menu" role="menu" hidden></div>
 <div id="pop" class="pop" hidden></div>
 <div id="recovery" class="recovery" hidden>
@@ -275,7 +265,6 @@
 <script src="dock.js"></script>
 <script src="events.js"></script>
 <script src="markdown.js"></script>
-<script src="review.js"></script>
 <script src="members.js"></script>
 <script src="recordings.js"></script>
 <script src="draw.js"></script>
@@ -283,7 +272,8 @@
 <script src="media.js"></script>
 <script src="app.js"></script>
 <script src="side.js"></script>
-<script src="plugins.js"></script>
+<script src="extensions.js"></script>
+<script src="board.js"></script>
 <script src="ai.js"></script>
 <script src="diag.js"></script>
 <script src="pages.js"></script>

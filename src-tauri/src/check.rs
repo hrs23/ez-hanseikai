@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use iroh::Watcher;
 use serde_json::{json, Value};
-use wasapi::{initialize_mta, AudioClient, DeviceEnumerator, Direction};
+use wasapi::{initialize_mta, DeviceEnumerator, Direction};
 
-use crate::{audio, capture, debug, ffmpeg, Core};
+use crate::{audio, capture, debug, ffmpeg, sources, Core};
 
 pub(crate) fn line(level: &str, text: &str, args: Value) -> Value {
     json!({"level": level, "text": text, "args": args})
@@ -25,7 +25,7 @@ fn windows_build() -> Option<u32> {
     version.trim().trim_end_matches(']').split('.').nth(2)?.trim().parse().ok()
 }
 
-fn audio_lines(pid: Option<u32>) -> Vec<Value> {
+fn audio_lines(core: &Core) -> Vec<Value> {
     let mut lines = Vec::new();
     let _ = initialize_mta();
     match DeviceEnumerator::new().and_then(|e| e.get_device_collection(&Direction::Render)) {
@@ -35,20 +35,21 @@ fn audio_lines(pid: Option<u32>) -> Vec<Value> {
             lines.push(if count == 0 { line("warn", "No playback device: there is no app sound to capture on this PC", json!({})) } else { line("ok", "{count} playback device(s)", json!({"count": count})) });
         }
     }
-    lines.push(match pid {
-        None => line("info", "No app selected for app sound, so it is not checked", json!({})),
-        Some(pid) => {
+    let source = core.engine.source.lock().unwrap().clone();
+    lines.push(match sources::find(&source, None) {
+        None => line("info", "No screen is shared, so its sound is not checked", json!({})),
+        Some(found) => {
             let (format, mode) = audio::capture_format();
-            match AudioClient::new_application_loopback_client(pid, true).and_then(|mut client| client.initialize_client(&format, &Direction::Capture, &mode)) {
-                Ok(()) => line("ok", "The selected app's sound can be captured", json!({})),
-                Err(e) => line("fail", "The selected app's sound cannot be captured: {error}", json!({"error": e.to_string()})),
+            match found.audio.client().and_then(|mut client| Ok(client.initialize_client(&format, &Direction::Capture, &mode)?)) {
+                Ok(()) => line("ok", "The shared screen's sound can be captured", json!({})),
+                Err(e) => line("fail", "The shared screen's sound cannot be captured: {error}", json!({"error": e.to_string()})),
             }
         }
     });
     lines
 }
 
-pub fn run(core: &Arc<Core>, audio_pid: Option<u32>) -> Vec<Value> {
+pub fn run(core: &Arc<Core>) -> Vec<Value> {
     let mut lines = Vec::new();
     match windows_build() {
         None => lines.push(line("warn", "Could not read the Windows build", json!({}))),
@@ -65,7 +66,7 @@ pub fn run(core: &Arc<Core>, audio_pid: Option<u32>) -> Vec<Value> {
         Err(e) => line("fail", "WebView2 runtime missing: {error}", json!({"error": e.to_string()})),
     });
     lines.extend(capture::check_capture());
-    lines.extend(audio_lines(audio_pid));
+    lines.extend(audio_lines(core));
     if !ffmpeg::present() {
         lines.push(line("fail", "ffmpeg is not installed yet; it is downloaded on first run", json!({})));
     }

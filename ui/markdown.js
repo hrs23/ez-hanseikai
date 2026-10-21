@@ -1,12 +1,7 @@
 const MD_HEADING_MAX = 6;
 const MD_DEPTH_MAX = 8;
 const BOARD_HEADING_BASE = 3;
-const MD_FENCE = /^\s*(```+|~~~+)\s*([\w+-]*)\s*$/;
-const MD_RULE = /^\s*([-*_])(\s*\1){2,}\s*$/;
 const MD_ITEM = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/;
-const MD_TASK = /^\[( |x|X)\]\s+(.*)$/;
-const MD_TABLE_ROW = /\|/;
-const MD_TABLE_RULE = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
 const MD_WEB = /^https?:\/\/[^\s"<>]+$/i;
 const MD_INLINE = new RegExp([
   "\\\\([\\\\`*_{}\\[\\]()#+\\-.!~=|<>])",
@@ -42,7 +37,7 @@ async function openWeb(url, label) {
   if (!mdVouched(url, label) && !(await ask(t("Open {host}?", { host: new URL(url).host }), t("Open"), false, url))) return;
   dialog("open_link", { url }).catch(warn);
 }
-const mdHooks = (over = {}) => ({ onTag: filterTag, onLink: openLink, onOpen: openWeb, onTask: null, ...over });
+const mdHooks = (over = {}) => ({ onTag: filterTag, onLink: openLink, onOpen: openWeb, ...over });
 
 function mdHref(url) {
   if (/^ezh:\/\/moment\//i.test(url)) {
@@ -95,56 +90,16 @@ function mdInline(text) {
 
 const mdIndent = (s) => s.match(/^\s*/)[0].length;
 
-function mdCells(row) {
-  const cells = row.trim().replace(/^\|/, "").replace(/\|$/, "").split(/(?<!\\)\|/);
-  return cells.map((c) => c.replaceAll("\\|", "|").trim());
-}
-
-function mdAlign(cell) {
-  const c = cell.trim();
-  if (c.startsWith(":") && c.endsWith(":")) return "center";
-  return c.endsWith(":") ? "right" : "";
-}
-
 function mdBlocks(lines, depth = 0) {
   const blocks = [];
   let i = 0;
-  const nest = depth < MD_DEPTH_MAX;
-  const quote = (s) => nest && /^\s*>/.test(s);
-  const item = (s) => nest && MD_ITEM.test(s);
-  const starts = (line) => MD_FENCE.test(line.s) || /^\s{0,3}#{1,6}\s/.test(line.s) || MD_RULE.test(line.s) || quote(line.s) || item(line.s);
+  const item = (s) => depth < MD_DEPTH_MAX && MD_ITEM.test(s);
+  const starts = (line) => /^\s{0,3}#{1,6}\s/.test(line.s) || item(line.s);
   while (i < lines.length) {
     const line = lines[i];
     if (!line.s.trim()) { i++; continue; }
-    const fence = line.s.match(MD_FENCE);
-    if (fence) {
-      const body = [];
-      i++;
-      while (i < lines.length && !(MD_FENCE.test(lines[i].s) && lines[i].s.trim().startsWith(fence[1][0]))) body.push(lines[i++].s);
-      i++;
-      blocks.push({ type: "code", lang: fence[2], text: body.join("\n") });
-      continue;
-    }
     const head = line.s.match(/^\s{0,3}(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/);
     if (head) { blocks.push({ type: "heading", level: head[1].length, inline: mdInline(head[2]) }); i++; continue; }
-    if (MD_RULE.test(line.s)) { blocks.push({ type: "rule" }); i++; continue; }
-    if (quote(line.s)) {
-      const inner = [];
-      while (i < lines.length && /^\s*>/.test(lines[i].s)) { inner.push({ s: lines[i].s.replace(/^\s*>\s?/, ""), n: lines[i].n }); i++; }
-      blocks.push({ type: "quote", blocks: mdBlocks(inner, depth + 1) });
-      continue;
-    }
-    if (MD_TABLE_ROW.test(line.s) && i + 1 < lines.length && MD_TABLE_RULE.test(lines[i + 1].s) && lines[i + 1].s.includes("-")) {
-      const head = mdCells(line.s);
-      const rule = mdCells(lines[i + 1].s);
-      if (head.length === rule.length) {
-        i += 2;
-        const rows = [];
-        while (i < lines.length && lines[i].s.trim() && MD_TABLE_ROW.test(lines[i].s)) rows.push(mdCells(lines[i++].s));
-        blocks.push({ type: "table", align: rule.map(mdAlign), head: head.map(mdInline), rows: rows.map((r) => r.slice(0, head.length).map(mdInline)) });
-        continue;
-      }
-    }
     if (item(line.s)) {
       const run = [];
       const kind = (s) => /\d/.test(s.match(MD_ITEM)[2]);
@@ -175,15 +130,14 @@ function mdList(lines, depth) {
   let item = null;
   let rest = [];
   const close = () => {
-    if (item && rest.length) item.blocks = mdBlocks(rest.map((l) => ({ s: l.s.slice(Math.min(mdIndent(l.s), mdIndent(rest[0].s))), n: l.n })), depth + 1);
+    if (item && rest.length) item.blocks = mdBlocks(rest.map((l) => ({ s: l.s.slice(Math.min(mdIndent(l.s), mdIndent(rest[0].s))) })), depth + 1);
     rest = [];
   };
   for (const line of lines) {
     const m = line.s.match(MD_ITEM);
     if (m && mdIndent(line.s) <= base) {
       close();
-      const task = m[3].match(MD_TASK);
-      item = { inline: mdInline(task ? task[2] : m[3]), task: task ? task[1] !== " " : null, n: line.n, blocks: [] };
+      item = { inline: mdInline(m[3]), blocks: [] };
       list.items.push(item);
     } else if (item) rest.push(line);
   }
@@ -192,15 +146,8 @@ function mdList(lines, depth) {
 }
 
 function mdParse(text) {
-  const lines = String(text).replace(/\r\n?/g, "\n").replaceAll("\t", "    ").split("\n").map((s, n) => ({ s, n }));
+  const lines = String(text).replace(/\r\n?/g, "\n").replaceAll("\t", "    ").split("\n").map((s) => ({ s }));
   return mdBlocks(lines);
-}
-
-function toggleTask(text, n) {
-  const lines = text.split("\n");
-  if (n < 0 || n >= lines.length) return text;
-  lines[n] = lines[n].replace(/^((?:\s*>\s?)*\s*(?:[-*+]|\d{1,9}[.)])\s+)\[( |x|X)\]/, (all, lead, mark) => `${lead}[${mark === " " ? "x" : " "}]`);
-  return lines.join("\n");
 }
 
 const mdText = (nodes) => nodes.map((n) => n.text ?? n.code ?? mdText(n.strong || n.em || n.strike || n.mark || n.children || [])).join("");
@@ -232,41 +179,17 @@ function mdNodes(blocks, hooks, base) {
   return blocks.map((b) => {
     if (b.type === "heading") return el(`h${Math.min(MD_HEADING_MAX, b.level + base)}`, {}, ...mdSpans(b.inline, hooks));
     if (b.type === "paragraph") return el("p", {}, ...mdSpans(b.inline, hooks));
-    if (b.type === "rule") return el("hr");
-    if (b.type === "code") return el("pre", {}, el("code", { textContent: b.text }));
-    if (b.type === "quote") return el("blockquote", {}, ...mdNodes(b.blocks, hooks, base));
-    if (b.type === "table") {
-      const cell = (tag, content, c) => el(tag, { style: b.align[c] ? `text-align:${b.align[c]}` : "" }, ...mdSpans(content, hooks));
-      return el("div", { className: "mdtable" }, el("table", {}, el("thead", {}, el("tr", {}, ...b.head.map((h, c) => cell("th", h, c)))), el("tbody", {}, ...b.rows.map((r) => el("tr", {}, ...r.map((x, c) => cell("td", x, c)))))));
-    }
-    const items = b.items.map((it) => {
-      const box = it.task === null ? null : el("input", { type: "checkbox", checked: it.task, disabled: !hooks.onTask, ariaLabel: t("Done"), onchange: () => hooks.onTask(it.n) });
-      return el("li", { className: it.task === null ? "" : "task" + (it.task ? " done" : "") }, box, el("span", {}, ...mdSpans(it.inline, hooks)), ...mdNodes(it.blocks, hooks, base));
-    });
+    const items = b.items.map((it) => el("li", {}, el("span", {}, ...mdSpans(it.inline, hooks)), ...mdNodes(it.blocks, hooks, base)));
     return el(b.ordered ? "ol" : "ul", b.ordered ? { start: b.start } : {}, ...items);
   });
 }
 
-const hasMoment = (x) => x !== null && typeof x === "object" && (x.kind === "moment" || Object.values(x).some(hasMoment));
-
-function boardParts(text) {
-  const out = { title: null, lead: [], sections: [] };
-  let body = out.lead;
-  for (const b of mdParse(text)) {
-    const level = b.type === "heading" ? b.level : 0;
-    if (level === 1 && !out.title && !out.sections.length) out.title = b.inline;
-    else if (level === 2) out.sections.push({ title: b.inline, blocks: (body = []) });
-    else body.push(b);
-  }
-  return out;
+function cardParts(text) {
+  const [first, ...rest] = String(text).replace(/\r\n?/g, "\n").split("\n");
+  return { head: mdInline(first.replace(/^\s*#{1,6}\s+/, "")), body: mdParse(rest.join("\n")) };
 }
 
-function boardDom(text, hooks) {
-  const b = boardParts(text);
-  const nodes = (blocks) => mdNodes(blocks, hooks, BOARD_HEADING_BASE);
-  const card = el("div", { className: "bcard" });
-  if (b.title) card.append(el("h2", { className: "title" }, ...mdSpans(b.title, hooks)));
-  if (b.lead.length) card.append(el("div", { className: b.sections.length ? "lead md" : "md" }, ...nodes(b.lead)));
-  if (b.sections.length) card.append(el("div", { className: "bgrid" }, ...b.sections.map((x) => el("section", { className: "bsec md" + (hasMoment(x.blocks) ? " wide" : "") }, el("h3", {}, ...mdSpans(x.title, hooks)), ...nodes(x.blocks)))));
-  return card;
+function cardDom(text, hooks) {
+  const c = cardParts(text);
+  return el("div", { className: "cardmd" }, c.head.length ? el("p", { className: "chead" }, ...mdSpans(c.head, hooks)) : null, ...mdNodes(c.body, hooks, BOARD_HEADING_BASE));
 }

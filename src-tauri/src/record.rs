@@ -19,7 +19,7 @@ use crate::ffmpeg::{self, FRAGMENTED};
 use crate::room::{self, capture_id, part_of, seg_name, INIT, RECORDINGS, SERIES};
 use crate::sources::{self, Found, Item};
 use crate::proc::{self, Process, BELOW_NORMAL};
-use crate::{clock, data, debug, hex, hw, media, merge, now_us, write_whole, Core};
+use crate::{clock, data, debug, hex, hw, media, merge, net, now_us, write_whole, Core};
 
 pub type Err = Box<dyn std::error::Error + Send + Sync>;
 
@@ -38,6 +38,8 @@ const PAD_AFTER_FRAMES: u64 = SAMPLE_RATE as u64 / 50;
 pub const QUALITIES: [(&str, u32); 3] = [("light", 960), ("standard", 1280), ("high", 1920)];
 const WIDE: (u32, u32) = (16, 9);
 const LEVELS_PER_SECOND: u64 = 30;
+const SPEAK_LEVEL: f32 = 0.02;
+const SPEAK_HANG: Duration = Duration::from_millis(300);
 const READ_CHUNK: usize = 64 << 10;
 const SUPERVISE_EVERY: Duration = Duration::from_millis(500);
 pub const RESCAN_EVERY: Duration = Duration::from_secs(5);
@@ -458,8 +460,11 @@ fn ensure_rec(core: &Core, room: &str, set: &str, start_us: i64, meta: &Value) {
     if crate::room::joined(&core.own_log(room), set) {
         return;
     }
-    let (by, voice) = core.active_set.lock().unwrap().as_ref().map(|s| (s.by.clone(), s.voice)).unwrap_or_default();
+    let (by, voice, of) = core.active_set.lock().unwrap().as_ref().map(|s| (s.by.clone(), s.voice, s.of.clone())).unwrap_or_default();
     let mut record = json!({"k": "rec", "room": room, "set": set, "start_us": start_us, "by": by, "voice": voice});
+    if let Some(of) = of {
+        record["of"] = json!(of);
+    }
     merge(&mut record, meta);
     core.append_log(room, &record);
 }
@@ -1028,11 +1033,36 @@ fn repeat(core: Arc<Core>) {
     }
 }
 
+#[derive(Default)]
+struct Speech {
+    on: bool,
+    loud_at: Option<Instant>,
+}
+
+impl Speech {
+    fn step(&mut self, now: Instant, level: f32, active: bool) -> Option<bool> {
+        if active && level > SPEAK_LEVEL {
+            self.loud_at = Some(now);
+        }
+        let on = active && self.loud_at.is_some_and(|at| now.duration_since(at) <= SPEAK_HANG);
+        (on != self.on).then(|| {
+            self.on = on;
+            on
+        })
+    }
+}
+
 fn meters(core: Arc<Core>) {
     let mut quiet = false;
+    let mut speech = Speech::default();
     loop {
         thread::sleep(Duration::from_millis(1000 / LEVELS_PER_SECOND));
         let [app, mic] = [APP, MIC].map(|t| f32::from_bits(core.engine.peaks[t].swap(0, Ordering::Relaxed)));
+        let active = core.active_set.lock().unwrap().is_some() && !core.engine.gain(MIC).1;
+        if let Some(on) = speech.step(Instant::now(), mic, active) {
+            net::broadcast(&core, json!({"t": "speaking", "on": on}));
+            let _ = core.app.emit("speaking", json!({"from": core.me(), "on": on}));
+        }
         let silent = app == 0.0 && mic == 0.0;
         if !(silent && quiet) {
             let _ = core.app.emit("levels", json!({"app": app, "mic": mic}));
@@ -1043,12 +1073,12 @@ fn meters(core: Arc<Core>) {
 
 fn rescan(core: &Core, source: &Value, last: Option<usize>) -> Option<Found> {
     let e = &core.engine;
-    let found = sources::find(core, source, last);
+    let found = sources::find(source, last);
     e.source_lost.store(!source.is_null() && found.is_none(), Ordering::Relaxed);
     let mut names = e.names.lock().unwrap();
     names.kind = found.as_ref().map(|f| f.kind.to_string()).unwrap_or_default();
     names.source = found.as_ref().map(|f| f.name.clone()).unwrap_or_default();
-    names.game = found.as_ref().map(|f| f.game.0.clone()).unwrap_or_default();
+    names.game = found.as_ref().map(|f| f.game.clone()).unwrap_or_default();
     found
 }
 
@@ -1126,7 +1156,7 @@ pub fn supervise(core: Arc<Core>) {
             scanned = Some((source, Instant::now()));
         }
         if !crate::test_mode() {
-            audio::ensure(&core, APP, found.as_ref().map_or(0, |f| f.game.1).to_string());
+            audio::ensure(&core, APP, found.as_ref().map_or_else(String::new, |f| f.audio.key()));
             let mic = e.mic.lock().unwrap().clone();
             audio::ensure(&core, MIC, mic);
         }
@@ -1142,6 +1172,21 @@ mod tests {
     use super::*;
     use crate::log::tests::{hold, put, temp};
     use crate::media::tests::{fragment, init};
+
+    #[test]
+    fn speaking_changes_only_when_the_mic_turns_loud_or_stays_quiet_past_the_hang() {
+        let (mut speech, start) = (Speech::default(), Instant::now());
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        assert_eq!(speech.step(at(0), 0.0, true), None);
+        assert_eq!(speech.step(at(10), 0.5, true), Some(true));
+        assert_eq!(speech.step(at(40), 0.5, true), None);
+        assert_eq!(speech.step(at(200), 0.0, true), None);
+        assert_eq!(speech.step(at(330), 0.0, true), None);
+        assert_eq!(speech.step(at(350), 0.0, true), Some(false));
+        assert_eq!(speech.step(at(500), 0.5, true), Some(true));
+        assert_eq!(speech.step(at(510), 0.5, false), Some(false));
+        assert_eq!(speech.step(at(520), 0.5, false), None);
+    }
 
     #[test]
     fn a_window_that_sends_no_frames_for_a_while_is_stalled() {

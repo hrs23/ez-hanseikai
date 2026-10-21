@@ -42,3 +42,10 @@ function soundKey(view, keys, me) {
   if (view > 0) return keys[view - 1] || null;
   return keys.includes(me) ? me : keys[0] || null;
 }
+
+function dropPos(positions, index) {
+  const before = positions[index - 1];
+  const after = positions[index];
+  if (before === undefined) return after === undefined ? 0 : after - 1;
+  return after === undefined ? before + 1 : (before + after) / 2;
+}

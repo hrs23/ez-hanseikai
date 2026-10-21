@@ -1,6 +1,6 @@
 # GGI Hanseikai
 
-GGI Hanseikai is a Windows app where a team records its games and reviews them together. A room holds the team's recordings. Each recording has events (notes, marks, analysis results such as match ends and spoken lines), and the room has one game plan: a Markdown page.
+GGI Hanseikai is a Windows app where a team records its games and reviews them together. A room holds the team's recordings. Each recording has events (notes, marks, analysis results such as match ends and spoken lines), and the room has a game plan: a team card and a card for each member, each a short Markdown text.
 
 This file describes the app's local HTTP API. An AI agent or a program can read recordings and do everything the app's window does, except open windows. Whatever you write is shared with the whole room, like what people write in the app.
 
@@ -15,8 +15,8 @@ The API is off by default. A person turns it on in the app: Settings > API > Loc
 - JSON in, JSON out (UTF-8). Errors are `{"error": "..."}` with the status 400, 401, 403, 404, 405, 409, 413, 500 or 503.
 - Times in a recording are seconds from its start (`at_s`, `from_s`, `to_s`, rounded to 0.1). Clock times are milliseconds since 1970 (`start_ms`, `end_ms`).
 - Reads work for every room on this PC. Operations act on the room that is open in the app, as the window does; events and the board are written only to the open room (409 otherwise): open it with enter_room.
-- Operations run at once, without the window's confirmations. delete_set, discard_set, remove_room, delete_old_files and reset {keep_rooms: false} delete recordings or the app's data with no undo: call them only when the person asked for exactly that. The token gives the same control as the window.
-- Notes are at most 500 characters and the game plan at most 4000. Write `#tag` in a note text to tag it, or send `tags`.
+- Operations run at once, without the window's confirmations. delete_set, remove_room, delete_old_files and reset {keep_rooms: false} delete recordings or the app's data with no undo: call them only when the person asked for exactly that. The token gives the same control as the window.
+- Notes are at most 500 characters and a game plan card at most 4000. A note you add through this API is shown to people with an AI mark, and a person can delete all of them at once. Write `#tag` in a note text to tag it, or send `tags`.
 - Paths are on this PC (write them like C:/videos/scrim). A recording leaves (export_folder) as a folder of plain files; the format is in docs/session-format.md of the repository.
 
 ## Read
@@ -33,33 +33,33 @@ GET /v1/rooms
 
 GET /v1/rooms/{room}/recordings
   {"recordings": [{"id": "2026-10-19 21-30-00", "kind": "play", "recording": false, "start_ms": 1792445400000, "end_ms": 1792448100000, "length_s": 2700.0, "members": [{"id": "...", "name": "Ann", "voice_only": false, "start_ms": 1792445400000, "end_ms": 1792448100000}]}]}
-  Newest first. A recording that was imported also has "title", "imported_by" ({"id", "name"}) and "imported": true on its members (the views). kind is "play" or "debrief" (a recording of people talking while they watched another one). recording is true while it is being recorded. Put the id in the URL with spaces as %20.
+  Newest first. A recording that was imported also has "title", "imported_by" ({"id", "name"}) and "imported": true on its members (the views). kind is "play" or "debrief" (a recording of people talking while they watched another one). A debrief also has "of" (the recording it is about) and "watch" (what the Watch Party showed: [{"t_us", "by", "set", "at_us", "playing", "rate"}]). "analysis" lists the extensions that are on: [{"plugin", "state": "done" | "running" | "left" | "failed", "progress"?, "reason"?, "waiting_for"?, "error"?}]. recording is true while it is being recorded. Put the id in the URL with spaces as %20.
 
 GET /v1/rooms/{room}/recordings/{recording}
   One element of the list above.
 
+GET /v1/rooms/{room}/recordings/{recording}/voices/{member}[/{capture}]
+  The member's voice in the recording as raw audio/mp4 (one capture of it); 409 with the capture ids when there are several; 404 when there is none. Read a debrief's voices here to transcribe them.
+
 GET /v1/rooms/{room}/recordings/{recording}/events[?tag=rotate][&kind=note]
   {"events": [{"key": "<author>/<id>", "id": 1792445520000000, "author": "...", "author_name": "Ann", "plugin": null, "kind": "note", "at_s": 120.5, "to_s": null, "member": null, "member_name": null, "text": "Rotate early #rotate", "tags": ["rotate"], "values": null}]}
-  Notes, marks and analysis results in time order (untimed ones first). plugin is the plugin's name for analysis results, null for people. kinds: note, mark, match_end, ... Spoken lines, drawings and the game plan are left out unless you ask with kind=speech, kind=drawing or kind=board.
+  Notes, marks and analysis results in time order (untimed ones first). plugin is the extension's name for analysis results, null for people. kinds: note, mark, match_end, ... Spoken lines, drawings and the game plan are left out unless you ask with kind=speech, kind=drawing or kind=board.
 
 GET /v1/rooms/{room}/recordings/{recording}/chapters
   {"chapters": [{"n": 1, "name": "Match 1", "from_s": 0.0, "to_s": 612.3}, {"n": 2, "name": "Match 2", "from_s": 612.3, "to_s": null}]}
-  Matches found by the Apex matches plugin (empty when it is off or found none). to_s is null for the match still in progress.
+  Matches found by the Apex matches extension (empty when it is off or found none). to_s is null for the match still in progress.
 
 GET /v1/rooms/{room}/recordings/{recording}/transcript[?member=<id>]
   {"lines": [{"member": "...", "member_name": "Ren", "from_s": 5.0, "to_s": 8.0, "text": "Drop north"}]}
-  Spoken lines from the Transcription plugin, in time order (empty when it is off or not finished).
+  Spoken lines from the Transcription extension, in time order (empty when it is off or not finished).
 
 GET /v1/rooms/{room}/board
   {"text": "# This week\n...", "author": "...", "author_name": "Ann", "updated_ms": 1792445000000}
-  text is "" when nobody has written the game plan.
+  The team card. text is "" when nobody has written it. Other cards are written with put_board_card.
 
 GET /v1/rooms/{room}/plugins
-  {"plugins": [{"id": "transcribe", "name": "Transcription", "version": "1.0.0", "on": true, "settings": {"model": "small"}, "ready": true, "process_here": true, "workers": [{"id": "...", "name": "Ren", "on": true, "ready": true}]}]}
-
-GET /v1/rooms/{room}/jobs
-  {"jobs": [{"job": "...", "plugin": "transcribe", "version": "1.0.0", "set": "<recording id>", "owner": "...", "owner_name": "Ren", "whole": false, "state": "waiting", "by": null, "error": null}], "running": null}
-  state is waiting, claimed, done or failed; by is who runs or ran it.
+  {"plugins": [{"id": "transcribe", "name": "Transcription", "version": "1.0.0", "on": true, "settings": {"model": "small"}, "ready": true, "runner": "...", "runner_name": "Ren", "left": 2, "failed": 0, "waiting_for": null, "waiting_for_name": null}]}
+  runner is the one member whose PC analyses every recording for the extension (null when that member left the room); left and failed count recordings.
 
 GET /v1/diagnostics[?everyone=true]
   {"text": "ggi-hanseikai 0.16.2 on windows ...\n\nrecent errors\n..."}
@@ -72,19 +72,20 @@ POST /v1/rooms/{room}/recordings/{recording}/events
   Adds a note (kind "note", the default) or a mark ({"kind": "mark", "at_s": 40}; a mark needs at_s and has no text). at_s is optional for a note: without it the note belongs to the whole recording. Tags are added to the text as #tag. Answer 201 with the event, as in the list above.
 
 PUT /v1/rooms/{room}/board
-  {"text": "# This week\n**Goal: move before the ring closes**\n\n## Next match\n- Pick the drop first"}
-  Replaces the game plan for the whole room. Read it first and keep what still applies. Answer 200 with the board. The format: `#` is the title, a bold line is the goal, each `##` is a card of bullet points; [text](ezh://moment/<recording id>/<seconds>/all) links open a moment.
+  {"text": "Goal: move before the ring closes\n- Pick the drop first"}
+  Replaces the team card for the whole room. Read it first and keep what still applies. Answer 200 with the board. The format: the first line is shown bold, then short Markdown (headings, lists, **bold**, ==marked==, #tags); [text](ezh://moment/<recording id>/<seconds>/all) links open a moment. put_board_card writes any card.
 
 POST /v1/ops/{name}
   Runs one operation of the app. The body is a JSON object with its arguments (empty means {}). Answer 200 with the operation's value (null for most); 404 for a name that does not exist; 400 {"error": "..."} when the app refuses, with the message the window would show. A long one (export_folder, check_peer, check_update, prepare_plugin, debug_report) answers when it is done. reset and install_update restart the app, so their request ends without an answer. Arguments marked ? are optional. The operations:
   Rooms and invites: create_room {name} (empty: "<your name>'s room") -> room id, join_room {code} (ezh-<id>-<token>; pending until a member approves), enter_room {id}, close_room {id}, remove_room {id}, rename_room {name}, create_invite {reuse} -> invite code, cancel_invites, answer_ask {id, approve}, remove_peer {id}, check_peer {id} (this PC for its own id; up to 12 s)
   Recording: start_recording {debrief?} (true: voices only), stop_recording, mark -> event id
-  Capture and devices: list_sources, set_source {source} (an id from list_sources, or null), list_mics, set_mic {id}, set_mix {kind, volume, muted} (kind app or mic, volume 0 to 1), list_processes, set_audio_process {name}, set_quality {id} (light, standard, high), set_limit {mbps} (null for none), set_codecs {list} (what the window can decode)
-  Settings: set_name {name}, set_language {language} ("", en, ja), set_hotkey {keys}, set_channel {channel} (stable, beta), set_warn_hours {hours}, set_layout {layout}, check_update -> version or null, install_update, data_info -> {dir, used_bytes, old_bytes, free_bytes}, delete_old_files -> {freed} (files of older versions only), reset {keep_rooms}, dismiss_recovery, retry_ffmpeg
-  Notes and events: add_event {kind, text, target, values} (kind note, drawing or board; target {t_us, set}) -> event id, event_action {kind, id, text} (kind edit, delete or restore), log_layout {layout}
+  Capture and devices: list_sources, set_source {source} (an id from list_sources, or null), list_mics, set_mic {id}, set_mix {kind, volume, muted} (kind app or mic, volume 0 to 1), set_quality {id} (light, standard, high), set_limit {mbps} (null for none), set_codecs {list} (what the window can decode)
+  Settings: set_name {name}, set_language {language} ("", en, ja), set_hotkey {keys}, set_channel {channel} (stable, beta), set_layout {layout}, check_update -> version or null, install_update, data_info -> {dir, used_bytes, old_bytes, free_bytes}, delete_old_files -> {freed} (files of older versions only), reset {keep_rooms}, dismiss_recovery, retry_ffmpeg
+  Notes and events: add_event {kind, text, target, values} (kind note, drawing or board; target {t_us, set}) -> event id, event_action {kind, id, text} (kind edit, delete or restore), delete_ai_notes {room, set} (hides every note added through the API in that recording), put_board_card {room, card?, text?, title?, pos?, gone?} (card team, m:<member id> or a card id from an earlier answer; an empty card makes a new one and answers its id), log_layout {layout}
   Watch Party: party_on {on, view} (view is {set, playing, live, wall_us, at_us, rate, focus, mode, slots, order}), party_act {view}, party_typing {on}, draw {stroke}
-  Extensions: room_plugins, set_room_plugin {id, on, settings}, set_plugin_runner {id, runner}, set_process_plugin {id, on}, prepare_plugin {id}, jobs -> {jobs, running, tags}, retry_job {job}, run_job_next {job}, cancel_job
-  Recordings on this PC: delete_set {room, set} (this PC's files; answers whether any), discard_set {room, set} (for everyone), download_set {room, set}, focus_set {set}, export_folder {room, set, folder} (a new or empty folder; every file starts at the recording's start; answers {folder, files, skipped}, the members whose parts are not here), export_check (refused when an export cannot start)
+  Extensions: room_plugins, set_room_plugin {id, on, settings}, set_plugin_runner {id, runner} (a room member), prepare_plugin {id}, retry_job {room, set, plugin?} (analyse the recording again with every extension that is on, or the one named)
+  Windows: open_board_window, set_fullscreen {on, window} (window main or board)
+  Recordings on this PC: delete_set {room, set} (this PC's files and the debriefs that name it; answers whether any), download_set {room, set}, focus_set {set}, export_folder {room, set, folder} (a new or empty folder; every file starts at the recording's start; answers {folder, files, skipped}, the members whose parts are not here), export_check (refused when an export cannot start)
   API: set_api {on}, set_api_lan {lan}, new_api_token (then read api.json), api_info -> {on, lan, address, hosts, token, error}, api_reference
   Diagnostics and page state: state (the window's whole state), debug_view {tab, since, set} (tab connections, network, recording, data, jobs, flow or log), debug_report {save, head} (answers the report text, or with save true the path of report.txt in the data folder)
   Not available: the operations that open a window (choosing files or folders, opening links and folders, the identity file).

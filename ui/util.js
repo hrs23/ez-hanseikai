@@ -2,6 +2,9 @@ const { invoke: tauriInvoke, convertFileSrc } = window.__TAURI__.core;
 const invoke = (name, args) => tauriInvoke("call", { name, args: args || {} });
 const dialog = (name, args) => tauriInvoke(name, args || {});
 const $ = (id) => document.getElementById(id);
+const boardWindow = location.search === "?board";
+const listenMain = (name, fn) => { if (!boardWindow) window.__TAURI__.event.listen(name, fn); };
+const setFull = (on) => invoke("set_fullscreen", { on, window: boardWindow ? "board" : "main" }).catch(warn);
 
 function el(tag, props = {}, ...children) {
   const e = Object.assign(document.createElement(tag), props);
@@ -54,9 +57,7 @@ function stored(key, fallback) {
 function store(key, value) {
   try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { console.warn(e); }
 }
-function unstore(match) {
-  try { for (const key of Object.keys(localStorage)) if (match(key)) localStorage.removeItem(key); } catch (e) { console.warn(e); }
-}
+const shortId = (id) => `${String(id).slice(0, 4)}·${String(id).slice(4, 8)}`;
 const warn = (e) => console.warn(e);
 const playFailed = (e) => { if (e.name !== "AbortError" && e.name !== "NotAllowedError") warn(e); };
 const sessionDay = (id) => id.slice(0, 10);

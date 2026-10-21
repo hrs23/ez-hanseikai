@@ -396,12 +396,13 @@ function api(app, method, route, { token, host, body, connect, timeout = CALL_S 
       const chunks = [];
       res.on("data", (c) => chunks.push(c));
       res.on("end", () => {
-        const text = Buffer.concat(chunks).toString("utf8");
+        const raw = Buffer.concat(chunks);
+        const text = raw.toString("utf8");
         let json = null;
         try {
           json = JSON.parse(text);
         } catch {}
-        resolve({ status: res.statusCode, text, json });
+        resolve({ status: res.statusCode, text, json, raw, type: res.headers["content-type"] });
       });
     });
     req.on("timeout", () => req.destroy(new Error("no answer")));
@@ -635,16 +636,20 @@ async function live(ctx) {
     ctx.room = await invoke(a, "create_room", { name: "Practice" });
     await waitFor("A opens the room on Live", within(UI_REFRESH_S * 5), () => onLive(a));
     await allSee([a], "encoding its test source", within(COLD_START_S), (st) => st.capture.live);
-    await evaluate(a, "openNow(); true");
     await pressAndConfirm(a, "toggleRecording()");
     const alone = (await waitFor("A records", within(UI_REFRESH_S * 5), async () => (await state(a)).active_set?.id)) || "";
-    const view = () => evaluate(a, `(() => { const v = Object.values(play.tiles)[0]?.media.video; return { shown: selected === ${JSON.stringify(alone)}, review: !!review, playing: clock.playing, cur: v ? v.currentTime : 0, dur: v && isFinite(v.duration) ? v.duration : 0 }; })()`);
-    const first = await waitFor("A's player plays the growing recording", within(SEGMENT_S * 4), async () => { const x = await view(); return x.shown && !x.review && x.playing && x.cur > 0 && x.dur > 0 && x; });
-    await waitFor("A's player moves on with the picture", within(SEGMENT_S * 3), async () => { const x = await view(); return !x.review && x.cur > first.cur + FRAGMENT_S * 2 && x.dur > first.dur + SEGMENT_S && x; });
+    await waitFor("A opens Live when the recording starts", within(UI_REFRESH_S * 5), () => onLive(a));
+    await evaluate(a, "openNow(); true");
+    await waitFor("A's player holds the growing recording still while this PC records", within(SEGMENT_S * 4), () => evaluate(a, `selected === ${JSON.stringify(alone)} && !clock.playing && liveClock.pos === null`));
+    await evaluate(a, "act('play', nowM()); true");
+    const view = () => evaluate(a, `(() => { const v = Object.values(play.tiles)[0]?.media.video; return { shown: selected === ${JSON.stringify(alone)}, playing: clock.playing, cur: v ? v.currentTime : 0, dur: v && isFinite(v.duration) ? v.duration : 0 }; })()`);
+    const first = await waitFor("A's player plays the growing recording once play is pressed", within(SEGMENT_S * 4), async () => { const x = await view(); return x.shown && x.playing && x.cur > 0 && x.dur > 0 && x; });
+    await waitFor("A's player moves on with the picture", within(SEGMENT_S * 3), async () => { const x = await view(); return x.cur > first.cur + FRAGMENT_S * 2 && x.dur > first.dur + SEGMENT_S && x; });
     await pressAndConfirm(a, "toggleRecording()");
-    await waitFor("A offers to discard", within(UI_REFRESH_S * 5), () => evaluate(a, `$("confirm").open && $("confirmtitle").textContent === t("Discard this recording?")`));
-    await evaluate(a, `$("confirmyes").click(); true`);
-    await waitFor("A dropped the recording", within(UI_REFRESH_S * 5), async () => { const st = await state(a); return !st.active_set && !setOf(st, alone); });
+    await waitFor("A stopped the recording", within(UI_REFRESH_S * 5), async () => !(await state(a)).active_set);
+    await invoke(a, "delete_set", { room: ctx.room, set: alone });
+    await waitFor("A dropped the recording", within(UI_REFRESH_S * 5), async () => !setOf(await state(a), alone));
+    await evaluate(a, "openLive(); true");
     await waitFor("A is back on Live", within(UI_REFRESH_S * 5), () => onLive(a));
     await evaluate(a, "openLive(); true");
     await waitFor("A shares no recording", within(UI_REFRESH_S * 5), async () => !(await state(a)).party.shared.set);
@@ -731,9 +736,9 @@ async function live(ctx) {
       await evaluate(app, `openLive(); true`);
       await waitFor(`${app.key} shows three live tiles`, within(UI_REFRESH_S * 10), () => evaluate(app, `!$("livetiles").hidden && Object.keys(rec.tiles).length === 3 && $("ptitle").textContent === t("Live")`));
     }
-    check(await evaluate(a, `$("miccap").classList.contains("off") && $("screencap").classList.contains("recording") && getComputedStyle($("miccap")).borderTopStyle === "dashed" && !!$("miclvl")`), "the bottom-left buttons are not in the shared off/recording states");
+    check(await evaluate(a, `$("miccap").classList.contains("off") && $("screencap").classList.contains("on") && getComputedStyle($("miccap")).borderTopStyle === "dashed" && !!$("miclvl")`), "the bottom-left buttons are not in the shared off/recording states");
     await screenshot(a, "live-recording");
-    await waitFor("A marks only Live, not the running recording, and names the online count once", within(UI_REFRESH_S * 3), () => evaluate(a, `!$("sessions").querySelector(".liverow.on") && $("sidenav").querySelector("[aria-current=page]").dataset.nav === "live" && $("psub").textContent === t("{n} online", { n: 3 })`));
+    await waitFor("A marks only Live, not the running recording, and shows the elapsed time and the free space", within(UI_REFRESH_S * 3), () => evaluate(a, `!$("sessions").querySelector(".liverow.on") && $("sidenav").querySelector("[aria-current=page]").dataset.nav === "live" && /^\d+:\d\d · Free /.test($("psub").textContent)`));
     await evaluate(a, `$("sessions").querySelector(".liverow").click(); true`);
     await waitFor("A marks only the running recording after opening it", within(UI_REFRESH_S * 3), () => evaluate(a, `!!$("sessions").querySelector(".liverow.on") && !$("sidenav").querySelector("[aria-current=page]")`));
     await evaluate(a, `openLive(); true`);
@@ -834,9 +839,7 @@ async function live(ctx) {
     await invoke(c, "stop_recording");
   });
 
-  await step("B leaves the room from its menu, enters it again with its recordings and notes, and deletes it from the list, which forgets B's personal plan", async () => {
-    const plan = JSON.stringify(`board/${ctx.room}`);
-    await evaluate(b, `localStorage.setItem(${plan}, JSON.stringify("# Mine")); true`);
+  await step("B leaves the room from its menu, enters it again with its recordings and notes, and deletes it from the list", async () => {
     const kept = (st) => ({ ids: [st.sets.map((s) => s.id), st.events.map((e) => e.key)].map((x) => x.sort().join()).join(), have: Object.fromEntries(st.sets.flatMap((s) => s.players.map((p) => [`${s.id} ${p.owner}`, p.have]))) });
     const before = kept(await state(b));
     await waitFor("B shows the room header", within(UI_REFRESH_S * 5), () => evaluate(b, `!$("app").hidden && !!st.room`));
@@ -850,7 +853,6 @@ async function live(ctx) {
     await waitFor("B lists the room", within(UI_REFRESH_S * 5), () => evaluate(b, `!$("start").hidden && $("roomlist").children.length > 0`));
     await pressAndConfirm(b, `[...$("roomlist").children].find((r) => r.firstChild.textContent === st.rooms.find((x) => x.id === ${JSON.stringify(ctx.room)}).name).querySelector(".more").click(); [...$("menu").querySelectorAll("button")].find((x) => x.textContent === t("Delete…")).click()`);
     await waitFor("B no longer lists the room", within(UI_REFRESH_S * 5), async () => { const st = await state(b); return !st.room && !st.rooms.some((r) => r.id === ctx.room); });
-    await waitFor("B forgets the personal plan of the room it deleted", within(UI_REFRESH_S * 5), async () => (await evaluate(b, `localStorage.getItem(${plan})`)) === null);
     await waitFor("B removes the folder of the room it left", within(UI_REFRESH_S * 5), () => !fs.existsSync(roomDir(b, ctx.room)));
   });
 
@@ -1053,20 +1055,13 @@ async function library(ctx) {
     ctx.durationS = (ended.end_us - ended.start_us) / 1e6;
   });
 
-  await step("each ended recording gets a thumbnail, and the room page lists recordings as cards", async () => {
+  await step("each ended recording gets a thumbnail, and the sidebar lists recordings with it", async () => {
     await waitFor("A makes the thumbnail of the set", within(30), async () => setOf(await state(a), ctx.set)?.thumb === true);
     const size = await evaluate(a, `new Promise((done) => { const i = new Image(); i.onload = () => done([i.naturalWidth, i.naturalHeight]); i.onerror = () => done(null); i.src = thumbSrc(setById(${JSON.stringify(ctx.set)})); })`);
     check(size && size[0] > 0 && size[1] > 0, `the page could not load the thumbnail: ${brief(size)}`);
     const file = fs.readFileSync(path.join(roomDir(a, ctx.room), "thumbs", `${ctx.set}.jpg`));
     check(file[0] === 0xff && file[1] === 0xd8 && file.length > 500, "the thumbnail file is not a JPEG");
-    await evaluate(a, `$("recsopen").click(); true`);
-    await waitFor("A lists the set as a card with a picture", within(UI_REFRESH_S * 5), () => evaluate(a, `[...$("roomtab").querySelectorAll(".reccard")].some((c) => c.querySelector("img") && c.querySelectorAll(".acts button").length === 2) && $("homename").textContent === t("Recordings") && $("recsopen").getAttribute("aria-current") === "page"`));
-    check(await evaluate(a, `!!$("sessions").querySelector(".srow:not(.liverow) .thumb img") && !$("allrecs") && $("sessions").querySelectorAll(".srow:not(.liverow)").length === recordingRows().length && !!$("recfilter")`), "the sidebar does not list every recording with a thumbnail, or the filter is not in the main area");
-    await evaluate(a, `$("recfilter").value = "zzzz"; $("recfilter").dispatchEvent(new Event("input")); true`);
-    check(await evaluate(a, `$("roomtab").querySelectorAll(".reccard").length === 0`), "the filter did not hide the cards");
-    await evaluate(a, `$("recfilter").value = ""; $("recfilter").dispatchEvent(new Event("input")); true`);
-    await waitFor("the cards come back", within(UI_REFRESH_S * 3), () => evaluate(a, `$("roomtab").querySelectorAll(".reccard").length > 0`));
-    await screenshot(a, "recordings-tab");
+    check(await evaluate(a, `!!$("sessions").querySelector(".srow:not(.liverow) .thumb img") && !$("recsopen") && $("sessions").querySelectorAll(".srow:not(.liverow)").length === recordingRows().length`), "the sidebar does not list every recording with a thumbnail");
     await evaluate(a, `$("sidenav").querySelector("[data-nav=members]").click(); true`);
     await waitFor("A shows the members", within(UI_REFRESH_S * 3), () => evaluate(a, `$("homename").textContent === t("Members") && navActive() === "members"`));
     await screenshot(a, "room-members");
@@ -1078,29 +1073,42 @@ async function library(ctx) {
     await waitFor("every member pulls every log again", within(REQUEST_TIMEOUT_S + DIAL_S + LOG_SYNC_S), () => all.every((holder) => all.every((owner) => fileSize(logFile(holder, ctx.room, owner.id)) >= sizes[owner.key])));
     await invoke(a, "set_room_plugin", { id: PLUGIN, on: true, settings: {} });
     const seconds = within(JOB_CHECK_S + LOG_SYNC_S + ctx.durationS / KEYFRAME_DECODE_SPEED);
-    await Promise.all(all.map((app) => waitFor(`${app.key}: the set's one job done`, seconds, async () => {
-      const jobs = (await invoke(app, "jobs")).jobs.filter((j) => j.plugin === PLUGIN && j.set === ctx.set);
-      return jobs.length === 1 && jobs[0].state === "done";
-    })));
+    const analysed = async (app) => setOf(await state(app), ctx.set)?.analysis?.find((x) => x.plugin === PLUGIN)?.state;
+    await Promise.all(all.map((app) => waitFor(`${app.key}: the set's analysis done`, seconds, async () => (await analysed(app)) === "done")));
     await sleep(LOG_SYNC_S * 2 * 1000);
     const runs = all.flatMap((owner) => logOf(a, ctx.room, owner.id).filter((r) => r.k === "job" && r.plugin === PLUGIN).map((r) => ({ ...r, by: owner.key })));
     for (const key of new Set(runs.map((r) => r.job))) {
-      const yielded = runs.filter((r) => r.job === key && r.state === "yield").map((r) => `${r.by}/${r.run}`);
-      const claims = runs.filter((r) => r.job === key && r.state === "claim" && !yielded.includes(`${r.by}/${r.run}`));
+      const claims = runs.filter((r) => r.job === key && r.state === "claim");
       const done = runs.filter((r) => r.job === key && r.state === "done");
-      check(claims.length === 1 && done.length === 1 && claims[0].run === done[0].run, `job ${key}: ${claims.length} claims kept, ${yielded.length} yielded, ${done.length} done`);
+      check(claims.length === 1 && done.length === 1 && claims[0].run === done[0].run && claims[0].by === a.key, `job ${key}: ${claims.length} claims, ${done.length} done, the runner is A`);
       check(done[0].events === 0, `job ${key} found ${done[0].events} matches in the test picture`);
     }
     check(new Set(runs.map((r) => r.job)).size === 1, `the set had ${new Set(runs.map((r) => r.job)).size} Apex jobs`);
-    ctx.notes.push(`one plugin job run once (${runs.filter((r) => r.state === "yield").length} later claims yielded)`);
+    ctx.notes.push("one extension job run once, by the member who turned it on");
     const shown = (await state(b)).events.filter((e) => e.plugin);
-    check(!shown.length, `plugin events shown: ${brief(shown)}`);
+    check(!shown.length, `extension events shown: ${brief(shown)}`);
   });
 
-  await step("the transcription plugin follows the chosen model, with one job row per person", async () => {
+  await step("the runner of an extension is chosen and a rerun is processed there", async () => {
+    const all = [a, b, c];
+    const done = (app) => logOf(a, ctx.room, app.id).filter((r) => r.k === "job" && r.state === "done" && r.plugin === PLUGIN).length;
+    await invoke(b, "set_plugin_runner", { id: PLUGIN, runner: b.id });
+    for (const app of all) await waitFor(`${app.key} sees B as the runner`, within(LOG_SYNC_S * 3), async () => (await invoke(app, "room_plugins")).find((x) => x.id === PLUGIN).runner === b.id);
+    await sleep(JOB_CHECK_S * 2 * 1000);
+    check(done(b) === 0 && done(c) === 0, "choosing the runner analysed the recording again");
+    const seconds = within(JOB_CHECK_S + LOG_SYNC_S * 2 + ctx.durationS / KEYFRAME_DECODE_SPEED);
+    await invoke(a, "retry_job", { room: ctx.room, set: ctx.set, plugin: PLUGIN });
+    await waitFor("B processes the rerun", seconds, async () => done(b) > 0);
+    for (const app of all) await waitFor(`${app.key} shows the set analysed again`, seconds, async () => setOf(await state(app), ctx.set)?.analysis?.find((x) => x.plugin === PLUGIN)?.state === "done");
+    await invoke(b, "set_plugin_runner", { id: PLUGIN, runner: a.id });
+    for (const app of all) await waitFor(`${app.key} sees A as the runner again`, within(LOG_SYNC_S * 3), async () => (await invoke(app, "room_plugins")).find((x) => x.id === PLUGIN).runner === a.id);
+  });
+
+  await step("the transcription extension follows the chosen model and the runner is chosen from the members", async () => {
     await invoke(b, "set_room_plugin", { id: "transcribe", on: true, settings: {} });
-    await evaluate(b, `openPlugin = "transcribe"; roomTab = "plugins"; go("room"); pollPlugins(); true`);
+    await evaluate(b, `openExtensions.add("transcribe"); roomTab = "extensions"; go("room"); pollPlugins(); true`);
     const shown = `[...$("roomtab").querySelectorAll(".plug")].find((p) => p.querySelector(".pt b").textContent === t("Transcription"))`;
+    check(await evaluate(b, `[...$("roomtab").querySelectorAll(".plug")].filter((p) => p.classList.contains("open")).length === 1`), "the rows are not collapsed except the one opened");
     for (const [model, size] of Object.entries(MODEL_BYTES)) {
       await waitFor("B shows the transcription settings", within(UI_REFRESH_S * 5), () => evaluate(b, `!!${shown} && !!${shown}.querySelector(".field select")`));
       await evaluate(b, `(() => { const s = ${shown}.querySelector(".field select"); s.value = ${JSON.stringify(model)}; s.dispatchEvent(new Event("change")); return true; })()`);
@@ -1117,42 +1125,17 @@ async function library(ctx) {
         });
       }
     }
-    const members = await evaluate(b, `${shown}.querySelectorAll(".wrow").length`);
-    check(members === 3, `B lists ${members} members under Processing`);
-    const choices = await evaluate(b, `[...${shown}.querySelectorAll("select[aria-label='" + t("Who runs it") + "'] option")].map((o) => o.textContent).join()`);
-    check(choices.split(",").sort().join() === ["Auto", a.name, b.name, c.name].sort().join(), `the runner choices are ${choices}`);
+    const choices = await evaluate(b, `[...${shown}.querySelectorAll("select[aria-label='" + t("Runner") + "'] option")].map((o) => o.textContent).join()`);
+    check(choices.split(",").sort().join() === [a.name, b.name, c.name].sort().join(), `the runner choices are ${choices}`);
     await invoke(b, "dismiss_recovery");
     await screenshot(b, "plugins");
-    await evaluate(b, `(() => { const s = ${shown}.querySelector("select[aria-label='" + t("Who runs it") + "']"); s.value = ${JSON.stringify(c.id)}; s.dispatchEvent(new Event("change")); return true; })()`);
+    await evaluate(b, `(() => { const s = ${shown}.querySelector("select[aria-label='" + t("Runner") + "']"); s.value = ${JSON.stringify(c.id)}; s.dispatchEvent(new Event("change")); return true; })()`);
     await waitFor("B asks before changing who runs it", within(UI_REFRESH_S * 5), () => evaluate(b, `$("confirm").open`));
     await evaluate(b, `$("confirmyes").click(); true`);
-    for (const app of [a, b, c]) await waitFor(`${app.key} sees C as the runner`, within(LOG_SYNC_S * 3), async () => (await invoke(app, "room_plugins")).find((x) => x.id === "transcribe").runner === c.id && (await invoke(app, "jobs")).jobs.filter((j) => j.plugin === "transcribe").every((j) => j.runner === c.id));
-    await evaluate(b, `[...$("roomtab").querySelectorAll(".seg button")].find((x) => x.firstChild.textContent === t("Jobs")).click(); true`);
-    await waitFor("B names C's PC in the jobs list", within(UI_REFRESH_S * 5), () => evaluate(b, `[...$("roomtab").querySelectorAll("tbody tr:not(.err)")].filter((r) => r.children[0].textContent.includes(t("Transcription"))).length > 0 && [...$("roomtab").querySelectorAll("tbody tr:not(.err)")].filter((r) => r.children[0].textContent.includes(t("Transcription"))).every((r) => r.children[4].textContent === t("{name}'s PC", { name: ${JSON.stringify(c.name)} }))`));
-    await screenshot(b, "jobs");
-    await invoke(b, "set_plugin_runner", { id: "transcribe", runner: null });
-    for (const app of [a, b, c]) await waitFor(`${app.key} sees Auto again`, within(LOG_SYNC_S * 3), async () => (await invoke(app, "room_plugins")).find((x) => x.id === "transcribe").runner === null);
-    const jobs = (await invoke(b, "jobs")).jobs.filter((j) => j.plugin === "transcribe" && j.set === ctx.set);
-    const owners = jobs.map((j) => j.owner);
-    check(owners.length > 0 && new Set(owners).size === owners.length, `transcription rows per person in the set: ${brief(owners)}`);
-  });
-
-  await step("a member turns processing off for one plugin and everyone sees it", async () => {
-    await invoke(c, "set_process_plugin", { id: "transcribe", on: false });
-    for (const app of [a, b, c]) {
-      await waitFor(`${app.key} sees C not processing`, within(LOG_SYNC_S * 3), async () => (await invoke(app, "room_plugins")).find((x) => x.id === "transcribe").workers.some((w) => w.id === c.id && w.on === false));
-    }
-    check((await invoke(c, "room_plugins")).find((x) => x.id === PLUGIN).process_here === true, "turning off one plugin turned off another");
-    await invoke(a, "set_process_plugin", { id: "transcribe", on: false });
-    for (const app of [a, b, c]) await waitFor(`${app.key} names B as the only one who runs the transcription`, within(LOG_SYNC_S * 3), async () => {
-      const jobs = (await invoke(app, "jobs")).jobs.filter((j) => j.plugin === "transcribe");
-      return jobs.length > 0 && jobs.every((j) => j.runner === b.id);
-    });
-    await invoke(a, "set_process_plugin", { id: "transcribe", on: true });
-    await invoke(c, "set_process_plugin", { id: "transcribe", on: true });
-    for (const app of [a, b, c]) await waitFor(`${app.key} sees nobody named when two process`, within(LOG_SYNC_S * 3), async () => (await invoke(app, "jobs")).jobs.filter((j) => j.plugin === "transcribe").every((j) => j.runner === null));
+    for (const app of [a, b, c]) await waitFor(`${app.key} sees C as the runner`, within(LOG_SYNC_S * 3), async () => (await invoke(app, "room_plugins")).find((x) => x.id === "transcribe").runner === c.id);
     await invoke(b, "set_room_plugin", { id: "transcribe", on: false, settings: {} });
   });
+
 
   await step("the room header menu lists the room commands and a rename in its settings reaches everyone", async () => {
     await evaluate(a, `$("sidenav").querySelector("[data-nav=board]").click(); true`);
@@ -1175,34 +1158,31 @@ async function library(ctx) {
     for (const app of [a, b, c]) await waitFor(`${app.key} shows Practice again`, within(LOG_SYNC_S * 2), async () => (await state(app)).room.name === "Practice");
   });
 
-  await step("the game plan renders Markdown safely, ticks tasks, and keeps a personal plan on this PC", async () => {
-    const plan = ["# Plan", "**Goal**: win", "## Checklist", "- [ ] first", "- [x] second", "## Table", "| Who | Job |", "|---|---|", "| Ann | scout |", "## Code", "```", "let ring = 1;", "```", "## Moments", `[Opening](ezh://moment/${encodeURIComponent(ctx.set)}/5/all) [site](https://example.com/x) [bad](javascript:alert(1)) <img src=x onerror=alert(1)>`].join("\n");
-    await evaluate(a, `editBoard("room"); $("boardtext").value = ${JSON.stringify(plan)}; renderMini(); saveBoard(); true`);
-    for (const app of [b, c]) await waitFor(`${app.key} receives the game plan`, within(LOG_SYNC_S * 2), async () => (await state(app)).events.some((e) => e.kind === "board" && e.text === plan));
-    await waitFor("A shows the cards", within(UI_REFRESH_S * 5), () => evaluate(a, `!!$("canvas").querySelector(".bsec table") && !!$("canvas").querySelector(".bsec pre code")`));
-    const dom = await evaluate(a, `(() => { const c = $("canvas"); return { cards: c.querySelectorAll(".bsec").length, boxes: c.querySelectorAll("input[type=checkbox]").length, links: [...c.querySelectorAll("a")].map((x) => [x.getAttribute("href"), x.title]), moments: c.querySelectorAll("button.link").length, images: c.querySelectorAll("img").length, text: c.textContent }; })()`);
-    check(dom.cards === 4 && dom.boxes === 2 && dom.moments === 1 && dom.images === 0 && dom.links.length === 1 && dom.links[0][0] === null && dom.links[0][1] === "https://example.com/x", `the game plan shows ${brief(dom)}`);
-    check(dom.text.includes("javascript:alert(1)") && dom.text.includes("<img src=x onerror=alert(1)>"), "the unsafe link and tag are not shown as plain text");
+  await step("the game plan is a board of cards with short Markdown, and a card is added, renamed, moved and deleted by anyone", async () => {
+    const text = ["Win the ring", "- first", "- second", `==hold== [Opening](ezh://moment/${encodeURIComponent(ctx.set)}/5/all) [site](https://example.com/x) [bad](javascript:alert(1)) <img src=x onerror=alert(1)>`, "| Who | Job |"].join("\n");
+    await evaluate(a, `showRoomTab("board"); true`);
+    await invoke(a, "put_board_card", { room: ctx.room, card: "team", text });
+    const card = async (app, id) => (await state(app)).board.find((x) => x.card === id);
+    for (const app of [b, c]) await waitFor(`${app.key} receives the team card`, within(LOG_SYNC_S * 2), async () => (await card(app, "team"))?.text === text);
+    await waitFor("A shows the cards", within(UI_REFRESH_S * 5), () => evaluate(a, `!!$("canvas").querySelector(".bcard.team .chead") && $("canvas").querySelectorAll(".brow > .bcard").length === 3`));
+    const dom = await evaluate(a, `(() => { const c = $("canvas").querySelector(".bcard.team"); return { head: c.querySelector(".chead").textContent, items: c.querySelectorAll("li").length, marks: c.querySelectorAll("mark").length, boxes: c.querySelectorAll("input,table,pre").length, links: [...c.querySelectorAll("a")].map((x) => [x.getAttribute("href"), x.title]), moments: c.querySelectorAll("button.link").length, images: c.querySelectorAll("img").length, text: c.textContent, writes: $("canvas").querySelectorAll(".write").length }; })()`);
+    check(dom.head === "Win the ring" && dom.items === 2 && dom.marks === 1 && dom.boxes === 0 && dom.moments === 1 && dom.images === 0 && dom.links.length === 1 && dom.links[0][0] === null && dom.links[0][1] === "https://example.com/x", `the team card shows ${brief(dom)}`);
+    check(dom.text.includes("javascript:alert(1)") && dom.text.includes("<img src=x onerror=alert(1)>") && dom.text.includes("| Who | Job |"), "the unsafe link, the tag and the table are not shown as plain text");
+    check(dom.writes === 3, `the empty member cards show ${dom.writes} Write buttons`);
     await screenshot(a, "board-room");
-    await evaluate(a, `(() => { const [one, two] = $("canvas").querySelectorAll("input[type=checkbox]"); one.click(); two.click(); return true; })()`);
-    const ticked = plan.replace("- [ ] first", "- [x] first").replace("- [x] second", "- [ ] second");
-    for (const app of [a, b, c]) await waitFor(`${app.key} sees both quick ticks`, within(LOG_SYNC_S * 2 + UI_REFRESH_S * 2), async () => (await evaluate(app, `boardEvent() && boardEvent().text`)) === ticked);
-    const boards = async (app) => (await state(app)).events.filter((e) => e.kind === "board").length;
-    const before = { a: await boards(a), b: await boards(b), c: await boards(c) };
-    await evaluate(a, `setBoardScope("personal"); $("boardedit").click(); true`);
-    await waitFor("A's Edit button opens the personal plan", within(UI_REFRESH_S * 3), () => evaluate(a, `boardEditing && boardScope === "personal" && $("boardtext").value === boardText() && $("boardtext").value !== boardEvent().text && $("boardscope").querySelector("[data-scope=personal]").getAttribute("aria-pressed") === "true"`));
-    await evaluate(a, `$("boardtext").value = "# Mine\\n- [ ] only me"; renderMini(); saveBoard(); true`);
-    await waitFor("A shows the personal plan", within(UI_REFRESH_S * 5), () => evaluate(a, `boardScope === "personal" && $("canvas").textContent.includes("only me") && $("homesub").textContent === t("Only on this PC")`));
-    await screenshot(a, "board-personal");
-    await sleep(SYNC_ROUND_S * 1000);
-    for (const app of [a, b, c]) {
-      check((await boards(app)) === before[app.key] && !JSON.stringify((await state(app)).events).includes("only me"), `${app.key} has the personal game plan as an event`);
-      check(!fs.readFileSync(logFile(app, ctx.room, app.id)).includes("only me"), `${app.key} wrote the personal plan to its log`);
-    }
-    await evaluate(a, `setBoardScope("room"); true`);
-    await waitFor("A shows the room plan again", within(UI_REFRESH_S * 5), () => evaluate(a, `boardScope === "room" && $("canvas").textContent.includes("Checklist")`));
-    await evaluate(a, `writeBoard(" "); true`);
-    await waitFor("A shows the starter page for a cleared room plan", within(UI_REFRESH_S * 5), () => evaluate(a, `!boardEvent() && boardDraft === boardText() && $("canvas").querySelectorAll(".bsec").length === 3 && !$("homesub").textContent`));
+    const id = await invoke(b, "put_board_card", { room: ctx.room, card: "", title: "Drops", text: "north" });
+    for (const app of [a, b, c]) await waitFor(`${app.key} sees the new card after the member cards`, within(LOG_SYNC_S * 2), async () => { const x = await card(app, id); return x?.title === "Drops" && x.text === "north" && (await state(app)).board.at(-1).card === id; });
+    await invoke(c, "put_board_card", { room: ctx.room, card: id, title: "Calls" });
+    await invoke(a, "put_board_card", { room: ctx.room, card: id, pos: -0.5 });
+    for (const app of [a, b, c]) await waitFor(`${app.key} sees the card renamed and moved up with its text`, within(LOG_SYNC_S * 2), async () => { const x = await card(app, id); return x?.title === "Calls" && x.text === "north" && (await state(app)).board[1].card === id; });
+    await invoke(b, "put_board_card", { room: ctx.room, card: id, gone: true });
+    for (const app of [a, b, c]) await waitFor(`${app.key} no longer shows the deleted card`, within(LOG_SYNC_S * 2), async () => !(await card(app, id)));
+    check((await invoke(a, "put_board_card", { room: ctx.room, card: "elsewhere", text: "x" }).catch((e) => e.message || "refused")) !== "elsewhere", "an invalid card id was accepted");
+    await invoke(a, "set_fullscreen", { on: true, window: "main" });
+    await invoke(a, "set_fullscreen", { on: false, window: "main" });
+    check(await invoke(a, "set_fullscreen", { on: true, window: "nowhere" }).then(() => false, () => true), "a window that does not exist went full screen");
+    await invoke(a, "put_board_card", { room: ctx.room, card: "team", text: "" });
+    await waitFor("A shows no text on the cleared team card", within(UI_REFRESH_S * 5), () => evaluate(a, `$("canvas").querySelectorAll(".write").length === 4`));
     await evaluate(a, `$("sidenav").querySelector("[data-nav=members]").click(); true`);
   });
 
@@ -1237,9 +1217,9 @@ async function library(ctx) {
     check(await evaluate(a, `(() => { $("name").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 300, clientY: 300 })); const labels = [...$("menu").querySelectorAll("button")].map((b) => b.textContent).join(); closeMenu(); $("settings").close(); return labels === [t("Cut"), t("Copy"), t("Paste"), t("Select all")].join(); })()`), "a text field has no edit menu");
     check(await evaluate(a, `!$("sessions").querySelector(".liverow") && !$("standby").hidden && $("standby").textContent.includes(t("Standby"))`), "the idle list holds a live entry or the start box lacks Standby");
     await evaluate(a, `openLive(); true`);
-    await waitFor("A shows the live tiles while idle", within(UI_REFRESH_S * 10), () => evaluate(a, `!$("livetiles").hidden && Object.keys(rec.tiles).length === 3 && navActive() === "live" && $("psub").textContent === ""`));
+    await waitFor("A shows the live tiles while idle", within(UI_REFRESH_S * 10), () => evaluate(a, `!$("livetiles").hidden && Object.keys(rec.tiles).length === 3 && navActive() === "live" && $("psub").textContent.startsWith("Free ")`));
     await screenshot(a, "live-idle");
-    check(rows.length === 3 && rows.every((x) => x === "Standby" || /^Receiving \d+%$/.test(x)), `member states ${brief(rows)}`);
+    check(rows.length === 3 && rows.every((x) => x === "Standby"), `member states ${brief(rows)}`);
   });
 
   await step("Watch Party converges on a seek and a play, and a member who joins midway converges too", async () => {
@@ -1256,9 +1236,11 @@ async function library(ctx) {
         return same && evaluate(app, `selected === ${JSON.stringify(ctx.set)} && clock.playing === ${playing} && Math.abs(nowM() - ${position}) < ${JUMP_MIN_S}`);
       })));
     };
+    await Promise.all(all.map((app) => evaluate(app, `openSession(${JSON.stringify(ctx.set)}); true`)));
+    for (const app of all) await waitFor(`${app.key} watches the set`, seconds, async () => (await state(app)).party.shared.set === ctx.set);
     await evaluate(c, `setParty(false); true`);
     await waitFor("C leaves the party", seconds, async () => !(await state(c)).party.on);
-    await evaluate(a, `openSet(${JSON.stringify(ctx.set)}); act("seek", ${SEEK_TO_S}); true`);
+    await evaluate(a, `act("seek", ${SEEK_TO_S}); true`);
     await follow(a, [b], false, SEEK_TO_S);
     await evaluate(b, `act("play", nowM()); true`);
     await follow(b, [a], true, "nowM()");
@@ -1298,7 +1280,7 @@ async function library(ctx) {
     await allSee(all, "watching the set together", within(PARTY_REPEAT_S + UI_REFRESH_S * 2), (st) => st.party.on && st.party.shared.set === ctx.set);
     check(await evaluate(a, `startState() === "review" && $("startbtn").textContent === t("Record debrief")`), "A's start button does not offer to record the debrief");
     await evaluate(a, `$("startmore").click(); true`);
-    check(await evaluate(a, `[...$("menu").querySelectorAll("button")].map((b) => b.textContent).join() === [t("Start recording"), t("Record debrief")].join()`), "the record menu does not offer Start recording and Record debrief");
+    check(await evaluate(a, `[...$("menu").querySelectorAll("button")].map((b) => b.textContent).join() === t("Switch to recording")`), "the record menu does not offer to switch back to recording while watching together");
     await evaluate(a, `closeMenu(); true`);
     await evaluate(b, `window.e2eNotes = []; window.__TAURI__.event.listen("session", (e) => e2eNotes.push(sessionNotice(e.payload.action, e.payload.by))).then(() => true)`);
     await pressAndConfirm(a, "toggleRecording()", false);
@@ -1314,8 +1296,6 @@ async function library(ctx) {
     await waitFor("C logs its seek as a party record", within(LOG_SYNC_S * 2), () => logOf(c, ctx.room, c.id).some((r) => r.k === "party" && r.set === ctx.review && r.shared.set === ctx.set));
     const ending = await pressAndConfirm(a, "toggleRecording()");
     check(ending === "Stop recording for everyone?", `A was asked "${ending}"`);
-    await waitFor("A offers to discard the short debrief", within(UI_REFRESH_S * 5), () => evaluate(a, `$("confirm").open && $("confirmtitle").textContent === t("Discard this recording?")`));
-    await evaluate(a, `$("confirmno").click(); true`);
     await waitFor("B is told who ended", within(LOG_SYNC_S * 2), () => evaluate(b, `e2eNotes.includes(${JSON.stringify(a.name + " stopped recording")})`));
     await allSee(all, "the review ended", within(LOG_SYNC_S * 2), (st) => !st.active_set && setOf(st, ctx.review) && !setOf(st, ctx.review).live);
     for (const app of all) {
@@ -1323,16 +1303,11 @@ async function library(ctx) {
       check(segsOf(own, ctx.review, "m").length > 0 && segsOf(own, ctx.review, "v").length === 0, `${app.key} recorded ${segsOf(own, ctx.review, "v").length} picture and ${segsOf(own, ctx.review, "m").length} voice segments in the review`);
     }
     check(logOf(a, ctx.room, a.id).some((r) => r.k === "party" && r.set === ctx.review), "A did not log what was watched when the review started");
-    await allSee(all, "two party records in the review", within(SYNC_ROUND_S * 2), (st) => (setOf(st, ctx.review)?.party || []).length >= 2);
-    await waitFor("A sees a review session", within(UI_REFRESH_S * 3), () => evaluate(a, `isReview(setById(${JSON.stringify(ctx.review)}))`));
-    await evaluate(a, `openSession(${JSON.stringify(ctx.review)}); true`);
-    await waitFor("A opens the review", within(UI_REFRESH_S * 3), () => evaluate(a, `review?.id === ${JSON.stringify(ctx.review)} && reviewTotal() > 0`));
-    for (const app of [b, c]) await waitFor(`${app.key} replays the review with A`, within(PARTY_REPEAT_S + UI_REFRESH_S * 2), () => evaluate(app, `review?.id === ${JSON.stringify(ctx.review)}`));
-    for (const app of all) check((await state(app)).party.shared.origin === a.id, `${app.key} took over the review it only followed`);
-    await evaluate(a, `act("seek", reviewTotal()); true`);
-    for (const app of all) await waitFor(`${app.key} replays the watched session at the seek`, within(UI_REFRESH_S * 3), () => evaluate(app, `review?.id === ${JSON.stringify(ctx.review)} && selected === ${JSON.stringify(ctx.set)} && Math.abs(nowM() - ${SEEK_TO_S * 2}) < ${JUMP_MIN_S}`));
-    await evaluate(a, `endReview(); openSession(${JSON.stringify(ctx.set)}); true`);
-    ctx.notes.push(`review session with ${(await state(a)).sets.find((s) => s.id === ctx.review).party.length} party records replayed`);
+    for (const app of all) await waitFor(`${app.key} links the review to the recording it was about`, within(LOG_SYNC_S * 2), async () => setOf(await state(app), ctx.review)?.of === ctx.set);
+    await waitFor("A lists the recording and not its debrief, which the recording's header counts", within(UI_REFRESH_S * 3), () => evaluate(a, `recordingRows().every((r) => r.id !== ${JSON.stringify(ctx.review)}) && debriefsOf(${JSON.stringify(ctx.set)}).length === 1`));
+    await evaluate(a, `openSession(${JSON.stringify(ctx.set)}); true`);
+    await waitFor("A's header says Debrief 1 time", within(UI_REFRESH_S * 3), () => evaluate(a, `$("pchips").textContent.includes(t("Debrief {n} time · {m} min", { n: 1, m: debriefLength(debriefsOf(${JSON.stringify(ctx.set)})) }))`));
+    ctx.notes.push(`debrief with ${logOf(a, ctx.room, a.id).filter((r) => r.k === "party" && r.set === ctx.review).length} party records of A linked to its recording`);
   });
 
   await step("the local API is on from launch, reads recordings and takes a note and a game plan that everyone sees, and the page switches it off and on", async () => {
@@ -1357,25 +1332,30 @@ async function library(ctx) {
     const list = await api(a, "GET", `${room}/recordings`, { token });
     const found = list.json?.recordings?.find((r) => r.id === ctx.set);
     check(found && found.kind === "play" && found.members.length >= 2 && found.length_s > 0 && found.end_ms > found.start_ms, `recordings: ${brief(list.json)}`);
-    check(list.json.recordings.find((r) => r.id === ctx.review)?.kind === "debrief", "the review is not listed as a debrief");
+    const debrief = list.json.recordings.find((r) => r.id === ctx.review);
+    check(debrief?.kind === "debrief" && debrief.of === ctx.set && Array.isArray(debrief.watch) && debrief.watch.length >= 2 && debrief.watch.every((w) => w.set === ctx.set && typeof w.at_us === "number") && found.of === undefined && Array.isArray(found.analysis), `the debrief: ${brief(debrief)}`);
+    const voice = await api(a, "GET", `${recording(ctx.review)}/voices/${a.id}`, { token });
+    check(voice.status === 200 && voice.type?.startsWith("audio/mp4") && voice.raw.subarray(4, 8).toString() === "ftyp", `the debrief voice: ${voice.status} ${voice.type}`);
+    check((await api(a, "GET", `${recording(ctx.set)}/voices/${a.id}x`, { token })).status === 404, "a voice that does not exist was served");
     for (const tail of ["events", "chapters", "transcript"]) {
       const r = await api(a, "GET", `${recording(ctx.set)}/${tail}`, { token });
       check(r.status === 200 && Array.isArray(r.json?.[tail === "events" ? "events" : tail === "chapters" ? "chapters" : "lines"]), `${tail}: ${r.status} ${brief(r.text)}`);
     }
     const plugins = await api(a, "GET", `${room}/plugins`, { token });
     check(plugins.status === 200 && ["apex-matches", "transcribe"].every((id) => plugins.json.plugins.some((p) => p.id === id)), `plugins: ${brief(plugins.json)}`);
-    const jobs = await api(a, "GET", `${room}/jobs`, { token });
-    check(jobs.status === 200 && jobs.json.jobs.some((j) => j.plugin === PLUGIN && j.state === "done"), `jobs: ${brief(jobs.json)}`);
+    check((await api(a, "GET", `${room}/jobs`, { token })).status === 404, "the jobs endpoint is still there");
+    const apex = plugins.json.plugins.find((p) => p.id === PLUGIN);
+    check(apex.runner === a.id && apex.left === 0 && apex.failed === 0 && found.analysis.some((x) => x.plugin === PLUGIN && x.state === "done"), `the extension: ${brief(apex)} ${brief(found.analysis)}`);
     check((await api(a, "POST", `${recording(ctx.set)}/events`, { token, body: { text: "" } })).status === 400, "an empty note was accepted");
     check((await api(a, "GET", `${recording(ctx.set)}/clips`, { token })).status === 404, "there is an endpoint for clips");
     const text = "Noted through the API #fromapi";
     const made = await api(a, "POST", `${recording(ctx.set)}/events`, { token, body: { text, at_s: SEEK_TO_S, tags: ["api"] } });
     check(made.status === 201 && made.json.at_s === SEEK_TO_S && made.json.tags.join() === "fromapi,api" && made.json.author === a.id, `the note: ${made.status} ${brief(made.text)}`);
-    await allSee([a, b, c], "the note written through the API", within(LOG_SYNC_S * 2), (st) => st.events.some((e) => e.key === made.json.key && e.text === `${text} #api` && e.kind === "note"));
+    await allSee([a, b, c], "the note written through the API is an AI note", within(LOG_SYNC_S * 2), (st) => st.events.some((e) => e.key === made.json.key && e.text === `${text} #api` && e.kind === "note" && e.source === "ai"));
     const tagged = await api(a, "GET", `${recording(ctx.set)}/events?tag=API`, { token });
     check(tagged.json.events.some((e) => e.key === made.json.key), "the note is not found by its tag");
     await evaluate(a, `side = "notes"; openSession(${JSON.stringify(ctx.set)}); true`);
-    await waitFor("A lists the note in the player", within(UI_REFRESH_S * 5), () => evaluate(a, `$("notelist").textContent.includes("Noted through the API")`));
+    await waitFor("A lists the note in the player with the AI mark", within(UI_REFRESH_S * 5), () => evaluate(a, `$("notelist").textContent.includes("Noted through the API") && !!$("notelist").querySelector(".aimark")`));
     const status = await api(a, "GET", "/v1/status", { token });
     check(status.status === 200 && status.json.room === ctx.room && status.json.recording === false && ["idle", "standby"].includes(status.json.state) && status.json.members.length === 3 && status.json.members.some((m) => m.id === a.id && m.state === status.json.state), `status: ${status.status} ${brief(status.json)}`);
     const diag = await api(a, "GET", "/v1/diagnostics?everyone=true", { token });
@@ -1388,15 +1368,15 @@ async function library(ctx) {
     check((await operation("enter_room", { id: "nope" })).status === 400 && (await operation("enter_room", {})).json.error === "id is missing or not valid.", "enter_room takes a room that is not in the list");
     check((await operation("nothing", {})).status === 404 && (await api(a, "GET", "/v1/ops/state", { token })).status === 405 && (await operation("state", "[]")).status === 400, "an operation takes any name, method or body");
     check((await operation("state")).json.id === a.id, "an operation without a body is not run as {}");
-    const board = "# Through the API\n**Goal: hold the high ground**";
+    const board = "Goal: hold the high ground\n- through the API";
     const put = await api(a, "PUT", `${room}/board`, { token, body: { text: board } });
     check(put.status === 200 && put.json.text === board, `the game plan: ${put.status} ${brief(put.text)}`);
     await allSee([a, b, c], "the game plan written through the API", within(LOG_SYNC_S * 2), (st) => st.events.some((e) => e.kind === "board" && e.text === board));
     check((await api(a, "GET", `${room}/board`, { token })).json.text === board, "the game plan reads back differently");
-    await waitFor("A shows the game plan", within(UI_REFRESH_S * 5), () => evaluate(a, `boardText() === ${JSON.stringify(board)}`));
+    await waitFor("A has the game plan as its team card", within(UI_REFRESH_S * 5), () => evaluate(a, `st.board.find((c) => c.card === "team").text === ${JSON.stringify(board)}`));
     await evaluate(a, `$("settings").close(); go("room"); true`);
-    await waitFor("A shows the API badge", within(UI_REFRESH_S * 5), () => evaluate(a, `!$("apibadge").hidden && !$("apibadge").classList.contains("lan")`));
-    await evaluate(a, `$("apibadge").click(); true`);
+    await waitFor("A shows the API badge beside the AI button, not with the faces", within(UI_REFRESH_S * 5), () => evaluate(a, `(() => { const b = document.querySelector("#roompage .apibadge"); return !b.hidden && !b.classList.contains("lan") && b.nextElementSibling === $("aibtn") && !$("roomfaces").parentElement.querySelector(".apibadge"); })()`));
+    await evaluate(a, `document.querySelector("#roompage .apibadge").click(); true`);
     check(await evaluate(a, `$("settings").open && settingsPane === "api" && !$("settings").querySelector('section[data-pane="api"]').hidden`), "the badge does not open Settings > API");
     await waitFor("A lists the endpoints", within(UI_REFRESH_S * 5), () => evaluate(a, `$("apiref").querySelectorAll("details").length >= 15 && $("apiref").textContent.includes("/v1/status") && $("apiref").querySelector("pre") !== null`));
     await evaluate(a, `$("settings").close(); go("room"); true`);
@@ -1431,9 +1411,9 @@ async function library(ctx) {
       check((await api(a, "GET", "/v1", { host: own, connect: address })).status === 401, "an address without the token was not refused");
       check((await api(a, "GET", "/v1", { token: fresh, host: `evil.example:${API_PORTS.a}`, connect: address })).status === 403, "a foreign Host header was not refused for other devices");
     }
-    await waitFor("A shows the warning on the badge", within(UI_REFRESH_S * 5), () => evaluate(a, `go("room"), $("apibadge").classList.contains("lan") && $("apibadge").title.includes("Other devices on your network")`));
+    await waitFor("A shows the warning on the badge", within(UI_REFRESH_S * 5), () => evaluate(a, `go("room"), document.querySelector("#roompage .apibadge").classList.contains("lan") && document.querySelector("#roompage .apibadge").title.includes("Other devices on your network")`));
     const faces = await evaluate(a, `(() => { const was = sideWidth; setSideWidth(clampSide(0), false); const f = $("roomfaces"); const r = { shown: f.querySelectorAll(".av").length, clipped: f.scrollWidth > f.clientWidth }; setSideWidth(was, false); return r; })()`);
-    check(faces.shown === 3 && !faces.clipped, `the faces beside the badge at the narrowest sidebar: ${brief(faces)}`);
+    check(faces.shown === 3 && !faces.clipped, `the faces at the narrowest sidebar: ${brief(faces)}`);
     await evaluate(a, `openSettings("api"); document.querySelector('#apiaccess [data-lan="0"]').click(); true`);
     await waitFor("A limits the API to this PC", within(UI_REFRESH_S * 5), () => evaluate(a, `!st.api.lan && $("apilanbox").hidden`));
     if (own) check(await api(a, "GET", "/v1", { token: fresh, host: own, connect: "127.0.0.1" }).then((r) => r.status === 403), "this PC's own address is accepted again for this PC only");
@@ -1509,7 +1489,7 @@ async function library(ctx) {
     await waitFor("B fetches the review on request", within((SEGMENT_S + SYNC_ROUND_S) * 3), async () => heldByAll(await state(b), ctx.review, [b]) && !holdEverything([b], ctx.room, ctx.review, all));
   });
 
-  await step("deleting a recording nobody else holds removes it, its jobs and its entry everywhere", async () => {
+  await step("deleting a recording nobody else holds removes it and its entry everywhere", async () => {
     const all = [a, b, c];
     marker(b, "offline", true);
     marker(c, "offline", true);
@@ -1524,30 +1504,14 @@ async function library(ctx) {
     marker(c, "offline", false);
     await meshed(all);
     await allSee(all, "the recording nobody else holds listed", within(LOG_SYNC_S * 3), (st) => !!setOf(st, bare));
-    const rowsOf = async (app) => (await invoke(app, "jobs")).jobs.filter((j) => j.set === bare).length;
-    await waitFor("A and B list a job row for the recording nobody else holds", within(JOB_CHECK_S + LOG_SYNC_S * 3), async () => (await rowsOf(a)) > 0 && (await rowsOf(b)) > 0);
     check((await state(a)).sets.find((x) => x.id === bare).shared === false, "A thinks others hold the recording nobody else holds");
     await waitFor("B's page does not offer to delete a recording it does not hold while A does", within(UI_REFRESH_S * 5), () => evaluate(b, `!canDelete(setById(${JSON.stringify(bare)}))`));
     await waitFor("A made the thumbnail", within(30), async () => setOf(await state(a), bare)?.thumb === true);
     await confirmDeletion(a, bare, "This deletes it completely");
     await allSee(all, "the recording nobody else holds gone from the list", within(LOG_SYNC_S * 3), (st) => !setOf(st, bare));
-    for (const app of all) await waitFor(`${app.key} has no job row for it`, within(JOB_CHECK_S + LOG_SYNC_S), async () => (await rowsOf(app)) === 0);
     check(logOf(a, ctx.room, a.id).some((r) => r.k === "set_del" && r.set === bare), "A did not log the removal");
     check(mediaLeft(a, bare) === 0 && !fs.existsSync(path.join(roomDir(a, ctx.room), "recordings", bare)) && !fs.existsSync(path.join(roomDir(a, ctx.room), "thumbs", `${bare}.jpg`)), "A kept media or the thumbnail");
     await waitFor("B's sidebar drops the recording nobody else holds", within(UI_REFRESH_S * 5), () => evaluate(b, `![...document.querySelectorAll("#sessions .srow")].some((r) => r.textContent.includes(sessionName(${JSON.stringify(bare)})))`));
-  });
-
-  await step("a short recording is offered for discarding when stopped and goes everywhere", async () => {
-    const all = [a, b, c];
-    await pressAndConfirm(a, "toggleRecording()");
-    ctx.short = (await waitFor("A records", within(UI_REFRESH_S * 5), async () => (await state(a)).active_set?.id)) || "";
-    await allSee(all, "recording the short one", within(LOG_SYNC_S * 2), (st) => st.active_set?.id === ctx.short);
-    await waitFor("A logs a segment", within(SEGMENT_S * 3), () => segsOf(logOf(a, ctx.room, a.id), ctx.short).length > 0);
-    await pressAndConfirm(a, "toggleRecording()");
-    await waitFor("A offers to discard", within(UI_REFRESH_S * 5), () => evaluate(a, `$("confirm").open && $("confirmtitle").textContent === t("Discard this recording?")`));
-    await evaluate(a, `$("confirmyes").click(); true`);
-    await allSee(all, "the short recording gone", within(LOG_SYNC_S * 3), (st) => !st.active_set && !setOf(st, ctx.short));
-    for (const app of all) await waitFor(`${app.key} removed the media`, within(SYNC_ROUND_S * 2), () => mediaLeft(app, ctx.short) === 0 && !fs.existsSync(path.join(roomDir(app, ctx.room), "recordings", ctx.short)));
   });
 
   await step("a member cut off for a whole recording lists it as not on this PC and fetches it only when asked", async () => {

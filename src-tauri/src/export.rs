@@ -19,6 +19,7 @@ use crate::{tenth, Core, NAME_MAX};
 
 const NOTES: &str = "notes.csv";
 const CHAPTERS: &str = "chapters.vtt";
+const WATCH: &str = "watch.json";
 const TOLERANCE_S: f64 = 0.05;
 const DEFAULT_SIZE: (u32, u32) = (1280, 720);
 const MATCH_TAG: &str = "match";
@@ -507,6 +508,9 @@ pub fn folder(core: &Arc<Core>, room_id: &str, set_id: &str, dir: &Path) -> Resu
     }
     if !chapters.is_empty() {
         write(CHAPTERS, vtt_text(&chapters))?;
+    }
+    if let Some(records) = crate::party::records(&logs).remove(set_id) {
+        write(WATCH, crate::party::watch_json(&records).to_string())?;
     }
     for (owner, cues) in &subtitles {
         if let Some(i) = outputs.iter().position(|o| o.owner == *owner) {

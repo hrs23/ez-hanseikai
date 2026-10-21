@@ -1,12 +1,5 @@
-const BOARD_WIDTH = 1080;
-const BOARD_PAD = 28;
-const PREVIEW_PAD = 16;
-const PREVIEW_MIN = 0.2;
-const ZOOM_STEP = 0.1;
-const ZOOM_MIN = 0.5;
-const ZOOM_MAX = 2;
 const SHORTCUTS = [
-  ["Live / Game plan / Members / Plugins", ["Ctrl+1", "Ctrl+2", "Ctrl+3", "Ctrl+4"]],
+  ["Live / Game plan / Members / Extensions", ["Ctrl+1", "Ctrl+2", "Ctrl+3", "Ctrl+4"]],
   ["Sidebar", ["Ctrl+B"]],
   ["Settings", ["Ctrl+,"]],
   ["Play / pause", ["Space", "K"]],
@@ -32,17 +25,10 @@ let roomTab = "members";
 let drawerFor = null;
 let checks = {};
 let checking = {};
-let jobFilter = "all";
-let boardEditing = false;
-let boardDraft = "";
-let boardScope = stored("boardScope", "room") === "personal" ? "personal" : "room";
-let boardFull = false;
-let zoom = stored("boardZoom", 0);
 let settingsPane = "general";
 let storageInfo = null;
 let picked = new Set();
 let diagTab = "summary";
-let recFilter = "";
 let diagFeed = null;
 let diagFeedAt = 0;
 
@@ -75,7 +61,7 @@ function renderStart() {
   }));
 }
 async function deleteRoom(room) {
-  if (await ask(t("Leave {room} and delete its recordings and notes on this PC? You need an invite code to come back. Other members keep theirs.", { room: room.name }), t("Delete"), true)) run("remove_room", { id: room.id }, () => { forgetPlan(room.id); refresh(); });
+  if (await ask(t("Leave {room} and delete its recordings and notes on this PC? You need an invite code to come back. Other members keep theirs.", { room: room.name }), t("Delete"), true)) run("remove_room", { id: room.id });
 }
 const leaveRoom = () => st.room && run("close_room", { id: st.room.id }, openLive);
 function joinWith(input) {
@@ -106,26 +92,23 @@ function showRoomTab(tab) {
   renderRoom();
 }
 
-const ROOM_TITLES = { members: "Members", plugins: "Plugins", board: "Game plan", recordings: "Recordings" };
-const navOf = (tab) => (tab === "jobs" ? "plugins" : tab);
+const ROOM_TITLES = { members: "Members", extensions: "Extensions", board: "Game plan" };
 
 function renderRoom() {
   if (page !== "room" || !inRoom()) return;
-  $("homename").textContent = t(ROOM_TITLES[navOf(roomTab)]);
+  $("homename").textContent = t(ROOM_TITLES[roomTab]);
   if (roomTab !== "board") $("homesub").textContent = roomTab === "members" ? t(people().length === 1 ? "{n} member" : "{n} members", { n: people().length }) : "";
   $("boardpane").hidden = roomTab !== "board";
   $("roomtab").parentElement.hidden = roomTab === "board";
   if (roomTab === "board") renderBoard();
   else if (roomTab === "members") renderMembers();
-  else if (roomTab === "plugins") renderPlugins();
-  else if (roomTab === "recordings") renderRecordings();
-  else renderJobs();
+  else renderExtensions();
   renderDrawer();
 }
 function memberOf(id) {
   const me = id === st.id;
   const p = me ? null : peerOf(id);
-  const status = memberStatus({ connected: me || !!(p && p.connected), sharing: me ? !!st.capture.source : !!(p && p.sharing), recording: recOf(id), receiving: receivingPercent(st.sets, id, nowUs(), st.id), seen_us: p && p.seen_us }, new Date());
+  const status = memberStatus({ connected: me || !!(p && p.connected), sharing: me ? !!st.capture.source : !!(p && p.sharing), seen_us: p && p.seen_us }, new Date());
   return { p, status };
 }
 function renderMembers() {
@@ -137,15 +120,15 @@ function renderMembers() {
     const answer = (approve) => () => run("answer_ask", { id: a.id, approve });
     out.push(el("div", { className: "askbox" }, el("span", { className: "av lg", textContent: initial(a.name), style: "background:var(--muted)" }), el("div", { className: "t" }, el("b", { textContent: t("{name} wants to join", { name: a.name || shortId(a.id) }) }), el("small", { className: "mono", textContent: shortId(a.id) })), el("span", { className: "sp" }), el("button", { className: "primary", textContent: t("Approve"), onclick: answer(true) }), el("button", { textContent: t("Decline"), onclick: answer(false) })));
   }
-  if (st.invites) out.push(el("div", { className: "invitebox" }, icon("link", "sm"), el("span", { textContent: t("An invite code is open") }), el("span", { className: "sp" }), el("button", { className: "sm", onclick: copyInvite }, icon("copy", "sm"), t("Copy")), el("button", { className: "sm ghost", onclick: cancelInvite, textContent: t("Cancel invite") })));
+  if (st.invites) out.push(el("div", { className: "invitebox" }, icon("link", "sm"), el("span", { textContent: t("An invite code is open") }), el("span", { className: "sp" }), el("button", { className: "sm", onclick: copyInvite }, icon("copy", "sm"), t("Copy")), el("button", { className: "sm", onclick: cancelInvite, textContent: t("Cancel invite") })));
   const head = el("tr", {}, ...["Name", "ID", "Status", "Connection", "Round trip", "Version", ""].map((h) => el("th", { textContent: h ? t(h) : "" })));
   const body = rows.map(({ id, p }) => {
     const me = id === st.id;
     const state = memberOf(id).status;
-    const conn = me || !p.connected ? el("span", { className: "faint", textContent: "—" }) : el("span", { className: p.path === "relay" ? "warn" : "ok" }, icon("relay", "sm"), p.path === "relay" ? t("Relay") : t("Direct"));
+    const conn = me || !p.connected ? el("span", { className: "faint", textContent: "—" }) : el("span", { className: "net " + (p.path === "relay" ? "warn" : "ok"), onclick: (e) => { e.stopPropagation(); openDiagnostics("flow"); } }, icon("relay", "sm"), p.path === "relay" ? t("Relay") : t("Direct"));
     const version = me ? st.version : p && p.version;
     const tr = el("tr", { className: "pick" + (drawerFor === id ? " sel" : "") + (state.kind === "off" ? " dim" : ""), tabIndex: 0 },
-      el("td", {}, el("span", { className: "who" }, avatar(id, "", me || (p && p.connected) ? (recOf(id) ? "rec" : "on") : null), el("b", { textContent: nameOf(id) }), me ? el("span", { className: "pill gray", textContent: t("You") }) : null)),
+      el("td", {}, el("span", { className: "who" }, avatar(id, "", me || (p && p.connected) ? "on" : null), el("b", { textContent: nameOf(id) }), me ? el("span", { className: "pill gray", textContent: t("You") }) : null)),
       el("td", {}, el("span", { className: "mono", textContent: `${id.slice(0, 4)}·${id.slice(4, 8)}·${id.slice(8, 12)}` }), iconButton("copy", t("Copy ID"), (e) => { e.stopPropagation(); navigator.clipboard.writeText(id).then(() => flash(t("ID copied"))); })),
       el("td", { className: "state " + state.kind }, el("i", { className: "sdot" }), state.text),
       el("td", {}, conn),
@@ -190,7 +173,7 @@ function renderDrawer() {
   } else if (!me) path = el("div", { className: "pathbox off" }, el("b", { textContent: memberOf(id).status.text }));
   add(t("Version"), (me ? st.version : p && p.version) || "—");
   const lines = checks[id];
-  const checkBox = [el("div", { className: "h3", textContent: t("Checks") }), ...(lines ? lines.filter((l) => l.level !== "info").map((l) => el("div", { className: "line lv-" + l.level }, icon({ ok: "ok", warn: "alert", fail: "fail" }[l.level] || "info", "sm"), el("span", { textContent: t(l.text, l.args) }))) : checking[id] ? [el("div", { className: "line" }, icon("spinner", "sm spin"), t("Checking…"))] : []), el("button", { className: "ghost sm", disabled: !!checking[id] || (!me && !(p && p.connected)), onclick: () => checkMember(id) }, icon("refresh", "sm"), t("Check again"))];
+  const checkBox = [el("div", { className: "h3", textContent: t("Checks") }), ...(lines ? lines.filter((l) => l.level !== "info").map((l) => el("div", { className: "line lv-" + l.level }, icon({ ok: "ok", warn: "alert", fail: "fail" }[l.level] || "info", "sm"), el("span", { textContent: t(l.text, l.args) }))) : checking[id] ? [el("div", { className: "line" }, icon("spinner", "sm spin"), t("Checking…"))] : []), el("button", { className: "sm", disabled: !!checking[id] || (!me && !(p && p.connected)), onclick: () => checkMember(id) }, icon("refresh", "sm"), t("Check again"))];
   box.replaceChildren(
     el("div", { className: "dhead" }, avatar(id, "xl"), el("div", { className: "t" }, el("b", { textContent: nameOf(id) }), el("small", { className: "mono", textContent: `${id.slice(0, 4)}·${id.slice(4, 8)}·${id.slice(8, 12)}` })), iconButton("x", t("Close"), () => { drawerFor = null; delete sigs.roomtab; renderRoom(); })),
     path || "",
@@ -202,218 +185,6 @@ function renderDrawer() {
     me ? "" : el("button", { className: "danger", onclick: () => removeMember(id), textContent: t("Remove from room…") }),
   );
 }
-function recordingCard(r) {
-  const s = r.s;
-  const here = onThisPc(s);
-  const state = here ? sessionState(s) : null;
-  const meta = state && (state.kind === "bar" || state.kind === "line")
-    ? el("div", { className: "meta" }, icon(state.icon, "sm"), el("span", { className: state.cls || "", textContent: state.text }), el("span", { className: "sp" }), el("span", { className: "muted", textContent: state.right || "" }))
-    : el("div", { className: "meta" }, el("span", { textContent: setLength(s) }), detailText(s) ? el("span", { className: "faint", textContent: detailText(s) }) : null, ...marksOf(s));
-  const exportBtn = iconButton("upload", t("Export"), (e) => { e.stopPropagation(); exportFolder(s); });
-  const deleteBtn = iconButton("trash", t("Delete…"), (e) => { e.stopPropagation(); confirmDelete([s.id]); });
-  exportBtn.disabled = !here;
-  deleteBtn.disabled = !canDelete(s);
-  const acts = el("span", { className: "acts" }, exportBtn, deleteBtn);
-  const thumb = thumbBox(s, s.players.map((p) => p.owner), "sm", CARD_FACES, false);
-  thumb.append(acts);
-  if (state && state.kind === "bar") thumb.append(el("div", { className: "bar" }, el("i", { style: `width:${Math.round(state.frac * 100)}%` })));
-  const card = el("div", { className: "reccard" + (here ? "" : " gone"), role: "button", tabIndex: 0 }, thumb, el("div", { className: "rtxt" }, el("b", { textContent: sessionName(s.id) }), meta, whereLine(s)));
-  card.onclick = () => { if (here) openSession(s.id); };
-  card.onkeydown = (e) => { if (e.key === "Enter" && e.target === card && here) openSession(s.id); };
-  card.oncontextmenu = (e) => { e.preventDefault(); sessionMenu(s.id, e); };
-  return card;
-}
-const recBar = el("div", { className: "recbar" },
-  el("div", { className: "selbox grow" }, el("span", { className: "lead" }, icon("search", "sm")), el("input", { id: "recfilter", type: "search", autocomplete: "off", oninput: (e) => { recFilter = e.target.value; delete sigs.roomtab; renderRoom(); } })));
-const recGrid = el("div", { className: "reccards" });
-function renderRecordings() {
-  const rows = recordingRows();
-  const words = recordingWords(recFilter);
-  const shown = rows.filter((r) => recordingMatches(r, words));
-  const sig = ["recordings", shown.map(rowSignature), recFilter, st.active_set, st.peers.map((p) => p.connected), lang, st.colors, st.names, dayOf(new Date())];
-  if (!changed("roomtab", sig)) return;
-  if ($("roomtab").firstElementChild !== recBar) $("roomtab").replaceChildren(recBar, recGrid);
-  $("recfilter").placeholder = t("Filter");
-  $("recfilter").setAttribute("aria-label", t("Filter"));
-  const a = st.active_set;
-  const live = a ? [el("div", { className: "reccard live", role: "button", tabIndex: 0, onclick: openNow, onkeydown: (e) => { if (e.key === "Enter") openNow(); } }, thumbBox(null, liveSet() ? liveSet().players.map((p) => p.owner) : [], "sm", CARD_FACES, true), el("div", { className: "rtxt" }, el("b", {}, el("i", { className: "recdot" }), t("Recording")), el("div", { className: "meta" }, a.voice ? pill("accent", "mic", t("Debrief")) : null, el("span", { textContent: t("by {name}", { name: a.by || "" }) }))))] : [];
-  const cards = shown.map(recordingCard);
-  recGrid.replaceChildren(...live, ...cards);
-  if (!live.length && !cards.length) recGrid.replaceChildren(el("div", { className: "empty", textContent: rows.length ? t("Nothing here") : t("No recordings yet") }));
-}
-function jobTarget(j) {
-  if (j.whole) return t("Whole recording");
-  const set = setById(j.set);
-  return set && isReview(set) ? t("{name}'s voice (debrief)", { name: nameOf(j.owner) }) : t("{name}'s voice", { name: nameOf(j.owner) });
-}
-function jobMenu(j, anchor) {
-  const plugin = plugins.find((p) => p.id === j.plugin);
-  const model = plugin && plugin.options.find((o) => o.key === "model");
-  const running = jobInfo.running && jobInfo.running.job === j.job;
-  openMenu([
-    { label: t("Run next on this PC"), icon: "play", disabled: j.state !== "waiting" || !j.here || !plugin || !plugin.process_here || !plugin.ready || (plugin.runner && plugin.runner !== st.id), run: () => invoke("run_job_next", { job: j.job }).then(pollPlugins) },
-    { label: t("Retry"), icon: "refresh", disabled: j.state !== "failed", run: () => invoke("retry_job", { job: j.job }).then(pollPlugins).catch(fail) },
-    { label: t("Stop"), icon: "stop", disabled: !running, run: () => invoke("cancel_job").then(pollPlugins) },
-    ...(model ? [{ separator: true }, { label: t("Rerun with another model"), icon: "cpu", more: true, run: (b) => openMenu(model.choices.map((c) => ({ label: c, check: plugin.settings.model === c, run: () => rerunWith(plugin, c) })), b, true) }] : []),
-  ], anchor);
-}
-async function rerunWith(plugin, model) {
-  if (plugin.settings.model === model) return;
-  if (!(await ask(t("Use {model} for the room?", { model }), t("Use {model}", { model }), false, t("Every recording is analysed again with it, on whichever PC has it.")))) return;
-  invoke("set_room_plugin", { id: plugin.id, on: true, settings: { ...plugin.settings, model } }).then(pollPlugins).catch(fail);
-}
-function renderJobs() {
-  const jobs = jobInfo ? jobInfo.jobs : [];
-  const running = jobInfo && jobInfo.running;
-  const shown = jobs.filter((j) => jobFilter === "all" || (jobFilter === "failed" ? j.state === "failed" : j.state === "claimed" || j.state === "waiting"));
-  if (!changed("roomtab", ["jobs", shown, jobs.map((j) => j.state), running && [running.job, Math.floor((running.progress || 0) * 100)], jobFilter, st.names, lang])) return;
-  const seg = el("div", { className: "seg" }, ...[["all", t("All jobs")], ["active", t("Active")], ["failed", t("Failed")]].map(([k, label]) => el("button", { className: jobFilter === k ? "on" : "", textContent: label, onclick: () => { jobFilter = k; renderRoom(); } })));
-  const state = (j) => {
-    if (running && running.job === j.job) { const n = Math.floor((running.progress || 0) * 100); return el("div", { className: "jobrun" }, el("span", { textContent: t("Running {n}%", { n }) }), el("div", { className: "bar" }, el("i", { style: `width:${n}%` }))); }
-    if (j.state === "failed") return el("span", { className: "pill bad", title: j.error || "" }, icon("fail", "sm"), t("Failed"));
-    if (j.state === "done") return el("span", { className: "pill ok" }, icon("check", "sm"), t("Done"));
-    if (j.state === "claimed") return el("span", { className: "pill accent", textContent: t("Running") });
-    return el("span", { className: "pill gray", textContent: j.next ? t("Next") : j.here ? t("Waiting") : t("Waiting for the file") });
-  };
-  const rows = shown.map((j) => {
-    const model = j.settings && j.settings.model;
-    const more = iconButton("more", t("More"), (e) => { e.stopPropagation(); jobMenu(j, e.currentTarget); });
-    const tr = el("tr", {}, el("td", {}, el("b", { textContent: pluginName(j.plugin) }), model ? el("span", { className: "mono muted", textContent: " " + model }) : null), el("td", { textContent: sessionName(j.set) }), el("td", { textContent: jobTarget(j) }), el("td", {}, state(j)), el("td", { className: j.by ? "" : "muted", textContent: runBy(j) }), el("td", { className: "chev" }, more));
-    tr.oncontextmenu = (e) => { e.preventDefault(); jobMenu(j, e); };
-    const err = j.state === "failed" && j.error ? el("tr", { className: "err" }, el("td", { colSpan: 6 }, icon("info", "sm"), t("Failed: {error}", { error: j.error }))) : null;
-    return [tr, err];
-  }).flat().filter(Boolean);
-  const head = el("tr", {}, ...["Plugin", "Recorded", "Target", "State", "Run by", ""].map((h) => el("th", { textContent: h ? t(h) : "" })));
-  const table = shown.length ? el("div", { className: "tablebox" }, el("table", { className: "table" }, el("thead", {}, head), el("tbody", {}, ...rows))) : el("div", { className: "empty", textContent: jobs.length ? t("Nothing here") : t("Turn on a plugin to analyse recordings") });
-  $("roomtab").replaceChildren(el("div", { className: "row" }, pluginTabs(), el("span", { className: "sp" }), seg), table);
-}
-function pollPlugins() {
-  if (!st || !inRoom() || document.hidden) return;
-  const gen = ++pluginsGen;
-  Promise.all([invoke("room_plugins"), invoke("jobs")]).then(([list, info]) => {
-    if (gen !== pluginsGen) return;
-    plugins = list;
-    watchDownloads();
-    if (changed("tags", info.tags)) for (const k of ["events", "board", "reviewtab"]) delete sigs[k];
-    jobInfo = info;
-    renderRoom();
-    renderNav();
-    renderSessions();
-  }).catch(warn);
-}
-window.__TAURI__.event.listen("job", (e) => {
-  if (jobInfo) jobInfo.running = e.payload;
-  renderSessions();
-  if (page === "room" && roomTab === "jobs") renderRoom();
-});
-
-function boardEvent() {
-  const at = (e) => e.id - ((peerOf(e.author) || {}).offset_us || 0);
-  let out = null;
-  for (const e of st.events) if (e.kind === "board" && (!e.values || !e.values.card || e.values.card === "team") && (!out || at(e) >= at(out))) out = e;
-  return out && out.text.trim() ? out : null;
-}
-const onBoard = () => page === "room" && roomTab === "board";
-const personal = () => boardScope === "personal";
-const planKey = (id) => `board/${id}`;
-const personalKey = () => planKey(st.room ? st.room.id : "");
-const forgetPlan = (id) => unstore((k) => k === planKey(id));
-function boardText() {
-  if (personal()) return stored(personalKey(), "");
-  const e = boardEvent();
-  return e ? e.text : BOARD_TEMPLATE[lang === "ja" ? "ja" : "en"];
-}
-function setBoardScope(scope) {
-  if (boardEditing || scope === boardScope) return;
-  boardScope = scope;
-  store("boardScope", scope);
-  delete sigs.board;
-  renderBoard();
-}
-let boardWrites = Promise.resolve();
-function writeBoard(text) {
-  delete sigs.board;
-  if (personal()) {
-    store(personalKey(), text);
-    renderBoard();
-    return Promise.resolve();
-  }
-  boardWrites = boardWrites.then(() => invoke("add_event", { kind: "board", text, target: {}, values: { card: "team" } })).then(() => refresh()).catch(fail);
-  return boardWrites;
-}
-function tickTask(n) {
-  const next = toggleTask(boardDraft, n);
-  if (next === boardDraft) { delete sigs.board; renderBoard(); return; }
-  boardDraft = next;
-  writeBoard(next);
-}
-const boardHooks = () => mdHooks({ onTask: tickTask });
-const fitScale = (box, pad, min) => Math.max(min, Math.min(1, (box.clientWidth - 2 * pad) / BOARD_WIDTH));
-const fitZoom = () => fitScale($("boardwrap"), BOARD_PAD, ZOOM_MIN);
-function placeBoard() {
-  const z = zoom || fitZoom();
-  $("canvas").style.zoom = String(z);
-  $("zoomfit").textContent = `${Math.round(z * 100)}%`;
-  $("zoomfit").title = t("Fit to the window");
-}
-function renderBoard() {
-  if (!onBoard() || !inRoom()) return;
-  $("boardwrap").hidden = boardEditing;
-  $("editor").hidden = !boardEditing;
-  $("boardview").hidden = boardEditing;
-  $("boardedits").hidden = !boardEditing;
-  $("boardbadge").hidden = !boardEditing;
-  for (const b of $("boardscope").children) { press(b, b.dataset.scope === boardScope); b.disabled = boardEditing; }
-  const e = boardEvent();
-  const sub = personal() ? t("Only on this PC") : e ? t("Updated by {name} · {time}", { name: nameOf(e.author), time: new Date((e.local_us || e.id) / 1000).toLocaleString(lang === "ja" ? "ja-JP" : "en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) }) : "";
-  $("homesub").textContent = boardEditing ? "" : sub;
-  if (boardEditing) return;
-  if (changed("board", [boardText(), boardScope, st.room.id, lang, st.names, jobInfo && jobInfo.tags])) {
-    boardDraft = boardText();
-    $("canvas").replaceChildren(boardDom(boardDraft, boardHooks()));
-  }
-  placeBoard();
-}
-async function editBoard(scope) {
-  const want = scope === "room" || scope === "personal" ? scope : boardScope;
-  if (boardEditing && want === boardScope) { showRoomTab("board"); $("boardtext").focus(); return; }
-  if (boardEditing && $("boardtext").value !== boardText() && !(await ask(t("Discard your changes?"), t("Discard"), true))) return;
-  boardScope = want;
-  store("boardScope", want);
-  showRoomTab("board");
-  boardEditing = true;
-  $("boardtext").value = boardText();
-  renderMini();
-  renderBoard();
-  $("boardtext").focus();
-}
-function renderMini() {
-  $("minicanvas").replaceChildren(boardDom($("boardtext").value, mdHooks({ onTask: null })));
-  $("minicanvas").style.zoom = String(fitScale($("editor").querySelector(".preview"), PREVIEW_PAD, PREVIEW_MIN));
-}
-function saveBoard() {
-  const text = $("boardtext").value;
-  boardEditing = false;
-  writeBoard(text).then(() => renderBoard());
-}
-function cancelBoard() {
-  boardEditing = false;
-  delete sigs.board;
-  renderBoard();
-}
-function toggleBoardFull() {
-  boardFull = !boardFull;
-  document.body.classList.toggle("boardfull", boardFull);
-  window.__TAURI__.window.getCurrentWindow().setFullscreen(boardFull).catch(warn);
-  setTimeout(placeBoard, 50);
-}
-function setZoom(z) {
-  zoom = z ? Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.round(z * 10) / 10)) : 0;
-  store("boardZoom", zoom);
-  placeBoard();
-}
-new ResizeObserver(() => { if (onBoard() && !boardEditing) placeBoard(); else if (boardEditing) renderMini(); }).observe($("boardpane"));
-
 function openSettings(pane) {
   if (!st) return;
   if (pane) settingsPane = pane;
@@ -474,17 +245,15 @@ function renderStorage() {
   const totalBytes = d.total || 1;
   const other = Math.max(0, totalBytes - d.free - used);
   const sets = st.sets.filter((s) => !s.live);
-  const sig = [used, old, d, sets.map((s) => [s.id, s.progress.have, s.progress.total, s.shared]), [...picked], st.warn_hours, lang];
+  const sig = [used, old, d, sets.map((s) => [s.id, s.progress.have, s.progress.total, s.shared]), [...picked], lang];
   if (!changed("storage", sig)) return;
   $("storedir").textContent = storageInfo ? storageInfo.dir : "";
   $("oldfiles").hidden = !old;
   $("oldfiles").lastChild.textContent = t("Delete old files ({size})", { size: bytes(old) });
   const seg = (cls, n) => { const i = el("i", { className: cls }); i.style.width = (n / totalBytes) * 100 + "%"; return i; };
   $("usage").replaceChildren(seg("app", used), seg("other", other));
-  const rate = d.per_hour ? t("About {size} per hour · room for about {h} h", { size: bytes(d.per_hour), h: Math.floor(d.hours_left) }) : "";
-  $("legend").replaceChildren(el("span", {}, el("i", { className: "app" }), t("GGI Hanseikai {size}", { size: bytes(used) })), el("span", {}, el("i", { className: "other" }), t("Other files {size}", { size: bytes(other) })), el("span", {}, el("i", { className: "free" }), t("Free {free} / {total}", { free: bytes(d.free), total: bytes(d.total) })), el("span", { className: "sp" }), el("span", { textContent: rate }));
-  if (changed("warnopts", [lang])) $("warnhours").replaceChildren(...[2, 5, 10, 20, 50].map((h) => el("option", { value: h, textContent: t("{n} h of recording", { n: h }) })));
-  $("warnhours").value = st.warn_hours;
+  const free = d.hours_left !== null && d.hours_left !== undefined ? t("Free {free} · about {h} h of recording", { free: bytes(d.free), h: Math.floor(d.hours_left) }) : t("Free {free}", { free: bytes(d.free) });
+  $("legend").replaceChildren(el("span", {}, el("i", { className: "app" }), t("GGI Hanseikai {size}", { size: bytes(used) })), el("span", {}, el("i", { className: "other" }), t("Other files {size}", { size: bytes(other) })), el("span", { className: "sp" }), el("span", {}, el("i", { className: "free" }), free));
   $("selold").textContent = t("All but newest {n}", { n: KEEP_NEWEST });
   for (const id of [...picked]) if (!sets.some((s) => s.id === id)) picked.delete(id);
   const biggest = Math.max(1, ...sets.map((s) => s.progress.have));
@@ -493,7 +262,7 @@ function renderStorage() {
     box.onchange = () => { if (box.checked) picked.add(s.id); else picked.delete(s.id); delete sigs.storage; renderStorage(); };
     const notes = noteCount(s);
     const recv = onThisPc(s) && s.progress.total && s.progress.have < s.progress.total ? t("Receiving {n}%", { n: Math.floor((s.progress.have / s.progress.total) * 100) }) : "";
-    return el("tr", { className: picked.has(s.id) ? "sel" : "" }, el("td", {}, box), el("td", {}, el("b", { textContent: sessionName(s.id) }), " ", el("span", { className: "muted small", textContent: voiceOnly(s) ? t("voice only") : t(notes === 1 ? "{n} note" : "{n} notes", { n: notes }) })), el("td", { textContent: setLength(s) }), el("td", { textContent: String(s.players.length) }), el("td", {}, onThisPc(s) ? [el("span", { className: "sizebar" }, el("i", { style: `width:${(s.progress.have / biggest) * 100}%` })), bytes(s.progress.have)] : el("span", { className: "muted", textContent: t("Not on this PC") })), el("td", { className: "muted small", textContent: recv }));
+    return el("tr", { className: picked.has(s.id) ? "sel" : "" }, el("td", {}, box), el("td", {}, el("b", { textContent: sessionName(s.id) }), " ", el("span", { className: "muted small", textContent: noPicture(s) ? t("voice only") : t(notes === 1 ? "{n} note" : "{n} notes", { n: notes }) })), el("td", { textContent: setLength(s) }), el("td", { textContent: String(s.players.length) }), el("td", {}, onThisPc(s) ? [el("span", { className: "sizebar" }, el("i", { style: `width:${(s.progress.have / biggest) * 100}%` })), bytes(s.progress.have)] : el("span", { className: "muted", textContent: t("Not on this PC") })), el("td", { className: "muted small", textContent: recv }));
   });
   const head = el("tr", {}, ...["", "Recorded", "Length", "People", "On this PC", ""].map((h) => el("th", { textContent: h ? t(h) : "" })));
   $("storetable").replaceChildren(el("table", { className: "table" }, el("thead", {}, head), el("tbody", {}, ...rows)));
@@ -510,7 +279,8 @@ function confirmDelete(ids) {
   $("dellist").replaceChildren(...preview.map((p) => el("div", { className: "delcard" },
     el("div", { className: "row" }, el("b", { textContent: sessionName(p.id) }), el("span", { className: "sp" }), el("span", { textContent: bytes(p.bytes) })),
     el("div", { className: "who" }, ...p.players.map((x) => el("span", {}, icon("film", "sm"), x.owner === st.id ? t("{name} (you)", { name: nameOf(x.owner) }) : nameOf(x.owner), el("span", { className: "muted", textContent: bytes(x.bytes) })))),
-    el("div", { className: "small" + (p.form === "Others still have it" ? " muted" : " warn"), textContent: t(p.form) }))));
+    el("div", { className: "small" + (p.form === "Others still have it" ? " muted" : " warn"), textContent: t(p.form) }),
+    p.debriefs.length ? el("div", { className: "small muted", textContent: t("Debriefs deleted with it: {names}", { names: p.debriefs.map(sessionName).join(", ") }) }) : null)));
   $("delyes").replaceChildren(icon("trash", "sm"), size ? t("Delete {size}", { size: bytes(size) }) : t("Delete"));
   $("delyes").onclick = async () => {
     $("deletedlg").close();
@@ -537,7 +307,7 @@ const DIAG_LOG_LINES = 300;
 const TRANSFER_KINDS = { init: "Setup", "live picture": "Live picture", "live voice": "Live voice", "history picture": "Recorded picture", "history voice": "Recorded voice" };
 const TRANSFER_RESULTS = { ok: "Done", retry: "Retried", partial: "Partial", "hash fail": "Checksum failed" };
 function pullDiag() {
-  const tab = { traffic: "network", log: "log", flow: "flow" }[diagTab];
+  const tab = { traffic: "network", log: "log", flow: "flow", jobs: "jobs" }[diagTab];
   if (!tab || Date.now() - diagFeedAt < DIAG_FEED_MS) return;
   diagFeedAt = Date.now();
   invoke("debug_view", { tab, since: 0, set: null }).then((data) => { diagFeed = { tab: diagTab, data }; delete sigs.diag; renderDiagnostics(); }).catch(warn);
@@ -565,21 +335,22 @@ function logView(data) {
   const lines = String(data.text || "").split("\n").filter(Boolean).slice(-DIAG_LOG_LINES);
   return [el("pre", { className: "logview", textContent: lines.length ? lines.join("\n") : t("Nothing yet") })];
 }
-function jobsView() {
-  const jobs = jobInfo ? jobInfo.jobs : [];
-  const state = (j) => ({ failed: t("Failed"), done: t("Done"), claimed: t("Running") }[j.state] || t("Waiting"));
-  return [diagTable([t("Plugin"), t("Recorded"), t("Target"), t("State"), t("Run by")], jobs.map((j) => [pluginName(j.plugin), sessionName(j.set), jobTarget(j), state(j), runBy(j)]), t("Turn on a plugin to analyse recordings"))];
+function jobsView(data) {
+  const jobs = (data && data.jobs) || [];
+  const progress = (j) => (typeof j.progress === "number" ? ` ${Math.floor(j.progress * 100)}%` : "");
+  return [diagTable([t("Extension"), t("Recorded"), t("State"), t("Run by")], jobs.map((j) => [j.plugin ? pluginName(j.plugin) : "—", j.set ? sessionName(j.set) : "—", `${j.state || "—"}${progress(j)}`, j.by || "—"]), t("Nothing yet"))];
 }
+const failedCount = () => st.sets.filter((s) => (s.analysis || []).some((a) => a.state === "failed")).length;
 function renderDiagnostics() {
   if (!$("diagdlg").open) return;
   for (const b of $("diagdlg").querySelectorAll("[data-dtab]")) b.classList.toggle("on", b.dataset.dtab === diagTab);
   pullDiag();
-  const failed = failedJobs();
+  const failed = failedCount();
   const lines = summaryLines(st, failed);
   const fed = diagFeed && diagFeed.tab === diagTab ? diagFeed.data : null;
-  if (!changed("diag", [diagTab, lines, st.peers, st.hw, st.clock, st.api, st.channel, fed, jobInfo && jobInfo.jobs, lang])) return;
+  if (!changed("diag", [diagTab, lines, st.peers, st.hw, st.clock, st.api, st.channel, fed, lang])) return;
   if (diagTab === "summary") {
-    $("diagbody").replaceChildren(el("div", { className: "okbox" }, ...lines.map((l) => el("div", { className: "ok-line lv-" + l.level }, icon({ ok: "ok", warn: "alert", fail: "fail" }[l.level] || "info", "sm"), el("b", { textContent: t(l.key) }), el("span", { textContent: l.text }), l.key === "Plugins" && failed ? el("button", { className: "sm", textContent: t("Open jobs"), onclick: () => { $("diagdlg").close(); showRoomTab("jobs"); } }) : null))));
+    $("diagbody").replaceChildren(el("div", { className: "okbox" }, ...lines.map((l) => el("div", { className: "ok-line lv-" + l.level }, icon({ ok: "ok", warn: "alert", fail: "fail" }[l.level] || "info", "sm"), el("b", { textContent: t(l.key) }), el("span", { textContent: l.text }), l.key === "Extensions" && failed ? el("button", { className: "sm", textContent: t("Open extensions"), onclick: () => { $("diagdlg").close(); showRoomTab("extensions"); } }) : null))));
     return;
   }
   if (diagTab === "traffic" || diagTab === "log") {
@@ -588,7 +359,7 @@ function renderDiagnostics() {
     return;
   }
   if (diagTab === "jobs") {
-    $("diagbody").replaceChildren(...jobsView());
+    $("diagbody").replaceChildren(...(fed ? jobsView(fed) : [el("div", { className: "empty", textContent: t("Loading…") })]));
     return;
   }
   if (diagTab === "pcs") {
@@ -607,7 +378,7 @@ function renderDiagnostics() {
   $("diagbody").replaceChildren(el("div", { className: "okbox" }, ...sent.map(okLine)), diagram, el("div", { className: "tablebox" }, el("table", { className: "table" }, el("thead", {}, head), el("tbody", {}, ...rows))));
 }
 async function diagnosticsText() {
-  const head = summaryLines(st, failedJobs()).map((l) => `[${l.level}] ${l.key}: ${l.text}`).join("\n");
+  const head = summaryLines(st, failedCount()).map((l) => `[${l.level}] ${l.key}: ${l.text}`).join("\n");
   return invoke("debug_report", { save: false, head });
 }
 
@@ -628,29 +399,15 @@ $("joincode").oninput = () => renderStart();
 $("join").onclick = () => run("set_name", { name: $("startname").value || st.name }, () => joinWith($("joincode")));
 $("joincode").onkeydown = (e) => { if (e.key === "Enter" && !composing(e) && !$("join").disabled) $("join").click(); };
 $("pendingcancel").onclick = () => st.room && run("remove_room", { id: st.room.id });
-for (const b of $("boardscope").children) b.onclick = () => setBoardScope(b.dataset.scope);
 $("roomnameinput").oninput = () => { const v = $("roomnameinput").value.trim(); $("roomsave").disabled = !v || v === st.room.name; };
 $("roomnameinput").onkeydown = (e) => { if (e.key === "Enter" && !composing(e) && !$("roomsave").disabled) $("roomsave").click(); };
 $("roomsave").onclick = () => { $("roomdlg").close(); run("rename_room", { name: $("roomnameinput").value }, () => { flash(t("Saved")); refresh(); }); };
 $("roomno").onclick = () => $("roomdlg").close();
-$("zoomin").onclick = () => setZoom((zoom || fitZoom()) + ZOOM_STEP);
-$("zoomout").onclick = () => setZoom((zoom || fitZoom()) - ZOOM_STEP);
-$("zoomfit").onclick = () => setZoom(0);
-$("boardfull").onclick = toggleBoardFull;
-$("boardedit").onclick = () => editBoard();
-$("boardsave").onclick = saveBoard;
-$("boardcancel").onclick = cancelBoard;
-$("boardtext").oninput = renderMini;
-$("boardtext").onkeydown = (e) => {
-  e.stopPropagation();
-  if (e.key === "Enter" && e.ctrlKey) { e.preventDefault(); saveBoard(); }
-  if (e.key === "Escape") { e.preventDefault(); cancelBoard(); }
-};
 for (const b of $("setnav").querySelectorAll("button")) b.onclick = () => { settingsPane = b.dataset.pane; showPane(); };
 $("promptcopy").onclick = () => navigator.clipboard.writeText(promptFull).then(() => { $("promptdlg").close(); flash(t("Prompt copied")); }).catch(fail);
 $("aibtn").onclick = (e) => openAiMenu(e.currentTarget, newestRecording());
 $("aiplay").onclick = (e) => openAiMenu(e.currentTarget, selected);
-$("apibadge").onclick = () => openSettings("api");
+for (const b of document.querySelectorAll(".apibadge")) b.onclick = () => openSettings("api");
 for (const b of $("apiaccess").children) b.onclick = () => run("set_api_lan", { lan: b.dataset.lan === "1" });
 $("apidoc").onclick = () => dialog("open_link", { url: `${apiUrl(st.api.address)}/llms.txt` }).catch(fail);
 $("apion").onchange = () => run("set_api", { on: $("apion").checked });
@@ -669,7 +426,6 @@ for (const b of $("quality").children) b.onclick = () => run("set_quality", { id
 $("limit").onchange = () => run("set_limit", { mbps: $("limit").value ? Number($("limit").value) : null });
 for (const b of $("channel").children) b.onclick = () => run("set_channel", { channel: b.dataset.c }, () => { refresh(); checkUpdate(false); });
 $("checkupdate").onclick = () => checkUpdate(true);
-$("warnhours").onchange = () => run("set_warn_hours", { hours: Number($("warnhours").value) });
 $("selnone").onclick = () => { picked.clear(); delete sigs.storage; renderStorage(); };
 $("selold").onclick = () => { picked = new Set(oldSessions(st.sets.filter((s) => !s.live))); delete sigs.storage; renderStorage(); };
 $("deletesel").onclick = () => confirmDelete([...picked]);
@@ -684,7 +440,6 @@ $("resetno").onclick = () => $("resetdlg").close();
 $("resetyes").onclick = () => {
   $("resetdlg").close();
   const keepRooms = $("keeprooms").checked;
-  if (!keepRooms) unstore((k) => k.startsWith(planKey("")));
   run("reset", { keep_rooms: keepRooms }, null);
 };
 $("hotkey").onclick = () => {
@@ -725,36 +480,46 @@ const menuActions = {
   "rename-room": openRoomSettings,
   "leave-room": leaveRoom,
   "add-note": openQuick,
-  "prev-session": () => stepSet(-1),
-  "next-session": () => stepSet(1),
   "delete-session": () => deleteSession(playSet()),
   "page-live": () => navigate("live"),
   "page-board": () => navigate("board"),
   "page-members": () => navigate("members"),
-  "page-plugins": () => navigate("plugins"),
+  "page-extensions": () => navigate("extensions"),
   "sidebar": toggleSidebar,
-  "events-panel": togglePanel,
   "fullscreen": toggleFull,
   "all-players": () => setView(current(), 0),
-  "next-player": () => cycle(current(), 1),
-  "prev-player": () => cycle(current(), -1),
   "shortcuts": () => openSettings("shortcuts"),
   "update": () => checkUpdate(true),
   "diagnostics": () => openDiagnostics(),
   "reset": openReset,
   "toggle-recording": toggleRecording,
 };
-window.__TAURI__.event.listen("menu", (e) => { if (menuActions[e.payload]) menuActions[e.payload](); });
-window.__TAURI__.event.listen("joined", (e) => flash(t("{name} joined", { name: e.payload })));
-window.__TAURI__.event.listen("session", (e) => { flash(sessionNotice(e.payload.action, e.payload.by)); chime(e.payload.action); });
-window.__TAURI__.event.listen("flash", (e) => flash(e.payload));
+listenMain("menu", (e) => { if (menuActions[e.payload]) menuActions[e.payload](); });
+listenMain("joined", (e) => { flash(t("{name} joined", { name: e.payload })); chime("join"); });
+listenMain("session", (e) => {
+  const debrief = e.payload.action === "end" ? debriefOpen : null;
+  debriefOpen = null;
+  flash(sessionNotice(e.payload.action, e.payload.by), "info", debrief && { label: t("Summarize with AI"), run: () => summarizeDebrief(debrief) });
+  chime(e.payload.action);
+  if (e.payload.action === "start" && !e.payload.voice) openLive();
+});
+listenMain("flash", (e) => flash(e.payload));
 
 fillIcons();
-reportCodecs();
-setInterval(() => { if (!document.hidden) tick(); }, TICK_MS);
-setInterval(() => { if (!document.hidden) refresh().catch(warn); }, REFRESH_MS);
-setInterval(pollPlugins, JOBS_MS);
-refresh();
-setTimeout(() => checkUpdate(false), UPDATE_CHECK_DELAY_MS);
-setInterval(() => checkUpdate(false), UPDATE_EVERY_MS);
-window.__TAURI__.event.listen("shown", () => { if (Date.now() - checkedAt > UPDATE_RECHECK_MS) checkUpdate(false); });
+if (boardWindow) {
+  document.body.classList.add("boardwin");
+  page = "room";
+  roomTab = "board";
+  $("boardpane").hidden = false;
+  window.__TAURI__.event.listen("log", () => refresh());
+  refresh();
+} else {
+  reportCodecs();
+  setInterval(() => { if (!document.hidden) tick(); }, TICK_MS);
+  setInterval(() => { if (!document.hidden) refresh().catch(warn); }, REFRESH_MS);
+  setInterval(pollPlugins, PLUGINS_MS);
+  refresh();
+  setTimeout(() => checkUpdate(false), UPDATE_CHECK_DELAY_MS);
+  setInterval(() => checkUpdate(false), UPDATE_EVERY_MS);
+  window.__TAURI__.event.listen("shown", () => { if (Date.now() - checkedAt > UPDATE_RECHECK_MS) checkUpdate(false); });
+}

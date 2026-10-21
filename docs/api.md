@@ -4,7 +4,7 @@ A local HTTP API lets a person, an AI agent or another program read a room's rec
 
 ## Turn it on
 
-Off by default. Settings > API > Local API starts it. The page shows the address, `http://127.0.0.1:47625`, and Copy token puts the token on the clipboard; New token replaces it (programs using the old one stop working). Below them the page lists the endpoints with an example each, and opens `/llms.txt`. The switch, the token and the exposure are kept in `settings.json` (`api`, `api_token`, `api_lan`). An API badge in the sidebar, under the room name, shows while the API runs; it opens this page. The AI button in a room, and in the player, copies a ready prompt with the address, the token and a pointer to `/llms.txt`, or turns the API on.
+Off by default. Settings > API > Local API starts it. The page shows the address, `http://127.0.0.1:47625`, and Copy token puts the token on the clipboard; New token replaces it (programs using the old one stop working). Below them the page lists the endpoints with an example each, and opens `/llms.txt`. The switch, the token and the exposure are kept in `settings.json` (`api`, `api_token`, `api_lan`). An API badge at the top right, beside the AI button, shows while the API runs; it opens this page. The AI button in a room, and in the player, copies a ready prompt with the address, the token and a pointer to `/llms.txt`, or turns the API on.
 
 Starting the app with `--api`, or with `EZH_API=1`, turns the API on at start (and keeps the switch on). `"api": true` in `settings.json` does the same.
 
@@ -25,7 +25,7 @@ The traffic is plain HTTP, not encrypted: use it on networks you trust only. Win
 - JSON in and out, UTF-8, one request per connection. Errors are `{"error": "..."}` with 400 (also for an operation the app refuses, with the message the window would show), 401, 403, 404 (also for an unknown operation), 405, 409, 413, 500 or 503.
 - Times inside a recording are seconds from its start, rounded to 0.1 (`at_s`, `from_s`, `to_s`). Clock times are milliseconds since 1970 (`start_ms`, `end_ms`, `updated_ms`).
 - Reads work for every room on this PC. Operations act on the open room as the window does, and events and the board are written only to the open room, because only that room is shared with the others; otherwise 409.
-- Operations run at once, without the window's confirmations (starting and stopping a recording, deleting, discarding, removing a room, resetting). `delete_set`, `discard_set`, `remove_room`, `delete_old_files` and `reset` with `keep_rooms: false` remove recordings or the app's data with no undo: call them only when the person asked for exactly that. The token gives the same control as the window, also from the LAN with Other devices.
+- Operations run at once, without the window's confirmations (starting and stopping a recording, deleting, removing a room, resetting). `delete_set`, `remove_room`, `delete_old_files` and `reset` with `keep_rooms: false` remove recordings or the app's data with no undo: call them only when the person asked for exactly that. The token gives the same control as the window, also from the LAN with Other devices.
 - Ids with spaces (a recording id looks like `2026-10-19 21-30-00`) are written percent-encoded in the path.
 - Notes are at most 500 characters and the game plan at most 4000. Bodies are at most 64 kB.
 - There are no endpoints for clips. A recording leaves as a folder of plain files (`export_folder {room, set, folder}`); see [the storage format](session-format.md#export-folder).
@@ -68,15 +68,20 @@ Newest first.
   "id": "2026-10-19 21-30-00", "kind": "play", "recording": false,
   "start_ms": 1792445400000, "end_ms": 1792448100000, "length_s": 2700.0,
   "title": null, "imported_by": null,
-  "members": [{"id": "<id>", "name": "Ann", "voice_only": false, "imported": false, "start_ms": 1792445400000, "end_ms": 1792448100000}]
+  "members": [{"id": "<id>", "name": "Ann", "voice_only": false, "imported": false, "start_ms": 1792445400000, "end_ms": 1792448100000}],
+  "analysis": [{"plugin": "transcribe", "state": "running", "progress": 0.4}]
 }]}
 ```
 
-`kind` is `play`, or `debrief` for a recording of voices made while watching another one together. `end_ms` is `null` while recording. A recording placed from outside (see [the storage format](session-format.md#placing-a-recording-made-elsewhere)) has its `title`, `imported_by` (`{"id", "name"}` of the member who placed it) and `imported: true` on each member, which is a view with the name it was given.
+`kind` is `play`, or `debrief` for a recording of voices made while watching another one together. A debrief also has `of`, the id of the recording it is about, and `watch`, what the Watch Party showed while it was recorded: `[{"t_us", "by", "set", "at_us", "playing", "rate"}]` in microseconds on this PC's clock. `end_ms` is `null` while recording. `analysis` has one entry per extension that is on, for the recording: `state` is `done`, `running` (with `progress`), `left` (with `reason`: `queue`, `receiving`, `waiting` with `waiting_for`, the member it waits for, or `no_runner`) or `failed` (with `error`). A recording placed from outside (see [the storage format](session-format.md#placing-a-recording-made-elsewhere)) has its `title`, `imported_by` (`{"id", "name"}` of the member who placed it) and `imported: true` on each member, which is a view with the name it was given.
 
 ### `GET /v1/rooms/{room}/recordings/{recording}`
 
 One element of the list above.
+
+### `GET /v1/rooms/{room}/recordings/{recording}/voices/{member}`
+
+The member's voice in the recording as raw fragmented MP4 (`audio/mp4`), one capture of it. When the member has several captures (the app restarted while recording), the reply is 409 with their ids and each is read at `voices/{member}/{capture}`. 404 when the member has no voice in the recording. A debrief's voices are read here, so an agent can transcribe them.
 
 ### `GET /v1/rooms/{room}/recordings/{recording}/events`
 
@@ -91,7 +96,7 @@ Query: `tag=<tag>` (case-insensitive) and `kind=<kind>`.
 }]}
 ```
 
-Notes, marks and plugin results in time order, untimed ones first. `plugin` is the plugin's name for analysis results and `null` for people's events. `member` is the player a result is about. Without `kind`, spoken lines (`speech`), drawings and game plan cards are left out.
+Notes, marks and extension results in time order, untimed ones first. A note or mark written through this API has `source: "ai"` in the log; the app marks it with AI and the recording menu's Delete AI notes hides them. `plugin` is the plugin's name for analysis results and `null` for people's events. `member` is the player a result is about. Without `kind`, spoken lines (`speech`), drawings and game plan cards are left out.
 
 ### `GET /v1/rooms/{room}/recordings/{recording}/chapters`
 
@@ -99,7 +104,7 @@ Notes, marks and plugin results in time order, untimed ones first. `plugin` is t
 {"chapters": [{"n": 1, "name": "Match 1", "from_s": 0.0, "to_s": 612.3}, {"n": 2, "name": "Match 2", "from_s": 612.3, "to_s": null}]}
 ```
 
-The matches between the match ends that the Apex matches plugin found. `to_s` is `null` for the match in progress. Empty when the plugin is off.
+The matches between the match ends that the Apex matches extension found. `to_s` is `null` for the match in progress. Empty when the extension is off.
 
 ### `GET /v1/rooms/{room}/recordings/{recording}/transcript`
 
@@ -109,23 +114,23 @@ Query: `member=<id>`.
 {"lines": [{"member": "<id>", "member_name": "Ren", "from_s": 5.0, "to_s": 8.0, "text": "Drop north"}]}
 ```
 
-Spoken lines from the Transcription plugin in time order. Empty when it is off or not finished.
+Spoken lines from the Transcription extension in time order. Empty when it is off or not finished.
 
 ### `GET /v1/rooms/{room}/board`
 
 ```json
-{"text": "# This week\n**Move before the ring closes**", "author": "<id>", "author_name": "Ann", "updated_ms": 1792445000000}
+{"text": "**Move before the ring closes**\n- Pick the drop first", "author": "<id>", "author_name": "Ann", "updated_ms": 1792445000000}
 ```
 
-The game plan. `text` is `""` and the rest `null` when nobody has written one.
+The team card of the game plan. `text` is `""` and the rest `null` when nobody has written one. The other cards are written with the `put_board_card` operation.
 
 ### `PUT /v1/rooms/{room}/board`
 
 ```json
-{"text": "# This week\n**Move before the ring closes**\n\n## Next match\n- Pick the drop first"}
+{"text": "**Move before the ring closes**\n- Pick the drop first"}
 ```
 
-Replaces the game plan for the whole room and answers 200 with the new board (same shape as the read). `text` must not be empty.
+Replaces the team card for the whole room and answers 200 with the new board (same shape as the read). `text` must not be empty.
 
 ### `POST /v1/rooms/{room}/recordings/{recording}/events`
 
@@ -148,20 +153,11 @@ Not available: the operations that open a window, that is choosing files or fold
 ### `GET /v1/rooms/{room}/plugins`
 
 ```json
-{"plugins": [{"id": "transcribe", "name": "Transcription", "version": "1.0.0", "on": true, "settings": {"model": "small"}, "ready": true, "process_here": true,
-  "workers": [{"id": "<id>", "name": "Ren", "on": true, "ready": true}]}]}
+{"plugins": [{"id": "transcribe", "name": "Transcription", "version": "1.0.0", "on": true, "settings": {"model": "small"}, "ready": true,
+  "runner": "<id>", "runner_name": "Ren", "left": 2, "failed": 0, "waiting_for": null, "waiting_for_name": null}]}
 ```
 
-`on` is the room's choice; `ready` means this PC has the plugin's files; `process_here` is this PC's switch; `workers` is who processes it.
-
-### `GET /v1/rooms/{room}/jobs`
-
-```json
-{"jobs": [{"job": "transcribe@1.0.0/ab12cd/2026-10-19 21-30-00/<id>", "plugin": "transcribe", "version": "1.0.0", "set": "2026-10-19 21-30-00", "owner": "<id>", "owner_name": "Ren", "whole": false, "state": "waiting", "by": null, "error": null}],
- "running": {"job": "...", "plugin": "transcribe", "progress": 0.4}}
-```
-
-`state` is `waiting`, `claimed`, `done` or `failed`; `by` is the member who runs or ran it; `whole` marks a job for the whole recording rather than one member. `running` is the job this PC runs now, or `null`.
+`on` is the room's choice; `ready` means this PC has the extension's files. `runner` is the one member whose PC processes every recording for it (`null` when that member left the room); `left` counts recordings still to do and `failed` those that failed, and `waiting_for` is the member whose PC they wait for. `retry_job` asks for a recording to be analyzed again.
 
 ### `GET /v1/diagnostics`
 

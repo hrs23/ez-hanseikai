@@ -12,8 +12,6 @@ use crate::room::{self, part_of, seg_name, File, Set, INIT, SERIES};
 use crate::{debug, file_len, hex, log, Core};
 
 pub const FULL_SHARE: f64 = 0.01;
-pub const WARN_HOURS: u32 = 10;
-pub const WARN_CHOICES: [u64; 5] = [2, 5, 10, 20, 50];
 const RATE_SETS: usize = 5;
 const KEEP_EVERY: Duration = Duration::from_secs(5);
 const AGE_EVERY: Duration = Duration::from_secs(3600);
@@ -169,15 +167,17 @@ pub fn keep_capture(dir: &Path) {
     }
 }
 
+const WARN_HOURS: f64 = 1.0;
+
 pub fn bytes_per_hour(sets: &[(u64, i64)]) -> Option<f64> {
     let recent: Vec<&(u64, i64)> = sets.iter().filter(|(bytes, us)| *bytes > 0 && *us > 0).take(RATE_SETS).collect();
     let (bytes, us) = recent.iter().fold((0u64, 0i64), |(b, u), (bytes, us)| (b + bytes, u + us));
     (us > 0).then(|| bytes as f64 * 3600e6 / us as f64)
 }
 
-pub fn disk_json(free: u64, total: u64, per_hour: Option<f64>, warn_hours: u32, full: bool) -> Value {
+pub fn disk_json(free: u64, total: u64, per_hour: Option<f64>, full: bool) -> Value {
     let hours_left = per_hour.map(|rate| free as f64 / rate);
-    let low = full || hours_left.is_some_and(|h| h < warn_hours as f64);
+    let low = full || hours_left.is_some_and(|h| h < WARN_HOURS);
     json!({"free": free, "total": total, "per_hour": per_hour, "hours_left": hours_left, "low": low, "full": full})
 }
 
@@ -484,11 +484,11 @@ mod tests {
         assert_eq!(bytes_per_hour(&[(3_000, hour), (1_000, hour)]), Some(2_000.0));
         let many: Vec<(u64, i64)> = (0..RATE_SETS + 3).map(|i| (if i < RATE_SETS { 10 } else { 1_000 }, hour)).collect();
         assert_eq!(bytes_per_hour(&many), Some(10.0));
-        let disk = disk_json(20_000, 100_000, Some(2_000.0), WARN_HOURS, false);
-        assert_eq!((disk["hours_left"].as_f64(), disk["low"].as_bool()), (Some(10.0), Some(false)));
-        assert_eq!(disk_json(19_999, 100_000, Some(2_000.0), WARN_HOURS, false)["low"], true);
-        assert_eq!(disk_json(1, 100_000, None, WARN_HOURS, false)["low"], false);
-        assert_eq!(disk_json(1, 100_000, None, WARN_HOURS, true)["low"], true);
+        let disk = disk_json(2_000, 100_000, Some(2_000.0), false);
+        assert_eq!((disk["hours_left"].as_f64(), disk["low"].as_bool()), (Some(1.0), Some(false)));
+        assert_eq!(disk_json(1_999, 100_000, Some(2_000.0), false)["low"], true);
+        assert_eq!(disk_json(1, 100_000, None, false)["low"], false);
+        assert_eq!(disk_json(1, 100_000, None, true)["low"], true);
     }
 
     #[test]

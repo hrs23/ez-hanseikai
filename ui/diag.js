@@ -60,7 +60,7 @@ function flowRows(s, flow, label) {
   rows.push({ key: "Update check", level: "info", text: t("github.com · at start and every 4 h · {channel} channel", { channel: flow.update.channel === "beta" ? t("Beta") : t("Stable") }) });
   rows.push(flow.time.ok ? { key: "Time check", level: "info", text: t("{host} · at start and every hour", { host: flow.time.host }) } : { key: "Time check", level: "warn", text: `${flow.time.host} · ${t("Unreachable")}` });
   const downloads = flow.downloads.map((d) => t("Downloading {what} from {host}", { what: label(d.key), host: d.hosts.join(", ") }));
-  rows.push(downloads.length ? { key: "Downloads", level: "warn", text: downloads.join(" · ") } : { key: "Downloads", level: "info", text: t("Video tools, plugin tools and models, only when needed") });
+  rows.push(downloads.length ? { key: "Downloads", level: "warn", text: downloads.join(" · ") } : { key: "Downloads", level: "info", text: t("Video tools, extension tools and models, only when needed") });
   if (flow.api.on) rows.push({ key: "Local API", level: flow.api.lan ? "warn" : "info", text: flow.api.lan ? t("Other devices on your network can control the app") : t("This PC only") });
   return rows;
 }
@@ -69,4 +69,41 @@ function okLine(row) {
 }
 function pcsView(s) {
   return pcCards(s).map((c) => el("div", { className: "okbox" + (c.dim ? " dim" : "") }, el("div", { className: "h3 first", textContent: c.me ? `${nameOf(c.id)} (${t("This PC")})` : nameOf(c.id) }), ...c.rows.map(okLine)));
+}
+
+const viaRelay = (peers) => peers.filter((p) => p.connected && p.path === "relay");
+function netState(peers) {
+  if (!peers.some((p) => p.connected)) return null;
+  return viaRelay(peers).length ? "relay" : "direct";
+}
+
+function leftText(seconds) {
+  if (seconds < 60) return t("{n} s left", { n: Math.max(1, Math.round(seconds)) });
+  if (seconds < 3600) return t("{n} min left", { n: Math.round(seconds / 60) });
+  return t("{n} h left", { n: Math.round(seconds / 360) / 10 });
+}
+
+function summaryLines(s, failed) {
+  const lines = [];
+  const on = s.peers.filter((p) => p.connected);
+  const relay = viaRelay(on);
+  const who = (p) => s.names[p.id] || shortId(p.id);
+  lines.push({ key: "Connections", level: relay.length ? "warn" : "ok", text: on.length ? on.map((p) => `${who(p)} ${p.path === "relay" ? t("relay") : t("direct")} ${p.rtt_ms} ms`).join(" · ") : t("No one else is online") });
+  const c = s.capture;
+  const q = c.quality;
+  const captureText = !c.source ? t("Screen off") : c.source_lost ? t("Capture source closed") : c.status ? t("Capture stopped. Retrying…") : [c.source.kind === "window" ? c.source.title : t("Display {n}", { n: c.source.index }), q.width ? `${q.width}×${q.height}` : "", `${q.fps} fps`, String(q.codec).toUpperCase()].filter(Boolean).join(" · ");
+  lines.push({ key: "Capture", level: c.source && (c.source_lost || c.status) ? "warn" : c.source ? "ok" : "info", text: captureText });
+  lines.push({ key: "Microphone", level: c.mix.mic.muted ? "info" : "ok", text: c.mix.mic.muted ? t("Muted") : t("On") });
+  const receiving = s.sets.filter((x) => x.progress.total && x.progress.have < x.progress.total);
+  const stuck = receiving.filter((x) => x.progress.stuck);
+  lines.push({ key: "Transfers", level: stuck.length ? "warn" : "ok", text: receiving.length ? t("Receiving {n} recordings", { n: receiving.length }) : t("Everything is here") });
+  const d = s.disk;
+  const space = d.hours_left !== null && d.hours_left !== undefined ? t("{free} free · about {h} h left", { free: bytes(d.free), h: Math.floor(d.hours_left) }) : t("{free} free", { free: bytes(d.free) });
+  lines.push({ key: "Storage", level: d.full ? "fail" : d.low ? "warn" : "ok", text: space });
+  const other = on.filter((p) => p.version && p.version !== s.version);
+  lines.push({ key: "Versions", level: other.length ? "warn" : "ok", text: other.length ? other.map((p) => t("{name} is on {version}", { name: who(p), version: p.version })).join(" · ") : s.version });
+  const clock = clockSummary(s);
+  lines.push({ key: "Clocks", level: clock.level, text: clock.text });
+  lines.push({ key: "Extensions", level: failed ? "fail" : "ok", text: failed ? t(failed === 1 ? "{n} analysis failed" : "{n} analyses failed", { n: failed }) : t("No problems") });
+  return lines;
 }

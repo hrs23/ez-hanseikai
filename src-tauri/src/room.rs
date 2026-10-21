@@ -98,6 +98,7 @@ pub struct ActiveSet {
     pub by: String,
     pub start_us: i64,
     pub voice: bool,
+    pub of: Option<String>,
 }
 
 pub fn random_hex(bytes: usize) -> String {
@@ -186,7 +187,7 @@ impl Core {
 
     pub fn active_set_json(&self) -> Value {
         match self.active_set.lock().unwrap().as_ref() {
-            Some(s) => json!({"id": s.id, "room": s.room, "by": s.by, "start_us": s.start_us, "voice": s.voice}),
+            Some(s) => json!({"id": s.id, "room": s.room, "by": s.by, "start_us": s.start_us, "voice": s.voice, "of": s.of}),
             None => Value::Null,
         }
     }
@@ -570,13 +571,13 @@ pub fn adopt_room(core: &Arc<Core>, pending: &str, id: &str, name: &str, members
     }
 }
 
-pub fn begin_set(core: &Arc<Core>, set: &str, by: &str, start_us: i64, voice: bool) -> Result<bool, String> {
+pub fn begin_set(core: &Arc<Core>, set: &str, by: &str, start_us: i64, voice: bool, of: Option<String>) -> Result<bool, String> {
     ffmpeg::ready()?;
     if core.disk_full() {
         return Err("The disk is almost full.".into());
     }
     let room = core.active_room_id();
-    let active = ActiveSet { id: set.to_string(), room, by: by.to_string(), start_us, voice };
+    let active = ActiveSet { id: set.to_string(), room, by: by.to_string(), start_us, voice, of };
     {
         let mut slot = core.active_set.lock().unwrap();
         if slot.is_some() {
@@ -630,19 +631,21 @@ pub fn start_set(core: &Arc<Core>, debrief: Option<bool>) -> Result<(), String> 
     let room = core.active_room_id();
     let set = unused_set(&logs(core, &room), &core.room_dir(&room), start_us, core.tz_offset_s);
     let by = core.name.lock().unwrap().clone();
-    let voice = debrief.unwrap_or_else(|| core.party.lock().unwrap().reviewing());
-    if !begin_set(core, &set, &by, start_us, voice)? {
+    let open = core.party.lock().unwrap().open_set();
+    let voice = debrief.unwrap_or(open.is_some());
+    let of = open.filter(|_| voice);
+    if !begin_set(core, &set, &by, start_us, voice, of.clone())? {
         return Ok(());
     }
     log_set_layout(core);
     party::log(core);
-    net::broadcast(core, json!({"t": "rec", "action": "start", "set": set, "room": room, "by": by, "start_us": start_us, "voice": voice}));
-    announce(core, "start", &by);
+    net::broadcast(core, json!({"t": "rec", "action": "start", "set": set, "room": room, "by": by, "start_us": start_us, "voice": voice, "of": of}));
+    announce(core, "start", &by, voice);
     Ok(())
 }
 
-pub fn announce(core: &Core, action: &str, by: &str) {
-    let _ = core.app.emit("session", json!({"action": action, "by": by}));
+pub fn announce(core: &Core, action: &str, by: &str, voice: bool) {
+    let _ = core.app.emit("session", json!({"action": action, "by": by, "voice": voice}));
 }
 
 pub fn stop_set(core: &Arc<Core>) {
@@ -651,7 +654,7 @@ pub fn stop_set(core: &Arc<Core>) {
     if let Some(set) = set {
         let by = core.name.lock().unwrap().clone();
         net::broadcast(core, json!({"t": "rec", "action": "stop", "set": set, "room": core.active_room_id(), "by": by}));
-        announce(core, "end", &by);
+        announce(core, "end", &by, false);
     }
 }
 
@@ -908,11 +911,30 @@ fn event_from(r: &Value, owner: &str, id: i64, offset_us: i64) -> Value {
         "local_us": local("t_us").or_else(|| local("from_us")), "end_us": local("to_us"),
         "set": set, "file": file,
         "text": text, "values": r["values"], "tags": tags, "deleted": false, "run": r["run"],
+        "source": if r["source"] == "ai" { json!("ai") } else { Value::Null }, "at_us": id - offset_us,
     })
+}
+
+fn ai_cutoffs(logs: &[Log]) -> HashMap<String, i64> {
+    let mut out: HashMap<String, i64> = HashMap::new();
+    for log in logs {
+        for r in log.records.iter().filter(|r| r["k"] == "ai_del") {
+            if let (Some(set), Some(t)) = (r["set"].as_str(), r["t_us"].as_i64()) {
+                let at = out.entry(set.to_string()).or_insert(i64::MIN);
+                *at = (*at).max(t - log.offset_us);
+            }
+        }
+    }
+    out
+}
+
+fn ai_hidden(event: &Value, cutoffs: &HashMap<String, i64>) -> bool {
+    event["source"] == "ai" && event["set"].as_str().and_then(|set| cutoffs.get(set)).is_some_and(|cut| event["at_us"].as_i64().unwrap_or(i64::MAX) < *cut)
 }
 
 pub fn events(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> Vec<Value> {
     let mut out = Vec::new();
+    let cutoffs = ai_cutoffs(logs);
     for log in logs {
         let cap = caps.map_or(usize::MAX, |c| c.get(&log.owner).copied().unwrap_or(0) as usize);
         let mut list: Vec<Value> = Vec::new();
@@ -935,7 +957,7 @@ pub fn events(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> Vec<Value> {
                 _ => {}
             }
         }
-        out.extend(list.into_iter().filter(|n| n["deleted"] == false));
+        out.extend(list.into_iter().filter(|n| n["deleted"] == false && !ai_hidden(n, &cutoffs)));
     }
     crate::jobs::keep_shown(&mut out, logs, caps);
     let gone = dropped(logs);
@@ -990,12 +1012,67 @@ fn remove_set(core: &Core, room: &str, set: &str, complete: bool) -> Result<bool
 }
 
 pub fn delete_set(core: &Core, room: &str, set: &str) -> Result<bool, String> {
+    let debriefs = named_debriefs(&logs(core, room), set);
     let complete = !others_hold(set, &core.peers.lock().unwrap().iter().map(|p| &p.have).collect::<Vec<_>>());
-    remove_set(core, room, set, complete)
+    let deleted = remove_set(core, room, set, complete)?;
+    for debrief in debriefs {
+        let _ = delete_set(core, room, &debrief);
+    }
+    Ok(deleted)
 }
 
-pub fn discard_set(core: &Core, room: &str, set: &str) -> Result<bool, String> {
-    remove_set(core, room, set, true)
+fn started<'a>(logs: &'a [Log], set: &str) -> impl Iterator<Item = &'a Value> + 'a {
+    let set = set.to_string();
+    logs.iter().flat_map(|l| l.records.iter()).filter(move |r| r["k"] == "rec" && r["set"] == set.as_str())
+}
+
+pub fn debrief_of(set: &str, logs: &[Log]) -> Option<String> {
+    let named = started(logs, set).find_map(|r| r["of"].as_str().filter(|of| valid_id(of)));
+    let parent = match named {
+        Some(parent) => parent.to_string(),
+        None if started(logs, set).any(|r| r["voice"] == true) => party::records(logs).remove(set)?.into_iter().next()?["shared"]["set"].as_str()?.to_string(),
+        None => return None,
+    };
+    (parent != set && started(logs, &parent).next().is_some() && !dropped(logs).contains(&parent)).then_some(parent)
+}
+
+pub fn named_debriefs(logs: &[Log], parent: &str) -> Vec<String> {
+    let gone = dropped(logs);
+    let mut out: Vec<String> = Vec::new();
+    for r in logs.iter().flat_map(|l| l.records.iter()).filter(|r| r["k"] == "rec" && r["of"] == parent) {
+        if let Some(set) = r["set"].as_str().filter(|s| valid_id(s) && *s != parent && !gone.contains(*s)) {
+            if !out.iter().any(|o| o == set) {
+                out.push(set.to_string());
+            }
+        }
+    }
+    out
+}
+
+pub fn board_card_valid(card: &str) -> bool {
+    card.len() <= 60 && (card == "team" || card.strip_prefix("m:").or_else(|| card.strip_prefix("c:")).is_some_and(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')))
+}
+
+pub fn board_cards(events: &[Value], members: &[String]) -> Vec<Value> {
+    let mut cards: BTreeMap<String, ((i64, String), Value)> = BTreeMap::new();
+    let mut first: HashMap<String, f64> = members.iter().enumerate().map(|(i, member)| (format!("m:{member}"), i as f64)).collect();
+    first.insert("team".into(), -1.0);
+    for (card, pos) in &first {
+        cards.insert(card.clone(), ((i64::MIN, String::new()), json!({"title": null, "text": "", "pos": pos, "gone": false})));
+    }
+    for e in events.iter().filter(|e| e["kind"] == "board") {
+        let card = e["values"]["card"].as_str().filter(|c| !c.is_empty()).unwrap_or("team");
+        let at = (e["at_us"].as_i64().unwrap_or(0), e["author"].as_str().unwrap_or_default().to_string());
+        if cards.get(card).is_some_and(|(old, _)| *old >= at) {
+            continue;
+        }
+        let pos = if card == "team" { -1.0 } else { e["values"]["pos"].as_f64().or_else(|| first.get(card).copied()).unwrap_or(f64::MAX) };
+        let state = json!({"title": e["values"]["title"].as_str().filter(|t| !t.is_empty()), "text": e["text"], "pos": pos, "gone": e["values"]["gone"] == true, "by": e["author"], "at_us": at.0});
+        cards.insert(card.to_string(), (at, state));
+    }
+    let mut out: Vec<Value> = cards.into_iter().map(|(card, (_, mut state))| { state["card"] = json!(card); state }).collect();
+    out.sort_by(|a, b| a["pos"].as_f64().unwrap_or(f64::MAX).total_cmp(&b["pos"].as_f64().unwrap_or(f64::MAX)).then_with(|| a["card"].as_str().cmp(&b["card"].as_str())));
+    out
 }
 
 fn remove_recording(room_dir: &Path, set: &str) {
@@ -1057,6 +1134,10 @@ pub fn set_layout(logs: &[Log], set: &str) -> Value {
     logs.iter().flat_map(|l| l.records.iter()).filter(|r| r["k"] == "layout" && r["set"] == set).max_by_key(|r| r["t_us"].as_i64()).map(|r| r["layout"].clone()).unwrap_or(Value::Null)
 }
 
+fn last_end(f: &File, series: &str) -> Option<i64> {
+    f.segs.iter().filter(|s| s.series == series).map(|s| s.t_us + s.d_us - f.offset_us).max()
+}
+
 fn parts_json(core: &Core, room: &str, set: &Set, f: &File) -> Vec<Value> {
     let mut out = Vec::new();
     for capture in f.captures() {
@@ -1096,7 +1177,7 @@ pub fn sets_json(core: &Core, room: &str, logs: &[Log], events: &[Value]) -> Vec
     let reports: Vec<&HashMap<String, u64>> = peers.iter().map(|p| &p.1).collect();
     let all = sets(core, room, logs);
     let mine = data::have_counts(core, room, &all);
-    let mut flows = party::records(logs);
+    let mut analysis = crate::jobs::analysis_by_set(core, room, logs, &all, &mine);
     let mut out = Vec::new();
     for set in all {
         let mut holders = vec![Holder { id: &me, have: &mine }];
@@ -1108,19 +1189,17 @@ pub fn sets_json(core: &Core, room: &str, logs: &[Log], events: &[Value]) -> Vec
             players.push(json!({
                 "owner": f.owner, "imported": f.view.is_some(), "start_us": f.start_us, "end_us": f.end_us, "offset_us": f.offset_us, "have": have, "total": total,
                 "recording": f.recording(), "verified_by": by, "stuck": stuck(&mine, &online, &set, f), "parts": parts_json(core, room, &set, f),
+                "last_us": {"v": last_end(f, SERIES[0]), "m": last_end(f, SERIES[1])},
             }));
         }
         let (have, total, stuck_all) = progress(core, &set, &mine, &online);
-        let finished: Vec<&File> = set.files.iter().filter(|f| f.end_us.is_some()).collect();
-        let partial = |h: &Holder| finished.iter().filter(|f| !full(h.have, &set, f) && SERIES.iter().any(|s| h.have.get(&have_key(&set.id, &f.owner, s)).is_some_and(|n| *n > 0))).count();
-        let lacking_by: Vec<Value> = holders.iter().map(|h| json!({"id": h.id, "n": partial(h)})).filter(|v| v["n"] != 0).collect();
         let covered: Vec<&Value> = events.iter().filter(|e| covers(&set, e)).map(|e| &e["key"]).collect();
         let imported = set.files.iter().find_map(|f| f.view.as_ref());
         out.push(json!({
             "id": set.id, "room": room, "start_us": set.start(), "end_us": set.end_shown(), "live": set.recording(),
             "thumb": crate::thumbs::path(&core.room_dir(room), &set.id).exists(), "title": imported.and_then(|v| v.title.clone()), "imported_by": imported.map(|v| display_name(core, &v.by)),
-            "players": players, "events": covered, "progress": {"have": have, "total": total, "stuck": stuck_all}, "lacking": lacking_by, "wanted": wants(core, room, &set.id) == Some(true), "shared": others_hold(&set.id, &reports),
-            "layout": set_layout(logs, &set.id), "party": flows.remove(&set.id).unwrap_or_default(),
+            "players": players, "events": covered, "progress": {"have": have, "total": total, "stuck": stuck_all}, "wanted": wants(core, room, &set.id) == Some(true), "shared": others_hold(&set.id, &reports),
+            "layout": set_layout(logs, &set.id), "of": debrief_of(&set.id, logs), "debriefs": named_debriefs(logs, &set.id), "analysis": analysis.remove(&set.id).unwrap_or_default(),
         }));
     }
     out
@@ -1165,6 +1244,7 @@ fn peer_json(p: &Peer) -> Value {
         "version": p.info.as_ref().map(|(version, _)| version),
         "other_version": other_version,
         "sharing": sharing,
+        "speaking": p.speaking && alive.is_some(),
     })
 }
 
@@ -1203,7 +1283,9 @@ pub fn state_json(core: &Core) -> Value {
     let mut events = events(&logs, caps.as_ref());
     let sets = sets_json(core, &room_id, &logs, &events);
     let recorded: Vec<(u64, i64)> = sets.iter().filter_map(|s| Some((s["progress"]["total"].as_u64()?, s["end_us"].as_i64()? - s["start_us"].as_i64()?))).collect();
-    let disk = data::disk_json(core.free_bytes.load(Ordering::Relaxed), core.total_bytes.load(Ordering::Relaxed), data::bytes_per_hour(&recorded), *core.warn_hours.lock().unwrap(), core.disk_full());
+    let disk = data::disk_json(core.free_bytes.load(Ordering::Relaxed), core.total_bytes.load(Ordering::Relaxed), data::bytes_per_hour(&recorded), core.disk_full());
+    let members: Vec<String> = active.as_ref().map(|r| r.members.clone()).unwrap_or_default();
+    let board: Vec<Value> = board_cards(&events, &members).into_iter().filter(|c| c["gone"] != true).collect();
     let seekable: HashSet<&str> = sets.iter().filter(|s| s["progress"]["have"].as_u64() > Some(0)).flat_map(|s| s["events"].as_array().into_iter().flatten().filter_map(|k| k.as_str())).collect();
     for e in events.iter_mut() {
         let (can_seek, mine) = (seekable.contains(e["key"].as_str().unwrap_or_default()) && e["local_us"].is_i64(), e["author"] == my_id.as_str() && e["plugin"].is_null());
@@ -1235,13 +1317,11 @@ pub fn state_json(core: &Core) -> Value {
         "language": *core.language.lock().unwrap(),
         "colors": colors(&people),
         "palette": PALETTE,
-        "audio_process": core.audio_process.lock().unwrap().clone(),
         "invites": core.invites.lock().unwrap().len(),
         "limit_mbps": *core.limit_mbps.lock().unwrap(),
         "recovery": core.recovery.lock().unwrap().clone(),
         "notice": core.notice.lock().unwrap().clone(),
         "disk": disk,
-        "warn_hours": *core.warn_hours.lock().unwrap(),
         "channel": *core.channel.lock().unwrap(),
         "previous_version": core.previous_version,
         "codec": ffmpeg::pick(&core.codecs.lock().unwrap()).1,
@@ -1256,6 +1336,8 @@ pub fn state_json(core: &Core) -> Value {
         "sets": sets,
         "peers": peers,
         "events": events,
+        "tag_names": crate::jobs::tag_names(&logs, caps.as_ref()),
+        "board": board,
         "names": names,
         "asks": asks,
         "party": party::state_json(core, &holdings(&logs)),
@@ -1310,6 +1392,7 @@ pub mod tests {
     fn records_from_other_versions_never_break_reading() {
         let valid = vec![
             json!({"k": "rec", "set": "s1", "start_us": 5, "room": "r", "by": "a", "voice": false}),
+            json!({"k": "rec", "set": "d1", "start_us": 6, "room": "r", "by": "a", "voice": true, "of": "s1"}),
             json!({"k": "cap", "capture": "1000", "start_us": 0, "width": 1280, "init": {"v": {"size": 4, "sha256": "i"}}}),
             seg("1000", "v", 1, "s1"),
             json!({"k": "rec_end", "set": "s1", "t_us": 9, "stop": true}),
@@ -1325,7 +1408,7 @@ pub mod tests {
             json!({"k": "layout", "set": "s1", "t_us": 9, "layout": {"order": ["a"]}}),
             json!({"k": "plugin", "plugin": "p1", "on": true, "version": "1", "settings": {"model": "base"}, "t_us": 9}),
             json!({"k": "job", "job": "p1@1/ab/s1/a", "state": "done", "run": 1, "plugin": "p1", "version": "1", "file": "s1/a", "tags": {}, "t_us": 9}),
-            json!({"k": "worker", "plugin": "p1", "on": true, "ready": true}),
+            json!({"k": "ai_del", "set": "s1", "t_us": 9}),
             json!({"k": "party", "set": "s1", "t_us": 9, "shared": {"set": "s1", "playing": false}}),
             json!({"k": "file_bad", "room": "r", "set": "s1", "file": "a/1000/000001.m4s", "size": 4, "t_us": 9}),
         ];
@@ -1354,8 +1437,8 @@ pub mod tests {
         let _ = set_layout(&logs, "s1");
         assert!(latest_name(&logs).is_some());
         assert!(crate::party::records(&logs).contains_key("s1"));
-        assert!(crate::jobs::configs(&logs, None).contains_key("p1") && crate::jobs::tracks(&logs, None).contains_key("p1@1/ab/s1/a"));
-        assert!(crate::jobs::chosen(&logs, None).contains_key("s1") && crate::jobs::workers(&logs).contains_key(&("p1".to_string(), "a".to_string())));
+        assert!(crate::jobs::configs(&logs, None).contains_key("p1") && crate::jobs::tracks(&logs, None).contains_key(&("p1".to_string(), "s1/a".to_string())));
+        assert!(crate::jobs::chosen(&logs, None).contains_key("s1"));
         assert!(dropped(&logs).contains("gone"));
     }
 
@@ -1720,5 +1803,83 @@ pub mod tests {
         assert!(!shares(&room, "b", "x"));
         room.invite = Some(("a".into(), "t".into()));
         assert!(!shares(&room, "b", "a"));
+    }
+
+    fn started_by(set: &str, extra: Value) -> Value {
+        let mut r = json!({"k": "rec", "set": set, "start_us": 1});
+        crate::merge(&mut r, &extra);
+        r
+    }
+
+    #[test]
+    fn an_old_debrief_links_through_its_first_party_record() {
+        let party = |t: i64, set: &str| json!({"k": "party", "set": "d1", "t_us": t, "shared": {"set": set, "at_us": 1}});
+        let logs = vec![log("a", 0, vec![started_by("s1", json!({})), started_by("d1", json!({"voice": true})), party(20, "s9"), party(10, "s1")]), log("b", 0, vec![started_by("s9", json!({}))])];
+        assert_eq!(debrief_of("d1", &logs), Some("s1".to_string()));
+        assert_eq!(debrief_of("s1", &logs), None);
+        let plain = vec![log("a", 0, vec![started_by("s1", json!({})), started_by("d1", json!({})), party(10, "s1")])];
+        assert_eq!(debrief_of("d1", &plain), None);
+        let named = vec![log("a", 0, vec![started_by("s1", json!({})), started_by("d2", json!({"voice": true, "of": "s1"}))])];
+        assert_eq!(debrief_of("d2", &named), Some("s1".to_string()));
+        let orphan = vec![log("a", 0, vec![started_by("d2", json!({"voice": true, "of": "s1"}))])];
+        assert_eq!(debrief_of("d2", &orphan), None);
+        let gone = vec![log("a", 0, vec![started_by("s1", json!({})), started_by("d2", json!({"voice": true, "of": "s1"}))]), log("b", 0, vec![json!({"k": "set_del", "set": "s1"})])];
+        assert_eq!(debrief_of("d2", &gone), None);
+        assert_eq!(debrief_of("s1", &named), None);
+    }
+
+    #[test]
+    fn deleting_a_recording_deletes_only_debriefs_that_name_it_and_keeps_peers_copies() {
+        let party = json!({"k": "party", "set": "old", "t_us": 1, "shared": {"set": "s1"}});
+        let logs = vec![
+            log("a", 0, vec![started_by("s1", json!({})), started_by("d1", json!({"voice": true, "of": "s1"})), started_by("old", json!({"voice": true})), party, started_by("d2", json!({"voice": true, "of": "s2"}))]),
+            log("b", 0, vec![started_by("d1", json!({"voice": true, "of": "s1"})), started_by("d3", json!({"voice": true, "of": "s1"})), json!({"k": "set_del", "set": "d3"})]),
+        ];
+        assert_eq!(named_debriefs(&logs, "s1"), vec!["d1".to_string()]);
+        assert_eq!(debrief_of("old", &logs), Some("s1".to_string()));
+        let peers_hold = HashMap::from([("d1/abc/m".to_string(), 3u64)]);
+        assert!(others_hold("d1", &[&peers_hold]) && !others_hold("old", &[&peers_hold]));
+    }
+
+    #[test]
+    fn ai_del_hides_ai_notes_from_every_log_but_not_human_notes() {
+        let note = |id: i64, set: &str, ai: bool| {
+            let mut r = user_event(id, "note", "n", json!({"set": set}), Value::Null);
+            if ai {
+                r["source"] = json!("ai");
+            }
+            r
+        };
+        let logs = vec![
+            log("a", 0, vec![note(100, "s1", true), note(101, "s1", false), note(102, "s2", true), note(900, "s1", true)]),
+            log("b", 10, vec![note(150, "s1", true), json!({"k": "ai_del", "set": "s1", "t_us": 500})]),
+        ];
+        let shown: Vec<(String, bool)> = events(&logs, None).iter().map(|e| (e["key"].as_str().unwrap().to_string(), e["source"] == "ai")).collect();
+        assert_eq!(shown.len(), 3);
+        assert!(shown.contains(&("a/101".to_string(), false)) && shown.contains(&("a/102".to_string(), true)) && shown.contains(&("a/900".to_string(), true)));
+        let later = vec![log("a", 0, vec![note(100, "s1", true)]), log("b", 500, vec![json!({"k": "ai_del", "set": "s1", "t_us": 650})])];
+        assert!(events(&later, None).is_empty());
+        let after = vec![log("a", 0, vec![note(100, "s1", true)]), log("b", 0, vec![json!({"k": "ai_del", "set": "s1", "t_us": 50})])];
+        assert_eq!(events(&after, None).len(), 1);
+    }
+
+    #[test]
+    fn board_cards_newest_event_wins_and_old_team_card_reads() {
+        let card = |id: i64, author: &str, text: &str, values: Value| {
+            let mut e = events(&[log(author, 0, vec![user_event(id, "board", text, json!({}), values)])], None).remove(0);
+            e["at_us"] = json!(id);
+            e
+        };
+        let members = vec!["a".to_string(), "b".to_string()];
+        let none = board_cards(&[], &members);
+        assert_eq!(none.iter().map(|c| c["card"].as_str().unwrap()).collect::<Vec<_>>(), ["team", "m:a", "m:b"]);
+        let old = card(5, "a", "# Plan", Value::Null);
+        let list = board_cards(&[old, card(7, "b", "Newer plan", json!({"card": "team"})), card(6, "a", "Older plan", json!({"card": ""}))], &members);
+        assert_eq!((list[0]["card"].as_str(), list[0]["text"].as_str(), list[0]["by"].as_str()), (Some("team"), Some("Newer plan"), Some("b")));
+        let more = board_cards(&[card(8, "a", "New", json!({"card": "c:1", "title": "Drops", "pos": 2.5})), card(9, "b", "Mine", json!({"card": "m:a", "pos": 3.0})), card(10, "b", "", json!({"card": "m:b", "gone": true})), card(11, "a", "Moved", json!({"card": "c:1", "title": "Drops", "pos": 0.5}))], &members);
+        assert_eq!(more.iter().map(|c| c["card"].as_str().unwrap()).collect::<Vec<_>>(), ["team", "c:1", "m:b", "m:a"]);
+        assert_eq!((more[1]["text"].as_str(), more[1]["title"].as_str(), more[1]["pos"].as_f64()), (Some("Moved"), Some("Drops"), Some(0.5)));
+        assert_eq!(more[2]["gone"], true);
+        assert!(board_card_valid("team") && board_card_valid("m:ab12") && board_card_valid("c:0f-9") && !board_card_valid("m:") && !board_card_valid("x:1") && !board_card_valid("c:a b"));
     }
 }

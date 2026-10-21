@@ -346,19 +346,20 @@ fn react_to_set(core: &Arc<Core>, set: &Value) {
         return;
     }
     let (by, start_us, voice) = (set["by"].as_str().unwrap_or_default().to_string(), set["start_us"].as_i64().unwrap_or(0), set["voice"] == true);
+    let of = set["of"].as_str().filter(|of| valid_id(of)).map(String::from);
     let newer = match core.active_set.lock().unwrap().as_ref() {
         None => false,
         Some(a) if (a.start_us, a.id.as_str()) < (start_us, id) => true,
         Some(_) => return,
     };
     if !newer {
-        let _ = room::begin_set(core, id, &by, start_us, voice);
+        let _ = room::begin_set(core, id, &by, start_us, voice, of);
         return;
     }
     let (core, id) = (core.clone(), id.to_string());
     std::thread::spawn(move || {
         room::end_set(&core, false, None);
-        let _ = room::begin_set(&core, &id, &by, start_us, voice);
+        let _ = room::begin_set(&core, &id, &by, start_us, voice, of);
     });
 }
 
@@ -409,11 +410,11 @@ async fn handle(core: Arc<Core>, from: EndpointId, mut send: SendStream, mut rec
             let here = req["room"].as_str() == Some(core.active_room_id().as_str());
             if req["action"] == "start" {
                 if here {
-                    room::announce(&core, "start", by);
+                    room::announce(&core, "start", by, req["voice"] == true);
                 }
-                react_to_set(&core, &json!({"id": req["set"], "room": req["room"], "by": req["by"], "start_us": req["start_us"], "voice": req["voice"]}));
+                react_to_set(&core, &json!({"id": req["set"], "room": req["room"], "by": req["by"], "start_us": req["start_us"], "voice": req["voice"], "of": req["of"]}));
             } else if req["action"] == "stop" && here {
-                room::announce(&core, "end", by);
+                room::announce(&core, "end", by, false);
                 let (core, set) = (core.clone(), req["set"].as_str().unwrap_or_default().to_string());
                 tokio::task::spawn_blocking(move || room::end_set(&core, true, Some(&set)));
             }
@@ -438,14 +439,19 @@ async fn handle(core: Arc<Core>, from: EndpointId, mut send: SendStream, mut rec
             }
             send.write_all(b"ok").await?;
         }
+        Some("speaking") => {
+            let on = req["on"] == true;
+            core.update_peer(&from, |p| p.speaking = on);
+            let _ = core.app.emit("speaking", json!({"from": from.to_string(), "on": on}));
+            send.write_all(b"ok").await?;
+        }
         Some("draw") if in_active_room(&core, req["room"].as_str().unwrap_or_default()) && core.party.lock().unwrap().on => {
             let _ = core.app.emit("draw", json!({"from": from.to_string(), "stroke": req["stroke"]}));
             send.write_all(b"ok").await?;
         }
         Some("check") => {
             let c = core.clone();
-            let pid = crate::sources::pid_of(&core.audio_process.lock().unwrap().clone());
-            let lines = tokio::task::spawn_blocking(move || crate::check::run(&c, pid)).await?;
+            let lines = tokio::task::spawn_blocking(move || crate::check::run(&c)).await?;
             send.write_all(&serde_json::to_vec(&lines)?).await?;
         }
         Some("asks") if req["room"].as_str() == Some(core.active_room_id().as_str()) => {
@@ -641,6 +647,7 @@ async fn pull_log(core: &Core, room: &str, of: &str, conn: &Connection) -> Resul
             }
             if !data.is_empty() {
                 log::extend(&path, from, &data)?;
+                let _ = core.app.emit("log", room);
             }
             if own && restored(file_len(&path), more, reported(core, room, of)) {
                 core.settle(room)?;
@@ -828,12 +835,14 @@ fn fetch_history(core: &Arc<Core>, peer: &EndpointId, conn: &Connection, room: &
     let haves: Vec<(String, HashMap<String, u64>)> = core.peers.lock().unwrap().iter().filter(|p| p.conn.is_some()).map(|p| (p.id.to_string(), p.have.clone())).collect();
     let count = |who: &str, key: &str| haves.iter().find(|(id, _)| id == who).and_then(|(_, h)| h.get(key)).copied().unwrap_or(0);
     let focus = core.focus.lock().unwrap().clone();
-    let mut sets = room::sets(core, room, &room::logs(core, room));
+    let logs = room::logs(core, room);
+    let mut sets = room::sets(core, room, &logs);
+    let analysis = crate::jobs::wanted_sets(core, room, &logs, &sets);
     sets.sort_by_key(|s| Some(&s.id) != focus.as_ref());
     let mut waiting = false;
     for set in &sets {
         let here = set.files.iter().any(|f| data::held(core, room, f).0 > 0);
-        if !room::auto_receive(set.recording(), here, room::wants(core, room, &set.id)) {
+        if !room::auto_receive(set.recording(), here || analysis.contains(&set.id), room::wants(core, room, &set.id)) {
             continue;
         }
         let focused = Some(&set.id) == focus.as_ref();
@@ -1037,6 +1046,7 @@ async fn run(core: &Arc<Core>, id: EndpointId, conn: Connection, outgoing: bool)
         if p.conn.as_ref().is_some_and(|c| c.stable_id() == conn.stable_id()) {
             p.conn = None;
             p.live = None;
+            p.speaking = false;
             if lived >= STABLE_FOR {
                 p.seen_us = Some(now_us());
             }

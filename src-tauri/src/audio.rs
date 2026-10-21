@@ -15,6 +15,38 @@ pub const CHANNELS: usize = 2;
 const FLOAT_FRAME_BYTES: usize = 8;
 const WAIT_MS: u32 = 20;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Loopback {
+    Include(u32),
+    ExcludeSelf,
+}
+
+impl Loopback {
+    const SELF: &'static str = "self";
+
+    pub fn key(self) -> String {
+        match self {
+            Loopback::Include(pid) => pid.to_string(),
+            Loopback::ExcludeSelf => Self::SELF.into(),
+        }
+    }
+
+    fn from_key(key: &str) -> Option<Self> {
+        match key {
+            Self::SELF => Some(Loopback::ExcludeSelf),
+            _ => key.parse().ok().filter(|pid| *pid != 0).map(Loopback::Include),
+        }
+    }
+
+    pub fn client(self) -> Result<AudioClient, Err> {
+        let (pid, include) = match self {
+            Loopback::Include(pid) => (pid, true),
+            Loopback::ExcludeSelf => (std::process::id(), false),
+        };
+        Ok(AudioClient::new_application_loopback_client(pid, include)?)
+    }
+}
+
 pub struct Audio {
     key: String,
     stop: Arc<AtomicBool>,
@@ -35,11 +67,8 @@ fn open(core: &Core, track: usize, key: &str) -> Result<Option<Opened>, Err> {
     let (format, mode) = capture_format();
     let mut found = None;
     let mut client = if track == APP {
-        let pid: u32 = key.parse().unwrap_or(0);
-        if pid == 0 {
-            return Ok(None);
-        }
-        AudioClient::new_application_loopback_client(pid, true)?
+        let Some(loopback) = Loopback::from_key(key) else { return Ok(None) };
+        loopback.client()?
     } else {
         let devices = DeviceEnumerator::new()?;
         let device = match devices.get_device(key) {

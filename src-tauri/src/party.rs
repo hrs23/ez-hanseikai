@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -16,8 +16,6 @@ pub type Heads = HashMap<String, u64>;
 pub struct Viewer {
     pub set: Value,
     pub heads: Heads,
-    pub progress: Option<f64>,
-    pub stuck: bool,
     pub typing: bool,
     pub seen: Instant,
 }
@@ -101,13 +99,13 @@ impl Party {
         self.enter(room);
         let mut shared = msg["shared"].clone();
         let heads = heads_of(&msg["heads"]);
-        self.viewers.insert(from.to_string(), Viewer { set: shared["set"].clone(), heads: heads.clone(), progress: msg["progress"].as_f64(), stuck: msg["stuck"] == true, typing: msg["typing"] == true, seen: now });
+        self.viewers.insert(from.to_string(), Viewer { set: shared["set"].clone(), heads: heads.clone(), typing: msg["typing"] == true, seen: now });
         if !self.on {
             return false;
         }
         self.lamport = self.lamport.max(key(&shared).0);
         self.absorb(&heads, now);
-        if key(&shared) <= key(&self.shared) {
+        if !self.shared["set"].is_string() || shared["set"] != self.shared["set"] || key(&shared) <= key(&self.shared) {
             return false;
         }
         to_local(&mut shared, offset_us);
@@ -127,29 +125,23 @@ impl Party {
         self.on && self.sent.as_ref().is_none_or(|(at, heads)| now.duration_since(*at) >= REPEAT || heads != own)
     }
 
-    pub fn message(&mut self, room: &str, own: &Heads, progress: Progress, now: Instant) -> Value {
+    pub fn message(&mut self, room: &str, own: &Heads, now: Instant) -> Value {
         self.enter(room);
         self.absorb(own, now);
         self.sent = Some((now, own.clone()));
-        json!({"t": "party", "room": self.room, "shared": self.shared, "heads": own, "progress": progress.0, "stuck": progress.1, "typing": self.typing})
+        json!({"t": "party", "room": self.room, "shared": self.shared, "heads": own, "typing": self.typing})
     }
 
-    pub fn status(&self, me: &str, own: &Heads, progress: Progress, now: Instant) -> Vec<Value> {
-        let set = &self.shared["set"];
-        let mut viewers: Vec<(&str, &Heads, Progress, &Value)> = vec![(me, own, progress, set)];
-        viewers.extend(self.seen(now).into_iter().map(|(id, v)| (id.as_str(), &v.heads, (v.progress, v.stuck), &v.set)));
+    pub fn status(&self, own: &Heads, now: Instant) -> Vec<Value> {
+        let mut viewers: Vec<&Heads> = vec![own];
+        viewers.extend(self.seen(now).into_iter().map(|(_, v)| &v.heads));
         let mut owners: Vec<&String> = self.heads.keys().collect();
         owners.sort();
         let mut out = Vec::new();
         for owner in owners {
             let settled = self.grown.get(owner).is_none_or(|at| now.duration_since(*at) >= REPEAT);
-            if settled && viewers.iter().any(|(_, heads, _, _)| heads.get(owner).copied().unwrap_or(0) < self.heads[owner]) {
+            if settled && viewers.iter().any(|heads| heads.get(owner).copied().unwrap_or(0) < self.heads[owner]) {
                 out.push(json!({"kind": "catching", "who": owner}));
-            }
-        }
-        for (id, _, (progress, stuck), at) in viewers {
-            if let Some(p) = progress.filter(|p| *p < 1.0 && *at == *set) {
-                out.push(json!({"kind": if stuck { "incomplete" } else { "receiving" }, "who": id, "percent": (p * 100.0).floor()}));
             }
         }
         out
@@ -165,12 +157,21 @@ impl Party {
         self.seen(now).into_iter().filter(|(_, v)| v.typing).map(|(id, _)| id.clone()).collect()
     }
 
-    pub fn watching(&self, now: Instant) -> Vec<String> {
-        self.seen(now).into_iter().filter(|(_, v)| !self.on || v.set == self.shared["set"]).map(|(id, _)| id.clone()).collect()
+    pub fn watching_by_set(&self, now: Instant) -> BTreeMap<String, usize> {
+        let mut out = BTreeMap::new();
+        let sets = self.seen(now).into_iter().map(|(_, v)| &v.set).chain(self.on.then_some(&self.shared["set"]));
+        for set in sets.filter_map(Value::as_str) {
+            *out.entry(set.to_string()).or_default() += 1;
+        }
+        out
+    }
+
+    pub fn open_set(&self) -> Option<String> {
+        self.shared["set"].as_str().filter(|_| self.on).map(String::from)
     }
 
     pub fn reviewing(&self) -> bool {
-        self.on && self.shared["set"].is_string()
+        self.open_set().is_some()
     }
 }
 
@@ -206,31 +207,17 @@ pub fn records(logs: &[room::Log]) -> HashMap<String, Vec<Value>> {
     out
 }
 
-pub type Progress = (Option<f64>, bool);
-
-fn progress(core: &Core, room: &str, logs: &[room::Log], set: &Value) -> Progress {
-    let all = room::sets(core, room, logs);
-    let Some(found) = all.iter().find(|s| set.as_str() == Some(s.id.as_str())) else { return (None, false) };
-    let mine = crate::data::have_counts(core, room, std::slice::from_ref(found));
-    let others = room::others_have(core);
-    let online: Vec<&Heads> = others.iter().filter(|o| o.2).map(|o| &o.1).collect();
-    let (have, total, stuck) = room::progress(core, found, &mine, &online);
-    ((total > 0).then(|| have as f64 / total as f64), stuck)
+pub fn watch_json(records: &[Value]) -> Value {
+    records.iter().map(|r| json!({"t_us": r["t_us"], "by": r["by"], "set": r["shared"]["set"], "at_us": r["shared"]["at_us"], "playing": r["shared"]["playing"], "rate": r["shared"]["rate"]})).collect()
 }
 
 pub fn send(core: &Arc<Core>) {
+    if !core.party.lock().unwrap().on {
+        return;
+    }
     let room = core.active_room_id();
-    let logs = room::logs(core, &room);
-    let own = room::holdings(&logs);
-    let set = core.party.lock().unwrap().shared["set"].clone();
-    let progress = progress(core, &room, &logs, &set);
-    let message = {
-        let mut party = core.party.lock().unwrap();
-        if !party.on {
-            return;
-        }
-        party.message(&room, &own, progress, Instant::now())
-    };
+    let own = room::holdings(&room::logs(core, &room));
+    let message = core.party.lock().unwrap().message(&room, &own, Instant::now());
     net::broadcast(core, message);
 }
 
@@ -254,19 +241,12 @@ pub fn receive(core: &Arc<Core>, from: &str, msg: &Value, offset_us: i64) -> boo
 }
 
 pub fn state_json(core: &Core, own: &Heads) -> Value {
-    let room = core.active_room_id();
-    let party = core.party.lock().unwrap();
-    if !party.on {
-        return json!({"on": false, "watching": party.watching(Instant::now())});
-    }
-    let set = party.shared["set"].clone();
-    drop(party);
-    let progress = progress(core, &room, &room::logs(core, &room), &set);
     let party = core.party.lock().unwrap();
     let now = Instant::now();
-    let me = core.me();
-    let status = party.status(&me, own, progress, now);
-    json!({"on": true, "shared": party.shared, "status": status, "watching": party.watching(now), "typing": party.typists(now)})
+    if !party.on {
+        return json!({"on": false, "watching": party.watching_by_set(now)});
+    }
+    json!({"on": true, "shared": party.shared, "status": party.status(own, now), "watching": party.watching_by_set(now), "typing": party.typists(now)})
 }
 
 pub async fn repeat(core: Arc<Core>) {
@@ -292,7 +272,7 @@ mod tests {
     }
 
     fn msg(p: &mut Party) -> Value {
-        p.message("r", &Heads::new(), (None, false), Instant::now())
+        p.message("r", &Heads::new(), Instant::now())
     }
 
     fn party(me: &str) -> Party {
@@ -327,10 +307,10 @@ mod tests {
     #[test]
     fn a_joiner_adopts_the_running_state() {
         let mut old = party("a");
-        old.act("a", &view("s2", 50), 10);
+        old.act("a", &view("s1", 50), 10);
         let mut new = party("z");
         assert!(new.receive("a", &msg(&mut old), 0, "r", Instant::now()));
-        assert_eq!(new.shared["set"], "s2");
+        assert_eq!(new.shared["wall_us"], 50);
         assert!(!old.receive("z", &msg(&mut new), 0, "r", Instant::now()));
     }
 
@@ -338,37 +318,56 @@ mod tests {
     fn turning_on_joins_the_party_without_moving_it() {
         let mut first = Party::default();
         first.turn(true, "z", &view("s1", 0), "r", 1_000);
+        first.act("z", &view("s1", 700), 2_000);
         let mut joiner = Party::default();
-        joiner.turn(true, "a", &view("s7", 0), "r", 5_000);
+        joiner.turn(true, "a", &view("s1", 0), "r", 5_000);
         assert!(joiner.receive("z", &msg(&mut first), 0, "r", Instant::now()));
-        assert_eq!(joiner.shared["set"], "s1");
+        assert_eq!(joiner.shared["wall_us"], 700);
         assert!(!first.receive("a", &msg(&mut joiner), 0, "r", Instant::now()));
-        assert_eq!(first.shared["set"], "s1");
-        joiner.act("a", &view("s7", 0), 6_000);
+        assert_eq!(first.shared["wall_us"], 700);
+        joiner.act("a", &view("s1", 0), 6_000);
         assert!(first.receive("a", &msg(&mut joiner), 0, "r", Instant::now()));
-        assert_eq!(first.shared["set"], "s7");
+        assert_eq!(first.shared["wall_us"], 0);
     }
 
     #[test]
     fn rejoining_takes_the_running_state_again() {
         let (mut a, mut b) = (party("a"), party("b"));
-        a.act("a", &view("s2", 0), 10);
+        a.act("a", &view("s1", 10), 10);
         b.receive("a", &msg(&mut a), 0, "r", Instant::now());
         a.turn(false, "a", &Value::Null, "r", 20);
-        b.act("b", &view("s3", 0), 30);
+        b.act("b", &view("s1", 30), 30);
         a.turn(true, "a", &view("s1", 0), "r", 40);
         assert!(a.receive("b", &msg(&mut b), 0, "r", Instant::now()));
-        assert_eq!(a.shared["set"], "s3");
+        assert_eq!(a.shared["wall_us"], 30);
     }
 
     #[test]
-    fn watching_lists_others_on_the_same_session() {
+    fn party_messages_for_another_recording_are_not_followed() {
+        let (mut a, mut b) = (party("a"), party("b"));
+        b.act("b", &view("s2", 900), 5_000);
+        assert!(!a.receive("b", &msg(&mut b), 0, "r", Instant::now()));
+        assert_eq!((a.shared["set"].clone(), a.shared["wall_us"].clone()), (json!("s1"), json!(0)));
+        a.turn(true, "a", &view("s2", 0), "r", 6_000);
+        b.act("b", &view("s2", 950), 7_000);
+        assert!(a.receive("b", &msg(&mut b), 0, "r", Instant::now()));
+        assert_eq!(a.shared["wall_us"], 950);
+        let mut idle = Party::default();
+        idle.turn(true, "c", &json!({"set": null}), "r", 8_000);
+        b.act("b", &view("s2", 960), 9_000);
+        assert!(!idle.receive("b", &msg(&mut b), 0, "r", Instant::now()));
+    }
+
+    #[test]
+    fn watching_counts_viewers_per_recording_and_includes_me_while_in_the_party() {
         let mut a = party("a");
         a.receive("c", &json!({"room": "r", "shared": {"seq": 0, "set": "s1"}}), 0, "r", Instant::now());
         a.receive("b", &json!({"room": "r", "shared": {"seq": 0, "set": "s1"}}), 0, "r", Instant::now());
         a.receive("d", &json!({"room": "r", "shared": {"seq": 0, "set": "s9"}}), 0, "r", Instant::now());
-        assert_eq!(a.watching(Instant::now()), vec!["b".to_string(), "c".to_string()]);
-        assert!(a.watching(Instant::now() + SEEN).is_empty());
+        assert_eq!(a.watching_by_set(Instant::now()), BTreeMap::from([("s1".to_string(), 3), ("s9".to_string(), 1)]));
+        assert!(a.watching_by_set(Instant::now() + SEEN).get("s9").is_none());
+        a.turn(false, "a", &Value::Null, "r", 2_000);
+        assert_eq!(a.watching_by_set(Instant::now()).get("s1"), Some(&2));
     }
 
     #[test]
@@ -391,24 +390,11 @@ mod tests {
         let own = heads(&[("x", 5), ("y", 2)]);
         assert!(!a.lacks(&own));
         assert!(a.lacks(&heads(&[("x", 4), ("y", 2)])));
-        assert!(a.status("a", &own, (None, false), Instant::now()).is_empty());
-        let status = a.status("a", &own, (None, false), Instant::now() + REPEAT);
+        assert!(a.status(&own, Instant::now()).is_empty());
+        let status = a.status(&own, Instant::now() + REPEAT);
         assert_eq!(status, vec![json!({"kind": "catching", "who": "x"})]);
-        a.message("r", &heads(&[("x", 1), ("y", 9)]), (None, false), Instant::now());
+        a.message("r", &heads(&[("x", 1), ("y", 9)]), Instant::now());
         assert_eq!(a.heads, heads(&[("x", 5), ("y", 9)]));
-    }
-
-    #[test]
-    fn progress_is_shown_for_the_same_set() {
-        let mut a = party("a");
-        a.receive("b", &json!({"room": "r", "shared": {"seq": 0, "set": "s1"}, "progress": 0.725}), 0, "r", Instant::now());
-        a.receive("c", &json!({"room": "r", "shared": {"seq": 0, "set": "s9"}, "progress": 0.1}), 0, "r", Instant::now());
-        assert_eq!(a.status("a", &Heads::new(), (Some(1.0), false), Instant::now()), vec![json!({"kind": "receiving", "who": "b", "percent": 72.0})]);
-        a.receive("b", &json!({"room": "r", "shared": {"seq": 0, "set": "s1"}, "progress": 0.5, "stuck": true}), 0, "r", Instant::now());
-        assert_eq!(
-            a.status("a", &Heads::new(), (Some(0.25), true), Instant::now()),
-            vec![json!({"kind": "incomplete", "who": "a", "percent": 25.0}), json!({"kind": "incomplete", "who": "b", "percent": 50.0})]
-        );
     }
 
     #[test]
@@ -429,7 +415,7 @@ mod tests {
         a.turn(false, "a", &Value::Null, "r", 2_000);
         assert!(!a.receive("b", &json!({"room": "r", "shared": {"seq": 9, "set": "s4"}}), 0, "r", Instant::now()));
         assert!(a.caps().is_none());
-        assert_eq!(a.watching(Instant::now()), vec!["b".to_string()]);
+        assert_eq!(a.watching_by_set(Instant::now()), BTreeMap::from([("s4".to_string(), 1)]));
         assert_ne!(a.shared["set"], "s4");
     }
 
@@ -455,5 +441,8 @@ mod tests {
         assert_eq!(list.iter().map(|r| (r["t_us"].as_i64().unwrap(), r["by"].as_str().unwrap())).collect::<Vec<_>>(), [(250, "b"), (300, "a")]);
         assert_eq!(list[0]["shared"]["wall_us"], 800);
         assert_eq!(all["other"].len(), 1);
+        let watch = watch_json(list);
+        assert_eq!(watch[0], json!({"t_us": 250, "by": "b", "set": "s1", "at_us": 800, "playing": true, "rate": null}));
+        assert_eq!(watch.as_array().unwrap().len(), 2);
     }
 }

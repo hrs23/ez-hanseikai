@@ -24,9 +24,6 @@ function micLevel(v, muted) {
   return muted ? 0 : Math.round(meterPos(toDb(v)) * 100) / 100;
 }
 
-function captureStates(c, recording, problem) {
-  return {
-    screen: !c.source ? "off" : problem ? "warn" : recording && c.working ? "recording" : "on",
-    mic: c.mix.mic.muted ? "off" : recording ? "recording" : "on",
-  };
+function captureStates(c, problem) {
+  return { screen: !c.source ? "off" : problem ? "warn" : "on", mic: c.mix.mic.muted ? "off" : "on" };
 }

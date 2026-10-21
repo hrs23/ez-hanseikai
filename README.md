@@ -17,12 +17,12 @@ Work in progress. See [the design](docs/design.md).
 3. No busywork: everyone's recordings are collected and lined up automatically, with no manual syncing.
 4. For people who trust each other: room members are trusted, and outsiders are kept out (encrypted connections, members only, one-time invites); the app does not try to defend a room against its own members.
 5. No one is required: everyone holds everything, so the room keeps working when anyone leaves or is offline.
-6. Any game: the app uses only the picture and sound, so it works with any game; game-specific features come from plugins.
+6. Any game: the app uses only the picture and sound, so it works with any game; game-specific features come from extensions.
 7. Simple: as few settings, screens and features as the job needs.
 8. Never touches the game: it only captures the screen and the game's sound, never injects code, draws overlays or reads game memory.
 9. No cloud: recordings and notes go straight to your teammates and stay on your PCs.
 10. Nothing is lost by one person's delete: everyone keeps their own copy.
-11. Analysis is done by plugins that only read the recordings; each can be turned on or off on its own.
+11. Analysis is done by extensions that only read the recordings; each can be turned on or off on its own.
 12. Free and open source.
 
 ## Install
@@ -55,9 +55,9 @@ Data lives in `%LOCALAPPDATA%\dev.ggi-hanseikai.app`; File > Open data folder op
 ## Contributing
 
 1. Never touch the game process: capture the screen with Windows Graphics Capture and game sound with per-process audio capture; never inject code, draw overlays or read game memory; detect game events only from the captured picture and sound.
-2. Everyday review features live in the app; game-specific analysis lives in plugins.
-3. Plugins are self-contained: each runs as its own program, reads only recordings and set information, writes only events, depends on no other plugin and can be turned on or off on its own. The app knows nothing about a plugin's internals and shows every plugin's events the same way.
-4. One mechanism per job: notes, markers and plugin results are all events. In the UI each action and piece of information has one place, with no explanatory text.
+2. Everyday review features live in the app; game-specific analysis lives in extensions.
+3. Extensions are self-contained: each runs as its own program, reads only recordings and set information, writes only events, depends on no other extension and can be turned on or off on its own. The app knows nothing about an extension's internals and shows every extension's events the same way.
+4. One mechanism per job: notes, markers and extension results are all events. In the UI each action and piece of information has one place, with no explanatory text.
 5. The UI is intuitive and standard, like common native apps: standard menus, shortcuts and dialogs, and everything works with the mouse alone.
 6. The code stays plain: functions and modules, no clever abstractions, shared code only where it is truly the same, no comments.
 7. Nothing is lost by a crash, a dropped connection or someone's delete, and everything resumes on its own.

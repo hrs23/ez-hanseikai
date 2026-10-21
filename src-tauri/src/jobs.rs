@@ -11,14 +11,13 @@ use sha2::{Digest, Sha256};
 use tauri::Emitter;
 
 use crate::plugins::{self, Found, Media, Output, Plugin, Reply};
-use crate::room::{self, File, Log, Seg, SERIES};
+use crate::room::{self, File, Log, Seg, Set, SERIES};
 use crate::ops::arg;
-use crate::{ffmpeg, hex, now_us, party, stream, Core};
+use crate::{data, ffmpeg, hex, now_us, party, stream, Core};
 
 const CHECK: Duration = Duration::from_secs(2);
 const EMIT_EVERY: Duration = Duration::from_millis(250);
 const SETTINGS_HASH_BYTES: usize = 6;
-const CLAIM_SETTLE: Duration = Duration::from_secs(2 * crate::net::LOG_SYNC.as_secs());
 const STOP_WAIT: Duration = Duration::from_secs(10);
 pub const UNFINISHED_MAX: u32 = 2;
 
@@ -38,12 +37,43 @@ pub enum Status {
     Retry,
 }
 
+#[derive(Clone, Debug)]
+pub struct Done {
+    pub at: i64,
+    pub owner: String,
+    pub run: i64,
+    pub tags: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct Latest {
+    pub at: (i64, String),
+    pub key: String,
+    pub status: Status,
+}
+
 #[derive(Default, Debug)]
 pub struct Track {
-    pub done: Vec<(String, i64)>,
-    pub last: BTreeMap<String, Status>,
-    pub tags: Vec<((String, i64), Value)>,
+    pub done: Vec<Done>,
+    pub latest: Option<Latest>,
     pub unfinished: BTreeMap<String, u32>,
+}
+
+pub type Tracks = HashMap<(String, String), Track>;
+
+impl Track {
+    fn winner(&self) -> Option<&Done> {
+        self.done.iter().max_by(|a, b| a.at.cmp(&b.at).then_with(|| (&b.owner, b.run).cmp(&(&a.owner, a.run))))
+    }
+
+    fn open_for(&self, me: &str) -> Option<bool> {
+        match self.latest.as_ref() {
+            None => Some(false),
+            Some(Latest { status: Status::Done(_) | Status::Failed(_), .. }) => None,
+            Some(Latest { at: (_, owner), status: Status::Claimed(_), .. }) => Some(owner == me),
+            Some(_) => Some(false),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -82,7 +112,6 @@ pub struct Running {
 }
 
 static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
-static FIRST: Mutex<String> = Mutex::new(String::new());
 static CANCEL: AtomicBool = AtomicBool::new(false);
 static STOP: AtomicBool = AtomicBool::new(false);
 static WORK: Mutex<Option<String>> = Mutex::new(None);
@@ -101,8 +130,8 @@ fn newest(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> BTreeMap<String,
             let (Some(id), Some(t)) = (r["plugin"].as_str(), r["t_us"].as_i64()) else { continue };
             let at = (t - log.offset_us, log.owner.clone());
             if latest.get(id).is_none_or(|(old, _)| at > *old) {
-                let runner = r["runner"].as_str().filter(|m| !m.is_empty()).map(str::to_string);
-                let config = Config { on: r["on"] == true, version: r["version"].as_str().unwrap_or_default().to_string(), settings: r["settings"].clone(), runner };
+                let runner = r["runner"].as_str().filter(|m| !m.is_empty()).unwrap_or(&log.owner).to_string();
+                let config = Config { on: r["on"] == true, version: r["version"].as_str().unwrap_or_default().to_string(), settings: r["settings"].clone(), runner: Some(runner) };
                 latest.insert(id.to_string(), (at, config));
             }
         }
@@ -124,11 +153,18 @@ pub fn prefix(plugin: &str, config: &Config) -> String {
     format!("{plugin}@{}/{}/", config.version, hex(&digest[..SETTINGS_HASH_BYTES]))
 }
 
-pub fn tracks(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> HashMap<String, Track> {
-    let mut out: HashMap<String, Track> = HashMap::new();
+fn split_key(key: &str) -> Option<(String, String)> {
+    let (head, rest) = key.split_once('/')?;
+    let file = rest.split_once('/')?.1;
+    Some((head.split('@').next()?.to_string(), file.to_string()))
+}
+
+pub fn tracks(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> Tracks {
+    let mut out: Tracks = HashMap::new();
     for (log, records) in capped(logs, caps) {
         for r in records.iter().filter(|r| r["k"] == "job") {
             let Some(key) = r["job"].as_str() else { continue };
+            let Some(id) = split_key(key) else { continue };
             let run = r["run"].as_i64().unwrap_or(0);
             let status = match r["state"].as_str() {
                 Some("claim") => Status::Claimed(run),
@@ -137,14 +173,16 @@ pub fn tracks(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> HashMap<Stri
                 Some("retry" | "yield" | "stop") => Status::Retry,
                 _ => continue,
             };
-            let track = out.entry(key.to_string()).or_default();
+            let at = (r["t_us"].as_i64().unwrap_or(0) - log.offset_us, log.owner.clone());
+            let track = out.entry(id).or_default();
             let unfinished = track.unfinished.entry(log.owner.clone()).or_default();
             *unfinished = if matches!(status, Status::Claimed(_)) { *unfinished + 1 } else { 0 };
             if status == Status::Done(run) {
-                track.done.push((log.owner.clone(), run));
-                track.tags.push(((log.owner.clone(), run), r["tags"].clone()));
+                track.done.push(Done { at: at.0, owner: log.owner.clone(), run, tags: r["tags"].clone() });
             }
-            track.last.insert(log.owner.clone(), status);
+            if track.latest.as_ref().is_none_or(|l| at >= l.at) {
+                track.latest = Some(Latest { at, key: key.to_string(), status });
+            }
         }
     }
     out
@@ -176,21 +214,13 @@ pub fn counts(plugin: &str, file: &str, chosen: &HashMap<String, String>) -> boo
     file.matches('/').count() == 1 && (!once(plugin) || file.split('/').next().is_some_and(|set| chosen.get(set).is_some_and(|f| f == file)))
 }
 
-fn current(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> Vec<String> {
-    configs(logs, caps).iter().filter(|(_, c)| c.on).map(|(id, c)| prefix(id, c)).collect()
-}
-
 fn winners(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> Vec<((String, i64), Value)> {
-    let prefixes = current(logs, caps);
+    let on: HashSet<String> = configs(logs, caps).into_iter().filter(|(_, c)| c.on).map(|(id, _)| id).collect();
     let chosen = chosen(logs, caps);
     tracks(logs, caps)
         .into_iter()
-        .filter(|(key, _)| prefixes.iter().any(|p| key.strip_prefix(p.as_str()).is_some_and(|file| counts(p.split('@').next().unwrap_or_default(), file, &chosen))))
-        .filter_map(|(_, t)| {
-            let best = t.done.iter().min()?.clone();
-            let tags = t.tags.into_iter().find(|(w, _)| *w == best).map(|(_, v)| v).unwrap_or(Value::Null);
-            Some((best, tags))
-        })
+        .filter(|((plugin, file), _)| on.contains(plugin) && counts(plugin, file, &chosen))
+        .filter_map(|(_, t)| t.winner().map(|w| ((w.owner.clone(), w.run), w.tags.clone())))
         .collect()
 }
 
@@ -215,27 +245,16 @@ pub fn tag_names(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> BTreeMap<
     out
 }
 
-fn taken(track: Option<&Track>, me: &str, online: &HashSet<String>) -> bool {
-    track.is_some_and(|t| t.last.iter().any(|(owner, s)| owner != me && matches!(s, Status::Claimed(_)) && online.contains(owner)))
-}
-
-pub fn yields(track: Option<&Track>, me: &str, run: i64, online: &HashSet<String>) -> bool {
-    let earlier = |owner: &String, s: &Status| owner != me && online.contains(owner) && matches!(s, Status::Claimed(r) if (*r, owner.as_str()) < (run, me));
-    track.is_some_and(|t| t.done.iter().any(|(owner, _)| owner != me) || t.last.iter().any(|(owner, s)| earlier(owner, s)))
-}
-
 #[allow(clippy::too_many_arguments)]
 pub fn next(
     me: &str,
-    online: &HashSet<String>,
     recording: bool,
     bundled: &[(&str, &str, bool)],
     ready: impl Fn(&str, &Value) -> bool,
     configs: &BTreeMap<String, Config>,
-    tracks: &HashMap<String, Track>,
+    tracks: &Tracks,
     chosen: &HashMap<String, String>,
     inputs: &[Input],
-    first: &str,
 ) -> Option<Pick> {
     let mut picks = Vec::new();
     for (order, (id, config)) in configs.iter().enumerate() {
@@ -245,62 +264,140 @@ pub fn next(
         }
         let prefix = prefix(id, config);
         for (i, input) in inputs.iter().enumerate().filter(|(_, input)| input.here && counts(id, &input.file, chosen)) {
-            let key = format!("{prefix}{}", input.file);
-            let track = tracks.get(&key);
-            if track.is_some_and(|t| !t.done.is_empty()) {
-                continue;
-            }
-            let mine = track.and_then(|t| t.last.get(me));
-            if matches!(mine, Some(Status::Failed(_))) {
-                continue;
-            }
-            let resumed = matches!(mine, Some(Status::Claimed(_)));
-            if !resumed && taken(track, me, online) {
-                continue;
-            }
-            let rank = (key != first, !resumed, input.owner != me, Reverse(input.start_us), order);
-            picks.push((rank, Pick { plugin: id.clone(), key, input: i }));
+            let Some(resumed) = tracks.get(&(id.clone(), input.file.clone())).map_or(Some(false), |t| t.open_for(me)) else { continue };
+            picks.push(((!resumed, Reverse(input.start_us), order), Pick { plugin: id.clone(), key: format!("{prefix}{}", input.file), input: i }));
         }
     }
     picks.into_iter().min_by(|a, b| a.0.cmp(&b.0)).map(|(_, p)| p)
 }
 
 fn runs_here(me: &str, bundled: &[(&str, &str, bool)], ready: impl Fn(&str, &Value) -> bool, id: &str, config: &Config) -> bool {
-    config.on && bundled.iter().any(|(b, version, _)| *b == id && *version == config.version) && config.runner.as_deref().is_none_or(|runner| runner == me) && ready(id, &config.settings)
+    config.on && bundled.iter().any(|(b, version, _)| *b == id && *version == config.version) && config.runner.as_deref() == Some(me) && ready(id, &config.settings)
 }
 
-pub fn abandoned(me: &str, bundled: &[(&str, &str, bool)], ready: impl Fn(&str, &Value) -> bool, configs: &BTreeMap<String, Config>, tracks: &HashMap<String, Track>) -> Vec<Value> {
-    let elsewhere: Vec<(String, &String)> = configs.iter().filter(|(id, c)| c.on && !runs_here(me, bundled, &ready, id, c)).map(|(id, c)| (prefix(id, c), id)).collect();
+pub fn runner_wants(me: &str, configs: &BTreeMap<String, Config>) -> bool {
+    configs.values().any(|c| c.on && c.runner.as_deref() == Some(me))
+}
+
+pub fn abandoned(me: &str, tracks: &Tracks) -> Vec<Value> {
     tracks
-        .iter()
-        .filter_map(|(key, t)| match t.last.get(me) {
-            Some(Status::Claimed(run)) if t.done.is_empty() => {
-                if t.unfinished.get(me).copied().unwrap_or(0) >= UNFINISHED_MAX {
-                    tracing::warn!("job {key} stopped twice without finishing, marking it failed");
-                    return Some(job_record("fail", key, *run, json!({"error": "Stopped twice without finishing."})));
-                }
-                let (_, plugin) = elsewhere.iter().find(|(p, _)| key.starts_with(p.as_str()))?;
-                tracing::info!("job {key} is no longer run here, releasing it");
-                Some(job_record("stop", key, *run, json!({"plugin": plugin})))
+        .values()
+        .filter_map(|t| match t.latest.as_ref() {
+            Some(Latest { at: (_, owner), key, status: Status::Claimed(run) }) if owner == me && t.unfinished.get(me).copied().unwrap_or(0) >= UNFINISHED_MAX => {
+                tracing::warn!("job {key} stopped twice without finishing, marking it failed");
+                Some(job_record("fail", key, *run, json!({"error": "Stopped twice without finishing."})))
             }
             _ => None,
         })
         .collect()
 }
 
-pub fn state(track: Option<&Track>, me: &str, online: &HashSet<String>) -> (String, Value, Value) {
-    let Some(t) = track else { return ("waiting".into(), Value::Null, Value::Null) };
-    if let Some((owner, _)) = t.done.iter().min() {
-        return ("done".into(), json!(owner), Value::Null);
+#[derive(Clone, Debug, PartialEq)]
+pub struct Holder {
+    pub id: String,
+    pub online: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Wait {
+    Queue,
+    Receiving,
+    Member(String),
+    NoRunner,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Phase {
+    Done,
+    Running,
+    Failed(String),
+    Left(Wait),
+}
+
+fn wait_for(runner: Option<&str>, me: &str, online: &HashSet<String>, holders: &[Holder]) -> Wait {
+    let Some(runner) = runner else { return Wait::NoRunner };
+    if runner != me && !online.contains(runner) {
+        return Wait::Member(runner.to_string());
     }
-    let claimed = t.last.iter().find(|(owner, s)| matches!(s, Status::Claimed(_)) && (*owner == me || online.contains(*owner)));
-    if let Some((owner, _)) = claimed {
-        return ("claimed".into(), json!(owner), Value::Null);
+    if holders.iter().any(|h| h.id == runner) {
+        Wait::Queue
+    } else if holders.iter().any(|h| h.online) {
+        Wait::Receiving
+    } else {
+        holders.first().map_or(Wait::Queue, |h| Wait::Member(h.id.clone()))
     }
-    match t.last.iter().find(|(_, s)| matches!(s, Status::Failed(_))) {
-        Some((owner, Status::Failed(e))) => ("failed".into(), json!(owner), json!(e)),
-        _ => ("waiting".into(), Value::Null, Value::Null),
+}
+
+pub fn phase(track: Option<&Track>, runner: Option<&str>, me: &str, online: &HashSet<String>, holders: &[Holder]) -> Phase {
+    let alive = |who: &str| who == me || online.contains(who);
+    match track.and_then(|t| t.latest.as_ref()) {
+        Some(Latest { status: Status::Done(_), .. }) => Phase::Done,
+        Some(Latest { status: Status::Failed(e), .. }) => Phase::Failed(e.clone()),
+        Some(Latest { at: (_, owner), status: Status::Claimed(_), .. }) if Some(owner.as_str()) == runner && alive(owner) => Phase::Running,
+        _ => Phase::Left(wait_for(runner, me, online, holders)),
     }
+}
+
+fn rank(phase: &Phase) -> u8 {
+    match phase {
+        Phase::Done => 0,
+        Phase::Left(_) => 1,
+        Phase::Running => 2,
+        Phase::Failed(_) => 3,
+    }
+}
+
+fn fold(phases: Vec<Phase>) -> Phase {
+    phases.into_iter().reduce(|a, b| if rank(&b) > rank(&a) { b } else { a }).unwrap_or(Phase::Done)
+}
+
+pub fn analysis(
+    me: &str,
+    online: &HashSet<String>,
+    configs: &BTreeMap<String, Config>,
+    tracks: &Tracks,
+    chosen: &HashMap<String, String>,
+    sets: &[Set],
+    holders: impl Fn(&Set, &File) -> Vec<Holder>,
+) -> HashMap<String, Vec<(String, Phase)>> {
+    let mut out: HashMap<String, Vec<(String, Phase)>> = HashMap::new();
+    for set in sets {
+        let finished: Vec<&File> = set.files.iter().filter(|f| f.end_us.is_some()).collect();
+        for (id, config) in configs.iter().filter(|(_, c)| c.on) {
+            let phases: Vec<Phase> = finished
+                .iter()
+                .filter(|f| counts(id, &format!("{}/{}", set.id, f.owner), chosen))
+                .map(|f| phase(tracks.get(&(id.clone(), format!("{}/{}", set.id, f.owner))), config.runner.as_deref(), me, online, &holders(set, f)))
+                .collect();
+            if !phases.is_empty() {
+                out.entry(set.id.clone()).or_default().push((id.clone(), fold(phases)));
+            }
+        }
+    }
+    out
+}
+
+pub fn analysis_json(phases: &[(String, Phase)], running: Option<&Running>, set: &str) -> Vec<Value> {
+    phases
+        .iter()
+        .map(|(plugin, phase)| match phase {
+            Phase::Done => json!({"plugin": plugin, "state": "done"}),
+            Phase::Running => {
+                let progress = running.filter(|r| r.plugin == *plugin && r.file.starts_with(&format!("{set}/"))).map(|r| r.progress);
+                json!({"plugin": plugin, "state": "running", "progress": progress})
+            }
+            Phase::Failed(error) => json!({"plugin": plugin, "state": "failed", "error": error}),
+            Phase::Left(wait) => {
+                let (reason, who) = match wait {
+                    Wait::Queue => ("queue", None),
+                    Wait::Receiving => ("receiving", None),
+                    Wait::NoRunner => ("no_runner", None),
+                    Wait::Member(id) => ("waiting", Some(id)),
+                };
+                json!({"plugin": plugin, "state": "left", "reason": reason, "waiting_for": who})
+            }
+        })
+        .collect()
 }
 
 pub fn moment(start_us: i64, s: f64) -> i64 {
@@ -374,11 +471,11 @@ pub fn inputs(core: &Core, room: &str, logs: &[Log], locate: impl Fn(&str) -> bo
     out
 }
 
-pub fn open(file: &str, me: &str, prefixes: &[String], tracks: &HashMap<String, Track>) -> bool {
-    prefixes.iter().any(|p| tracks.get(&format!("{p}{file}")).is_none_or(|t| t.done.is_empty() && !matches!(t.last.get(me), Some(Status::Failed(_)))))
+pub fn open(file: &str, me: &str, configs: &BTreeMap<String, Config>, tracks: &Tracks, chosen: &HashMap<String, String>) -> bool {
+    configs.iter().any(|(id, c)| c.on && c.runner.as_deref() == Some(me) && counts(id, file, chosen) && tracks.get(&(id.clone(), file.to_string())).is_none_or(|t| t.open_for(me).is_some()))
 }
 
-fn snapshot(core: &Core, room: &str) -> (Vec<Log>, BTreeMap<String, Config>, HashMap<String, Track>) {
+fn snapshot(core: &Core, room: &str) -> (Vec<Log>, BTreeMap<String, Config>, Tracks) {
     let logs = room::logs(core, room);
     let (configs, tracks) = (room_configs(core, room, &logs), tracks(&logs, None));
     (logs, configs, tracks)
@@ -393,6 +490,12 @@ pub fn members_run(mut configs: BTreeMap<String, Config>, members: &[String]) ->
         c.runner = c.runner.take().filter(|r| members.contains(r));
     }
     configs
+}
+
+pub fn wanted_sets(core: &Core, room: &str, logs: &[Log], sets: &[Set]) -> HashSet<String> {
+    let (me, configs, tracks, chosen) = (core.me(), room_configs(core, room, logs), tracks(logs, None), chosen(logs, None));
+    let wanted = |set: &Set, f: &File| f.end_us.is_some() && f.segs.iter().any(|s| s.series == SERIES[0]) && open(&format!("{}/{}", set.id, f.owner), &me, &configs, &tracks, &chosen);
+    sets.iter().filter(|set| set.files.iter().any(|f| wanted(set, f))).map(|set| set.id.clone()).collect()
 }
 
 fn plugin_dir(core: &Core, id: &str) -> PathBuf {
@@ -415,60 +518,10 @@ fn present(core: &Core, id: &str, settings: &Value) -> bool {
     plugins::find(id).is_some_and(|p| plugins::missing(p, &plugin_dir(core, id), settings).is_empty()) && ffmpeg::present()
 }
 
-fn skipped(core: &Core, id: &str) -> bool {
-    core.skip_plugins.lock().unwrap().contains(id)
-}
-
-fn ready(core: &Core, id: &str, settings: &Value) -> bool {
-    present(core, id, settings) && !skipped(core, id)
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct Worker {
-    pub on: bool,
-    pub ready: bool,
-}
-
-pub fn workers(logs: &[Log]) -> HashMap<(String, String), Worker> {
-    let mut out = HashMap::new();
-    for log in logs {
-        for r in log.records.iter().filter(|r| r["k"] == "worker") {
-            if let Some(plugin) = r["plugin"].as_str() {
-                out.insert((plugin.to_string(), log.owner.clone()), Worker { on: r["on"] != false, ready: r["ready"] == true });
-            }
-        }
-    }
-    out
-}
-
 fn room_members(core: &Core, room: &str) -> Vec<String> {
     let me = core.me();
     let others: Vec<String> = core.rooms.lock().unwrap().list.iter().find(|r| r.id == room).map(|r| r.members.iter().map(|m| m.to_string()).filter(|m| *m != me).collect()).unwrap_or_default();
     std::iter::once(me).chain(others).collect()
-}
-
-pub fn assigned(runner: Option<&str>, members: &[String], plugin: &str, known: &HashMap<(String, String), Worker>) -> Option<String> {
-    if let Some(runner) = runner {
-        return Some(runner.to_string());
-    }
-    let mut eligible = members.iter().filter(|m| known.get(&(plugin.to_string(), (*m).clone())).is_none_or(|w| w.on));
-    let first = eligible.next()?;
-    eligible.next().is_none().then(|| first.clone())
-}
-
-fn publish(core: &Core, room: &str, logs: &[Log], configs: &BTreeMap<String, Config>) {
-    if !core.active_room().is_some_and(|r| r.invite.is_none()) {
-        return;
-    }
-    let me = core.me();
-    let known = workers(logs);
-    for p in plugins::ALL.iter() {
-        let settings = configs.get(p.id).map_or_else(|| plugins::normalize(p, &Value::Null), |c| c.settings.clone());
-        let now = Worker { on: !skipped(core, p.id), ready: present(core, p.id, &settings) };
-        if known.get(&(p.id.to_string(), me.clone())) != Some(&now) {
-            core.append_log(room, &json!({"k": "worker", "plugin": p.id, "on": now.on, "ready": now.ready, "t_us": now_us()}));
-        }
-    }
 }
 
 fn recording(core: &Core) -> bool {
@@ -503,18 +556,16 @@ pub fn worker(core: Arc<Core>) {
 
 fn tick(core: &Arc<Core>, room: &str) {
     let (logs, configs, tracks) = snapshot(core, room);
-    publish(core, room, &logs, &configs);
-    let prefixes = current(&logs, None);
-    if prefixes.is_empty() || STOP.load(Ordering::Relaxed) {
+    let me = core.me();
+    if !runner_wants(&me, &configs) || STOP.load(Ordering::Relaxed) {
         return;
     }
-    let me = core.me();
-    for record in abandoned(&me, &bundled(), |id, s| ready(core, id, s), &configs, &tracks) {
+    for record in abandoned(&me, &tracks) {
         core.append_log(room, &record);
     }
-    let inputs = inputs(core, room, &logs, |file| open(file, &me, &prefixes, &tracks));
-    let first = FIRST.lock().unwrap().clone();
-    let pick = next(&me, &online(core), recording(core), &bundled(), |id, s| ready(core, id, s), &configs, &tracks, &chosen(&logs, None), &inputs, &first);
+    let chosen = chosen(&logs, None);
+    let inputs = inputs(core, room, &logs, |file| open(file, &me, &configs, &tracks, &chosen));
+    let pick = next(&me, recording(core), &bundled(), |id, s| present(core, id, s), &configs, &tracks, &chosen, &inputs);
     let Some(pick) = pick else { return };
     let (Some(plugin), Some(config)) = (plugins::find(&pick.plugin), configs.get(&pick.plugin)) else { return };
     work(core, room, plugin, config, &pick.key, &inputs[pick.input]);
@@ -523,22 +574,13 @@ fn tick(core: &Arc<Core>, room: &str) {
 fn work(core: &Arc<Core>, room: &str, plugin: &'static Plugin, config: &Config, key: &str, input: &Input) {
     let run = now_us();
     let about = json!({"plugin": plugin.id, "version": plugin.version, "settings": config.settings, "file": input.file});
-    core.append_log(room, &job_record("claim", key, run, about.clone()));
-    std::thread::sleep(CLAIM_SETTLE);
-    if yields(tracks(&room::logs(core, room), None).get(key), &core.me(), run, &online(core)) {
-        core.append_log(room, &job_record("yield", key, run, about));
-        return;
-    }
-    if STOP.load(Ordering::Relaxed) {
-        core.append_log(room, &job_record("stop", key, run, about));
-        return;
-    }
+    core.append_log(room, &job_record("claim", key, run, about));
     CANCEL.store(false, Ordering::Relaxed);
     tracing::info!("job {key} started on {}", input.file);
     *RUNNING.lock().unwrap() = Some(Running { room: room.into(), key: key.into(), plugin: plugin.id.into(), file: input.file.clone(), run, progress: 0.0 });
     emit(core);
     let work = work_root(core).join(run.to_string());
-    let outcome = run_parts(core, room, plugin, config, key, input, &work);
+    let outcome = run_parts(core, room, plugin, config, input, &work);
     let about = json!({"plugin": plugin.id, "version": plugin.version, "file": input.file});
     match outcome {
         Some(Ok((found, tags, note))) => {
@@ -565,7 +607,7 @@ fn work(core: &Arc<Core>, room: &str, plugin: &'static Plugin, config: &Config, 
 
 type Results = (Vec<(i64, Found)>, BTreeMap<String, String>, String);
 
-fn run_parts(core: &Arc<Core>, room: &str, plugin: &'static Plugin, config: &Config, key: &str, input: &Input, work: &std::path::Path) -> Option<Result<Results, String>> {
+fn run_parts(core: &Arc<Core>, room: &str, plugin: &'static Plugin, config: &Config, input: &Input, work: &std::path::Path) -> Option<Result<Results, String>> {
     let mut found = Vec::new();
     let mut tags = BTreeMap::new();
     let mut notes = Vec::new();
@@ -584,7 +626,7 @@ fn run_parts(core: &Arc<Core>, room: &str, plugin: &'static Plugin, config: &Con
             dir: plugin_dir(core, plugin.id),
             work: work.join(i.to_string()),
         };
-        match watch(core, room, plugin, key, &job, (i as f64 / count, 1.0 / count))? {
+        match watch(core, room, plugin, &job, (i as f64 / count, 1.0 / count))? {
             Ok(output) => {
                 found.extend(output.events.into_iter().map(|e| (part.start_us, e)));
                 tags.extend(output.tags);
@@ -596,12 +638,13 @@ fn run_parts(core: &Arc<Core>, room: &str, plugin: &'static Plugin, config: &Con
     Some(Ok((found, tags, notes.join("; "))))
 }
 
-fn stale(core: &Core, room: &str, plugin: &Plugin, key: &str) -> bool {
+fn stale(core: &Core, room: &str, plugin: &Plugin) -> bool {
     let logs = room::logs(core, room);
-    core.active_room_id() != room || skipped(core, plugin.id) || (recording(core) && !plugin.live) || !current(&logs, None).iter().any(|p| key.starts_with(p.as_str()))
+    let runs = room_configs(core, room, &logs).get(plugin.id).is_some_and(|c| c.on && c.runner.as_deref() == Some(core.me().as_str()));
+    core.active_room_id() != room || (recording(core) && !plugin.live) || !runs
 }
 
-fn watch(core: &Core, room: &str, plugin: &Plugin, key: &str, job: &plugins::Job, share: (f64, f64)) -> Option<Result<Output, String>> {
+fn watch(core: &Core, room: &str, plugin: &Plugin, job: &plugins::Job, share: (f64, f64)) -> Option<Result<Output, String>> {
     let mut process = match plugins::spawn(job) {
         Ok(c) => c,
         Err(e) => return Some(Err(e.to_string())),
@@ -615,7 +658,7 @@ fn watch(core: &Core, room: &str, plugin: &Plugin, key: &str, job: &plugins::Job
                 process.kill();
                 return Some(Err("Cancelled".into()));
             }
-            if STOP.load(Ordering::Relaxed) || stale(core, room, plugin, key) {
+            if STOP.load(Ordering::Relaxed) || stale(core, room, plugin) {
                 process.kill();
                 return None;
             }
@@ -632,7 +675,7 @@ fn watch(core: &Core, room: &str, plugin: &Plugin, key: &str, job: &plugins::Job
             }
             Ok(Reply::Done(output)) => {
                 let _ = process.child.wait();
-                return (!stale(core, room, plugin, key)).then_some(Ok(output));
+                return (!stale(core, room, plugin)).then_some(Ok(output));
             }
             Ok(Reply::Failed(e)) => {
                 let _ = process.child.wait();
@@ -641,7 +684,7 @@ fn watch(core: &Core, room: &str, plugin: &Plugin, key: &str, job: &plugins::Job
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => {
                 let _ = process.child.wait();
-                return Some(Err("The plugin stopped without a result.".into()));
+                return Some(Err("The extension stopped without a result.".into()));
             }
         }
     }
@@ -661,17 +704,38 @@ fn finish(core: &Arc<Core>, room: &str, plugin: &Plugin, key: &str, run: i64, in
     party::send(core);
 }
 
+fn holders_of(core: &Core, mine: &HashMap<String, u64>) -> impl Fn(&Set, &File) -> Vec<Holder> {
+    let me = core.me();
+    let peers = room::others_have(core);
+    let mine = mine.clone();
+    move |set: &Set, f: &File| {
+        let mut out: Vec<Holder> = room::full(&mine, set, f).then(|| Holder { id: me.clone(), online: true }).into_iter().collect();
+        out.extend(peers.iter().filter(|(_, have, _)| room::full(have, set, f)).map(|(id, _, online)| Holder { id: id.clone(), online: *online }));
+        out
+    }
+}
+
+pub fn analysis_by_set(core: &Core, room: &str, logs: &[Log], sets: &[Set], mine: &HashMap<String, u64>) -> HashMap<String, Vec<Value>> {
+    let configs = room_configs(core, room, logs);
+    let phases = analysis(&core.me(), &online(core), &configs, &tracks(logs, None), &chosen(logs, None), sets, holders_of(core, mine));
+    let running = RUNNING.lock().unwrap();
+    phases.into_iter().map(|(set, list)| { let json = analysis_json(&list, running.as_ref(), &set); (set, json) }).collect()
+}
+
 pub fn plugins_json(core: &Core, room: &str) -> Vec<Value> {
     let logs = room::logs(core, room);
     let configs = room_configs(core, room, &logs);
-    let known = workers(&logs);
-    let members = room_members(core, room);
+    let sets = room::sets(core, room, &logs);
+    let mine = data::have_counts(core, room, &sets);
+    let by_set = analysis_by_set(core, room, &logs, &sets, &mine);
+    let count = |id: &str, states: &[&str]| by_set.values().filter(|list| list.iter().any(|a| a["plugin"] == id && states.contains(&a["state"].as_str().unwrap_or_default()))).count();
     plugins::ALL
         .iter()
         .map(|p| {
             let config = configs.get(p.id);
             let settings = config.map_or_else(|| plugins::normalize(p, &Value::Null), |c| c.settings.clone());
             let missing = plugins::missing(p, &plugin_dir(core, p.id), &settings);
+            let waiting_for = by_set.values().flatten().find(|a| a["plugin"] == p.id && !a["waiting_for"].is_null()).map(|a| a["waiting_for"].clone());
             let mut v = plugins::manifest(p);
             v["on"] = json!(config.is_some_and(|c| c.on));
             v["room_version"] = json!(config.map(|c| c.version.clone()));
@@ -679,12 +743,10 @@ pub fn plugins_json(core: &Core, room: &str) -> Vec<Value> {
             v["download_bytes"] = json!(missing.iter().map(|d| d.size).sum::<u64>());
             v["ready"] = json!(missing.is_empty());
             v["download"] = crate::download::progress(p.id);
-            v["process_here"] = json!(!skipped(core, p.id));
             v["runner"] = json!(config.and_then(|c| c.runner.clone()));
-            v["workers"] = members.iter().map(|m| {
-                let w = known.get(&(p.id.to_string(), m.clone()));
-                json!({"id": m, "on": w.is_none_or(|w| w.on), "ready": w.map(|w| w.ready)})
-            }).collect();
+            v["left"] = json!(count(p.id, &["left", "running"]));
+            v["failed"] = json!(count(p.id, &["failed"]));
+            v["waiting_for"] = waiting_for.unwrap_or(Value::Null);
             v
         })
         .collect()
@@ -695,11 +757,11 @@ pub fn room_plugins(core: &Arc<Core>, _: Value) -> Result<Value, String> {
 }
 
 pub fn set_room_plugin(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    let plugin = plugins::find(&arg::<String>(&args, "id")?).ok_or("Unknown plugin.")?;
+    let plugin = plugins::find(&arg::<String>(&args, "id")?).ok_or("Unknown extension.")?;
     let room = core.active_room_id();
     let logs = room::logs(core, &room);
-    let runner = room_configs(core, &room, &logs).remove(plugin.id).and_then(|c| c.runner);
-    let config = Config { on: arg(&args, "on")?, version: plugin.version.into(), settings: plugins::normalize(plugin, &args["settings"]), runner };
+    let runner = room_configs(core, &room, &logs).remove(plugin.id).and_then(|c| c.runner).unwrap_or_else(|| core.me());
+    let config = Config { on: arg(&args, "on")?, version: plugin.version.into(), settings: plugins::normalize(plugin, &args["settings"]), runner: Some(runner) };
     core.append_log(&room, &plugin_record(plugin.id, &config, change_time(now_us(), &logs, plugin.id)));
     Ok(Value::Null)
 }
@@ -712,76 +774,52 @@ fn plugin_record(id: &str, config: &Config, t_us: i64) -> Value {
     record
 }
 
-fn runner_record(plugin: &Plugin, runner: Option<String>, logs: &[Log], now: i64) -> Value {
+fn runner_record(plugin: &Plugin, runner: String, logs: &[Log], now: i64) -> Value {
     let config = configs(logs, None).remove(plugin.id).unwrap_or_else(|| Config { on: false, version: plugin.version.into(), settings: plugins::normalize(plugin, &Value::Null), runner: None });
-    plugin_record(plugin.id, &Config { runner, ..config }, change_time(now, logs, plugin.id))
+    plugin_record(plugin.id, &Config { runner: Some(runner), ..config }, change_time(now, logs, plugin.id))
 }
 
 pub fn set_plugin_runner(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    let plugin = plugins::find(&arg::<String>(&args, "id")?).ok_or("Unknown plugin.")?;
+    let plugin = plugins::find(&arg::<String>(&args, "id")?).ok_or("Unknown extension.")?;
     let room = core.active_room_id();
     let logs = room::logs(core, &room);
-    let runner = arg::<Option<String>>(&args, "runner")?.filter(|m| !m.is_empty());
-    if runner.as_ref().is_some_and(|m| !room_members(core, &room).contains(m)) {
+    let runner: String = arg(&args, "runner")?;
+    if !room_members(core, &room).contains(&runner) {
         return Err("Unknown member.".into());
     }
     core.append_log(&room, &runner_record(plugin, runner, &logs, now_us()));
     Ok(Value::Null)
 }
 
-pub fn set_process_plugin(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    let plugin = plugins::find(&arg::<String>(&args, "id")?).ok_or("Unknown plugin.")?;
-    {
-        let mut skip = core.skip_plugins.lock().unwrap();
-        if arg(&args, "on")? { skip.remove(plugin.id) } else { skip.insert(plugin.id.to_string()) };
-    }
-    core.save_settings();
-    let room = core.active_room_id();
-    let logs = room::logs(core, &room);
-    publish(core, &room, &logs, &configs(&logs, None));
-    Ok(Value::Null)
-}
-
 pub fn prepare_plugin(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    let plugin = plugins::find(&arg::<String>(&args, "id")?).ok_or("Unknown plugin.")?;
+    let plugin = plugins::find(&arg::<String>(&args, "id")?).ok_or("Unknown extension.")?;
     let settings = configs(&room::logs(core, &core.active_room_id()), None).get(plugin.id).map_or_else(|| plugins::normalize(plugin, &Value::Null), |c| c.settings.clone());
     let dir = plugin_dir(core, plugin.id);
     plugins::fetch_group(plugin.id, &dir, &plugins::missing(plugin, &dir, &settings)).map(|_| Value::Null)
 }
 
-pub fn jobs_json(core: &Core, room: &str) -> Value {
-    let (logs, configs, tracks) = snapshot(core, room);
-    let (me, online) = (core.me(), online(core));
-    let on: Vec<(&String, &Config, String)> = configs.iter().filter(|(_, c)| c.on).map(|(id, c)| (id, c, prefix(id, c))).collect();
-    let prefixes: Vec<String> = on.iter().map(|(_, _, p)| p.clone()).collect();
-    let inputs = if on.is_empty() { Vec::new() } else { inputs(core, room, &logs, |file| open(file, &me, &prefixes, &tracks)) };
-    let chosen = chosen(&logs, None);
-    let known = workers(&logs);
-    let members = room_members(core, room);
-    let mut list = Vec::new();
-    for (id, config, prefix) in &on {
-        let runner = assigned(config.runner.as_deref(), &members, id, &known);
-        for input in inputs.iter().filter(|i| counts(id, &i.file, &chosen)) {
-            let key = format!("{prefix}{}", input.file);
-            let (state, by, error) = state(tracks.get(&key), &me, &online);
-            let next = *FIRST.lock().unwrap() == key;
-            list.push(json!({"job": key, "plugin": id, "version": config.version, "settings": config.settings, "set": input.set, "owner": input.owner, "whole": plugins::find(id).is_some_and(|p| p.per_set), "here": input.here, "state": state, "by": by, "error": error, "next": next, "runner": runner}));
-        }
-    }
-    json!({"jobs": list, "running": running_json(), "tags": tag_names(&logs, core.party.lock().unwrap().caps().as_ref())})
-}
-
-pub fn jobs(core: &Arc<Core>, _: Value) -> Result<Value, String> {
-    Ok(jobs_json(core, &core.active_room_id()))
+pub fn retries(configs: &BTreeMap<String, Config>, chosen: &HashMap<String, String>, set: &Set, plugin: Option<&str>) -> Vec<Value> {
+    configs
+        .iter()
+        .filter(|(id, c)| c.on && plugin.is_none_or(|p| p == id.as_str()))
+        .flat_map(|(id, c)| {
+            let prefix = prefix(id, c);
+            set.files.iter().map(move |f| format!("{}/{}", set.id, f.owner)).filter(move |file| counts(id, file, chosen)).map(move |file| job_record("retry", &format!("{prefix}{file}"), 0, Value::Null))
+        })
+        .collect()
 }
 
 pub fn retry_job(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    core.append_log(&core.active_room_id(), &job_record("retry", &arg::<String>(&args, "job")?, 0, Value::Null));
-    Ok(Value::Null)
-}
-
-pub fn run_job_next(_: &Arc<Core>, args: Value) -> Result<Value, String> {
-    *FIRST.lock().unwrap() = arg(&args, "job")?;
+    let (room, set): (String, String) = (arg(&args, "room")?, arg(&args, "set")?);
+    let plugin: Option<String> = arg(&args, "plugin")?;
+    if !room::valid_id(&room) || !room::valid_id(&set) || !core.rooms.lock().unwrap().list.iter().any(|r| r.id == room) {
+        return Err("That recording is not on this PC.".into());
+    }
+    let logs = room::logs(core, &room);
+    let found = room::sets(core, &room, &logs).into_iter().find(|s| s.id == set).ok_or("That recording is not on this PC.")?;
+    for record in retries(&room_configs(core, &room, &logs), &chosen(&logs, None), &found, plugin.as_deref()) {
+        core.append_log(&room, &record);
+    }
     Ok(Value::Null)
 }
 
@@ -790,17 +828,6 @@ pub fn cancel_set(room: &str, set: &str) {
     if RUNNING.lock().unwrap().as_ref().is_some_and(|r| r.room == room && r.file.starts_with(&file)) {
         CANCEL.store(true, Ordering::Relaxed);
     }
-    let mut first = FIRST.lock().unwrap();
-    if first.contains(&format!("/{set}/")) {
-        first.clear();
-    }
-}
-
-pub fn cancel_job(_: &Arc<Core>, _: Value) -> Result<Value, String> {
-    if RUNNING.lock().unwrap().is_some() {
-        CANCEL.store(true, Ordering::Relaxed);
-    }
-    Ok(Value::Null)
 }
 
 pub fn stop_now(core: &Core) {
@@ -834,15 +861,6 @@ mod tests {
         Log { owner: owner.into(), offset_us, records: Arc::new(records) }
     }
 
-    #[test]
-    fn deleting_a_recording_cancels_this_pcs_next_job_on_it_only() {
-        *FIRST.lock().unwrap() = "apex-matches@1/abc/2026-10-19 10-00-00/owner".into();
-        cancel_set("r", "2026-10-19 10-00-01");
-        assert!(!FIRST.lock().unwrap().is_empty());
-        cancel_set("r", "2026-10-19 10-00-00");
-        assert!(FIRST.lock().unwrap().is_empty());
-    }
-
     fn config_record(t: i64, on: bool, model: &str) -> Value {
         json!({"k": "plugin", "plugin": "transcribe", "on": on, "version": "1.0.0", "settings": {"model": model}, "t_us": t})
     }
@@ -851,24 +869,22 @@ mod tests {
         Input { file: format!("{set}/{owner}"), set: set.into(), owner: owner.into(), start_us: start, here, parts: vec![Part { start_us: start, end_us: start + 1000, ..Default::default() }] }
     }
 
-    fn on() -> BTreeMap<String, Config> {
-        BTreeMap::from([("transcribe".to_string(), Config { on: true, version: "1.0.0".into(), settings: json!({"model": "small"}), runner: None })])
+    fn on(model: &str) -> Config {
+        Config { on: true, version: "1.0.0".into(), settings: json!({"model": model}), runner: Some("a".into()) }
     }
 
     fn key(file: &str) -> String {
-        format!("{}{file}", prefix("transcribe", &on()["transcribe"]))
+        format!("{}{file}", prefix("transcribe", &on("small")))
+    }
+
+    fn key_with(model: &str, file: &str) -> String {
+        format!("{}{file}", prefix("transcribe", &on(model)))
     }
 
     const BUNDLED: [(&str, &str, bool); 1] = [("transcribe", "1.0.0", false)];
 
-    fn pick(me: &str, online: &[&str], recording: bool, logs: &[Log], inputs: &[Input]) -> Option<String> {
-        let online: HashSet<String> = online.iter().map(|s| s.to_string()).collect();
-        next(me, &online, recording, &BUNDLED, |_, _| true, &configs(logs, None), &tracks(logs, None), &HashMap::new(), inputs, "").map(|p| inputs[p.input].file.clone())
-    }
-
-    fn ends(me: &str, ready: bool, bundled: &[(&str, &str, bool)], logs: &[Log]) -> Vec<(String, String, i64)> {
-        let records = abandoned(me, bundled, |_, _| ready, &configs(logs, None), &tracks(logs, None));
-        records.iter().map(|r| (r["state"].as_str().unwrap_or_default().to_string(), r["job"].as_str().unwrap_or_default().to_string(), r["run"].as_i64().unwrap_or_default())).collect()
+    fn pick(me: &str, recording: bool, logs: &[Log], inputs: &[Input]) -> Option<String> {
+        next(me, recording, &BUNDLED, |_, _| true, &configs(logs, None), &tracks(logs, None), &HashMap::new(), inputs).map(|p| inputs[p.input].file.clone())
     }
 
     fn base_logs(extra_a: Vec<Value>, extra_b: Vec<Value>) -> Vec<Log> {
@@ -877,73 +893,165 @@ mod tests {
         vec![log("a", 0, a), log("b", 0, extra_b)]
     }
 
+    fn append(logs: &mut [Log], i: usize, record: Value) {
+        Arc::make_mut(&mut logs[i].records).push(record);
+    }
+
+    fn by_a(mut record: Value) -> Value {
+        record["runner"] = json!("a");
+        record
+    }
+
+    fn timed(mut record: Value, t: i64) -> Value {
+        record["t_us"] = json!(t);
+        record
+    }
+
+    #[test]
+    fn changing_settings_keeps_old_results_and_reruns_nothing() {
+        let done = timed(job_record("done", &key("s1/a"), 3, json!({"tags": {"x": "X"}})), 10);
+        let event = json!({"k": "event", "id": 11, "kind": "speech", "plugin": {"id": "transcribe"}, "run": 3});
+        let mut logs = base_logs(vec![event, done], vec![]);
+        let inputs = [input("s1", "a", 10, true), input("s2", "a", 20, true)];
+        assert_eq!(pick("a", false, &logs, &inputs).as_deref(), Some("s2/a"));
+        append(&mut logs, 1, by_a(config_record(100, true, "base")));
+        assert_eq!(configs(&logs, None)["transcribe"].settings["model"], "base");
+        assert_eq!(shown(&logs, None), HashSet::from([("a".to_string(), 3)]));
+        assert_eq!(tag_names(&logs, None), BTreeMap::from([("x".to_string(), "X".to_string())]));
+        assert_eq!(pick("a", false, &logs, &inputs[..1]), None);
+        assert_eq!(pick("a", false, &logs, &inputs).as_deref(), Some("s2/a"));
+        append(&mut logs, 0, config_record(200, false, "base"));
+        assert!(shown(&logs, None).is_empty());
+    }
+
     #[test]
     fn the_latest_config_wins_on_the_shared_clock() {
         let logs = vec![log("a", 0, vec![config_record(100, true, "small")]), log("b", 50, vec![config_record(120, false, "base")])];
-        let c = configs(&logs, None);
-        assert!(c["transcribe"].on);
+        assert!(configs(&logs, None)["transcribe"].on);
         let logs = vec![log("a", 0, vec![config_record(100, true, "small")]), log("b", -50, vec![config_record(120, false, "base")])];
         assert!(!configs(&logs, None)["transcribe"].on);
     }
 
     #[test]
-    fn a_chosen_runner_takes_every_job_the_others_leave_them_and_a_removed_one_leaves_them_to_auto() {
-        let with_runner = |runner: &str| json!({"k": "plugin", "plugin": "transcribe", "on": true, "version": "1.0.0", "settings": {"model": "small"}, "runner": runner, "t_us": 2});
-        let logs = base_logs(vec![with_runner("b")], vec![]);
+    fn the_runner_defaults_to_who_turned_it_on() {
+        let logs = vec![log("a", 0, vec![config_record(1, true, "small")]), log("b", 0, vec![])];
+        assert_eq!(configs(&logs, None)["transcribe"].runner.as_deref(), Some("a"));
+        let by_b = vec![log("a", 0, vec![]), log("b", 0, vec![config_record(1, true, "small")])];
+        assert_eq!(configs(&by_b, None)["transcribe"].runner.as_deref(), Some("b"));
+        let old_auto = json!({"k": "plugin", "plugin": "transcribe", "on": true, "version": "1.0.0", "settings": {}, "runner": "", "t_us": 2});
+        let logs = vec![log("a", 0, vec![config_record(1, true, "small")]), log("b", 0, vec![old_auto])];
         assert_eq!(configs(&logs, None)["transcribe"].runner.as_deref(), Some("b"));
+        let chosen = json!({"k": "plugin", "plugin": "transcribe", "on": true, "version": "1.0.0", "settings": {}, "runner": "a", "t_us": 3});
+        let logs = vec![log("a", 0, vec![]), log("b", 0, vec![config_record(1, true, "small"), chosen])];
+        assert_eq!(configs(&logs, None)["transcribe"].runner.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn only_the_runner_processes_and_a_runner_who_left_is_no_runner() {
+        let logs = base_logs(vec![], vec![]);
         let inputs = [input("s1", "a", 10, true)];
-        assert_eq!(pick("a", &["b"], false, &logs, &inputs), None);
-        assert_eq!(pick("b", &["a"], false, &logs, &inputs), Some("s1/a".to_string()));
-        let auto = base_logs(vec![], vec![]);
-        assert_eq!(configs(&auto, None)["transcribe"].runner, None);
-        assert_eq!(pick("a", &["b"], false, &auto, &inputs), Some("s1/a".to_string()));
-        let cleared = base_logs(vec![with_runner("b"), json!({"k": "plugin", "plugin": "transcribe", "on": true, "version": "1.0.0", "settings": {"model": "small"}, "runner": "", "t_us": 3})], vec![]);
-        assert_eq!(configs(&cleared, None)["transcribe"].runner, None);
+        assert_eq!(pick("a", false, &logs, &inputs).as_deref(), Some("s1/a"));
+        assert_eq!(pick("b", false, &logs, &inputs), None);
         let members = |ids: &[&str]| ids.iter().map(|id| id.to_string()).collect::<Vec<_>>();
-        assert_eq!(members_run(configs(&logs, None), &members(&["a", "b"]))["transcribe"].runner.as_deref(), Some("b"));
-        assert_eq!(members_run(configs(&logs, None), &members(&["a", "c"]))["transcribe"].runner, None);
+        assert_eq!(members_run(configs(&logs, None), &members(&["a", "b"]))["transcribe"].runner.as_deref(), Some("a"));
+        assert_eq!(members_run(configs(&logs, None), &members(&["b", "c"]))["transcribe"].runner, None);
     }
 
     #[test]
     fn changing_the_runner_keeps_the_rooms_version_and_settings() {
         let plugin = plugins::find("transcribe").unwrap();
         let mut logs = base_logs(vec![], vec![]);
-        let record = runner_record(plugin, Some("b".into()), &logs, 100);
-        Arc::make_mut(&mut logs[1].records).push(record);
+        let record = runner_record(plugin, "b".into(), &logs, 100);
+        append(&mut logs, 1, record);
         let config = &configs(&logs, None)["transcribe"];
         assert_eq!(config.runner.as_deref(), Some("b"));
-        assert_eq!(prefix("transcribe", config), prefix("transcribe", &on()["transcribe"]));
-        let fresh = runner_record(plugin, None, &[], 100);
+        assert_eq!(prefix("transcribe", config), prefix("transcribe", &on("small")));
+        let fresh = runner_record(plugin, "b".into(), &[], 100);
         assert_eq!((fresh["on"].clone(), fresh["version"].clone()), (json!(false), json!(plugin.version)));
     }
 
     #[test]
-    fn a_dead_claim_is_released_when_the_job_is_no_longer_run_here() {
-        let with_runner = json!({"k": "plugin", "plugin": "transcribe", "on": true, "version": "1.0.0", "settings": {"model": "small"}, "runner": "b", "t_us": 2});
-        let mut logs = base_logs(vec![job_record("claim", &key("s1/a"), 5, Value::Null), with_runner], vec![]);
-        let inputs = [input("s1", "a", 10, true)];
-        assert_eq!(pick("b", &["a"], false, &logs, &inputs), None);
-        assert!(ends("b", true, &BUNDLED, &logs).is_empty());
-        assert_eq!(ends("a", true, &BUNDLED, &logs), vec![("stop".to_string(), key("s1/a"), 5)]);
-        Arc::make_mut(&mut logs[0].records).push(job_record("stop", &key("s1/a"), 5, Value::Null));
-        assert_eq!(pick("b", &["a"], false, &logs, &inputs).as_deref(), Some("s1/a"));
-        assert!(ends("a", true, &BUNDLED, &logs).is_empty());
-        let auto = base_logs(vec![job_record("claim", &key("s1/a"), 5, Value::Null)], vec![]);
-        assert!(ends("a", true, &BUNDLED, &auto).is_empty());
-        assert_eq!(ends("a", false, &BUNDLED, &auto).len(), 1);
-        assert_eq!(ends("a", true, &[("transcribe", "2.0.0", false)], &auto).len(), 1);
+    fn the_runner_wants_every_finished_file_of_an_enabled_extension() {
+        let logs = base_logs(vec![], vec![]);
+        let all = configs(&logs, None);
+        assert!(runner_wants("a", &all));
+        assert!(!runner_wants("b", &all));
+        let off = vec![log("a", 0, vec![config_record(1, true, "small"), config_record(2, false, "small")])];
+        assert!(!runner_wants("a", &configs(&off, None)));
+        assert!(!runner_wants("a", &BTreeMap::new()));
     }
 
     #[test]
-    fn auto_names_the_only_member_who_processes_and_otherwise_nobody() {
-        let members: Vec<String> = ["a", "b", "c"].iter().map(|s| s.to_string()).collect();
-        let off = |m: &str| ((("transcribe").to_string(), m.to_string()), Worker { on: false, ready: true });
-        let known: HashMap<(String, String), Worker> = [off("a"), off("c")].into_iter().collect();
-        assert_eq!(assigned(None, &members, "transcribe", &known), Some("b".to_string()));
-        assert_eq!(assigned(None, &members, "transcribe", &HashMap::new()), None);
-        assert_eq!(assigned(Some("c"), &members, "transcribe", &known), Some("c".to_string()));
-        let none: HashMap<(String, String), Worker> = ["a", "b", "c"].iter().map(|m| off(m)).collect();
-        assert_eq!(assigned(None, &members, "transcribe", &none), None);
+    fn the_runner_wants_only_files_that_still_need_analysis() {
+        let done = timed(job_record("done", &key("s1/a"), 3, Value::Null), 10);
+        let failed = timed(job_record("fail", &key("s2/a"), 4, Value::Null), 11);
+        let logs = base_logs(vec![done, failed], vec![]);
+        let (configs, tracks, chosen) = (configs(&logs, None), tracks(&logs, None), HashMap::new());
+        let open = |file: &str, me: &str| open(file, me, &configs, &tracks, &chosen);
+        assert!(!open("s1/a", "a"));
+        assert!(!open("s2/a", "a"));
+        assert!(open("s3/a", "a"));
+        assert!(!open("s3/a", "b"));
+    }
+
+    #[test]
+    fn a_recording_with_one_file_running_reads_running_and_a_failure_outranks_it() {
+        let left = Phase::Left(Wait::Queue);
+        assert_eq!(fold(vec![Phase::Running, left.clone(), left.clone()]), Phase::Running);
+        assert_eq!(fold(vec![left.clone(), Phase::Running, Phase::Failed("x".into())]), Phase::Failed("x".into()));
+        assert_eq!(fold(vec![Phase::Done, left.clone()]), left);
+    }
+
+    #[test]
+    fn old_yield_and_stop_records_read_as_pending() {
+        let inputs = [input("s1", "a", 10, true)];
+        for state in ["yield", "stop", "retry"] {
+            let logs = base_logs(vec![timed(job_record("claim", &key("s1/a"), 5, Value::Null), 5), timed(job_record(state, &key("s1/a"), 5, Value::Null), 6)], vec![]);
+            assert_eq!(pick("a", false, &logs, &inputs).as_deref(), Some("s1/a"), "{state}");
+            let t = tracks(&logs, None);
+            assert_eq!(phase(t.get(&("transcribe".into(), "s1/a".into())), Some("a"), "a", &HashSet::new(), &[]), Phase::Left(Wait::Queue));
+        }
+    }
+
+    #[test]
+    fn a_file_only_an_offline_member_holds_stays_left_not_failed() {
+        let t = Track::default();
+        let online = HashSet::from(["a".to_string()]);
+        let held_by_b = [Holder { id: "b".into(), online: false }];
+        assert_eq!(phase(Some(&t), Some("a"), "a", &online, &held_by_b), Phase::Left(Wait::Member("b".into())));
+        let held_online = [Holder { id: "c".into(), online: true }, Holder { id: "b".into(), online: false }];
+        assert_eq!(phase(None, Some("a"), "a", &online, &held_online), Phase::Left(Wait::Receiving));
+        let held_here = [Holder { id: "a".into(), online: true }];
+        assert_eq!(phase(None, Some("a"), "a", &online, &held_here), Phase::Left(Wait::Queue));
+        assert_eq!(phase(None, Some("b"), "a", &online, &held_here), Phase::Left(Wait::Member("b".into())));
+        assert_eq!(phase(None, None, "a", &online, &held_here), Phase::Left(Wait::NoRunner));
+        let logs = base_logs(vec![timed(job_record("claim", &key("s1/b"), 5, Value::Null), 5)], vec![]);
+        let t = tracks(&logs, None);
+        let file = ("transcribe".to_string(), "s1/b".to_string());
+        assert_eq!(phase(t.get(&file), Some("a"), "a", &online, &held_here), Phase::Running);
+        assert_eq!(phase(t.get(&file), Some("a"), "b", &HashSet::new(), &held_here), Phase::Left(Wait::Member("a".into())));
+        let failed = base_logs(vec![timed(job_record("fail", &key("s1/b"), 5, json!({"error": "x"})), 5)], vec![]);
+        assert_eq!(phase(tracks(&failed, None).get(&file), Some("a"), "a", &online, &held_here), Phase::Failed("x".into()));
+        let done = base_logs(vec![timed(job_record("done", &key("s1/b"), 5, Value::Null), 5)], vec![]);
+        assert_eq!(phase(tracks(&done, None).get(&file), Some("a"), "a", &online, &held_here), Phase::Done);
+    }
+
+    #[test]
+    fn a_recording_shows_its_worst_file_and_only_enabled_extensions() {
+        let seg = |set: &str| json!({"k": "seg", "series": "v", "set": set, "n": 1, "capture": "1", "t_us": 1, "d_us": 1, "size": 1, "sha256": "x"});
+        let rec = |set: &str| json!({"k": "rec", "set": set, "start_us": 1});
+        let end = |set: &str| json!({"k": "rec_end", "set": set, "t_us": 9});
+        let logs = vec![log("a", 0, vec![config_record(1, true, "small"), rec("s1"), seg("s1"), end("s1"), timed(job_record("done", &key("s1/a"), 3, Value::Null), 5)]), log("b", 0, vec![rec("s1"), seg("s1"), end("s1")])];
+        let sets = room::derive_sets("r", &logs);
+        let holders = |_: &Set, f: &File| vec![Holder { id: f.owner.clone(), online: true }];
+        let run = |logs: &[Log]| analysis("a", &HashSet::from(["b".to_string()]), &configs(logs, None), &tracks(logs, None), &chosen(logs, None), &sets, &holders);
+        let out = run(&logs);
+        assert_eq!(out["s1"], vec![("transcribe".to_string(), Phase::Left(Wait::Receiving))]);
+        let mut done = logs;
+        append(&mut done, 0, timed(job_record("done", &key("s1/b"), 4, Value::Null), 6));
+        assert_eq!(run(&done)["s1"], vec![("transcribe".to_string(), Phase::Done)]);
+        append(&mut done, 0, config_record(10, false, "small"));
+        assert!(run(&done).is_empty());
     }
 
     #[test]
@@ -975,116 +1083,68 @@ mod tests {
     }
 
     #[test]
-    fn the_later_of_two_claims_yields() {
-        let claim = |run: i64| json!({"k": "job", "state": "claim", "job": "j", "run": run});
-        let logs = vec![log("a", 0, vec![claim(10)]), log("b", 0, vec![claim(20)])];
-        let t = tracks(&logs, None);
-        let online: HashSet<String> = ["a".to_string(), "b".to_string()].into();
-        assert!(yields(t.get("j"), "b", 20, &online));
-        assert!(!yields(t.get("j"), "a", 10, &online));
-        assert!(!yields(t.get("j"), "b", 20, &HashSet::new()));
-        let tie = tracks(&[log("a", 0, vec![claim(10)]), log("b", 0, vec![claim(10)])], None);
-        assert!(yields(tie.get("j"), "b", 10, &online) && !yields(tie.get("j"), "a", 10, &online));
-        let yielded = tracks(&[log("a", 0, vec![claim(10)]), log("b", 0, vec![claim(20), json!({"k": "job", "state": "yield", "job": "j", "run": 20})])], None);
-        assert_eq!(yielded["j"].last["b"], Status::Retry);
-        let finished = tracks(&[log("a", 0, vec![claim(10), json!({"k": "job", "state": "done", "job": "j", "run": 10})]), log("b", 0, vec![claim(20)])], None);
-        assert!(yields(finished.get("j"), "b", 20, &HashSet::new()));
-    }
-
-    #[test]
     fn keys_change_with_version_and_settings() {
-        let a = Config { on: true, version: "1.0.0".into(), settings: json!({"model": "small"}), runner: None };
+        let a = on("small");
         let b = Config { settings: json!({"model": "base"}), ..a.clone() };
         let c = Config { version: "1.1.0".into(), ..a.clone() };
         assert_ne!(prefix("transcribe", &a), prefix("transcribe", &b));
         assert_ne!(prefix("transcribe", &a), prefix("transcribe", &c));
         assert_eq!(prefix("transcribe", &a), prefix("transcribe", &a.clone()));
+        assert_eq!(split_key(&key("s1/a")), Some(("transcribe".to_string(), "s1/a".to_string())));
+        assert_eq!(split_key("s1/a"), None);
     }
 
     #[test]
-    fn a_job_asked_for_runs_next() {
+    fn the_newest_recording_comes_first_and_an_interrupted_own_claim_before_it() {
         let logs = base_logs(vec![], vec![]);
-        let inputs = [input("s1", "b", 100, true), input("s2", "a", 200, true)];
-        let online: HashSet<String> = HashSet::new();
-        let first = key(&inputs[0].file);
-        let pick = next("a", &online, false, &BUNDLED, |_, _| true, &configs(&logs, None), &tracks(&logs, None), &HashMap::new(), &inputs, &first).unwrap();
-        assert_eq!(inputs[pick.input].file, inputs[0].file);
-        assert_eq!(pick_file("a", &logs, &inputs), inputs[1].file);
-    }
-
-    fn pick_file(me: &str, logs: &[Log], inputs: &[Input]) -> String {
-        pick(me, &[], false, logs, inputs).unwrap()
-    }
-
-    #[test]
-    fn own_recordings_come_first_then_the_newest() {
-        let logs = base_logs(vec![], vec![]);
-        let inputs = [input("s1", "b", 10, true), input("s2", "b", 20, true), input("s1", "a", 10, true)];
-        assert_eq!(pick("a", &[], false, &logs, &inputs).as_deref(), Some("s1/a"));
-        assert_eq!(pick("a", &[], false, &logs, &inputs[..2]).as_deref(), Some("s2/b"));
-        assert_eq!(pick("a", &[], false, &logs, &[input("s1", "b", 10, false)]), None);
+        let inputs = [input("s1", "b", 10, true), input("s2", "b", 20, true), input("s0", "a", 1, true)];
+        assert_eq!(pick("a", false, &logs, &inputs).as_deref(), Some("s2/b"));
+        assert_eq!(pick("a", false, &logs, &[input("s1", "b", 10, false)]), None);
+        let claimed = base_logs(vec![timed(job_record("claim", &key("s0/a"), 5, Value::Null), 5)], vec![]);
+        assert_eq!(pick("a", false, &claimed, &inputs).as_deref(), Some("s0/a"));
     }
 
     #[test]
     fn nothing_runs_while_recording_unless_live_or_when_off_or_mismatched() {
         let inputs = [input("s1", "a", 10, true)];
-        assert_eq!(pick("a", &[], true, &base_logs(vec![], vec![]), &inputs), None);
+        assert_eq!(pick("a", true, &base_logs(vec![], vec![]), &inputs), None);
         let off = vec![log("a", 0, vec![config_record(1, true, "small"), config_record(2, false, "small")])];
-        assert_eq!(pick("a", &[], false, &off, &inputs), None);
+        assert_eq!(pick("a", false, &off, &inputs), None);
         let mut newer = config_record(3, true, "small");
         newer["version"] = json!("2.0.0");
-        assert_eq!(pick("a", &[], false, &[log("a", 0, vec![newer])], &inputs), None);
-        let online = HashSet::new();
+        assert_eq!(pick("a", false, &[log("a", 0, vec![newer])], &inputs), None);
         let live = [("transcribe", "1.0.0", true)];
         let logs = base_logs(vec![], vec![]);
-        assert!(next("a", &online, true, &live, |_, _| true, &configs(&logs, None), &tracks(&logs, None), &HashMap::new(), &inputs, "").is_some());
-        assert!(next("a", &online, false, &live, |_, _| false, &configs(&logs, None), &tracks(&logs, None), &HashMap::new(), &inputs, "").is_none());
+        assert!(next("a", true, &live, |_, _| true, &configs(&logs, None), &tracks(&logs, None), &HashMap::new(), &inputs).is_some());
+        assert!(next("a", false, &live, |_, _| false, &configs(&logs, None), &tracks(&logs, None), &HashMap::new(), &inputs).is_none());
     }
 
     #[test]
-    fn claims_by_online_members_are_left_and_stale_ones_taken() {
-        let claim = job_record("claim", &key("s1/b"), 7, Value::Null);
-        let logs = base_logs(vec![], vec![claim]);
-        let inputs = [input("s1", "b", 10, true)];
-        assert_eq!(pick("a", &["b"], false, &logs, &inputs), None);
-        assert_eq!(pick("a", &[], false, &logs, &inputs).as_deref(), Some("s1/b"));
-    }
-
-    #[test]
-    fn interrupted_own_claims_rerun_first() {
-        let mine = job_record("claim", &key("s0/b"), 5, Value::Null);
-        let theirs = job_record("claim", &key("s0/b"), 6, Value::Null);
-        let logs = base_logs(vec![mine], vec![theirs]);
-        let inputs = [input("s1", "a", 10, true), input("s0", "b", 1, true)];
-        assert_eq!(pick("a", &["b"], false, &logs, &inputs).as_deref(), Some("s0/b"));
-    }
-
-    #[test]
-    fn done_jobs_are_skipped_and_own_failures_wait_for_a_retry() {
+    fn done_and_failed_files_wait_for_a_retry() {
         let inputs = [input("s1", "a", 10, true)];
-        let done = base_logs(vec![], vec![job_record("done", &key("s1/a"), 3, Value::Null)]);
-        assert_eq!(pick("a", &[], false, &done, &inputs), None);
-        let failed = base_logs(vec![job_record("claim", &key("s1/a"), 3, Value::Null), job_record("fail", &key("s1/a"), 3, json!({"error": "x"}))], vec![]);
-        assert_eq!(pick("a", &[], false, &failed, &inputs), None);
-        assert_eq!(pick("b", &[], false, &failed, &inputs).as_deref(), Some("s1/a"));
-        let mut retried = failed;
-        Arc::make_mut(&mut retried[0].records).push(job_record("retry", &key("s1/a"), 0, Value::Null));
-        assert_eq!(pick("a", &[], false, &retried, &inputs).as_deref(), Some("s1/a"));
+        let done = base_logs(vec![timed(job_record("done", &key("s1/a"), 3, Value::Null), 5)], vec![]);
+        assert_eq!(pick("a", false, &done, &inputs), None);
+        let mut failed = base_logs(vec![timed(job_record("claim", &key("s1/a"), 3, Value::Null), 4), timed(job_record("fail", &key("s1/a"), 3, json!({"error": "x"})), 5)], vec![]);
+        assert_eq!(pick("a", false, &failed, &inputs), None);
+        append(&mut failed, 1, timed(job_record("retry", &key("s1/a"), 0, Value::Null), 6));
+        assert_eq!(pick("a", false, &failed, &inputs).as_deref(), Some("s1/a"));
+        append(&mut failed, 0, timed(job_record("done", &key_with("base", "s1/a"), 7, Value::Null), 7));
+        assert_eq!(pick("a", false, &failed, &inputs), None);
+        append(&mut failed, 1, timed(job_record("retry", &key("s1/a"), 0, Value::Null), 8));
+        assert_eq!(pick("a", false, &failed, &inputs).as_deref(), Some("s1/a"));
+        assert_eq!(shown(&failed, None).len(), 1);
     }
 
     #[test]
     fn a_job_stopped_twice_without_finishing_fails_and_a_stop_on_purpose_does_not_count() {
-        let claim = |run| job_record("claim", &key("s1/a"), run, Value::Null);
-        let once = base_logs(vec![claim(1)], vec![]);
-        assert!(ends("a", true, &BUNDLED, &once).is_empty());
-        let twice = base_logs(vec![claim(1), claim(2)], vec![]);
-        assert_eq!(ends("a", true, &BUNDLED, &twice), vec![("fail".to_string(), key("s1/a"), 2)]);
-        assert_eq!(ends("a", false, &BUNDLED, &twice), vec![("fail".to_string(), key("s1/a"), 2)]);
-        assert!(ends("b", true, &BUNDLED, &twice).is_empty());
-        let stopped = base_logs(vec![claim(1), job_record("stop", &key("s1/a"), 1, Value::Null), claim(2)], vec![]);
-        assert!(ends("a", true, &BUNDLED, &stopped).is_empty());
-        let inputs = [input("s1", "a", 10, true)];
-        assert_eq!(pick("a", &[], false, &stopped, &inputs).as_deref(), Some("s1/a"));
+        let claim = |run: i64| timed(job_record("claim", &key("s1/a"), run, Value::Null), run);
+        let ends = |me: &str, logs: &[Log]| abandoned(me, &tracks(logs, None)).iter().map(|r| (r["state"].as_str().unwrap_or_default().to_string(), r["job"].as_str().unwrap_or_default().to_string(), r["run"].as_i64().unwrap_or_default())).collect::<Vec<_>>();
+        assert!(ends("a", &base_logs(vec![claim(1)], vec![])).is_empty());
+        assert_eq!(ends("a", &base_logs(vec![claim(1), claim(2)], vec![])), vec![("fail".to_string(), key("s1/a"), 2)]);
+        assert!(ends("b", &base_logs(vec![claim(1), claim(2)], vec![])).is_empty());
+        let stopped = base_logs(vec![claim(1), timed(job_record("stop", &key("s1/a"), 1, Value::Null), 2), claim(3)], vec![]);
+        assert!(ends("a", &stopped).is_empty());
+        assert_eq!(pick("a", false, &stopped, &[input("s1", "a", 10, true)]).as_deref(), Some("s1/a"));
     }
 
     #[test]
@@ -1112,24 +1172,21 @@ mod tests {
     }
 
     #[test]
-    fn a_job_done_twice_is_shown_once_and_only_for_the_current_config() {
+    fn a_file_done_twice_shows_the_newest_result_and_ties_go_to_the_lowest_owner() {
         let k = key("s1/a");
-        let a = vec![plugin_event(1, 10), job_record("done", &k, 1, json!({"tags": {"x": "X"}})), plugin_event(2, 11)];
-        let b = vec![plugin_event(4, 20), job_record("done", &k, 4, Value::Null)];
+        let a = vec![plugin_event(1, 10), timed(job_record("done", &k, 1, json!({"tags": {"x": "X"}})), 50), plugin_event(2, 11)];
+        let b = vec![plugin_event(4, 20), timed(job_record("done", &key_with("base", "s1/a"), 4, Value::Null), 60)];
         let logs = base_logs(a, b);
-        assert_eq!(shown(&logs, None), HashSet::from([("a".to_string(), 1)]));
-        assert_eq!(tag_names(&logs, None), BTreeMap::from([("x".to_string(), "X".to_string())]));
+        assert_eq!(shown(&logs, None), HashSet::from([("b".to_string(), 4)]));
+        let tie = base_logs(vec![timed(job_record("done", &k, 1, Value::Null), 50)], vec![timed(job_record("done", &k, 4, Value::Null), 50)]);
+        assert_eq!(shown(&tie, None), HashSet::from([("a".to_string(), 1)]));
         let mut events = vec![
             json!({"author": "a", "run": 1, "plugin": {"id": "transcribe"}}),
-            json!({"author": "a", "run": 2, "plugin": {"id": "transcribe"}}),
             json!({"author": "b", "run": 4, "plugin": {"id": "transcribe"}}),
             json!({"author": "b", "plugin": null}),
         ];
         keep_shown(&mut events, &logs, None);
         assert_eq!(events.len(), 2);
-        let mut changed = logs;
-        Arc::make_mut(&mut changed[1].records).push(config_record(9, true, "base"));
-        assert!(shown(&changed, None).is_empty());
     }
 
     #[test]
@@ -1143,25 +1200,16 @@ mod tests {
     }
 
     #[test]
-    fn each_member_publishes_whether_it_processes_a_plugin_and_has_it() {
-        let worker = |plugin: &str, on: bool, ready: bool| json!({"k": "worker", "plugin": plugin, "on": on, "ready": ready});
-        let logs = vec![log("a", 0, vec![worker("transcribe", true, false), worker("transcribe", false, true)]), log("b", 0, vec![worker("apex-matches", true, true)])];
-        let w = workers(&logs);
-        assert_eq!(w[&("transcribe".to_string(), "a".to_string())], Worker { on: false, ready: true });
-        assert_eq!(w[&("apex-matches".to_string(), "b".to_string())], Worker { on: true, ready: true });
-        assert!(!w.contains_key(&("transcribe".to_string(), "b".to_string())));
-    }
-
-    #[test]
-    fn states_for_the_jobs_view() {
-        let online = HashSet::from(["b".to_string()]);
-        assert_eq!(state(None, "a", &online).0, "waiting");
-        let logs = base_logs(vec![], vec![job_record("claim", &key("f"), 1, Value::Null)]);
-        let t = tracks(&logs, None);
-        assert_eq!(state(t.get(&key("f")), "a", &online), ("claimed".into(), json!("b"), Value::Null));
-        assert_eq!(state(t.get(&key("f")), "a", &HashSet::new()).0, "waiting");
-        let logs = base_logs(vec![], vec![job_record("fail", &key("f"), 1, json!({"error": "no"}))]);
-        assert_eq!(state(tracks(&logs, None).get(&key("f")), "a", &online), ("failed".into(), json!("b"), json!("no")));
+    fn re_running_asks_every_enabled_extension_or_the_one_named_for_each_counted_file() {
+        let seg = |owner_set: &str| json!({"k": "seg", "series": "v", "set": owner_set, "n": 1, "capture": "1", "t_us": 1, "d_us": 1, "size": 1, "sha256": "x"});
+        let rec = |set: &str| json!({"k": "rec", "set": set, "start_us": 1});
+        let logs = vec![log("a", 0, vec![config_record(1, true, "small"), rec("s1"), seg("s1")]), log("b", 0, vec![rec("s1"), seg("s1")])];
+        let sets = room::derive_sets("r", &logs);
+        let all = retries(&configs(&logs, None), &chosen(&logs, None), &sets[0], None);
+        assert_eq!(all.iter().map(|r| r["job"].as_str().unwrap().to_string()).collect::<Vec<_>>(), vec![key("s1/a"), key("s1/b")]);
+        assert!(all.iter().all(|r| r["state"] == "retry"));
+        assert!(retries(&configs(&logs, None), &chosen(&logs, None), &sets[0], Some("apex-matches")).is_empty());
+        assert_eq!(retries(&configs(&logs, None), &chosen(&logs, None), &sets[0], Some("transcribe")).len(), 2);
     }
 
     #[test]

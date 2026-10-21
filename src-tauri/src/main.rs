@@ -36,7 +36,7 @@ use iroh::endpoint::{presets, Connection};
 use iroh::{Endpoint, EndpointId, SecretKey};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 pub const ALPN: &[u8] = b"ggi-hanseikai/0";
 pub const OLD_ALPN: &[u8] = b"ez-hanseikai/0";
@@ -67,13 +67,17 @@ pub fn tenth(x: f64) -> f64 {
     (x * 10.0).round() / 10.0
 }
 
+pub fn profile<'a, M: tauri::Manager<tauri::Wry>>(builder: tauri::WebviewWindowBuilder<'a, tauri::Wry, M>, dir: &Path) -> tauri::WebviewWindowBuilder<'a, tauri::Wry, M> {
+    let builder = builder.data_directory(dir.to_path_buf());
+    match TEST_PORT.as_ref().and_then(|p| p.parse::<u16>().ok()) {
+        Some(port) => builder.additional_browser_args(&format!("{BROWSER_ARGS} --remote-debugging-port={port}")),
+        None => builder,
+    }
+}
+
 fn open_main(app: &tauri::App, dir: &Path) -> tauri::Result<()> {
     let config = app.config().app.windows.first().cloned().unwrap_or_default();
-    let mut builder = tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?.data_directory(dir.to_path_buf());
-    if let Some(port) = TEST_PORT.as_ref().and_then(|p| p.parse::<u16>().ok()) {
-        builder = builder.additional_browser_args(&format!("{BROWSER_ARGS} --remote-debugging-port={port}"));
-    }
-    builder.build().map(|window| {
+    profile(tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?, dir).build().map(|window| {
         shell::plain_keys(&window);
         shell::match_caption(&window);
     })
@@ -165,6 +169,7 @@ pub struct Peer {
     pub info: Option<(String, u32)>,
     pub hw: Value,
     pub live: Option<net::PeerLive>,
+    pub speaking: bool,
     pub seen_us: Option<i64>,
     pub have: HashMap<String, u64>,
     pub logs: HashMap<String, u64>,
@@ -177,7 +182,7 @@ impl Peer {
     }
 
     pub fn new(id: EndpointId, name: String) -> Self {
-        Self { id, name, conn: None, offset_us: None, failures: 0, announce: true, codecs: default_codecs(), info: None, hw: Value::Null, live: None, seen_us: None, have: HashMap::new(), logs: HashMap::new(), asks: Vec::new() }
+        Self { id, name, conn: None, offset_us: None, failures: 0, announce: true, codecs: default_codecs(), info: None, hw: Value::Null, live: None, speaking: false, seen_us: None, have: HashMap::new(), logs: HashMap::new(), asks: Vec::new() }
     }
 }
 
@@ -192,8 +197,6 @@ pub struct Core {
     pub rooms: Mutex<room::Rooms>,
     pub active_set: Mutex<Option<room::ActiveSet>>,
     pub tz_offset_s: i64,
-    pub audio_process: Mutex<String>,
-    pub warn_hours: Mutex<u32>,
     pub channel: Mutex<String>,
     pub codecs: Mutex<Vec<String>>,
     pub following: Mutex<HashSet<String>>,
@@ -217,7 +220,6 @@ pub struct Core {
     pub party: Mutex<party::Party>,
     pub language: Mutex<String>,
     pub hotkey: Mutex<String>,
-    pub skip_plugins: Mutex<HashSet<String>>,
     pub api_on: Mutex<bool>,
     pub api_lan: Mutex<bool>,
     pub api_token: Mutex<String>,
@@ -252,6 +254,7 @@ impl Core {
         let _guard = self.log_lock.lock().unwrap();
         let path = if self.log_ready(room) { self.log_path(room, &self.me()) } else { self.pending_path(room) };
         let _ = log::append(&path, record);
+        let _ = self.app.emit("log", room);
     }
 
     pub fn hold_own_log(&self, room: &str) -> std::io::Result<()> {
@@ -299,8 +302,6 @@ impl Core {
         let value = json!({
             "name": *self.name.lock().unwrap(),
             "limit_mbps": *self.limit_mbps.lock().unwrap(),
-            "audio_process": *self.audio_process.lock().unwrap(),
-            "warn_hours": *self.warn_hours.lock().unwrap(),
             "channel": *self.channel.lock().unwrap(),
             "mic": self.engine.mic.lock().unwrap().clone(),
             "mix": self.engine.mix.lock().unwrap().clone(),
@@ -308,7 +309,6 @@ impl Core {
             "language": *self.language.lock().unwrap(),
             "layout": *self.layout.lock().unwrap(),
             "hotkey": *self.hotkey.lock().unwrap(),
-            "skip_plugins": *self.skip_plugins.lock().unwrap(),
             "api": *self.api_on.lock().unwrap(),
             "api_lan": *self.api_lan.lock().unwrap(),
             "api_token": *self.api_token.lock().unwrap(),
@@ -448,8 +448,6 @@ async fn init(app: AppHandle, dir: PathBuf, left_lock: bool) -> Result<Arc<Core>
         rooms: Mutex::new(rooms),
         active_set: Mutex::new(None),
         tz_offset_s: data::tz_offset_seconds(),
-        audio_process: Mutex::new(settings["audio_process"].as_str().unwrap_or_default().to_string()),
-        warn_hours: Mutex::new(settings["warn_hours"].as_u64().map_or(data::WARN_HOURS, |h| h as u32)),
         channel: Mutex::new(settings["channel"].as_str().unwrap_or(CHANNELS[0]).to_string()),
         codecs: Mutex::new(default_codecs()),
         following: Mutex::new(HashSet::new()),
@@ -473,7 +471,6 @@ async fn init(app: AppHandle, dir: PathBuf, left_lock: bool) -> Result<Arc<Core>
         party: Mutex::new(party::Party::default()),
         language: Mutex::new(settings["language"].as_str().unwrap_or_default().to_string()),
         hotkey: Mutex::new(settings["hotkey"].as_str().filter(|h| shell::hotkey(h).is_some()).unwrap_or(shell::DEFAULT_HOTKEY).to_string()),
-        skip_plugins: Mutex::new(strings(&settings["skip_plugins"])),
         api_on: Mutex::new(settings["api"] == true),
         api_lan: Mutex::new(settings["api_lan"] == true),
         api_token: Mutex::new(settings["api_token"].as_str().filter(|t| api::token_valid(t)).unwrap_or_default().to_string()),
@@ -493,9 +490,6 @@ pub fn clean_settings(mut settings: Value) -> Value {
     }
     if !settings["limit_mbps"].as_f64().is_some_and(|v| v.is_finite() && v > 0.0) {
         settings["limit_mbps"] = Value::Null;
-    }
-    if !settings["warn_hours"].as_u64().is_some_and(|h| data::WARN_CHOICES.contains(&h)) {
-        settings["warn_hours"] = Value::Null;
     }
     if !settings["channel"].as_str().is_some_and(|c| CHANNELS.contains(&c)) {
         settings["channel"] = Value::Null;
@@ -676,12 +670,12 @@ mod tests {
 
     #[test]
     fn settings_from_older_versions_fall_back_to_defaults() {
-        let old = clean_settings(json!({"name": "Ren", "limit_mbps": 0, "keep_days": 30, "warn_hours": 7, "channel": "nightly", "source": "display:1", "language": "fr", "quality": "ultra", "obs_port": 4455}));
+        let old = clean_settings(json!({"name": "Ren", "limit_mbps": 0, "keep_days": 30, "channel": "nightly", "source": "display:1", "language": "fr", "quality": "ultra", "obs_port": 4455}));
         assert_eq!(old["name"], "Ren");
-        assert!(old["limit_mbps"].is_null() && old["warn_hours"].is_null() && old["channel"].is_null() && old["source"].is_null() && old["quality"].is_null());
+        assert!(old["limit_mbps"].is_null() && old["channel"].is_null() && old["source"].is_null() && old["quality"].is_null());
         assert_eq!(old["language"], "");
-        let kept = clean_settings(json!({"limit_mbps": 8.5, "warn_hours": 20, "channel": "beta", "source": {"kind": "display", "index": 1}, "language": "ja", "quality": "high"}));
-        assert_eq!((kept["limit_mbps"].as_f64(), kept["warn_hours"].as_u64(), kept["channel"].as_str(), kept["language"].as_str(), kept["quality"].as_str()), (Some(8.5), Some(20), Some("beta"), Some("ja"), Some("high")));
+        let kept = clean_settings(json!({"limit_mbps": 8.5, "channel": "beta", "source": {"kind": "display", "index": 1}, "language": "ja", "quality": "high"}));
+        assert_eq!((kept["limit_mbps"].as_f64(), kept["channel"].as_str(), kept["language"].as_str(), kept["quality"].as_str()), (Some(8.5), Some("beta"), Some("ja"), Some("high")));
         assert_eq!(kept["source"]["index"], 1);
         assert_eq!(clean_settings(json!([1, 2])), clean_settings(json!({})));
     }

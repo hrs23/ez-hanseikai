@@ -15,9 +15,9 @@ const UPDATE_RECHECK_MS = 10 * 60 * 1000;
 const DOUBLE_CLICK_MS = 250;
 const JUMP_MIN = 1;
 const NOTE_STEP_GAP = 0.5;
-const JOBS_MS = 5000;
+const PLUGINS_MS = 5000;
 const DOWNLOAD_POLL_MS = 1000;
-const CHIME = { start: [660, 880], end: [880, 660] };
+const CHIME = { start: [660, 880], end: [880, 660], join: [784, 988] };
 const CHIME_NOTE_S = 0.14;
 const CHIME_GAIN = 0.15;
 const TAG_HINTS = 5;
@@ -33,7 +33,6 @@ const rec = tileGrid($("livetiles"), "record");
 const play = tileGrid($("playtiles"), "player");
 const clock = { playing: false, m: 0, at: 0 };
 const liveClock = { pos: null, rate: 1, held: false, late: [], at: 0 };
-const voices = {};
 let st = null;
 let idx = null;
 let ready = false;
@@ -42,7 +41,6 @@ let page = "player";
 let nowView = false;
 let nowSet = null;
 let selected = null;
-let review = null;
 let rate = 1;
 let volume = stored("volume", 1);
 let sessionSound = stored("sessionSound", true);
@@ -78,7 +76,9 @@ let panelOpen = false;
 let clickTimer = null;
 let quick = null;
 let partyRoom = null;
-let jobInfo = null;
+let played = false;
+let debriefOpen = null;
+const speaking = new Set();
 let plugins = [];
 let pluginsGen = 0;
 let dismissed = new Set();
@@ -93,25 +93,22 @@ const inRoom = () => !!st && !!st.room && !st.room.pending;
 const fail = (e) => flash(e, "error");
 const run = (cmd, args, then = refresh) => invoke(cmd, args).then(then).catch(fail);
 const quiet = (cmd, args) => invoke(cmd, args).catch(warn);
-const showingNow = () => nowView || (!playSet() && !review);
-const followingLive = () => live && !review && !!playSet() && playSet().live;
+const showingNow = () => nowView || !playSet();
+const followingLive = () => live && !!playSet() && playSet().live;
 const livePinned = () => followingLive() && liveClock.pos !== null;
 const setById = (id) => (st && st.sets.find((s) => s.id === id)) || null;
-const reviewSet = () => (review ? setById(review.id) : null);
-const reviewing = () => !!(watchParty && st && st.party.on && st.party.shared && typeof st.party.shared.set === "string");
+const reviewing = () => !!(watchParty && st && st.party.on && typeof st.party.shared.set === "string");
 
-function ordered(present, saved) {
-  const keep = (saved || []).filter((k) => present.includes(k));
-  return [...keep, ...present.filter((k) => !keep.includes(k))];
-}
 
 function initial(name) {
   return (String(name || "?").trim().charAt(0) || "?").toUpperCase();
 }
 
-function avatar(id, size, dot) {
-  const a = el("span", { className: "av" + (size ? " " + size : ""), textContent: initial(id === st.id ? st.name : st.names[id]), title: nameOf(id) });
-  a.style.background = colorOf(colorIndex(id));
+function avatar(id, size, dot, grey) {
+  const a = el("span", { className: "av" + (size ? " " + size : "") + (speaking.has(id) ? " speaking" : ""), textContent: initial(id === st.id ? st.name : st.names[id]), title: nameOf(id) });
+  a.dataset.speak = id;
+  a.style.background = grey ? "var(--raised-3)" : colorOf(colorIndex(id));
+  if (grey) a.style.color = "var(--muted)";
   if (dot) a.append(el("i", { className: dot }));
   return a;
 }
@@ -130,9 +127,10 @@ function pill(cls, iconName, text) {
 
 function tile(s, key) {
   if (s.tiles[key]) return s.tiles[key];
-  const tl = { key, media: slot(el("video", { muted: true, preload: "auto" })), mic: null, name: el("span", { className: "nm" }), av: el("span"), dot: el("i", { className: "rd", hidden: true }), imp: el("span", { className: "imp", hidden: true }), who: el("div", { className: "who" }), what: el("div", { className: "what" }), sub: el("div", { className: "subt", hidden: true }) };
-  tl.lab = el("div", { className: "nl" }, tl.av, tl.name, tl.imp, tl.dot);
-  tl.box = el("div", { className: "tile", tabIndex: 0 }, tl.media.video, el("div", { className: "waitbox" }, tl.who, tl.what), tl.sub, tl.lab);
+  const tl = { key, media: slot(el("video", { muted: true, preload: "auto" })), mic: null, name: el("span", { className: "nm" }), av: el("span"), imp: el("span", { className: "imp", hidden: true }), who: el("div", { className: "who" }), what: el("div", { className: "what" }), sub: el("div", { className: "subt", hidden: true }), problem: el("div", { className: "problem", hidden: true }) };
+  tl.lab = el("div", { className: "nl" + (speaking.has(key) ? " speaking" : "") }, tl.av, tl.name, tl.imp);
+  tl.lab.dataset.speak = key;
+  tl.box = el("div", { className: "tile", tabIndex: 0 }, tl.media.video, el("div", { className: "waitbox" }, tl.who, tl.what), tl.sub, tl.problem, tl.lab);
   const focus = () => { const i = s.keys.indexOf(key) + 1; setView(s, s.view === i ? 0 : i); };
   tl.box.onkeydown = (e) => { if (e.key === "Enter") focus(); };
   if (s === play) {
@@ -157,14 +155,13 @@ function tile(s, key) {
   s.el.append(tl.box);
   return (s.tiles[key] = tl);
 }
-function nameTile(tl, key, recording) {
+function nameTile(tl, key, online = true) {
   tl.name.textContent = nameOf(key);
   tl.who.textContent = nameOf(key);
-  tl.dot.hidden = !recording;
   tl.imp.hidden = !importedIds.has(key);
   tl.imp.textContent = t("Imported");
-  const sig = JSON.stringify([nameOf(key), colorIndex(key), st.palette]);
-  if (tl.avSig !== sig) { tl.avSig = sig; tl.av.replaceChildren(avatar(key, "sm")); }
+  const sig = JSON.stringify([nameOf(key), colorIndex(key), st.palette, online]);
+  if (tl.avSig !== sig) { tl.avSig = sig; tl.av.replaceChildren(avatar(key, "sm", null, !online)); }
 }
 function prune(s, keys) {
   for (const [key, tl] of Object.entries(s.tiles)) if (!keys.includes(key)) { drop(tl.media); drop(tl.mic); tl.box.remove(); delete s.tiles[key]; }
@@ -264,21 +261,12 @@ const playLayout = (set) => fromSaved(stored("layout/" + set.id, null) || set.la
 function logLayout() {
   const set = playSet();
   const size = (key, sideName) => Math.round(play.tiles[key] ? play.tiles[key].box[sideName] : 0);
-  if (set && !review) quiet("log_layout", { layout: { set: set.id, mode: play.view ? "focus" : play.mode, slots: play.slots, tiles: play.keys.map((key, i) => ({ id: key, index: i, w: size(key, "clientWidth"), h: size(key, "clientHeight") })) } });
+  if (set) quiet("log_layout", { layout: { set: set.id, mode: play.view ? "focus" : play.mode, slots: play.slots, tiles: play.keys.map((key, i) => ({ id: key, index: i, w: size(key, "clientWidth"), h: size(key, "clientHeight") })) } });
 }
 
 function recOf(id) {
   const set = liveSet();
   return !!(set && set.players.some((p) => p.owner === id && p.recording));
-}
-function sending() {
-  return [...(st.capture.sharing ? [st.id] : []), ...st.peers.filter((p) => p.connected && p.sharing).map((p) => p.id)];
-}
-function livePlayers() {
-  const files = { [st.id]: st.capture.live };
-  for (const p of st.peers) if (p.live) files[p.id] = p.live;
-  const keys = [st.id, ...st.peers.filter((p) => p.connected || files[p.id]).map((p) => p.id)];
-  return keys.map((key) => ({ key, file: files[key] && files[key].size > 0 ? files[key] : null, recording: recOf(key) && (key !== st.id || st.capture.working), sharing: key !== st.id && !!(peerOf(key) || {}).sharing }));
 }
 const liveStart = (key, part) => (part && typeof part.start_us === "number" ? (part.start_us - (key === st.id ? 0 : (peerOf(key) || {}).offset_us || 0)) / 1e6 : null);
 function liveMembers() {
@@ -291,7 +279,7 @@ function liveMembers() {
       return { key: p.key, avail: on(tl.media, last.v) ? liveAvail(slots) : null, ended: !p.recording };
     });
   }
-  return livePlayers().filter((p) => rec.tiles[p.key]).map(({ key, file }) => ({ key, avail: file ? liveAvail([[liveStart(key, rec.tiles[key].media.part), rec.tiles[key].media.video]]) : null, ended: false }));
+  return livePlayers(st).filter((p) => rec.tiles[p.key]).map(({ key, file }) => ({ key, avail: file ? liveAvail([[liveStart(key, rec.tiles[key].media.part), rec.tiles[key].media.video]]) : null, ended: false }));
 }
 function goLive() {
   live = true;
@@ -299,13 +287,18 @@ function goLive() {
 }
 function tickLive() {
   const at = performance.now();
-  const on = playSet() ? followingLive() : !review && Object.keys(rec.tiles).length > 0;
-  if (!on) { Object.assign(liveClock, { pos: null, rate: 1, held: false, late: [], at }); return; }
+  const blocked = st.recording && !played;
+  const on = !blocked && (playSet() ? followingLive() : Object.keys(rec.tiles).length > 0);
+  if (!on) {
+    Object.assign(liveClock, { pos: null, rate: 1, held: false, late: [], at });
+    if (blocked && clock.playing) Object.assign(clock, { playing: false, m: nowM(), at });
+    return;
+  }
   Object.assign(liveClock, liveStep(liveClock, liveMembers(), nowUs() / 1e6, (at - liveClock.at) / 1000), { at });
   if (changed("liverate", liveClock.rate)) applyAudio();
   if (livePinned()) Object.assign(clock, { playing: true, m: nowM(), at });
   if (playSet()) return;
-  for (const p of livePlayers()) {
+  for (const p of livePlayers(st)) {
     const tl = rec.tiles[p.key];
     if (!tl) continue;
     tl.box.classList.toggle("late", liveClock.late.includes(p.key));
@@ -319,28 +312,40 @@ function tickLive() {
   }
 }
 function liveWhat(p) {
-  if (p.key === st.id) {
-    if (!st.capture.source) return [el("div", { className: "big" }, icon("monitor-off")), el("b", { textContent: t("{name} · Screen off", { name: nameOf(st.id) }) }), el("button", { className: "sm choose", textContent: t("Choose screen"), onclick: (e) => { e.stopPropagation(); openSource($("screenmore")); } })];
-    return [el("span", { textContent: captureProblem(st.capture) || t("Starting…") })];
-  }
-  return [el("span", { textContent: p.sharing ? t("Starting…") : t("Screen off") })];
+  if (p.me && !p.sharing) return [el("button", { className: "pick", onclick: (e) => { e.stopPropagation(); openSource($("screenmore")); } }, icon("monitor"), t("Select screen"))];
+  if (!p.online || !p.sharing) return [];
+  return [el("span", { textContent: (p.me && captureProblem(st.capture)) || t("Starting…") })];
+}
+function liveState(p) {
+  if (p.file) return "video";
+  if (p.me && !p.sharing) return "select";
+  return !p.online ? "away" : p.sharing ? "starting" : "quiet";
 }
 function renderLive() {
   const idle = page === "player" && showingNow() && !playSet();
   $("livetiles").hidden = !idle;
   if (!idle) { prune(rec, []); return; }
-  const list = livePlayers();
+  const list = livePlayers(st);
   const lay = fromSaved(st.layout);
-  rec.keys = ordered(list.map((p) => p.key), lay.order);
+  rec.keys = list.map((p) => p.key);
   rec.mode = lay.mode;
   rec.slots = lay.slots;
   prune(rec, rec.keys);
+  const mine = st.recording && !(st.active_set && st.active_set.voice);
   for (const p of list) {
     const tl = tile(rec, p.key);
-    nameTile(tl, p.key, p.recording);
-    if (changed("livewhat/" + p.key, [!!p.file, p.sharing, st.capture.source, captureProblem(st.capture), nameOf(p.key), lang])) tl.what.replaceChildren(...(p.file ? [t("Waiting for {name}…", { name: nameOf(p.key) })] : liveWhat(p)));
-    tl.box.classList.toggle("wait", !p.file);
-    tl.box.classList.toggle("mine", p.key === st.id && !st.capture.source);
+    const state = liveState(p);
+    nameTile(tl, p.key, p.online);
+    const problem = tileProblem({ recording: mine && p.online, sharing: p.sharing, now: nowUs(), start: p.start, voiceEnd: p.last && p.last.m, pictureEnd: p.last && p.last.v });
+    if (changed("livewhat/" + p.key, [state, captureProblem(st.capture), nameOf(p.key), problem, lang])) {
+      tl.what.replaceChildren(...liveWhat(p));
+      tl.problem.textContent = problem || "";
+      tl.problem.hidden = !problem;
+    }
+    tl.box.classList.toggle("wait", state === "select" || state === "starting");
+    tl.box.classList.toggle("hatch", state === "away" || state === "quiet");
+    tl.box.classList.toggle("off", state === "away");
+    tl.box.classList.toggle("mine", state === "select");
     if (!p.file) continue;
     const start = liveStart(p.key, p.file);
     if (tl.media.src === srcOf(p.file)) tl.media.part = p.file;
@@ -356,8 +361,8 @@ function renderShell() {
   $("roompage").hidden = page !== "room";
   $("playerpage").hidden = page !== "player";
   document.body.classList.toggle("noside", !sidebar);
-  document.body.classList.toggle("nopanel", !panel || (page === "player" && !playSet() && !review));
-  document.body.classList.toggle("panelopen", panelOpen && (!!playSet() || !!review));
+  document.body.classList.toggle("nopanel", !panel || (page === "player" && !playSet()));
+  document.body.classList.toggle("panelopen", panelOpen && !!playSet());
   document.body.classList.toggle("full", full);
 }
 
@@ -398,17 +403,6 @@ function setClock(playing, m) {
   clock.at = performance.now();
   tick();
 }
-const reviewM = () => (review ? (review.playing ? review.m + ((performance.now() - review.at) / 1000) * rate : review.m) : 0);
-const reviewTotal = () => { const s = reviewSet(); return s ? ((s.end_us || nowUs()) - s.start_us) / 1e6 : 0; };
-function setReview(playing, m) {
-  if (!review) return;
-  review.playing = playing;
-  review.m = Math.max(0, Math.min(m, reviewTotal()));
-  review.at = performance.now();
-  tick();
-}
-const shownM = () => (review ? reviewM() : nowM());
-const shownTotal = () => (review ? reviewTotal() : total());
 
 const recv = (key) => ({ app: { volume: 1, muted: false }, voice: { volume: 1, muted: false }, ...(receive[key] || {}) });
 function applyAudio() {
@@ -424,10 +418,6 @@ function applyAudio() {
       v.playbackRate = livePinned() ? liveClock.rate : rate;
     }
   });
-  for (const [key, s] of Object.entries(voices)) {
-    const mix = recv(key).voice;
-    for (const v of [s.video, s.pending && s.pending.video]) if (v) { v.muted = away || muted || mix.muted; v.volume = volume * mix.volume; v.playbackRate = rate; }
-  }
   if (changed("mute", [muted || volume === 0])) $("mute").replaceChildren(icon(muted || volume === 0 ? "volume-x" : "volume-2"));
   if (document.activeElement !== $("volume")) $("volume").value = muted ? 0 : volume;
   rangeFill($("volume"));
@@ -451,7 +441,7 @@ function openReceive(key, anchor) {
   showPop([el("div", { className: "head" }, avatar(key, "sm"), el("b", { textContent: nameOf(key) })), mixRow(key, "app", t("App sound")), mixRow(key, "voice", t("Voice"))], anchor, true);
 }
 function openMix(anchor) {
-  const keys = [...new Set([...play.keys, ...Object.keys(voices)])];
+  const keys = play.keys;
   showPop([el("div", { className: "head" }, el("b", { textContent: t("Volume per member") })), ...keys.flatMap((key) => [el("div", { className: "who" }, avatar(key, "sm"), nameOf(key)), mixRow(key, "app", t("App sound")), mixRow(key, "voice", t("Voice"))])], anchor, true);
 }
 function showPop(children, anchor, above, cls = "") {
@@ -468,24 +458,21 @@ function showPop(children, anchor, above, cls = "") {
 function renderPlayer() {
   renderLive();
   const set = playSet();
-  const idle = !set && !review;
+  const idle = !set;
   const list = players();
-  const flow = review ? reviewFlow() : null;
-  const shared = !review && watchParty && st.party.on && set && partyLayout && partyLayout.set === set.id;
-  const lay = flow ? { mode: flow.mode, slots: flow.slots, order: flow.order } : set ? (shared ? { mode: partyLayout.mode || "grid", slots: partyLayout.slots || 0, order: partyLayout.order || [] } : playLayout(set)) : fromSaved(null);
+  const shared = watchParty && st.party.on && set && partyLayout && partyLayout.set === set.id;
+  const lay = set ? (shared ? { mode: partyLayout.mode || "grid", slots: partyLayout.slots || 0, order: partyLayout.order || [] } : playLayout(set)) : fromSaved(null);
   play.keys = ordered(list.map((p) => p.key), lay.order);
   play.mode = lay.mode;
   play.slots = lay.slots;
-  if (flow) play.view = flow.focus ? play.keys.indexOf(flow.focus) + 1 : 0;
-  else if (shared && partyLayout.focus !== undefined) { play.view = partyLayout.focus ? play.keys.indexOf(partyLayout.focus) + 1 : 0; delete partyLayout.focus; }
+  if (shared && partyLayout.focus !== undefined) { play.view = partyLayout.focus ? play.keys.indexOf(partyLayout.focus) + 1 : 0; delete partyLayout.focus; }
   prune(play, play.keys);
   for (const p of list) {
     const tl = tile(play, p.key);
-    nameTile(tl, p.key, p.recording);
+    nameTile(tl, p.key);
     feedParts(tl, p, nowM(), base(list), clock.playing);
   }
   place(play);
-  feedVoices();
   applyAudio();
   if (page !== "player") return;
   renderHeader(set);
@@ -496,13 +483,12 @@ function renderPlayer() {
   renderTransport(set, idle);
 }
 function renderTransport(set, idle) {
-  const liveSetShown = !!(set && set.live && !review);
-  const tot = shownTotal();
+  const liveSetShown = !!(set && set.live);
+  const tot = total();
   const edge = liveEdge(total(), nowM());
   if (set && !set.live) live = false;
   for (const id of ["play", "back", "fwd", "addnote", "mixbtn", "cc", "seek", "lane", "chapters", "matchchip"]) $(id).classList.toggle("nodisp", idle);
   $("speed").classList.toggle("nodisp", idle || followingLive());
-  $("addnote").classList.toggle("nodisp", idle || !!review);
   $("transport").classList.toggle("idle", idle);
   $("clocknow").parentElement.hidden = idle;
   $("live").hidden = !(idle || liveSetShown);
@@ -510,31 +496,36 @@ function renderTransport(set, idle) {
   $("live").className = "livebtn " + (atLive ? "at" : "behind");
   if (changed("livebtn", [idle, atLive, idle ? 0 : Math.round(edge.behind), lang])) $("live").replaceChildren(el("i"), idle ? t("Live") : atLive ? t("Latest") : t("Jump to latest"), atLive ? "" : el("span", { className: "lagt", textContent: "−" + fmt(edge.behind) }));
   $("seek").classList.toggle("onlive", liveSetShown && atLive);
-  $("seek").querySelector(".grow").hidden = !(liveSetShown || (review && reviewSet() && reviewSet().live));
+  $("seek").querySelector(".grow").hidden = !liveSetShown;
   press($("cc"), subtitles);
-  const frac = set && !review && set.progress.total ? Math.min(1, set.progress.have / set.progress.total) : 1;
+  const frac = set && set.progress.total ? Math.min(1, set.progress.have / set.progress.total) : 1;
   $("seek").querySelector(".got").style.width = frac * 100 + "%";
-  $("seek").querySelector(".missing").hidden = !(set && !review && set.progress.stuck);
+  $("seek").querySelector(".missing").hidden = !(set && set.progress.stuck);
   $("seek").querySelector(".missing").style.left = frac * 100 + "%";
-  renderBands(tot);
+}
+const debriefLength = (list) => Math.max(1, Math.round(list.reduce((n, d) => n + ((d.end_us || nowUs()) - d.start_us), 0) / 6e7));
+function debriefChip(set, list) {
+  const text = t(list.length === 1 ? "Debrief {n} time · {m} min" : "Debrief {n} times · {m} min", { n: list.length, m: debriefLength(list) });
+  return el("button", { className: "sm", title: t("Export…"), onclick: () => exportDebriefs(set, list) }, icon("mic", "sm"), text);
+}
+function viewChip(set, line) {
+  const chip = pill(line.kind === "away" ? "warn" : "gray", line.kind === "receiving" ? "spinner" : line.kind === "away" ? "alert" : "download", line.text);
+  if (line.action) chip.append(" · ", el("button", { className: "sm", textContent: line.action, onclick: () => run("download_set", { room: set.room, set: set.id }) }));
+  return chip;
 }
 function headerChips(set) {
   const a = st.active_set;
-  if (review) { const r = reviewSet(); return [pill("accent", "mic", t("Debrief")), r && r.live ? pill("rec", "rec", t("Recording")) : null]; }
   if (!set) return [];
   if (set.live) {
     const edge = liveEdge(total(), nowM());
     return [pill("rec", "rec", t("Recording {time}", { time: fmt((nowUs() - a.start_us) / 1e6) })), live ? null : pill("gray", null, t("Playing back · {time} behind the latest", { time: fmt(edge.behind) }))];
   }
-  if (set.imported_by) return [pill("gray", "download", t("Imported by {name}", { name: set.imported_by }))];
-  return [isReview(set) ? pill("accent", "mic", t("Debrief")) : pill("gray", "film", t("Recorded"))];
+  const line = viewLine(set, viewContext());
+  const debriefs = debriefsOf(set.id);
+  return [set.imported_by ? pill("gray", "download", t("Imported by {name}", { name: set.imported_by })) : pill("gray", "film", t("Recorded")), line ? viewChip(set, line) : null, debriefs.length ? debriefChip(set, debriefs) : null];
 }
 function headerSub(set) {
-  if (review) {
-    const r = reviewSet();
-    return r ? [fmt(reviewTotal()), t("Watch Party replay"), t("voices of {names}", { names: r.players.map((p) => nameOf(p.owner)).join(", ") })].join(" · ") : "";
-  }
-  if (!set) return st.active_set ? t("{n} online", { n: 1 + st.peers.filter((p) => p.connected).length }) : "";
+  if (!set) return [st.active_set ? fmt((nowUs() - st.active_set.start_us) / 1e6) : null, t("Free {free}", { free: bytes(st.disk.free) })].filter(Boolean).join(" · ");
   const matches = matchEnds(items).length;
   if (set.live) return [t("This recording"), matchNow(nowM())].filter(Boolean).join(" · ");
   return [setLength(set), matches ? t(matches === 1 ? "{n} match" : "{n} matches", { n: matches }) : null].filter(Boolean).join(" · ");
@@ -546,7 +537,7 @@ function fitSub() {
 }
 new ResizeObserver(fitSub).observe($("playerpage"));
 function renderHeader(set) {
-  const title = review ? sessionName(review.id) : !set ? t("Live") : set.live ? t("Recording") : sessionName(set.id);
+  const title = !set ? t("Live") : set.live ? t("Recording") : sessionName(set.id);
   $("ptitle").textContent = title;
   const chips = headerChips(set);
   const csig = chips.map((c) => c && c.outerHTML);
@@ -556,28 +547,26 @@ function renderHeader(set) {
   fitSub();
   const a = st.active_set;
   $("reviewrec").hidden = !(a && a.voice);
-  if (a && a.voice) $("reviewrec").replaceChildren(el("i", { className: "recdot" }), t("Debrief {time}", { time: fmt((nowUs() - a.start_us) / 1e6) }));
+  if (a && a.voice) $("reviewrec").replaceChildren(el("i", { className: "recdot" }), t("Recording {time}", { time: fmt((nowUs() - a.start_us) / 1e6) }));
   renderParty(set);
-  $("panelbtn").hidden = !set && !review;
+  $("panelbtn").hidden = !set;
   $("panelbtn").classList.toggle("on", panelShown());
   if (changed("fullicon", [full])) $("full").replaceChildren(icon(full ? "minimize" : "maximize"));
 }
+const watchers = (id) => (st.party.watching[id] || 0) - (watchParty && st.party.on && st.party.shared.set === id ? 1 : 0);
 function renderParty(set) {
   const on = watchParty && st.party.on;
   const box = $("wpbox");
-  box.hidden = !set && !review;
-  $("shared").classList.toggle("wp", !!(on && (set || review)));
-  const watching = (st.party.watching || []).filter((id) => id !== st.id);
+  box.hidden = !set;
+  $("shared").classList.toggle("wp", !!(on && set));
+  const others = set ? watchers(set.id) : 0;
   const status = on ? st.party.status || [] : [];
-  if (changed("partystatus", [status, st.names, lang])) $("partystatus").replaceChildren(...status.map((s) => pill(s.kind === "incomplete" ? "warn" : "gray", s.kind === "catching" ? "spinner" : "download",
-    s.kind === "catching" ? t("Catching up with {name}", { name: nameOf(s.who) }) : s.kind === "incomplete" ? t("{name} incomplete at {n}%", { name: nameOf(s.who), n: s.percent }) : t("{name} receiving {n}%", { name: nameOf(s.who), n: s.percent }))));
-  const sig = [on, watching, st.names, st.colors, lang];
-  if (!changed("wpbox", sig)) return;
+  if (changed("partystatus", [status, st.names, lang])) $("partystatus").replaceChildren(...status.map((s) => pill("gray", "spinner", t("Catching up with {name}", { name: nameOf(s.who) }))));
+  if (!changed("wpbox", [on, others, st.names, lang])) return;
   if (on) {
-    const all = [st.id, ...watching];
-    box.replaceChildren(el("div", { className: "wpbar" }, icon("users", "sm"), el("span", { textContent: "Watch Party" }), avatars(all), el("span", { className: "n", textContent: String(all.length) }), el("button", { className: "sm", onclick: () => setParty(false) }, icon("logout", "sm"), t("Leave"))));
+    box.replaceChildren(el("div", { className: "wpbar" }, icon("users", "sm"), el("span", { textContent: "Watch Party" }), el("span", { className: "n", textContent: String(others + 1) }), el("button", { className: "sm", onclick: () => setParty(false) }, icon("logout", "sm"), t("Leave"))));
   } else {
-    box.replaceChildren(el("button", { className: "wpoff", onclick: () => setParty(true) }, icon("users", "sm"), el("span", { textContent: "Watch Party" }), watching.length ? avatars(watching) : null, watching.length ? el("span", { className: "muted", textContent: t("{n} watching", { n: watching.length }) }) : null, el("span", { className: "join", textContent: t("Join") })));
+    box.replaceChildren(el("button", { className: "wpoff", onclick: () => setParty(true) }, icon("users", "sm"), el("span", { textContent: "Watch Party" }), others ? el("span", { className: "muted", textContent: t("{n} watching", { n: others }) }) : null, el("span", { className: "join", textContent: t("Join") })));
   }
 }
 function setParty(on) {
@@ -603,15 +592,10 @@ function renderTools() {
 
 function openSession(id) {
   nowView = false;
-  const set = setById(id);
-  if (set && isReview(set)) { startReview(set); share(); go("player"); return; }
-  endReview();
   if (id !== selected) openSet(id);
   go("player");
 }
 function openNow() {
-  if (st.active_set && st.active_set.voice) return openLive();
-  endReview();
   nowView = true;
   const l = liveSet();
   if (l) {
@@ -619,13 +603,11 @@ function openNow() {
     nowSet = l.id;
     goLive();
   } else if (selected) selectSet(null);
-  share();
   go("player");
 }
 function openSet(id, m = 0) {
   selectSet(id);
-  if (m) setClock(false, m);
-  share();
+  if (m) { setClock(false, m); share(); }
   refresh();
 }
 function selectSet(id) {
@@ -642,78 +624,27 @@ function selectSet(id) {
   play.view = 0;
   prune(play, []);
   if (id) quiet("focus_set", { set: id });
-}
-function startReview(set, m = 0) {
-  if (!review || review.id !== set.id) {
-    review = { id: set.id, playing: false, m, at: performance.now() };
-    for (const k of Object.keys(sigs)) if (["events", "views", "panel", "bands", "flow"].includes(k)) delete sigs[k];
-    side = "talk";
-  }
-  refresh();
-}
-function endReview() {
-  if (!review) return;
-  review = null;
-  for (const [key, s] of Object.entries(voices)) { drop(s); delete voices[key]; }
-  delete sigs.bands;
-  side = "review";
-}
-function reviewFlow() {
-  const set = reviewSet();
-  return set ? flowAt(set.party, set.start_us + reviewM() * 1e6) : null;
-}
-function followFlow() {
-  const flow = reviewFlow();
-  if (!flow) return;
-  if (flow.set && flow.set !== selected && setById(flow.set)) { selectSet(flow.set); renderPlayer(); }
-  if (!flow.set || flow.set !== selected) return;
-  const m = (flow.wall_us - base()) / 1e6;
-  const playing = review.playing && flow.playing;
-  if (playing !== clock.playing || Math.abs(m - nowM()) > JUMP_MIN) setClock(playing, m);
-  if (flow.rate !== rate) setRate(flow.rate);
-}
-function feedVoices() {
-  const set = reviewSet();
-  const list = playersOf(set);
-  for (const key of Object.keys(voices)) if (!list.some((p) => p.key === key)) { drop(voices[key]); delete voices[key]; }
-  if (!set) return;
-  const wall = set.start_us + reviewM() * 1e6;
-  for (const p of list) {
-    const part = partFor(p, "m", wall);
-    if (!part || !part.size) continue;
-    if (!voices[p.key]) voices[p.key] = slot(document.body.appendChild(el("audio", { preload: "auto" })));
-    const s = voices[p.key];
-    feed(s, part, review.playing && s.src === srcOf(part), part, (wall - part.start_us + p.off) / 1e6);
-  }
-}
-function syncVoices() {
-  const set = reviewSet();
-  if (!set) return;
-  const wall = set.start_us + reviewM() * 1e6;
-  for (const p of playersOf(set)) {
-    const s = voices[p.key];
-    const part = partFor(p, "m", wall);
-    if (!s || !part) continue;
-    if (pathOf(s.part) !== pathOf(part)) { feed(s, part, false, part, (wall - part.start_us + p.off) / 1e6); continue; }
-    if (!switching(s)) sync(s.video, (wall - part.start_us + p.off) / 1e6, review.playing && page === "player");
-  }
+  if (watchParty && st.party.on) joinParty();
 }
 function stepSet(dir) {
-  const list = st.sets.filter((s) => !s.live);
-  const i = list.findIndex((s) => s.id === (review ? review.id : selected));
+  const list = recordingRows().map((r) => r.s);
+  const i = list.findIndex((s) => s.id === selected);
   const next = i < 0 ? list[0] : list[i - dir];
   if (next) { openSession(next.id); osd(sessionName(next.id)); }
 }
 
+function whatNodes(what, line, set) {
+  if (line) return [icon(line.kind === "away" ? "alert" : "download", "sm"), line.text, line.action ? el("button", { className: "sm", textContent: line.action, onclick: (e) => { e.stopPropagation(); run("download_set", { room: set.room, set: set.id }); } }) : ""];
+  return what === "voice" ? [icon("mic", "sm"), t("Voice only")] : [t("Waiting for {name}…", { name: what })];
+}
 function tick() {
   if (!st) return;
   tickLive();
-  if (review) followFlow();
   const list = players();
   const tot = total(list);
+  const set = playSet();
   let m = nowM();
-  if (clock.playing && tot && m >= tot && !review) { clock.playing = false; clock.m = tot; m = tot; }
-  if (review && review.playing && reviewM() >= reviewTotal() && !(reviewSet() || {}).live) setReview(false, reviewTotal());
+  if (clock.playing && tot && m >= tot) { clock.playing = false; clock.m = tot; m = tot; }
   const b = base(list);
   const away = page !== "player";
   for (const p of list) {
@@ -729,31 +660,27 @@ function tick() {
     const behind = !pinned && !!p.file.total && p.file.have < p.file.total && target > have;
     tl.box.classList.toggle("wait", !tl.media.part || !pictured || behind);
     tl.box.classList.toggle("late", !!tl.media.part && pinned && liveClock.late.includes(p.key));
-    const n = p.file.total ? Math.floor((p.file.have / p.file.total) * 100) : 0;
-    const what = p.file.stuck ? ["stuck", n] : !pictured ? ["voice"] : pinned ? ["wait"] : ["here", n];
-    if (changed("what/" + p.key, [...what, nameOf(p.key), lang])) tl.what.replaceChildren(...(what[0] === "stuck" ? [icon("alert", "sm"), t("{name} stopped at {n}%", { name: nameOf(p.key), n })] : what[0] === "here" ? [icon("download", "sm"), t("{name} {n}% here", { name: nameOf(p.key), n })] : what[0] === "voice" ? [icon("mic", "sm"), t("Voice only")] : [t("Waiting for {name}…", { name: nameOf(p.key) })]));
+    const line = !pictured || behind ? viewLine(set, viewContext(), p.key) : null;
+    const what = line ? line.text : !pictured ? "voice" : nameOf(p.key);
+    if (changed("what/" + p.key, [what, line && line.action, nameOf(p.key), lang])) tl.what.replaceChildren(...whatNodes(what, line, set));
     for (const s of [tl.media, tl.mic]) if (s && s.part && !switching(s)) sync(s.video, m + shiftOf(p, s.part, b), clock.playing && !away && !(pinned && liveClock.held));
   }
-  if (review) syncVoices();
   if (st.active_set) tickSide();
   if (away) return;
-  const shown = shownM();
-  const stot = shownTotal();
-  $("clocknow").textContent = fmt(shown);
-  $("clocktotal").textContent = ` / ${fmt(stot)}`;
-  const frac = stot ? Math.min(1, shown / stot) : 0;
+  const tott = total(list);
+  $("clocknow").textContent = fmt(m);
+  $("clocktotal").textContent = ` / ${fmt(tott)}`;
+  const frac = tott ? Math.min(1, m / tott) : 0;
   $("seek").querySelector(".fill").style.width = frac * 100 + "%";
   $("seek").querySelector(".thumb").style.left = frac * 100 + "%";
-  $("seek").querySelector(".grow").style.left = (stot ? Math.min(1, (review ? reviewTotal() : received(list)) / stot) : 1) * 100 + "%";
-  const playing = review ? review.playing : clock.playing;
-  $("seek").classList.toggle("paused", !playing);
-  $("seek").setAttribute("aria-valuemax", Math.round(stot));
-  $("seek").setAttribute("aria-valuenow", Math.round(shown));
-  $("seek").setAttribute("aria-valuetext", fmt(shown));
-  if (changed("playicon", [playing])) $("play").replaceChildren(icon(playing ? "pause" : "play"));
-  $("play").setAttribute("aria-label", playing ? t("Pause") : t("Play"));
+  $("seek").querySelector(".grow").style.left = (tott ? Math.min(1, received(list) / tott) : 1) * 100 + "%";
+  $("seek").classList.toggle("paused", !clock.playing);
+  $("seek").setAttribute("aria-valuemax", Math.round(tott));
+  $("seek").setAttribute("aria-valuenow", Math.round(m));
+  $("seek").setAttribute("aria-valuetext", fmt(m));
+  if (changed("playicon", [clock.playing])) $("play").replaceChildren(icon(clock.playing ? "pause" : "play"));
+  $("play").setAttribute("aria-label", clock.playing ? t("Pause") : t("Play"));
   renderMoment(m);
-  renderFlowBar();
 }
 
 function osd(text, who) {
@@ -808,10 +735,6 @@ function apply(cmd, m, who, prev = { playing: clock.playing, m: nowM() }) {
 }
 function view() {
   const set = playSet();
-  if (review) {
-    const r = reviewSet();
-    return { set: review.id, playing: review.playing, wall_us: Math.round((r ? r.start_us : 0) + reviewM() * 1e6), at_us: nowUs(), rate, focus: null, mode: play.mode, slots: play.slots, order: play.keys };
-  }
   return { set: set ? set.id : null, playing: clock.playing, live: followingLive(), wall_us: wallOf(nowM()), at_us: nowUs(), rate, focus: play.view ? play.keys[play.view - 1] : null, mode: play.mode, slots: play.slots, order: play.keys };
 }
 let partySends = Promise.resolve();
@@ -827,30 +750,15 @@ function joinParty() {
 }
 const newer = (a, b) => !b || (a.seq !== b.seq ? a.seq > b.seq : a.stamp !== b.stamp ? a.stamp > b.stamp : a.origin > b.origin);
 function applyParty(p) {
-  if (p.set && p.set !== selected && !setById(p.set)) return;
   const first = !partyLast;
   partyLast = p;
   const mine = p.origin === st.id;
   if (quick && !mine) quick.moved = true;
-  const target = p.set ? setById(p.set) : null;
-  if (target && isReview(target)) {
-    if (!review || review.id !== target.id) { nowView = false; startReview(target); if (page !== "player" && !mine && !first) go("player"); }
-    if (typeof p.wall_us === "number") {
-      const m = (p.wall_us - target.start_us) / 1e6 + (p.playing ? ((nowUs() - p.at_us) / 1e6) * (p.rate || 1) : 0);
-      if (p.playing !== review.playing || Math.abs(m - reviewM()) > JUMP_MIN) setReview(p.playing, m);
-    }
-    return;
-  }
-  if (review && p.set !== review.id) endReview();
-  if (p.set && p.set !== selected) {
-    selectSet(p.set);
-    if (nowView && !(liveSet() && liveSet().id === p.set)) nowView = false;
-    if (!mine && !first) osd(t("{name} opened {set}", { name: nameOf(p.origin), set: sessionName(p.set) }), p.origin);
-  }
+  const set = playSet();
+  if (!set || p.set !== set.id) return;
   partyLayout = { set: p.set, mode: p.mode, slots: p.slots, order: p.order, focus: p.focus };
   if (p.rate && p.rate !== rate) setRate(p.rate);
-  const set = playSet();
-  if (!set || !p.set || typeof p.wall_us !== "number") return;
+  if (typeof p.wall_us !== "number") return;
   if (p.live && set.live) { if (!live) goLive(); return; }
   const m = Math.max(0, (p.wall_us - base()) / 1e6 + (p.playing ? ((nowUs() - p.at_us) / 1e6) * rate : 0));
   if (mine || first || p.seq === 0) { if (p.playing !== clock.playing || Math.abs(m - nowM()) > JUMP_MIN) setClock(p.playing, m); }
@@ -859,24 +767,15 @@ function applyParty(p) {
   else setClock(p.playing, m);
 }
 function act(cmd, m, prev) {
-  if (review) {
-    const before = { playing: review.playing, m: reviewM() };
-    if (cmd === "play") setReview(true, m);
-    else if (cmd === "pause") setReview(false, m);
-    else if (cmd === "seek") setReview(review.playing, m);
-    if (cmd !== "seek") bezel(cmd === "play");
-    setUndo(() => act(before.playing ? "play" : "pause", before.m));
-    share();
-    return;
-  }
   if (!playSet()) return;
+  if (cmd === "play") played = true;
   apply(cmd, m, st.id, prev);
   share();
 }
-window.__TAURI__.event.listen("party", () => refresh());
-const togglePlay = () => act((review ? review.playing : clock.playing) ? "pause" : "play", shownM());
+listenMain("party", () => refresh());
+const togglePlay = () => act(clock.playing ? "pause" : "play", nowM());
 const seekTo = (m) => act("seek", Math.max(0, m));
-const jump = (delta) => seekTo(Math.min(shownTotal(), shownM() + delta));
+const jump = (delta) => seekTo(Math.min(total(), nowM() + delta));
 
 function indexOf(state) {
   const byKey = new Map(state.events.map((e) => [e.key, e]));
@@ -887,6 +786,7 @@ function indexOf(state) {
 const setOf = (e) => idx.setOfKey.get(e.key) || null;
 const setLength = (s) => fmt(((s.end_us || nowUs()) - s.start_us) / 1e6);
 const pluginName = (id) => t((plugins.find((p) => p.id === id) || {}).name || id);
+const viewContext = () => ({ me: st.id, name: nameOf, online: (id) => id === st.id || !!(peerOf(id) || {}).connected, left: (set) => { const r = receiving(set); return r && r.left; } });
 function itemOf(e, set) {
   const r = role(e);
   const at = (us) => (us === null || us === undefined || !set ? null : (us - set.start_us) / 1e6);
@@ -925,19 +825,16 @@ function renderEvents() {
   const pool = scope === "all" ? allItems() : items;
   const order = (x, y) => (x.setId === y.setId ? (x.m ?? -1) - (y.m ?? -1) : x.setId < y.setId ? 1 : -1);
   const shown = groupDrawings(pool.filter((n) => listed(n.role) && matches(n, words)).sort(order));
-  const rset = reviewSet();
-  const speech = (rset ? setItems(rset) : items).filter((n) => n.role === "speech").sort((x, y) => x.m - y.m);
+  const speech = items.filter((n) => n.role === "speech").sort((x, y) => x.m - y.m);
   renderPanelTabs(shown, speech);
-  if (!review) renderTimeline(Math.round(total()));
-  else if (changed("chapters", ["review"])) { $("chapters").hidden = true; $("lane").replaceChildren(); }
+  renderTimeline(Math.round(total()));
   renderEventList(shown, words);
   renderConvo(speech);
   renderReviewTab();
-  renderFlowList();
 }
 function renderPanelTabs(shown, speech) {
   const notes = shown.filter((n) => n.kind === "note").length;
-  const tabs = review ? [["talk", t("Talk")], ["notes", t("Notes"), notes], ["shown", t("Shown")]] : [["review", t("Review")], ["notes", t("Notes"), notes], ...(speech.length ? [["talk", t("Talk")]] : [])];
+  const tabs = [["review", t("Review")], ["notes", t("Notes"), notes], ...(speech.length ? [["talk", t("Talk")]] : [])];
   if (!tabs.some(([k]) => k === side)) side = tabs[0][0];
   if (changed("paneltabs", [tabs, side, lang])) $("paneltabs").replaceChildren(...tabs.map(([k, label, n]) => {
     const b = el("button", { className: k === side ? "on" : "", role: "tab", ariaSelected: k === side }, label, n ? el("em", { textContent: String(n) }) : null);
@@ -951,7 +848,6 @@ function renderPanelTabs(shown, speech) {
   $("notelist").hidden = side !== "notes";
   $("filterrow").hidden = side !== "notes";
   $("convolist").hidden = side !== "talk";
-  $("flowlist").hidden = side !== "shown";
   $("scope").value = scope;
 }
 function renderTimeline(tot) {
@@ -982,76 +878,26 @@ function renderConvo(speech) {
   }));
 }
 function renderReviewTab() {
-  if (side !== "review" || review) return;
+  if (side !== "review") return;
   const set = playSet();
   if (!set) return;
   const tot = total();
   const list = matchChapters(matchEnds(items), tot, !!set.live);
   const notes = items.filter((n) => (n.kind === "note" || n.kind === "mark") && n.role === "moment" && n.m !== null).sort((a, b) => a.m - b.m);
   const ends = items.filter((n) => n.plugin && (n.tags || []).includes(MATCH_TAG) && n.m !== null);
-  const debriefs = st.sets.filter((s) => isReview(s) && s.party.some((r) => r.shared.set === set.id));
+  const pending = (set.analysis || []).filter((a) => a.state !== "done");
   const now = nowM();
   const cur = list.find((c) => c.m <= now && now < c.end);
-  const sig = [list, notes.map((n) => [n.key, n.m, n.body, n.author]), debriefs.map((d) => d.id), cur && cur.n, lang, st.colors];
+  const sig = [list, notes.map((n) => [n.key, n.m, n.body, n.author, n.source]), pending, cur && cur.n, lang, st.colors, st.names, plugins.map((p) => p.name)];
   if (!changed("reviewtab", sig)) return;
-  const noteRow = (n) => {
-    const row = el("div", { className: "ev" }, el("button", { className: "at", textContent: fmt(n.m), onclick: () => seekTo(n.m) }), el("span", { className: "tx" }, ...inline(n.body), el("span", { className: "by" }, el("i", { className: "dt", style: `background:${colorOf(colorIndex(n.author))}` }), n.who)));
-    return row;
-  };
+  const noteRow = (n) => el("div", { className: "ev" }, el("button", { className: "at", textContent: fmt(n.m), onclick: () => seekTo(n.m) }), el("span", { className: "tx" }, ...inline(n.body), n.source === "ai" ? el("span", { className: "aimark", textContent: t("AI") }) : null, el("span", { className: "by" }, el("i", { className: "dt", style: `background:${colorOf(colorIndex(n.author))}` }), n.who)));
   const groups = list.length ? list.map((c) => ({ title: t("Match {n}", { n: c.n }), range: `${fmt(c.m)}–${fmt(c.end)}`, m: c.m, cur: cur === c, rows: [...notes.filter((n) => n.m >= c.m && n.m < c.end).map(noteRow), ...ends.filter((e) => Math.abs(e.m - c.end) < JUMP_MIN).map((e) => el("div", { className: "ev sys" }, el("button", { className: "at", textContent: fmt(e.m), onclick: () => seekTo(e.m) }), el("span", { className: "tx" }, icon("flag", "sm"), t("Match end"))))] })) : [{ title: t("Whole recording"), range: fmt(tot), m: 0, cur: true, rows: notes.map(noteRow) }];
-  const out = groups.map((g) => el("div", { className: "match" + (g.cur ? " cur" : "") },
+  const out = pending.map((a) => el("div", { className: "ev sys analysis" }, icon(a.state === "failed" ? "alert" : "cpu", "sm"), el("span", { className: "tx " + (a.state === "failed" ? "warn" : "muted"), textContent: `${t(pluginName(a.plugin))} · ${analysisReason(a, nameOf)}` }), a.state === "failed" ? el("button", { className: "sm", textContent: t("Retry"), onclick: () => retryAnalysis(set, a.plugin) }) : null));
+  out.push(...groups.map((g) => el("div", { className: "match" + (g.cur ? " cur" : "") },
     el("div", { className: "mh" }, el("b", { textContent: g.title }), el("small", { textContent: g.range }), el("button", { className: "sm", onclick: () => { seekTo(g.m); if (!clock.playing) act("play", g.m); } }, icon("play", "sm"), t("Watch"))),
-    ...(g.rows.length ? g.rows : [el("div", { className: "none", textContent: t("No notes") })])));
-  if (debriefs.length) {
-    out.push(el("div", { className: "h3", textContent: t("Debriefs of this recording") }));
-    out.push(...debriefs.map((d) => el("button", { className: "debrief", onclick: () => openSession(d.id) }, icon("mic", "sm"), el("span", { textContent: sessionName(d.id) }), pill("accent", null, t("Debrief")), el("span", { className: "sp" }), el("span", { className: "muted", textContent: setLength(d) }), icon("play", "sm"))));
-  }
-  out.push(el("button", { className: "ghost tolink", onclick: () => editBoard("room") }, icon("board", "sm"), t("Write to the game plan")));
+    ...(g.rows.length ? g.rows : [el("div", { className: "none", textContent: t("No notes") })]))));
+  out.push(el("button", { className: "tolink", onclick: editTeam }, icon("board", "sm"), t("Write to the game plan")));
   $("reviewlist").replaceChildren(...out);
-}
-function stepText(step) {
-  const set = setById(step.set);
-  const at = set ? (step.wall_us - base(playersOf(set))) / 1e6 : 0;
-  const name = nameOf(step.by);
-  if (step.kind === "open") return t("{name} opened {set} at {time}", { name, set: sessionName(step.set), time: fmt(at) });
-  if (step.kind === "live") return t("{name} went to Live", { name });
-  if (step.kind === "play") return t("{name} played", { name });
-  if (step.kind === "pause") return t("{name} paused", { name });
-  return t("{name} moved to {time}", { name, time: fmt(at) });
-}
-function renderFlowList() {
-  if (side !== "shown") return;
-  const set = reviewSet();
-  if (!set || !changed("flow", [set.party.length, lang, st.names])) return;
-  $("flowlist").replaceChildren(...flowSteps(set.party).map((step) => {
-    const m = (step.t_us - set.start_us) / 1e6;
-    const row = el("div", { className: "ev" }, el("button", { className: "at", textContent: fmt(m), onclick: () => seekTo(m) }), el("span", { className: "tx", textContent: stepText(step) }));
-    return row;
-  }));
-}
-function renderFlowBar() {
-  const flow = review ? reviewFlow() : null;
-  $("flowbar").hidden = !flow;
-  if (!flow) return;
-  const set = setById(flow.set);
-  const text = set ? [t("Watching: {set}", { set: sessionName(set.id) }), matchNow(nowM()), fmt(nowM())].filter(Boolean).join(" · ") : t("Watching live");
-  if ($("flowtext").textContent !== text) $("flowtext").textContent = text;
-  $("flowopen").hidden = !set;
-}
-function renderBands(tot) {
-  const set = reviewSet();
-  const bands = set ? flowBands(set.party, set.start_us, set.end_us || nowUs()) : [];
-  const ids = [...new Set(bands.map((b) => b.set))];
-  if (!changed("bands", [bands, Math.round(tot), lang])) return;
-  const span = set ? (set.end_us || nowUs()) - set.start_us : 1;
-  const colorFor = (id) => `var(--band${ids.indexOf(id) % 4})`;
-  $("bands").replaceChildren(...bands.map((b) => {
-    const e = el("i", { title: sessionName(b.set) });
-    Object.assign(e.style, { left: ((b.from - set.start_us) / span) * 100 + "%", width: ((b.to - b.from) / span) * 100 + "%", background: colorFor(b.set) });
-    return e;
-  }));
-  $("bandlabels").hidden = !bands.length;
-  $("bandlabels").replaceChildren(...ids.map((id) => el("span", {}, el("i", { style: `background:${colorFor(id)}` }), t("Watching {set}", { set: sessionName(id) }))), el("span", { className: "sp" }), set ? el("span", { className: "muted", textContent: t("Voices: {names}", { names: set.players.map((p) => nameOf(p.owner)).join(" · ") }) }) : "");
 }
 function timeText(n) {
   if (n.m === null) return t("Whole recording");
@@ -1068,7 +914,7 @@ function eventRow(n) {
   const sys = !!n.plugin || n.kind === "mark";
   const body = n.role === "drawing" ? [t("Drawing") + (n.count > 1 ? ` ×${n.count}` : "")] : inline(n.body);
   const tags = n.kind === "note" ? [] : (n.tags || []).map((tg) => el("button", { className: "tag", textContent: tagName(tg), onclick: (e) => { e.stopPropagation(); filterTag(tg); } }));
-  const tx = el("span", { className: "tx" }, sys ? icon("flag", "sm") : null, ...body, ...tags);
+  const tx = el("span", { className: "tx" }, sys ? icon("flag", "sm") : null, ...body, n.source === "ai" ? el("span", { className: "aimark", textContent: t("AI") }) : null, ...tags);
   const dot = el("i", { className: "dt", style: `background:${n.plugin ? "var(--muted)" : colorOf(colorIndex(n.author))}` });
   const by = el("span", { className: "by" }, dot, n.who);
   const row = el("div", { className: "ev" + (sys ? " sys" : "") + (n.role === "chapter" ? " chapter" : "") }, at, tx, by);
@@ -1117,7 +963,6 @@ function renderMoment(m) {
     c.classList.toggle("cur", on);
     if (on && c.dataset.match) match = c.textContent;
   }
-  if (review) match = null;
   $("matchchip").hidden = !match;
   if (match && changed("matchchip", [match])) $("matchchip").replaceChildren(el("span", { textContent: "· " + match }), icon("chevron-right", "sm"));
   const notes = activeAt(items.filter((n) => n.role === "moment" && n.text && !n.plugin), m).slice(-OVERLAY_MAX);
@@ -1125,25 +970,18 @@ function renderMoment(m) {
   if (changed("overlay", [notes.map((n) => [n.key, n.m, n.body, n.author]), typists.map(nameOf), st.colors, lang])) $("overlay").replaceChildren(
     ...notes.map((n) => el("p", {}, avatar(n.author, "sm"), ...inline(n.body))),
     ...typists.map((id) => el("p", { className: "typing", textContent: t("{name} is typing…", { name: nameOf(id) }) })));
-  const rset = reviewSet();
-  const rm = rset ? reviewM() : m;
-  const speech = subtitles ? activeAt((rset ? setItems(rset) : items).filter((n) => n.role === "speech"), rm) : [];
+  const speech = subtitles ? activeAt(items.filter((n) => n.role === "speech"), m) : [];
   for (const key of play.keys) {
     const tl = play.tiles[key];
     if (!tl) continue;
-    const lines = rset ? [] : speech.filter((n) => (n.file || n.author) === key).map((n) => n.body);
+    const lines = speech.filter((n) => (n.file || n.author) === key).map((n) => n.body);
     tl.sub.hidden = !lines.length;
     if (tl.sub.textContent !== lines.join("\n")) tl.sub.textContent = lines.join("\n");
-  }
-  if (rset) {
-    const text = speech.map((n) => `${n.speaker}: ${n.body}`).join("\n");
-    const tl = play.tiles[play.view ? play.keys[play.view - 1] : play.keys[0]];
-    if (tl) { tl.sub.hidden = !text; if (tl.sub.textContent !== text) tl.sub.textContent = text; }
   }
   const current = speech.length ? speech[speech.length - 1].key : null;
   for (const row of $("convolist").children) {
     const on = row.dataset.key === current;
-    if (on && !row.classList.contains("cur") && (review ? review.playing : clock.playing)) row.scrollIntoView({ block: "nearest" });
+    if (on && !row.classList.contains("cur") && clock.playing) row.scrollIntoView({ block: "nearest" });
     row.classList.toggle("cur", on);
   }
 }
@@ -1202,7 +1040,7 @@ function speedMenu(anchor) {
 
 function openQuick() {
   const set = playSet();
-  if (!set || review) return;
+  if (!set) return;
   if (page !== "player") go("player");
   if (!quick) {
     quick = { resume: clock.playing, m: nowM(), wall: wallOf(nowM()), set: set.id, timed: true, moved: false };
@@ -1338,7 +1176,7 @@ function stageMenu(e) {
   const set = playSet();
   if (!set) return;
   openMenu([
-    ...(review ? [] : [{ label: t("Add note"), icon: "note", right: "C", run: openQuick }]),
+    { label: t("Add note"), icon: "note", right: "C", run: openQuick },
     { label: t("Copy link to this moment"), icon: "link", run: () => navigator.clipboard.writeText(momentLink(set.id, nowM(), play.view ? play.keys[play.view - 1] : null)).then(() => osd(t("Link copied"))).catch(fail) },
     { label: t("Clear drawing"), icon: "eraser", right: "X", run: () => clearInk(false) },
   ], e);
@@ -1382,6 +1220,15 @@ function renderNotices() {
     n.action ? el("button", { className: "sm" + (n.action.primary ? " primary" : ""), textContent: n.action.label, onclick: n.action.run }) : null,
     n.sticky ? null : iconButton("x", t("Close"), () => { dismissed.add(n.key); delete sigs.notices; renderNotices(); }))));
 }
+async function exportDebriefs(set, list) {
+  try {
+    await invoke("export_check");
+    const folder = await dialog("pick_folder");
+    if (!folder) return;
+    for (const d of list) await invoke("export_folder", { room: d.room, set: d.id, folder: `${folder}\\${d.id}` });
+    flash(t("Export finished"));
+  } catch (e) { fail(e); }
+}
 function exportFolder(set) {
   if (!set) { flash(t("Open a recording first")); return; }
   invoke("export_check").then(() => dialog("pick_folder")).then((folder) => {
@@ -1393,7 +1240,7 @@ function exportFolder(set) {
     }).catch((e) => { if (exporting) { exporting = null; fail(e); refresh(); } });
   }).catch(fail);
 }
-window.__TAURI__.event.listen("export", (e) => {
+listenMain("export", (e) => {
   const x = e.payload;
   if (x.done) { exporting = null; if (x.error) fail(x.error); else flash(t("Export finished")); refresh(); return; }
   if (exporting) exporting.percent = x.percent;
@@ -1415,8 +1262,8 @@ async function checkUpdate(manual) {
   renderNotices();
 }
 function busy() {
-  const party = watchParty && st.party.on && st.party.watching.some((id) => id !== st.id);
-  return st.recording || party || clock.playing || (review && review.playing) || !!exporting || !!(jobInfo && jobInfo.running);
+  const party = watchParty && st.party.on && watchers(st.party.shared.set) > 0;
+  return st.recording || party || clock.playing || !!exporting || (st.sets || []).some((s) => (s.analysis || []).some((a) => a.state === "running"));
 }
 async function askUpdate() {
   askingUpdate = true;
@@ -1445,24 +1292,26 @@ function refresh() {
 }
 let refreshing = null;
 let refreshAgain = false;
-const steps = () => [renderShell, renderStart, renderSide, renderNotices, renderPlayer, renderEvents, renderTools, renderRoom, renderBoard, renderRecovery, renderOpenDialogs];
+const steps = () => [renderShell, renderStart, renderSide, renderNotices, renderPlayer, renderEvents, renderTools, renderRoom, renderRecovery, renderOpenDialogs];
 async function update() {
   st = await invoke("state");
   clockShift = st.now_us - Date.now() * 1000;
   idx = indexOf(st);
   titles = Object.fromEntries(st.sets.filter((x) => x.title).map((x) => [x.id, x.title]));
   importedIds = new Set(st.sets.flatMap((x) => x.players.filter((p) => p.imported).map((p) => p.owner)));
+  for (const p of st.peers) if (p.speaking) speaking.add(p.id); else speaking.delete(p.id);
   if (lang !== st.lang) { lang = st.lang; setLanguage(lang); for (const k of Object.keys(sigs)) delete sigs[k]; }
+  if (boardWindow) { for (const step of [renderShell, renderBoard]) try { step(); } catch (e) { console.error(e); } return; }
   if (!ready) { ready = true; pollPlugins(); }
   if (installAfter && available && !busy() && !askingUpdate) askUpdate();
   if (selected && !setById(selected)) selected = null;
-  if (review && !reviewSet()) endReview();
+  if (!st.recording) played = false;
   const l = liveSet();
-  const voice = st.active_set && st.active_set.voice;
-  if (nowView && l && !voice && selected !== l.id) { selectSet(l.id); nowSet = l.id; goLive(); share(); }
   if (nowView && !l && nowSet) { nowView = false; nowSet = null; }
+  const voice = st.active_set && st.active_set.voice;
+  if (voice) debriefOpen = st.active_set.id;
   const roomId = st.room ? st.room.id : "";
-  if (partyRoom !== roomId) { partyRoom = roomId; cancelBoard(); await joinParty(); st = await invoke("state"); idx = indexOf(st); }
+  if (partyRoom !== roomId) { partyRoom = roomId; editing = null; await joinParty(); st = await invoke("state"); idx = indexOf(st); }
   if (!drag && watchParty && st.party.on && newer(st.party.shared, partyLast)) applyParty(st.party.shared);
   for (const step of steps()) try { step(); } catch (e) { console.error(e); }
 }
@@ -1479,13 +1328,13 @@ function toggleFull() {
   $("playerpage").classList.toggle("full", full);
   renderShell();
   delete sigs.fullicon;
-  window.__TAURI__.window.getCurrentWindow().setFullscreen(full).catch(warn);
+  setFull(full);
   wake();
 }
 function wake() {
   $("playerpage").classList.remove("idle");
   clearTimeout(idleTimer);
-  if (full) idleTimer = setTimeout(() => { if (clock.playing || (review && review.playing)) $("playerpage").classList.add("idle"); }, IDLE_MS);
+  if (full) idleTimer = setTimeout(() => { if (clock.playing) $("playerpage").classList.add("idle"); }, IDLE_MS);
 }
 document.addEventListener("mousemove", wake);
 function go(p) {
@@ -1499,10 +1348,8 @@ function go(p) {
   refresh();
 }
 function openLive() {
-  endReview();
   nowView = false;
   if (selected) selectSet(null);
-  share();
   go("player");
 }
 function showPanel(on) {
@@ -1524,7 +1371,7 @@ function ask(title, action, danger, text) {
   $("confirmtext").hidden = !text;
   $("confirmtext").textContent = text || "";
   $("confirmyes").textContent = action;
-  $("confirmyes").className = danger ? "dangerfill" : "primary";
+  $("confirmyes").className = danger ? "danger" : "primary";
   d.showModal();
   $("confirmno").focus();
   return new Promise((done) => {
@@ -1552,10 +1399,14 @@ function chime(action) {
     warn(e);
   }
 }
+function setSpeaking(id, on) {
+  if (on) speaking.add(id); else speaking.delete(id);
+  for (const e of document.querySelectorAll("[data-speak]")) e.classList.toggle("speaking", speaking.has(e.dataset.speak));
+}
+listenMain("speaking", (e) => setSpeaking(e.payload.from, e.payload.on));
 function setRate(r) {
   clock.m = nowM();
   clock.at = performance.now();
-  if (review) { review.m = reviewM(); review.at = performance.now(); }
   rate = r;
   applyAudio();
 }
@@ -1566,10 +1417,6 @@ function setVolume(v) {
   muted = false;
   store("volume", volume);
   applyAudio();
-}
-function cycle(s, delta) {
-  const n = s.keys.length;
-  if (n) setView(s, s.view === 0 ? (delta > 0 ? 1 : n) : ((s.view - 1 + delta + n) % n) + 1);
 }
 const EDITABLE = "input:not([type=range]):not([type=checkbox]):not([type=radio]):not([type=button]), textarea";
 function editMenu(e, field) {
@@ -1591,16 +1438,13 @@ document.addEventListener("contextmenu", (e) => {
 async function toggleRecording(kind) {
   if (!st) return;
   const ending = !!st.active_set;
-  const debrief = !ending && (kind ? kind === "debrief" : reviewing());
+  const debrief = !ending && (kind ? kind === "debrief" : debriefNow());
   const title = ending ? t("Stop recording for everyone?") : debrief ? t("Record the debrief for everyone?") : t("Start recording for everyone?");
   const action = ending ? t("Stop recording") : debrief ? t("Record debrief") : t("Start recording");
   const text = ending ? t("Recording stops for everyone.") : debrief ? t("Only the voice and the viewing flow are recorded.") : t("Everyone in the room starts recording.");
   if (!(await ask(title, action, ending, text))) return;
-  if (!ending) return run("start_recording", { debrief });
-  const { id, start_us } = st.active_set;
-  const seconds = (nowUs() - start_us) / 1e6;
-  await run("stop_recording");
-  if (discardable(seconds) && (await ask(t("Discard this recording?"), t("Discard"), true))) run("discard_set", { room: st.room.id, set: id });
+  debriefMode = null;
+  run(ending ? "stop_recording" : "start_recording", ending ? null : { debrief });
 }
 const current = () => (playSet() ? play : rec);
 
@@ -1619,7 +1463,6 @@ $("panelbtn").onclick = togglePanel;
 $("full").onclick = toggleFull;
 $("layoutplay").onclick = (e) => pickLayout(current(), e.currentTarget);
 $("scope").onchange = () => { scope = $("scope").value; renderEvents(); };
-$("flowopen").onclick = () => { const flow = reviewFlow(); if (!flow || !flow.set) return; const m = nowM(); endReview(); openSession(flow.set); openSet(flow.set, m); };
 for (const b of $("tools").querySelectorAll("[data-tool]")) b.onclick = () => { ink.tool = b.dataset.tool; renderTools(); };
 $("clearink").onclick = () => clearInk(false);
 $("toast").onmouseenter = () => clearTimeout(toastTimer);
@@ -1630,18 +1473,17 @@ function seekFrac(x) {
 }
 $("seek").onpointerdown = (e) => {
   const bar = $("seek");
-  if ((!playSet() && !review) || drag) return;
-  drag = review ? { review: true } : { playing: clock.playing, m: nowM() };
+  if (!playSet() || drag) return;
+  drag = { playing: clock.playing, m: nowM() };
   bar.setPointerCapture(e.pointerId);
-  const move = (x) => { live = false; if (review) setReview(review.playing, seekFrac(x) * reviewTotal()); else setClock(clock.playing, seekFrac(x) * total()); };
+  const move = (x) => { live = false; setClock(clock.playing, seekFrac(x) * total()); };
   move(e.clientX);
   bar.onpointermove = (m) => move(m.clientX);
   bar.onpointerup = bar.onpointercancel = () => {
     bar.onpointermove = bar.onpointerup = bar.onpointercancel = null;
     const from = drag;
     drag = null;
-    if (from.review) share();
-    else act("seek", nowM(), from);
+    act("seek", nowM(), from);
   };
 };
 const peek = { video: el("video", { muted: true, preload: "auto" }), want: null };
@@ -1651,8 +1493,6 @@ peek.video.onseeked = () => {
   if (peek.want !== null && Math.abs(peek.want - peek.video.currentTime) > SEEK_TOLERANCE) peek.video.currentTime = peek.want;
 };
 function peekAt(x) {
-  if (review) { $("peek").hidden = false; $("peek").querySelector("canvas").hidden = true; $("peek").style.left = Math.max(0, Math.min($("seek").clientWidth, x - $("seek").getBoundingClientRect().left)) + "px"; $("peektime").textContent = fmt(seekFrac(x) * reviewTotal()); $("peekchapter").textContent = ""; return; }
-  $("peek").querySelector("canvas").hidden = false;
   const r = $("seek").getBoundingClientRect();
   const tot = total();
   if (!tot) return;
@@ -1735,7 +1575,7 @@ document.addEventListener("keydown", (e) => {
   if (ctrl && e.key.toLowerCase() === "z" && !typing()) { e.preventDefault(); runUndo(); return; }
   if (e.key === "Escape") { escapeKey(); return; }
   if (typing() || nativeKey(e) || e.metaKey || e.altKey) return;
-  const player = page === "player" && (!!playSet() || !!review);
+  const player = page === "player" && !!playSet();
   const key = e.key.normalize("NFKC");
   const k = key.length === 1 ? key.toLowerCase() : key;
   let action = null;

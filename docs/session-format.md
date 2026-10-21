@@ -66,11 +66,11 @@ Every kind the app writes. The body's field `k` holds the kind, for example {`k`
 
 | Kind | Fields | Meaning |
 | --- | --- | --- |
-| `rec` | `room`, `set`, `start_us`, `by` (name of the starter), `voice` | The writer joins the set: its part begins. Capture details (`source_kind`, `source`, `width`, `height`, `fps`, `kbps`, `encoder`, `codec`, `audio`, `mic`, `version`) are copied in. A recording made elsewhere also has `imported`, `view` and `title?` (below). |
+| `rec` | `room`, `set`, `start_us`, `by` (name of the starter), `voice`, `of?` | The writer joins the set: its part begins. `of` names the recording a debrief is about. Capture details (`source_kind`, `source`, `width`, `height`, `fps`, `kbps`, `encoder`, `codec`, `audio`, `mic`, `version`) are copied in. A recording made elsewhere also has `imported`, `view` and `title?` (below). |
 | `rec_end` | `set`, `room`, `t_us`, `stop` | The writer's part ends. `stop` is true when someone pressed Stop, so a member who missed it ends the set when it finds this record in any log. |
 | `cap` | `room`, `capture`, `start_us`, `init` {`v`, `m`: {`size`, `sha256`}}, plus the capture details of `rec` | A capture starts or an init arrives. All `cap` records of one capture are merged, later fields winning. |
 | `seg` | `capture`, `series`, `n`, `set`, `t_us`, `d_us`, `size`, `sha256` | A finished segment of a set: number `n` (from 1), its start, duration, size and SHA-256. Only segments of a set are logged. |
-| `event` | `id`, `t_us`, `kind`, `target`, `text`, `values`, `tags` | A note, mark, drawing, board or plugin result. `id` is unique per author. `target` is `{"t_us"}` for a moment or `{"from_us", "to_us"}` for a range, with `set?` and `file?` (a member ID). A plugin result also has `plugin` {`id`, `name`, `version`}, `job` and `run`. |
+| `event` | `id`, `t_us`, `kind`, `target`, `text`, `values`, `tags`, `source?` | A note, mark, drawing, board card or plugin result. `source` is `ai` for a note written through the local API. `id` is unique per author. `target` is `{"t_us"}` for a moment or `{"from_us", "to_us"}` for a range, with `set?` and `file?` (a member ID). A plugin result also has `plugin` {`id`, `name`, `version`}, `job` and `run`. |
 | `event_edit` | `id`, `t_us`, `text`, `tags` | The new text of the writer's event. |
 | `event_del` | `id`, `t_us` | The writer's event is deleted. |
 | `event_restore` | `id`, `t_us` | The deletion is undone. |
@@ -80,10 +80,10 @@ Every kind the app writes. The body's field `k` holds the kind, for example {`k`
 | `room_name` | `name`, `t_us` | The room is renamed. |
 | `offset` | `peer` (short ID), `t_us`, `rtt_us`, `offset_us` | The writer measured the peer's clock: `offset_us` is theirs minus the writer's. |
 | `layout` | `set`, `t_us`, `layout` | The writer's layout for the set; `set` is also inside `layout`. A `layout` record without `set`, written while watching, belongs to no set's default layout and is ignored. |
-| `plugin` | `plugin`, `on`, `version`, `settings`, `runner?`, `t_us` | The room's choice for a plugin. |
-| `job` | `state`, `job`, `run`, `t_us`, `plugin?`, `version?`, `settings?`, `file?`, `error?`, `events?`, `tags?`, `note?` | A step of an analysis job: `state` is `claim`, `yield`, `stop`, `fail`, `done` or `retry`. |
-| `worker` | `plugin`, `on`, `ready`, `t_us` | Whether the writer processes the plugin and has its files. |
+| `plugin` | `plugin`, `on`, `version`, `settings`, `runner?`, `t_us` | The room's choice for a plugin. `runner` is the member who runs it; without it, the writer. |
+| `job` | `state`, `job`, `run`, `t_us`, `plugin?`, `version?`, `settings?`, `file?`, `error?`, `events?`, `tags?`, `note?` | A step of an analysis job: `state` is `claim`, `fail`, `done` or `retry` (older versions also wrote `yield` and `stop`, read as waiting). |
 | `party` | `set`, `t_us`, `shared` | The Watch Party state while a set records. |
+| `ai_del` | `set`, `t_us` | Hides every note with `source` `ai` of the set written before it, from any log. |
 | `file_bad` | `room`, `set`, `file`, `size`, `t_us` | A fetched file failed its check and was deleted (`file` is `<member id>/<capture>/<name>`). |
 
 How readers derive things:
@@ -91,9 +91,9 @@ How readers derive things:
 - A set exists for each `rec` whose set ID is valid and not dropped by a `set_del`. A member has one part per set. The part is that member's `rec`, `seg` and `rec_end` records, and its captures are the `cap` records of the captures its segments name. A later `rec` after a `rec_end` reopens the part. A repeated `seg` for the same capture, series and `n` is ignored. `n` is 1 to 4294967295, `series` is `v` or `m`, `capture` is a capture ID.
 - The set starts at the earliest start of any part, and ends at the latest end. A part with no `rec_end` is open; a set is recording while a part is open and present, and a `rec_end` with `stop` true by anyone ends the set.
 - Clock offset: the writer's own log has offset 0. Another log's offset is the newest `offset` measurement of that member by the reader, or its live measurement; a recording made elsewhere takes the offset of the member named in `imported`. A record's time on the reader's clock is `t_us` minus the offset.
-- Events: for each author and `id`, the first `event` counts; later `event_edit`, `event_del` and `event_restore` records of the same author change its text, tags and deletion. A plugin result cannot be edited, and is shown only for the run that has a `job` record with state `done` (the lowest member ID when several are done).
-- The room name is the newest `room_name` by corrected time. The newest `plugin` record per plugin wins. The latest `remove` or `admit` per member wins: the member is removed or in. The `layout` of a set is the newest one for it. Job states per `job` key and the `worker` records tell who runs what.
-- A debrief is a set whose parts are voice only and that has `party` records. Replaying it applies the `shared` states in time order.
+- Events: for each author and `id`, the first `event` counts; later `event_edit`, `event_del` and `event_restore` records of the same author change its text, tags and deletion. A plugin result cannot be edited, and is shown only while its plugin is on, for the newest run of that plugin and file that has a `job` record with state `done`, whatever its version or settings (the lowest member ID and run on a tie). A `board` event is a card: `values` {`card`, `title?`, `pos?`, `gone?`}, the newest event of a card wins, and an event without `card` is the team card.
+- The room name is the newest `room_name` by corrected time. The newest `plugin` record per plugin wins. The latest `remove` or `admit` per member wins: the member is removed or in. The `layout` of a set is the newest one for it. The state of a plugin on a file is its newest `job` record over every key and member. `worker` records of older versions are ignored.
+- A debrief is a voice-only set whose `rec` names a recording in `of`; an older one without `of` links to the `shared.set` of its first `party` record. Its `party` records are what the Watch Party showed while it was recorded.
 
 ## Placing a recording made elsewhere
 
@@ -134,3 +134,4 @@ Recording > Export to folder… writes a new folder of plain files for a video e
 - `notes.csv`: notes and marks, one row each, with the columns `seconds,kind,text,tags` (seconds from the start; `kind` is `note` or `mark`; `tags` are separated by spaces). Written only when there are any.
 - `chapters.vtt`: chapters as WebVTT cues (chapters people made, and the matches that the Apex matches plugin found). Written only when there are any.
 - `<name>.vtt`: the spoken lines of that member as WebVTT cues, from Transcription.
+- `watch.json`: for a debrief, its `party` records as `[{"t_us", "by", "set", "at_us", "playing", "rate"}]`, in microseconds on the exporting PC's clock.

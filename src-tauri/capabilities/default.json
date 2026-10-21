@@ -1,11 +1,11 @@
 {
   "identifier": "default",
   "windows": [
-    "main"
+    "main",
+    "board"
   ],
   "permissions": [
     "core:default",
-    "core:window:allow-set-fullscreen",
     "updater:default",
     "window-state:default"
   ]

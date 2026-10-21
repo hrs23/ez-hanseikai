@@ -7,7 +7,7 @@ use iroh::Watcher;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
-use crate::{api, audio, check, clean_name, clean_note, data, debug, export, ffmpeg, jobs, merge, net, now_us, party, record, room, shell, sources, Core, BOARD_MAX, CHANNELS, EVENT_KINDS, NOTE_MAX, REPO, VALUES_MAX};
+use crate::{api, audio, check, clean_name, clean_note, clean_text, data, debug, export, ffmpeg, jobs, merge, net, now_us, party, record, room, shell, sources, Core, BOARD_MAX, CHANNELS, EVENT_KINDS, NAME_MAX, NOTE_MAX, REPO, VALUES_MAX};
 
 pub type Op = fn(&Arc<Core>, Value) -> Result<Value, String>;
 
@@ -31,8 +31,6 @@ pub const OPS: &[(&str, Op)] = &[
     ("list_mics", list_mics),
     ("set_mic", set_mic),
     ("set_mix", set_mix),
-    ("list_processes", list_processes),
-    ("set_audio_process", set_audio_process),
     ("set_quality", set_quality),
     ("set_limit", set_limit),
     ("set_codecs", set_codecs),
@@ -40,7 +38,6 @@ pub const OPS: &[(&str, Op)] = &[
     ("set_language", set_language),
     ("set_hotkey", set_hotkey),
     ("set_channel", set_channel),
-    ("set_warn_hours", set_warn_hours),
     ("set_layout", set_layout),
     ("check_update", check_update),
     ("install_update", install_update),
@@ -51,6 +48,10 @@ pub const OPS: &[(&str, Op)] = &[
     ("retry_ffmpeg", retry_ffmpeg),
     ("add_event", add_event),
     ("event_action", event_action),
+    ("delete_ai_notes", delete_ai_notes),
+    ("put_board_card", put_board_card),
+    ("open_board_window", open_board_window),
+    ("set_fullscreen", set_fullscreen),
     ("log_layout", log_layout),
     ("party_on", party_on),
     ("party_act", party_act),
@@ -59,14 +60,9 @@ pub const OPS: &[(&str, Op)] = &[
     ("room_plugins", jobs::room_plugins),
     ("set_room_plugin", jobs::set_room_plugin),
     ("set_plugin_runner", jobs::set_plugin_runner),
-    ("set_process_plugin", jobs::set_process_plugin),
     ("prepare_plugin", jobs::prepare_plugin),
-    ("jobs", jobs::jobs),
     ("retry_job", jobs::retry_job),
-    ("run_job_next", jobs::run_job_next),
-    ("cancel_job", jobs::cancel_job),
     ("delete_set", delete_set),
-    ("discard_set", discard_set),
     ("download_set", download_set),
     ("focus_set", focus_set),
     ("export_check", export_check),
@@ -189,7 +185,7 @@ fn check_peer(core: &Arc<Core>, args: Value) -> Result<Value, String> {
         return Ok(tauri::async_runtime::block_on(net::check_peer(core, &id)));
     }
     warm(core);
-    Ok(json!(check::run(core, sources::pid_of(&core.audio_process.lock().unwrap().clone()))))
+    Ok(json!(check::run(core)))
 }
 
 fn start_recording(core: &Arc<Core>, args: Value) -> Result<Value, String> {
@@ -265,19 +261,6 @@ fn set_mix(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     Ok(Value::Null)
 }
 
-fn list_processes(_: &Arc<Core>, _: Value) -> Result<Value, String> {
-    let mut names: Vec<String> = sources::processes().into_iter().map(|(name, _)| name).collect();
-    names.sort_by_key(|n| n.to_lowercase());
-    names.dedup();
-    Ok(json!(names))
-}
-
-fn set_audio_process(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    *core.audio_process.lock().unwrap() = arg(&args, "name")?;
-    core.save_settings();
-    Ok(Value::Null)
-}
-
 fn set_quality(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     let id: String = arg(&args, "id")?;
     if !record::QUALITIES.iter().any(|q| q.0 == id) {
@@ -327,12 +310,6 @@ fn set_channel(core: &Arc<Core>, args: Value) -> Result<Value, String> {
         return Err(format!("unknown channel {channel}"));
     }
     *core.channel.lock().unwrap() = channel;
-    core.save_settings();
-    Ok(Value::Null)
-}
-
-fn set_warn_hours(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    *core.warn_hours.lock().unwrap() = arg(&args, "hours")?;
     core.save_settings();
     Ok(Value::Null)
 }
@@ -443,6 +420,54 @@ fn event_action(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     Ok(Value::Null)
 }
 
+fn delete_ai_notes(core: &Arc<Core>, args: Value) -> Result<Value, String> {
+    let (room, set) = recording(&args)?;
+    core.append_log(&room, &json!({"k": "ai_del", "set": set, "t_us": now_us()}));
+    party::send(core);
+    Ok(Value::Null)
+}
+
+fn put_board_card(core: &Arc<Core>, args: Value) -> Result<Value, String> {
+    let room: String = arg(&args, "room")?;
+    if room != core.active_room_id() {
+        return Err("Enter the room first.".into());
+    }
+    let wanted: String = arg(&args, "card")?;
+    let card = if wanted.is_empty() { format!("c:{}", room::random_hex(4)) } else { wanted };
+    if !room::board_card_valid(&card) {
+        return Err("That is not a card.".into());
+    }
+    let members = core.active_room().map(|r| r.members).unwrap_or_default();
+    let cards = room::board_cards(&room::events(&room::logs(core, &room), None), &members);
+    let current = cards.iter().find(|c| c["card"] == card.as_str());
+    let text = match arg::<Option<String>>(&args, "text")? {
+        Some(text) => clean_note(&text, BOARD_MAX),
+        None => current.and_then(|c| c["text"].as_str()).unwrap_or_default().to_string(),
+    };
+    let title = match arg::<Option<String>>(&args, "title")? {
+        Some(title) => clean_text(&title, NAME_MAX),
+        None => current.and_then(|c| c["title"].as_str()).unwrap_or_default().to_string(),
+    };
+    let last = cards.iter().filter_map(|c| c["pos"].as_f64()).fold(0.0, f64::max);
+    let pos = arg::<Option<f64>>(&args, "pos")?.filter(|p| p.is_finite()).or_else(|| current.and_then(|c| c["pos"].as_f64())).unwrap_or(last + 1.0);
+    let gone = arg::<Option<bool>>(&args, "gone")?.unwrap_or_else(|| current.is_some_and(|c| c["gone"] == true));
+    let mut values = json!({"card": card, "pos": pos, "gone": gone});
+    if !title.is_empty() {
+        values["title"] = json!(title);
+    }
+    log_event(core, &room, "board", &text, json!({}), values);
+    Ok(json!(card))
+}
+
+fn open_board_window(core: &Arc<Core>, _: Value) -> Result<Value, String> {
+    shell::open_board(&core.app, &core.dir);
+    Ok(Value::Null)
+}
+
+fn set_fullscreen(core: &Arc<Core>, args: Value) -> Result<Value, String> {
+    shell::set_fullscreen(&core.app, &arg::<String>(&args, "window")?, arg(&args, "on")?).map(|_| Value::Null)
+}
+
 fn log_layout(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     core.append_log(&core.active_room_id(), &json!({"k": "layout", "t_us": now_us(), "layout": args["layout"]}));
     Ok(Value::Null)
@@ -478,10 +503,6 @@ fn draw(core: &Arc<Core>, args: Value) -> Result<Value, String> {
 
 fn delete_set(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     room::delete_set(core, &arg::<String>(&args, "room")?, &arg::<String>(&args, "set")?).map(|deleted| json!(deleted))
-}
-
-fn discard_set(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    room::discard_set(core, &arg::<String>(&args, "room")?, &arg::<String>(&args, "set")?).map(|discarded| json!(discarded))
 }
 
 fn download_set(core: &Arc<Core>, args: Value) -> Result<Value, String> {
