@@ -1753,7 +1753,7 @@ dependencies = [
 
 [[package]]
 name = "ggi-hanseikai"
-version = "0.19.3"
+version = "0.19.4"
 dependencies = [
  "anyhow",
  "crc32fast",
