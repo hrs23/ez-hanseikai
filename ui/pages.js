@@ -248,8 +248,9 @@ function renderProfile() {
     press(b, i === mine);
     return b;
   }));
-  $("facegrid").replaceChildren(...Object.keys(FACES).map((name, i) => {
-    const b = el("button", { className: "facebtn", ariaLabel: `${t("Avatar")} ${i + 1}`, onclick: () => run("set_profile", { avatar: name }) }, picture(name, colorOf(mine), name, "lg"));
+  const own = image && !FACES[image] ? [press(el("button", { className: "facebtn", ariaLabel: t("Avatar") }, picture("", colorOf(mine), image, "lg")), true)] : [];
+  $("facegrid").replaceChildren(...own, ...Object.keys(FACES).map((name, i) => {
+    const b = el("button", { className: "facebtn", ariaLabel: `${t("Avatar")} ${i + 1}`, onclick: () => run("set_profile", { avatar: name }) }, picture("", colorOf(mine), name, "lg"));
     press(b, image === name);
     return b;
   }));

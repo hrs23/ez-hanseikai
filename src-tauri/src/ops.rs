@@ -285,18 +285,18 @@ fn set_name(core: &Arc<Core>, args: Value) -> Result<Value, String> {
 fn set_profile(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     #[derive(serde::Deserialize)]
     struct Look {
-        color: Option<usize>,
+        color: Option<u64>,
         avatar: Option<String>,
     }
     let look: Look = serde_json::from_value(args).map_err(|_| "color or avatar is not valid.".to_string())?;
-    if look.color.is_some_and(|c| c >= room::COLORS) {
+    if look.color.is_some_and(|c| room::check_color(c).is_none()) {
         return Err("color is not valid.".into());
     }
     if let Some(avatar) = &look.avatar {
         room::check_avatar(avatar)?;
     }
     if let Some(color) = look.color {
-        *core.color.lock().unwrap() = Some(color);
+        *core.color.lock().unwrap() = Some(color as usize);
     }
     if let Some(avatar) = look.avatar {
         *core.avatar.lock().unwrap() = avatar;

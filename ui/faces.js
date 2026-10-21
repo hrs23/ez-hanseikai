@@ -31,7 +31,10 @@ const looks = () => Object.keys(st.colors).map(look);
 function avatar(id, size, dot, grey) {
   const a = picture(id === st.id ? st.name : st.names[id], grey ? "var(--raised-3)" : colorOf(colorIndex(id)), st.avatars[id], size);
   a.title = nameOf(id);
-  if (grey) a.style.color = "var(--muted)";
+  if (grey) {
+    a.style.color = "var(--muted)";
+    a.classList.add("dim");
+  }
   if (dot) a.append(el("i", { className: dot }));
   return a;
 }

@@ -370,8 +370,12 @@ fn newest<'a>(logs: &'a [Log], kind: &str, field: &str, fits: fn(&str) -> bool) 
     found.max().map(|(t, _, value)| (t, value))
 }
 
+fn stamp_at(logs: &[Log], kind: &str, field: &str, fits: fn(&str) -> bool, now: i64) -> i64 {
+    newest(logs, kind, field, fits).map_or(now, |(t, _)| now.max(t + 1))
+}
+
 fn stamp(logs: &[Log], kind: &str, field: &str, fits: fn(&str) -> bool) -> i64 {
-    newest(logs, kind, field, fits).map_or(now_us(), |(t, _)| now_us().max(t + 1))
+    stamp_at(logs, kind, field, fits, now_us())
 }
 
 pub fn latest_name(logs: &[Log]) -> Option<String> {
@@ -379,7 +383,7 @@ pub fn latest_name(logs: &[Log]) -> Option<String> {
 }
 
 fn icon_fits(icon: &str) -> bool {
-    icon.is_empty() || valid_image(icon)
+    icon.is_empty() || check_image(icon).is_ok()
 }
 
 fn latest_icon(logs: &[Log]) -> String {
@@ -421,12 +425,12 @@ fn check_image(text: &str) -> Result<(), String> {
     }
 }
 
-fn valid_image(text: &str) -> bool {
-    check_image(text).is_ok()
-}
-
 fn builtin_avatar(text: &str) -> bool {
     (1..=16).contains(&text.len()) && text.bytes().all(|b| b.is_ascii_lowercase())
+}
+
+pub fn check_color(c: u64) -> Option<usize> {
+    (c < COLORS as u64).then_some(c as usize)
 }
 
 pub fn check_avatar(text: &str) -> Result<(), String> {
@@ -440,7 +444,7 @@ pub fn my_profile(core: &Core) -> Profile {
 fn read_profile(record: &Value) -> Option<Profile> {
     let color = match &record["color"] {
         Value::Null => None,
-        c => Some(c.as_u64().filter(|c| *c < COLORS as u64)? as usize),
+        c => Some(check_color(c.as_u64()?)?),
     };
     let avatar = match &record["avatar"] {
         Value::Null => "",
@@ -1815,7 +1819,8 @@ pub mod tests {
     #[test]
     fn a_rename_made_here_beats_a_name_from_a_fast_clock() {
         let ahead = log("b", 0, vec![json!({"k": "room_name", "name": "Theirs", "t_us": 5000})]);
-        let t = 1000i64.max(stamp(std::slice::from_ref(&ahead), "room_name", "name", |_| true));
+        let t = stamp_at(std::slice::from_ref(&ahead), "room_name", "name", |_| true, 1000);
+        assert_eq!(t, 5001);
         let mine = log("a", 0, vec![json!({"k": "room_name", "name": "Mine", "t_us": t})]);
         assert_eq!(latest_name(&[ahead, mine]), Some("Mine".to_string()));
     }

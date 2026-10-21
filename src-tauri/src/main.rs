@@ -495,7 +495,7 @@ pub fn clean_settings(mut settings: Value) -> Value {
     if !settings.is_object() {
         settings = json!({});
     }
-    if !settings["color"].as_u64().is_some_and(|c| c < room::COLORS as u64) {
+    if !settings["color"].as_u64().is_some_and(|c| room::check_color(c).is_some()) {
         settings["color"] = Value::Null;
     }
     if !settings["avatar"].as_str().is_some_and(|a| room::check_avatar(a).is_ok()) {
