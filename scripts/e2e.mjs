@@ -30,6 +30,7 @@ const RUNNER_SLOWDOWN = 3;
 const COLD_START_S = 60;
 const CALL_S = 30;
 const POLL_MS = 500;
+const SLOW_WAIT_S = 3;
 const SEGMENTS_BEFORE_LATE_JOIN = 2;
 const SEGMENTS_AFTER_RESTART = 2;
 const SHORT_SET_SEGMENTS = 5;
@@ -113,14 +114,18 @@ function exited() {
 }
 
 async function waitFor(label, seconds, probe) {
-  const deadline = Date.now() + seconds * 1000;
+  const started = Date.now();
+  const deadline = started + seconds * 1000;
   let last;
   for (;;) {
     const gone = exited();
     if (gone) fail(`${gone.key} exited with code ${gone.proc.exitCode} while waiting for: ${label}`);
     try {
       last = await probe();
-      if (last) return last;
+      if (last) {
+        if (Date.now() - started > SLOW_WAIT_S * 1000) say(`waited ${((Date.now() - started) / 1000).toFixed(1)} s for: ${label}`);
+        return last;
+      }
     } catch (e) {
       last = e.message;
     }
@@ -748,11 +753,82 @@ async function live(ctx) {
     await allSee(others, "the deletion", within(LOG_SYNC_S * 2), (st) => !seen(st));
   });
 
+
+  await step("the set stops and everyone has it", async () => {
+    const all = [a, b, c];
+    await invoke(a, "stop_recording");
+    await allSee(all, "the set ended and everyone has it", within((SEGMENT_S + SYNC_ROUND_S) * 3), (st) => !st.active_set && setOf(st, ctx.set) && !setOf(st, ctx.set).live && heldByAll(st, ctx.set, all));
+  });
+
+  await step("C loses its own log and gets all of it back before writing again", async () => {
+    kill(c);
+    await stopped(c);
+    const copy = fs.readFileSync(logFile(a, ctx.room, c.id));
+    fs.rmSync(logFile(c, ctx.room, c.id));
+    start("c");
+    await attach(c);
+    await share(c);
+    const pending = path.join(roomDir(c, ctx.room), "pending.bin");
+    await waitFor("C holds its whole log again", within(DIAL_S + SYNC_ROUND_S * 2), () => fileSize(logFile(c, ctx.room, c.id)) >= copy.length && !fs.existsSync(pending));
+    check(fs.readFileSync(logFile(c, ctx.room, c.id)).subarray(0, copy.length).equals(copy), "C's restored log differs from A's copy of it");
+    const all = [a, b, c];
+    await meshed(all);
+    const id = await invoke(c, "add_event", { kind: "note", text: "After the restore", target: {}, values: null });
+    await allSee([a, b], "C's note written after the restore", within(REQUEST_TIMEOUT_S + DIAL_S + LOG_SYNC_S), (st) => st.events.some((e) => e.key === `${c.id}/${id}`));
+  });
+
+  await step("removing C for the whole room stops it fetching", async () => {
+    await invoke(a, "remove_peer", { id: c.id });
+    await allSee([a, b], "C no longer a peer", within(LOG_SYNC_S * 2), (st) => !st.peers.some((p) => p.id === c.id));
+    await sleep(LOG_SYNC_S * 1000);
+    const before = fileSize(logFile(c, ctx.room, a.id));
+    const id = await invoke(a, "add_event", { kind: "note", text: "After the removal", target: {}, values: null });
+    const key = `${a.id}/${id}`;
+    await allSee([b], "the new note", within(LOG_SYNC_S * 2), (st) => st.events.some((e) => e.key === key));
+    await sleep(SYNC_ROUND_S * 2 * 1000);
+    check(fileSize(logFile(c, ctx.room, a.id)) === before, "C still received A's log after its removal");
+    const st = await state(c);
+    check(!st.events.some((e) => e.key === key), "C shows a note written after its removal");
+  });
+
+  await step("B leaves the room from its menu, enters it again with its recordings and notes, and deletes it from the list, which forgets B's personal plan", async () => {
+    const plan = JSON.stringify(`board/${ctx.room}`);
+    await evaluate(b, `localStorage.setItem(${plan}, JSON.stringify("# Mine")); true`);
+    const kept = (st) => [st.sets.map((s) => `${s.id} ${s.players.map((p) => p.have).join()}`), st.events.map((e) => e.key)].map((x) => x.sort().join()).join();
+    const before = kept(await state(b));
+    await waitFor("B shows the room header", within(UI_REFRESH_S * 5), () => evaluate(b, `!$("app").hidden && !!st.room`));
+    await evaluate(b, `$("roomname").click(); [...$("menu").querySelectorAll("button")].find((x) => x.textContent === t("Leave room")).click(); true`);
+    await waitFor("B shows the start screen and still lists the room", within(UI_REFRESH_S * 5), async () => { const st = await state(b); return !st.room && st.rooms.some((r) => r.id === ctx.room) && evaluate(b, `!$("start").hidden && $("app").hidden`); });
+    await invoke(b, "enter_room", { id: ctx.room });
+    await meshed([a, b], ctx.room);
+    check(kept(await state(b)) === before, "B lost recordings or notes by leaving and entering again");
+    await invoke(b, "close_room", { id: ctx.room });
+    await waitFor("B lists the room", within(UI_REFRESH_S * 5), () => evaluate(b, `!$("start").hidden && $("roomlist").children.length > 0`));
+    await pressAndConfirm(b, `[...$("roomlist").children].find((r) => r.firstChild.textContent === st.rooms.find((x) => x.id === ${JSON.stringify(ctx.room)}).name).querySelector(".more").click(); [...$("menu").querySelectorAll("button")].find((x) => x.textContent === t("Delete…")).click()`);
+    await waitFor("B no longer lists the room", within(UI_REFRESH_S * 5), async () => { const st = await state(b); return !st.room && !st.rooms.some((r) => r.id === ctx.room); });
+    await waitFor("B forgets the personal plan of the room it deleted", within(UI_REFRESH_S * 5), async () => (await evaluate(b, `localStorage.getItem(${plan})`)) === null);
+    await waitFor("B removes the folder of the room it left", within(UI_REFRESH_S * 5), () => !fs.existsSync(roomDir(b, ctx.room)));
+  });
+
+  await step("C removes the room from this PC while sharing and its folder does not come back", async () => {
+    const dir = roomDir(c, ctx.room);
+    check((await state(c)).capture.sharing && filesUnder(path.join(dir, "standby", c.id)).length > 0, "C shares no live picture before removing the room");
+    await invoke(c, "close_room", { id: ctx.room });
+    await invoke(c, "remove_room", { id: ctx.room });
+    check(!(await state(c)).rooms.some((r) => r.id === ctx.room), "C still lists the room it removed");
+    let since = 0;
+    await waitFor("C's room folder gone for good", within(FINISH_WAIT_S + KEEP_EVERY_S * 3), () => {
+      since = fs.existsSync(dir) ? 0 : since || Date.now();
+      return since > 0 && Date.now() - since > (FINISH_WAIT_S + KEEP_EVERY_S) * 1000;
+    });
+    check(fs.existsSync(path.join(c.data, "rooms", OLD_ROOM)), "removing the room touched a folder of an older version");
+  });
 }
 
 async function gather(ctx) {
   const a = await launch("a");
   const b = await launch("b");
+  const c = await launch("c");
   ctx.room = await invoke(a, "create_room", { name: "Practice" });
   await asks(a, b, a);
   await invoke(a, "answer_ask", { id: b.id, approve: true });
@@ -761,7 +837,6 @@ async function gather(ctx) {
   await invoke(a, "start_recording");
   ctx.set = (await state(a)).active_set.id;
   await waitFor(`A has logged ${SEGMENTS_BEFORE_LATE_JOIN} segments`, within(SEGMENT_S * (SEGMENTS_BEFORE_LATE_JOIN + 1)), () => segsOf(logOf(a, ctx.room, a.id), ctx.set, "v").length >= SEGMENTS_BEFORE_LATE_JOIN);
-  const c = await launch("c");
   await asks(a, c, b);
   await invoke(a, "answer_ask", { id: c.id, approve: true });
   await meshed([a, b, c], ctx.room);
@@ -885,23 +960,6 @@ async function recover(ctx) {
     check(!missing, missing);
     const count = all.reduce((n, owner) => n + pieces(logOf(owner, ctx.room, owner.id), ctx.set).length, 0);
     ctx.notes.push(`verified ${count} pieces by SHA-256 on each of ${all.length} members, set of ${ctx.durationS.toFixed(1)} s`);
-  });
-
-  await step("C loses its own log and gets all of it back before writing again", async () => {
-    kill(c);
-    await stopped(c);
-    const copy = fs.readFileSync(logFile(a, ctx.room, c.id));
-    fs.rmSync(logFile(c, ctx.room, c.id));
-    start("c");
-    await attach(c);
-    await share(c);
-    const pending = path.join(roomDir(c, ctx.room), "pending.bin");
-    await waitFor("C holds its whole log again", within(DIAL_S + SYNC_ROUND_S * 2), () => fileSize(logFile(c, ctx.room, c.id)) >= copy.length && !fs.existsSync(pending));
-    check(fs.readFileSync(logFile(c, ctx.room, c.id)).subarray(0, copy.length).equals(copy), "C's restored log differs from A's copy of it");
-    const all = [a, b, c];
-    await meshed(all);
-    const id = await invoke(c, "add_event", { kind: "note", text: "After the restore", target: {}, values: null });
-    await allSee([a, b], "C's note written after the restore", within(REQUEST_TIMEOUT_S + DIAL_S + LOG_SYNC_S), (st) => st.events.some((e) => e.key === `${c.id}/${id}`));
   });
 }
 
@@ -1596,53 +1654,6 @@ async function library(ctx) {
       check(fs.existsSync(file) && fs.readFileSync(file).equals(Buffer.from(body)), `${name} was changed or removed`);
     }
     check(!fs.existsSync(path.join(apps.c.data, oldStandby())), "C kept a live segment of an earlier run");
-  });
-
-  await step("removing C for the whole room stops it fetching", async () => {
-    await invoke(a, "remove_peer", { id: c.id });
-    await allSee([a, b], "C no longer a peer", within(LOG_SYNC_S * 2), (st) => !st.peers.some((p) => p.id === c.id));
-    await sleep(LOG_SYNC_S * 1000);
-    const before = fileSize(logFile(c, ctx.room, a.id));
-    const id = await invoke(a, "add_event", { kind: "note", text: "After the removal", target: {}, values: null });
-    const key = `${a.id}/${id}`;
-    await allSee([b], "the new note", within(LOG_SYNC_S * 2), (st) => st.events.some((e) => e.key === key));
-    await sleep((DIAL_S + SYNC_ROUND_S) * 1000);
-    check(fileSize(logFile(c, ctx.room, a.id)) === before, "C still received A's log after its removal");
-    const st = await state(c);
-    check(!st.events.some((e) => e.key === key), "C shows a note written after its removal");
-  });
-
-  await step("B leaves the room from its menu, enters it again with its recordings and notes, and deletes it from the list, which forgets B's personal plan", async () => {
-    const plan = JSON.stringify(`board/${ctx.room}`);
-    await evaluate(b, `localStorage.setItem(${plan}, JSON.stringify("# Mine")); true`);
-    const kept = (st) => [st.sets.map((s) => `${s.id} ${s.players.map((p) => p.have).join()}`), st.events.map((e) => e.key)].map((x) => x.sort().join()).join();
-    const before = kept(await state(b));
-    await waitFor("B shows the room header", within(UI_REFRESH_S * 5), () => evaluate(b, `!$("app").hidden && !!st.room`));
-    await evaluate(b, `$("roomname").click(); [...$("menu").querySelectorAll("button")].find((x) => x.textContent === t("Leave room")).click(); true`);
-    await waitFor("B shows the start screen and still lists the room", within(UI_REFRESH_S * 5), async () => { const st = await state(b); return !st.room && st.rooms.some((r) => r.id === ctx.room) && evaluate(b, `!$("start").hidden && $("app").hidden`); });
-    await invoke(b, "enter_room", { id: ctx.room });
-    await meshed([a, b], ctx.room);
-    check(kept(await state(b)) === before, "B lost recordings or notes by leaving and entering again");
-    await invoke(b, "close_room", { id: ctx.room });
-    await waitFor("B lists the room", within(UI_REFRESH_S * 5), () => evaluate(b, `!$("start").hidden && $("roomlist").children.length > 0`));
-    await pressAndConfirm(b, `[...$("roomlist").children].find((r) => r.firstChild.textContent === st.rooms.find((x) => x.id === ${JSON.stringify(ctx.room)}).name).querySelector(".more").click(); [...$("menu").querySelectorAll("button")].find((x) => x.textContent === t("Delete…")).click()`);
-    await waitFor("B no longer lists the room", within(UI_REFRESH_S * 5), async () => { const st = await state(b); return !st.room && !st.rooms.some((r) => r.id === ctx.room); });
-    await waitFor("B forgets the personal plan of the room it deleted", within(UI_REFRESH_S * 5), async () => (await evaluate(b, `localStorage.getItem(${plan})`)) === null);
-    await waitFor("B removes the folder of the room it left", within(UI_REFRESH_S * 5), () => !fs.existsSync(roomDir(b, ctx.room)));
-  });
-
-  await step("C removes the room from this PC while sharing and its folder does not come back", async () => {
-    const dir = roomDir(c, ctx.room);
-    check((await state(c)).capture.sharing && filesUnder(path.join(dir, "standby", c.id)).length > 0, "C shares no live picture before removing the room");
-    await invoke(c, "close_room", { id: ctx.room });
-    await invoke(c, "remove_room", { id: ctx.room });
-    check(!(await state(c)).rooms.some((r) => r.id === ctx.room), "C still lists the room it removed");
-    let since = 0;
-    await waitFor("C's room folder gone for good", within(FINISH_WAIT_S + KEEP_EVERY_S * 3), () => {
-      since = fs.existsSync(dir) ? 0 : since || Date.now();
-      return since > 0 && Date.now() - since > (FINISH_WAIT_S + KEEP_EVERY_S) * 1000;
-    });
-    check(fs.existsSync(path.join(c.data, "rooms", OLD_ROOM)), "removing the room touched a folder of an older version");
   });
 }
 
