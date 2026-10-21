@@ -18,6 +18,7 @@ pub const OPS: &[(&str, Op)] = &[
     ("close_room", close_room),
     ("remove_room", remove_room),
     ("rename_room", rename_room),
+    ("set_room_icon", set_room_icon),
     ("create_invite", create_invite),
     ("cancel_invites", cancel_invites),
     ("answer_ask", answer_ask),
@@ -35,6 +36,7 @@ pub const OPS: &[(&str, Op)] = &[
     ("set_limit", set_limit),
     ("set_codecs", set_codecs),
     ("set_name", set_name),
+    ("set_profile", set_profile),
     ("set_language", set_language),
     ("set_hotkey", set_hotkey),
     ("set_channel", set_channel),
@@ -132,6 +134,10 @@ fn remove_room(core: &Arc<Core>, args: Value) -> Result<Value, String> {
 
 fn rename_room(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     room::rename_room(core, &arg::<String>(&args, "name")?).map(|_| Value::Null)
+}
+
+fn set_room_icon(core: &Arc<Core>, args: Value) -> Result<Value, String> {
+    room::set_room_icon(core, &arg::<String>(&args, "icon")?).map(|_| Value::Null)
 }
 
 fn create_invite(core: &Arc<Core>, args: Value) -> Result<Value, String> {
@@ -273,6 +279,30 @@ fn set_codecs(core: &Arc<Core>, args: Value) -> Result<Value, String> {
 fn set_name(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     *core.name.lock().unwrap() = clean_name(&arg::<String>(&args, "name")?);
     core.save_settings();
+    Ok(Value::Null)
+}
+
+fn set_profile(core: &Arc<Core>, args: Value) -> Result<Value, String> {
+    #[derive(serde::Deserialize)]
+    struct Look {
+        color: Option<usize>,
+        avatar: Option<String>,
+    }
+    let look: Look = serde_json::from_value(args).map_err(|_| "color or avatar is not valid.".to_string())?;
+    if look.color.is_some_and(|c| c >= room::COLORS) {
+        return Err("color is not valid.".into());
+    }
+    if let Some(avatar) = &look.avatar {
+        room::check_avatar(avatar)?;
+    }
+    if let Some(color) = look.color {
+        *core.color.lock().unwrap() = Some(color);
+    }
+    if let Some(avatar) = look.avatar {
+        *core.avatar.lock().unwrap() = avatar;
+    }
+    core.save_settings();
+    room::share_profile(core);
     Ok(Value::Null)
 }
 

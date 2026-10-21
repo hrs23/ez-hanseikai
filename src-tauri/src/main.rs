@@ -193,6 +193,8 @@ pub struct Core {
     pub app: AppHandle,
     pub peers: Mutex<Vec<Peer>>,
     pub name: Mutex<String>,
+    pub color: Mutex<Option<usize>>,
+    pub avatar: Mutex<String>,
     pub limit_mbps: Mutex<Option<f64>>,
     pub invites: Mutex<Vec<(String, String)>>,
     pub rooms: Mutex<room::Rooms>,
@@ -302,6 +304,8 @@ impl Core {
     pub fn save_settings(&self) {
         let value = json!({
             "name": *self.name.lock().unwrap(),
+            "color": *self.color.lock().unwrap(),
+            "avatar": *self.avatar.lock().unwrap(),
             "limit_mbps": *self.limit_mbps.lock().unwrap(),
             "channel": *self.channel.lock().unwrap(),
             "mic": self.engine.mic.lock().unwrap().clone(),
@@ -444,6 +448,8 @@ async fn init(app: AppHandle, dir: PathBuf, left_lock: bool) -> Result<Arc<Core>
         app,
         peers: Mutex::new(Vec::new()),
         name: Mutex::new(settings["name"].as_str().map(clean_name).unwrap_or_default()),
+        color: Mutex::new(settings["color"].as_u64().map(|c| c as usize)),
+        avatar: Mutex::new(settings["avatar"].as_str().unwrap_or_default().to_string()),
         limit_mbps: Mutex::new(settings["limit_mbps"].as_f64()),
         invites: Mutex::new(Vec::new()),
         rooms: Mutex::new(rooms),
@@ -488,6 +494,12 @@ async fn init(app: AppHandle, dir: PathBuf, left_lock: bool) -> Result<Arc<Core>
 pub fn clean_settings(mut settings: Value) -> Value {
     if !settings.is_object() {
         settings = json!({});
+    }
+    if !settings["color"].as_u64().is_some_and(|c| c < room::COLORS as u64) {
+        settings["color"] = Value::Null;
+    }
+    if !settings["avatar"].as_str().is_some_and(|a| room::check_avatar(a).is_ok()) {
+        settings["avatar"] = json!("");
     }
     if !settings["limit_mbps"].as_f64().is_some_and(|v| v.is_finite() && v > 0.0) {
         settings["limit_mbps"] = Value::Null;
@@ -676,6 +688,18 @@ mod tests {
         let kept = clean_settings(json!({"limit_mbps": 8.5, "channel": "beta", "language": "ja", "quality": "high"}));
         assert_eq!((kept["limit_mbps"].as_f64(), kept["channel"].as_str(), kept["language"].as_str(), kept["quality"].as_str()), (Some(8.5), Some("beta"), Some("ja"), Some("high")));
         assert_eq!(clean_settings(json!([1, 2])), clean_settings(json!({})));
+    }
+
+    #[test]
+    fn settings_drop_a_bad_colour_and_avatar() {
+        let bad = clean_settings(json!({"color": 8, "avatar": "data:image/svg+xml;base64,AAAA"}));
+        assert!(bad["color"].is_null());
+        assert_eq!(bad["avatar"], "");
+        assert!(clean_settings(json!({"color": "red", "avatar": 5}))["color"].is_null());
+        let kept = clean_settings(json!({"color": 3, "avatar": "bolt"}));
+        assert_eq!((kept["color"].as_u64(), kept["avatar"].as_str()), (Some(3), Some("bolt")));
+        let image = clean_settings(json!({"avatar": "data:image/webp;base64,AAAA"}));
+        assert_eq!(image["avatar"], "data:image/webp;base64,AAAA");
     }
 
     #[test]

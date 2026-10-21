@@ -33,6 +33,14 @@
   --track-strong: rgba(255, 255, 255, 0.32);
   --hatch: rgba(255, 255, 255, 0.05);
   --link: #5dcbff;
+  --member-orange: #ff9f4c;
+  --member-sky: #5dcbff;
+  --member-lime: #a6e45a;
+  --member-magenta: #e882e1;
+  --member-yellow: #edd643;
+  --member-violet: #c099ff;
+  --member-pink: #ff8cbc;
+  --member-blue: #8ca8ff;
   --on-member: var(--deep);
   --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px #23272f;
 }

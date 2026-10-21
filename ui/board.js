@@ -128,7 +128,7 @@ function placeBoard() {
 }
 function renderBoard() {
   if (!onBoard() || !inRoom()) return;
-  if (changed("board", editing ? [editing, lang] : [st.board, st.names, st.colors, lang, st.tag_names])) {
+  if (changed("board", editing ? [editing, lang] : [st.board, st.names, looks(), lang, st.tag_names])) {
     $("canvas").replaceChildren(...st.board.filter((c) => c.card === "team").map(cardEl), el("div", { className: "brow" }, ...st.board.filter((c) => c.card !== "team").map(cardEl), editing && editing.adding ? newCardEl() : null));
   }
   placeBoard();

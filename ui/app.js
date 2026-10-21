@@ -102,19 +102,6 @@ const livePinned = () => followingLive() && liveClock.pos !== null;
 const setById = (id) => (st && st.sets.find((s) => s.id === id)) || null;
 const reviewing = () => !!(watchParty && st && st.party.on && typeof st.party.shared.set === "string");
 
-
-function initial(name) {
-  return (String(name || "?").trim().charAt(0) || "?").toUpperCase();
-}
-
-function avatar(id, size, dot, grey) {
-  const a = el("span", { className: "av" + (size ? " " + size : ""), textContent: initial(id === st.id ? st.name : st.names[id]), title: nameOf(id) });
-  a.style.background = grey ? "var(--raised-3)" : colorOf(colorIndex(id));
-  if (grey) a.style.color = "var(--muted)";
-  if (dot) a.append(el("i", { className: dot }));
-  return a;
-}
-
 function markVoice(e, on, off) {
   e.classList.toggle("speaking", on && !off);
   e.classList.toggle("micoff", off);
@@ -171,7 +158,7 @@ function nameTile(tl, key, online = true) {
   tl.who.textContent = nameOf(key);
   tl.imp.hidden = !importedIds.has(key);
   tl.imp.textContent = t("Imported");
-  const sig = JSON.stringify([nameOf(key), colorIndex(key), st.palette, online]);
+  const sig = JSON.stringify([nameOf(key), look(key), online]);
   if (tl.avSig !== sig) { tl.avSig = sig; tl.av.replaceChildren(avatar(key, "sm", null, !online)); }
 }
 function prune(s, keys) {
@@ -434,7 +421,7 @@ function applyAudio() {
   });
   const pick = play.keys.length > 1 && !play.view;
   $("gamesound").hidden = !pick;
-  if (pick && changed("gamesound", [heard, nameOf(heard), colorIndex(heard), st.palette, lang])) {
+  if (pick && changed("gamesound", [heard, nameOf(heard), look(heard), lang])) {
     $("gamesound").replaceChildren(avatar(heard, "sm"));
     $("gamesound").title = $("gamesound").ariaLabel = t("App sound: {name}", { name: nameOf(heard) });
   }

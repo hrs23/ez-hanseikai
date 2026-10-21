@@ -39,7 +39,7 @@ function renderStart() {
   if (!st.name) askName = true;
   $("namefield").hidden = !askName;
   $("nameshow").hidden = askName;
-  if (!askName && changed("startname", [st.name, st.colors])) { $("nameav").replaceChildren(avatar(st.id, "lg")); $("nametext").textContent = st.name; }
+  if (!askName && changed("startname", [st.name, look(st.id)])) { $("nameav").replaceChildren(avatar(st.id, "lg")); $("nametext").textContent = st.name; }
   if (document.activeElement !== $("startname")) $("startname").value = st.name;
   const named = !!st.name || !!$("startname").value.trim();
   $("startpending").hidden = !pendingRoom;
@@ -50,12 +50,11 @@ function renderStart() {
   const others = st.rooms.filter((r) => !r.id.startsWith("pending-")).sort((a, b) => (b.used_us || 0) - (a.used_us || 0));
   $("roomsbox").hidden = !others.length;
   $("roomsor").hidden = !others.length;
-  if (!changed("rooms", [others, lang])) return;
+  if (!changed("rooms", [others.map((r) => [r.id, r.name, stamp(r.icon), r.used_us]), lang])) return;
   $("roomlist").replaceChildren(...others.map((r, i) => {
-    const face = (id) => { const a = el("span", { className: "av sm", textContent: initial(id === st.id ? st.name : r.names[id]) }); a.style.background = colorOf(r.colors[id]); return a; };
     const enter = () => run("enter_room", { id: r.id }, openLive);
     const more = iconButton("more", t("More"), (e) => { e.stopPropagation(); openMenu([{ label: t("Delete…"), icon: "trash", danger: true, run: () => deleteRoom(r) }], e.currentTarget); }, "icon sm more");
-    const row = el("div", { className: "rrow", tabIndex: 0, role: "button" }, el("b", { textContent: r.name }), el("span", { className: "avs" }, ...r.members.slice(0, AVATARS_SHOWN).map(face)), el("span", { className: "sp" }), r.used_us ? el("span", { className: "muted small", textContent: dayLabel(dayOf(new Date(r.used_us / 1000)), new Date(), lang) }) : null, el("button", { className: "sm" + (i ? "" : " primary"), textContent: t("Enter"), onclick: (e) => { e.stopPropagation(); enter(); } }), more);
+    const row = el("div", { className: "rrow", tabIndex: 0, role: "button" }, roomIcon(r, "lg"), el("b", { textContent: r.name }), el("span", { className: "sp" }), r.used_us ? el("span", { className: "muted small", textContent: dayLabel(dayOf(new Date(r.used_us / 1000)), new Date(), lang) }) : null, el("button", { className: "sm" + (i ? "" : " primary"), textContent: t("Enter"), onclick: (e) => { e.stopPropagation(); enter(); } }), more);
     row.onclick = enter;
     row.onkeydown = (e) => { if (e.key === "Enter") enter(); };
     return row;
@@ -76,11 +75,22 @@ const createRoom = () => invoke("create_room", { name: "" }).then(() => { openLi
 async function removeMember(id) {
   if (await ask(t("Remove {name} from the room?", { name: nameOf(id) }), t("Remove from room"), true, t("Everyone stops sending to them. What they already have stays with them."))) { drawerFor = null; run("remove_peer", { id }); }
 }
+let iconDraft = "";
+function roomDirty() {
+  const name = $("roomnameinput").value.trim();
+  $("roomsave").disabled = !name || (name === st.room.name && iconDraft === st.room.icon);
+}
+function showIconDraft() {
+  $("roomiconshow").replaceChildren(roomIcon({ name: $("roomnameinput").value, icon: iconDraft }, "xl"));
+  $("roomiconclear").hidden = !iconDraft;
+  roomDirty();
+}
 function openRoomSettings() {
   if (!st.room) return;
   $("roomnameinput").value = st.room.name;
   $("roomnameinput").maxLength = ROOM_NAME_MAX;
-  $("roomsave").disabled = true;
+  iconDraft = st.room.icon;
+  showIconDraft();
   $("roomdlg").showModal();
   $("roomnameinput").select();
 }
@@ -114,12 +124,12 @@ function memberOf(id) {
 }
 function renderMembers() {
   const rows = people().map((id) => ({ id, p: id === st.id ? null : peerOf(id) }));
-  const sig = ["members", rows.map((r) => [r.id, memberOf(r.id).status, r.p && [r.p.connected, r.p.path, r.p.rtt_ms, r.p.version, r.p.failures]]), st.asks, st.invites, drawerFor, st.names, st.colors, lang];
+  const sig = ["members", rows.map((r) => [r.id, memberOf(r.id).status, r.p && [r.p.connected, r.p.path, r.p.rtt_ms, r.p.version, r.p.failures]]), st.asks, st.invites, drawerFor, st.names, looks(), lang];
   if (!changed("roomtab", sig)) return;
   const out = [];
   for (const a of st.asks) {
     const answer = (approve) => () => run("answer_ask", { id: a.id, approve });
-    out.push(el("div", { className: "askbox" }, el("span", { className: "av lg", textContent: initial(a.name), style: "background:var(--muted)" }), el("div", { className: "t" }, el("b", { textContent: t("{name} wants to join", { name: a.name || shortId(a.id) }) }), el("small", { className: "mono", textContent: shortId(a.id) })), el("span", { className: "sp" }), el("button", { className: "primary", textContent: t("Approve"), onclick: answer(true) }), el("button", { textContent: t("Decline"), onclick: answer(false) })));
+    out.push(el("div", { className: "askbox" }, picture(a.name, null, "", "lg"), el("div", { className: "t" }, el("b", { textContent: t("{name} wants to join", { name: a.name || shortId(a.id) }) }), el("small", { className: "mono", textContent: shortId(a.id) })), el("span", { className: "sp" }), el("button", { className: "primary", textContent: t("Approve"), onclick: answer(true) }), el("button", { textContent: t("Decline"), onclick: answer(false) })));
   }
   if (st.invites) out.push(el("div", { className: "invitebox" }, icon("link", "sm"), el("span", { textContent: t("An invite code is open") }), el("span", { className: "sp" }), el("button", { className: "sm", onclick: copyInvite }, icon("copy", "sm"), t("Copy")), el("button", { className: "sm", onclick: cancelInvite, textContent: t("Cancel invite") })));
   const head = el("tr", {}, ...["Name", "ID", "Status", "Connection", "Round trip", "Version", ""].map((h) => el("th", { textContent: h ? t(h) : "" })));
@@ -129,7 +139,7 @@ function renderMembers() {
     const conn = me || !p.connected ? el("span", { className: "faint", textContent: "—" }) : el("span", { className: "net " + (p.path === "relay" ? "warn" : "ok"), onclick: (e) => { e.stopPropagation(); openDiagnostics("flow"); } }, icon("relay", "sm"), p.path === "relay" ? t("Relay") : t("Direct"));
     const version = me ? st.version : p && p.version;
     const tr = el("tr", { className: "pick" + (drawerFor === id ? " sel" : "") + (state.kind === "off" ? " dim" : ""), tabIndex: 0 },
-      el("td", {}, el("span", { className: "who" }, avatar(id, "", me || (p && p.connected) ? "on" : null), el("b", { textContent: nameOf(id) }), me ? el("span", { className: "pill gray", textContent: t("You") }) : null)),
+      el("td", {}, el("span", { className: "who" }, me ? el("button", { className: "plain", ariaLabel: t("Avatar"), onclick: (e) => { e.stopPropagation(); openSettings("general"); } }, avatar(id, "", "on")) : avatar(id, "", p && p.connected ? "on" : null), el("b", { textContent: nameOf(id) }), me ? el("span", { className: "pill gray", textContent: t("You") }) : null)),
       el("td", {}, el("span", { className: "mono", textContent: `${id.slice(0, 4)}·${id.slice(4, 8)}·${id.slice(8, 12)}` }), iconButton("copy", t("Copy ID"), (e) => { e.stopPropagation(); navigator.clipboard.writeText(id).then(() => flash(t("ID copied"))); })),
       el("td", { className: "state " + state.kind }, el("i", { className: "sdot" }), state.text),
       el("td", {}, conn),
@@ -160,7 +170,7 @@ function renderDrawer() {
   const p = me ? null : peerOf(id);
   if (!checks[id] && !checking[id] && (me || (p && p.connected))) checkMember(id);
   const receivingFrom = st.sets.filter((s) => !s.live).flatMap((s) => s.players.filter((x) => x.owner === id && x.total && x.have < x.total).map((x) => ({ s, x })));
-  const sig = [id, p && [p.connected, p.path, p.rtt_ms, p.sent, p.received, p.offset_us, p.version], checks[id], checking[id], receivingFrom.map((r) => [r.s.id, r.x.have]), st.names, lang];
+  const sig = [id, p && [p.connected, p.path, p.rtt_ms, p.sent, p.received, p.offset_us, p.version], checks[id], checking[id], receivingFrom.map((r) => [r.s.id, r.x.have]), st.names, look(id), lang];
   if (!changed("drawer", sig)) return;
   const kv = [];
   const add = (k, v) => kv.push(el("dt", { textContent: k }), el("dd", { textContent: v }));
@@ -227,6 +237,23 @@ function renderSettings() {
   $("apierrrow").hidden = !st.api.error;
   $("apierr").textContent = st.api.error ? t(st.api.error) : "";
   if (settingsPane === "storage") renderStorage();
+  if (changed("profile", look(st.id))) renderProfile();
+}
+function renderProfile() {
+  const mine = colorIndex(st.id);
+  const image = st.avatars[st.id] || "";
+  $("colorpick").replaceChildren(...MEMBER_COLORS.map((_, i) => {
+    const b = el("button", { className: "swatch", ariaLabel: `${t("Color")} ${i + 1}`, onclick: () => run("set_profile", { color: i }) });
+    b.style.background = colorOf(i);
+    press(b, i === mine);
+    return b;
+  }));
+  $("facegrid").replaceChildren(...Object.keys(FACES).map((name, i) => {
+    const b = el("button", { className: "facebtn", ariaLabel: `${t("Avatar")} ${i + 1}`, onclick: () => run("set_profile", { avatar: name }) }, picture(name, colorOf(mine), name, "lg"));
+    press(b, image === name);
+    return b;
+  }));
+  $("avatarclear").hidden = !image;
 }
 function renderApiReference() {
   if (st.api.lan) invoke("api_info").then((info) => { $("apihosts").textContent = info.hosts.map(apiUrl).join("  "); }).catch(() => {});
@@ -400,9 +427,19 @@ $("joincode").oninput = () => renderStart();
 $("join").onclick = () => run("set_name", { name: $("startname").value || st.name }, () => joinWith($("joincode")));
 $("joincode").onkeydown = (e) => { if (e.key === "Enter" && !composing(e) && !$("join").disabled) $("join").click(); };
 $("pendingcancel").onclick = () => st.room && run("remove_room", { id: st.room.id });
-$("roomnameinput").oninput = () => { const v = $("roomnameinput").value.trim(); $("roomsave").disabled = !v || v === st.room.name; };
+$("roomnameinput").oninput = showIconDraft;
+$("roomiconpick").onclick = () => pickImage((image) => { iconDraft = image; showIconDraft(); });
+$("roomiconclear").onclick = () => { iconDraft = ""; showIconDraft(); };
 $("roomnameinput").onkeydown = (e) => { if (e.key === "Enter" && !composing(e) && !$("roomsave").disabled) $("roomsave").click(); };
-$("roomsave").onclick = () => { $("roomdlg").close(); run("rename_room", { name: $("roomnameinput").value }, () => { flash(t("Saved")); refresh(); }); };
+$("roomsave").onclick = async () => {
+  $("roomdlg").close();
+  try {
+    if ($("roomnameinput").value.trim() !== st.room.name) await invoke("rename_room", { name: $("roomnameinput").value });
+    if (iconDraft !== st.room.icon) await invoke("set_room_icon", { icon: iconDraft });
+    flash(t("Saved"));
+    refresh();
+  } catch (e) { fail(e); }
+};
 $("roomno").onclick = () => $("roomdlg").close();
 for (const b of $("setnav").querySelectorAll("button")) b.onclick = () => { settingsPane = b.dataset.pane; showPane(); };
 $("promptcopy").onclick = () => navigator.clipboard.writeText(promptFull).then(() => { $("promptdlg").close(); flash(t("Prompt copied")); }).catch(fail);
@@ -417,6 +454,8 @@ $("apinew").onclick = async () => {
   if (await ask(t("Make a new token?"), t("New token"), false, t("Programs using the old token stop working."))) run("new_api_token", null, () => flash(t("New token made")));
 };
 $("name").onchange = () => run("set_name", { name: $("name").value });
+$("avatarimage").onclick = () => pickImage((image) => run("set_profile", { avatar: image }));
+$("avatarclear").onclick = () => run("set_profile", { avatar: "" });
 $("language").onchange = () => run("set_language", { language: $("language").value });
 $("sessionsound").onchange = () => { sessionSound = $("sessionsound").checked; store("sessionSound", sessionSound); };
 $("copyid").onclick = () => navigator.clipboard.writeText(st.id).then(() => flash(t("ID copied")));

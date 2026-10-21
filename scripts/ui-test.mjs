@@ -317,7 +317,7 @@ test("the new Diagnostics texts have Japanese translations", () => {
 
 test("every fixed text has a Japanese translation", () => {
   const used = new Set();
-  for (const f of ["app.js", "side.js", "pages.js", "board.js", "extensions.js", "events.js", "util.js", "draw.js", "ai.js", "members.js", "recordings.js", "diag.js", "markdown.js"]) {
+  for (const f of ["app.js", "faces.js", "side.js", "pages.js", "board.js", "extensions.js", "events.js", "util.js", "draw.js", "ai.js", "members.js", "recordings.js", "diag.js", "markdown.js"]) {
     const s = read(f);
     for (const m of s.matchAll(/\bt\(\s*"((?:[^"\\]|\\.)*)"/g)) used.add(JSON.parse(`"${m[1]}"`));
     for (const m of s.matchAll(/\bt\([^)]*\?\s*"((?:[^"\\]|\\.)*)"\s*:\s*"((?:[^"\\]|\\.)*)"/g)) { used.add(JSON.parse(`"${m[1]}"`)); used.add(JSON.parse(`"${m[2]}"`)); }
@@ -371,7 +371,7 @@ test("everyone is told who started or stopped recording", () => {
 test("the pages call a recording a recording, never a session", () => {
   const texts = [...Object.keys(ui$.JA), ...Object.values(ui$.JA)];
   assert.deepEqual(texts.filter((x) => /session|セッション/i.test(x)), []);
-  for (const f of ["app.js", "side.js", "pages.js", "board.js", "extensions.js", "events.js", "util.js", "ai.js", "markdown.js", "index.html"]) {
+  for (const f of ["app.js", "faces.js", "side.js", "pages.js", "board.js", "extensions.js", "events.js", "util.js", "ai.js", "markdown.js", "index.html"]) {
     const shown = [...read(f).matchAll(/\bt\(\s*"((?:[^"\\]|\\.)*)"|data-t(?:-title|-placeholder|-label)?="([^"]*)"/g)].map((m) => m[1] || m[2]);
     assert.deepEqual(shown.filter((x) => /session/i.test(x)), [], f);
   }
@@ -589,8 +589,23 @@ function page(files, globals = {}) {
   return { ctx, boxes };
 }
 
+test("an avatar shows the image, a built-in shape or the initial; an unknown shape shows the initial; a room without an icon shows its initial", () => {
+  const image = "data:image/webp;base64,AAAA";
+  const state = { id: "me", name: "Aki", names: { ren: "Ren", koya: "Koya", mia: "Mia" }, colors: { me: 1, ren: 2, koya: 3, mia: 4 }, avatars: { me: "bolt", ren: image, koya: "gone", mia: "data:image/svg+xml;base64,AAAA" } };
+  const { ctx } = page(["util.js", "faces.js"], { st: state, nameOf: (id) => id, colorIndex: (id) => state.colors[id] || 0 });
+  const draw = (code) => vm.runInContext(code, ctx);
+  const bolt = draw(`avatar("me", "sm")`);
+  assert.deepEqual([bolt.find("path").length, bolt.textContent, bolt.style.background], [1, "", "var(--member-sky)"]);
+  assert.equal(draw(`avatar("ren")`).find("img")[0].src, image);
+  for (const id of ["koya", "mia"]) assert.deepEqual([draw(`avatar("${id}")`).textContent, draw(`avatar("${id}")`).find("img").length], [id === "koya" ? "K" : "M", 0]);
+  const room = draw(`roomIcon({ name: "Practice", icon: "" }, "sm")`);
+  assert.deepEqual([room.textContent, room.className], ["P", "av sm room"]);
+  assert.equal(draw(`roomIcon({ name: "Practice", icon: "${image}" }, "sm")`).find("img").length, 1);
+  assert.deepEqual(plain(draw(`look("ren")`)), [2, image.length, image.slice(-16)]);
+});
+
 test("a card shows nothing a note can write as running or navigating", () => {
-  const { ctx } = page(["util.js", "icons.js", "i18n.js", "layout.js", "events.js", "markdown.js"], { st: { palette: [] }, filterTag() {}, openLink() {} });
+  const { ctx } = page(["util.js", "icons.js", "i18n.js", "layout.js", "events.js", "markdown.js"], { st: {}, filterTag() {}, openLink() {} });
   const text = ["Plan", "[bad](javascript:alert(1)) <img src=x onerror=alert(1)> [ok](https://example.com/p) [m](ezh://moment/s1/5/all)", "- [ ] not a task", "| A | B |"].join("\n");
   const card = vm.runInContext(`cardDom(${JSON.stringify(text)}, mdHooks({ onOpen: () => {} }))`, ctx);
   assert.equal(card.find("table").length + card.find("pre").length + card.find("input").length, 0);
@@ -610,7 +625,7 @@ test("a card shows nothing a note can write as running or navigating", () => {
   assert.equal(dom("Lead\nbody").children[0].className, "chead");
 });
 test("a moment link keeps a formatted label, and deep lists render without running out of stack", () => {
-  const { ctx } = page(["util.js", "icons.js", "i18n.js", "layout.js", "events.js", "markdown.js"], { st: { palette: [] }, filterTag() {}, openLink() {} });
+  const { ctx } = page(["util.js", "icons.js", "i18n.js", "layout.js", "events.js", "markdown.js"], { st: {}, filterTag() {}, openLink() {} });
   const label = (text) => vm.runInContext(`cardDom(${JSON.stringify("x\n" + text)}, mdHooks())`, ctx).find("button").filter((b) => b.className === "link")[0].textContent;
   assert.equal(label("[**Opening** push](ezh://moment/s1/5/all)"), "Opening push 0:05");
   assert.equal(label("[Rotate `B`](ezh://moment/s1/5/all)"), "Rotate B 0:05");

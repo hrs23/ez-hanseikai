@@ -120,6 +120,10 @@ mark { background: var(--warn-soft); color: var(--warn); border-radius: 3px; pad
 .av.lg { width: 28px; height: 28px; font-size: var(--t-md); }
 .av.xl { width: 44px; height: 44px; font-size: 18px; }
 .av.dim { opacity: var(--opacity-dim); }
+.av > img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
+.av > svg { width: 62%; height: 62%; fill: currentColor; stroke: currentColor; stroke-width: 1.5; stroke-linejoin: round; fill-rule: evenodd; }
+.av.room { border-radius: var(--r-sm); color: var(--soft); }
+button.plain { background: none; border: 0; padding: 0; height: auto; border-radius: 50%; }
 .av { transition: box-shadow var(--fast); }
 .av.speaking, .avs .av.speaking { box-shadow: 0 0 0 2px var(--chrome), 0 0 0 4px var(--ok); }
 .av > i { position: absolute; right: -2px; bottom: -2px; width: 9px; height: 9px; border-radius: 50%; box-shadow: 0 0 0 2px var(--chrome); }
@@ -574,6 +578,11 @@ dialog.settings[open] { display: flex; }
 .srow2 { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); min-height: 52px; }
 .srow2 > .lab { width: 200px; flex: none; color: var(--soft); font-size: var(--t-md); font-weight: var(--w-regular); text-transform: none; letter-spacing: 0; padding: 0; }
 .w240 { width: 240px; }
+.swatches, .faces { display: flex; flex-wrap: wrap; gap: var(--s1); flex: 1; }
+.swatch { width: 24px; height: 24px; margin: 0 var(--s1); padding: 0; border: 0; border-radius: 50%; }
+.swatch.on { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--text); }
+.facebtn { width: 32px; height: 32px; padding: 0; border: 2px solid transparent; border-radius: 50%; background: transparent; }
+.facebtn.on { border-color: var(--accent); }
 button.keys { justify-content: flex-start; background: var(--bg); }
 button.keys.listening { border-color: var(--accent); color: var(--accent); }
 dl.keys { display: grid; grid-template-columns: 1fr auto; gap: 8px 16px; margin: 0; font-size: var(--t-sm); align-items: center; }

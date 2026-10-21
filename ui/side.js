@@ -20,8 +20,9 @@ function renderSide() {
 }
 function renderRoomHead() {
   const name = st.room.name;
-  if (!changed("roomhead", [name])) return;
-  $("roomname").firstElementChild.textContent = name;
+  if (!changed("roomhead", [name, stamp(st.room.icon)])) return;
+  $("roomicon").replaceChildren(roomIcon(st.room, "sm"));
+  $("roomname").querySelector(".nm").textContent = name;
   $("roomname").title = name;
   $("roomname").setAttribute("aria-label", name);
 }
@@ -107,7 +108,7 @@ function memberDot(id) {
 }
 function renderFaces() {
   const ids = people();
-  const sig = [ids, ids.map(memberDot), st.names, st.colors];
+  const sig = [ids, ids.map(memberDot), st.names, looks()];
   if (!changed("faces", sig)) return;
   const faces = ids.slice(0, SIDE_FACES).map((id) => {
     const dot = memberDot(id);
@@ -196,7 +197,7 @@ function sessionRow(s) {
 function renderSessions() {
   if (!inRoom()) return;
   const rows = recordingRows();
-  const sig = [rows.map(rowSignature), page, nowView, selected, partyFrom, st.active_set, st.peers.map((p) => p.connected), lang, st.colors, st.names, dayOf(new Date())];
+  const sig = [rows.map(rowSignature), page, nowView, selected, partyFrom, st.active_set, st.peers.map((p) => p.connected), lang, looks(), st.names, dayOf(new Date())];
   if (!changed("sessions", sig)) return;
   $("sessions").replaceChildren(...(st.active_set ? [liveRow()] : []), ...rows.map((r) => sessionRow(r.s)), rows.length || st.active_set ? "" : el("div", { className: "none", textContent: t("No recordings yet") }));
 }
@@ -248,7 +249,7 @@ function renderDock() {
     $("micbtn").title = mute ? t("Unmute microphone") : t("Mute microphone");
     $("micbtn").setAttribute("aria-pressed", String(!mute));
   }
-  if (changed("me", [st.name, st.id, st.colors, lang])) {
+  if (changed("me", [st.name, st.id, look(st.id), lang])) {
     $("meav").replaceChildren(avatar(st.id, "lg", "on"));
     $("mename").textContent = st.name;
     $("meid").textContent = shortId(st.id);

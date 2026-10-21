@@ -1216,7 +1216,7 @@ async function library(ctx) {
       await invoke(by, "rename_room", { name });
       for (const app of [a, b, c]) await waitFor(`${app.key} shows ${name}`, within(LOG_SYNC_S * 2), async () => (await state(app)).room.name === name);
     }
-    await waitFor("the sidebar header shows the room name as a menu", within(UI_REFRESH_S * 5), () => evaluate(a, `$("roomname").firstElementChild.textContent === "Practice" && $("roomname").getAttribute("aria-haspopup") === "menu"`));
+    await waitFor("the sidebar header shows the room name as a menu", within(UI_REFRESH_S * 5), () => evaluate(a, `$("roomname").querySelector(".nm").textContent === "Practice" && $("roomname").getAttribute("aria-haspopup") === "menu"`));
     await evaluate(a, `$("roomname").click(); true`);
     const labels = await evaluate(a, `[...$("menu").querySelectorAll("button")].map((b) => b.textContent)`);
     check(labels.filter((l) => l !== "Cancel invite").join() === ["Room settings…", "Copy invite code", "Leave room"].join(), `the room menu lists ${labels}`);
@@ -1225,9 +1225,21 @@ async function library(ctx) {
     await screenshot(a, "room-settings");
     await evaluate(a, `(() => { const i = $("roomnameinput"); i.value = "Scrim room"; i.dispatchEvent(new Event("input")); $("roomsave").click(); return true; })()`);
     for (const app of [a, b, c]) await waitFor(`${app.key} shows the name set in the room settings`, within(LOG_SYNC_S * 2), async () => (await state(app)).room.name === "Scrim room");
-    await waitFor("A's header shows the new name", within(UI_REFRESH_S * 3), () => evaluate(a, `$("roomname").firstElementChild.textContent === "Scrim room"`));
+    await waitFor("A's header shows the new name", within(UI_REFRESH_S * 3), () => evaluate(a, `$("roomname").querySelector(".nm").textContent === "Scrim room"`));
     await invoke(a, "rename_room", { name: "Practice" });
     for (const app of [a, b, c]) await waitFor(`${app.key} shows Practice again`, within(LOG_SYNC_S * 2), async () => (await state(app)).room.name === "Practice");
+  });
+
+  await step("B's chosen colour and built-in avatar and A's room icon reach everyone", async () => {
+    const icon = "data:image/webp;base64,UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA==";
+    await invoke(b, "set_profile", { color: 5, avatar: "bolt" });
+    await invoke(a, "set_room_icon", { icon });
+    for (const app of [a, b, c]) await waitFor(`${app.key} shows B's colour and avatar`, within(LOG_SYNC_S * 2), async () => { const s = await state(app); return s.colors[b.id] === 5 && s.avatars[b.id] === "bolt"; });
+    for (const app of [a, b, c]) await waitFor(`${app.key} shows the room icon in the room and in the list`, within(LOG_SYNC_S * 2), async () => { const s = await state(app); return s.room.icon === icon && s.rooms.find((r) => r.id === s.room.id).icon === icon; });
+    await waitFor("A's sidebar shows the icon as an image", within(UI_REFRESH_S * 3), () => evaluate(a, `!!$("roomicon").querySelector("img")`));
+    await invoke(b, "set_profile", { avatar: "" });
+    await invoke(a, "set_room_icon", { icon: "" });
+    for (const app of [a, b, c]) await waitFor(`${app.key} shows no avatar for B and no room icon`, within(LOG_SYNC_S * 2), async () => { const s = await state(app); return !s.avatars[b.id] && s.room.icon === ""; });
   });
 
   await step("the game plan is a board of cards with short Markdown, and a card is added, renamed, moved and deleted by anyone", async () => {
@@ -1266,7 +1278,7 @@ async function library(ctx) {
       check(r.width === width && !r.scroll.length && !r.outside.length, `the sidebar at ${width}: ${brief(r)}`);
     }
     await invoke(a, "rename_room", { name: "W".repeat(ROOM_NAME_CHARS) });
-    await waitFor("A's header truncates the long name", within(LOG_SYNC_S * 2), () => evaluate(a, `(() => { const n = $("roomname").firstElementChild; return n.textContent.length === ${ROOM_NAME_CHARS} && n.scrollWidth > n.clientWidth && getComputedStyle(n).textOverflow === "ellipsis" && $("side").scrollWidth <= $("side").clientWidth + 1; })()`));
+    await waitFor("A's header truncates the long name", within(LOG_SYNC_S * 2), () => evaluate(a, `(() => { const n = $("roomname").querySelector(".nm"); return n.textContent.length === ${ROOM_NAME_CHARS} && n.scrollWidth > n.clientWidth && getComputedStyle(n).textOverflow === "ellipsis" && $("side").scrollWidth <= $("side").clientWidth + 1; })()`));
     await screenshot(a, "sidebar-narrow");
     await invoke(a, "rename_room", { name: "Practice" });
     await evaluate(a, `setSideWidth(${264}); true`);

@@ -159,6 +159,6 @@ listenMain("draw", (e) => {
   const { from, stroke } = e.payload;
   if (!watchParty || !stroke || stroke.set !== selected) return;
   if (stroke.clear) { clearInk(true); return; }
-  ink.live.set(from + "/" + stroke.id, { ...stroke, at: performance.now() });
+  ink.live.set(from + "/" + stroke.id, { ...stroke, color: colorIndex(from), at: performance.now() });
   renderInk();
 });

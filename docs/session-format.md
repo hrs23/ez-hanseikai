@@ -19,7 +19,7 @@ Store raw, compute views later.
 | Path | Content |
 | --- | --- |
 | `key.bin` | 32 raw bytes: the Ed25519 secret key. Its public key, in iroh's text form, is the member ID. |
-| `rooms.json` | `{"active": <room id or null>, "list": [{"id", "name", "members": [member ID], "names": {member ID: name}, "invite": [member ID, token], "removed": [member ID]}]}`. `invite` is optional. |
+| `rooms.json` | `{"active": <room id or null>, "list": [{"id", "name", "members": [member ID], "names": {member ID: name}, "icon", "invite": [member ID, token], "removed": [member ID]}]}`. `icon` and `invite` are optional; `icon` is a cache of the room icon. |
 | `app.lock` | Held exclusively while the app runs. A tool writes only when it can open this file for writing. |
 | `rooms/` | One folder per room. |
 
@@ -78,6 +78,8 @@ Every kind the app writes. The body's field `k` holds the kind, for example {`k`
 | `remove` | `member`, `t_us` | The member is removed from the room. |
 | `admit` | `member`, `t_us` | The member is let in (again). |
 | `room_name` | `name`, `t_us` | The room is renamed. |
+| `room_icon` | `icon`, `t_us` | The room's icon: an image data URL (PNG, JPEG or WebP, base64, at most 16384 characters), or "" for none. |
+| `profile` | `color?`, `avatar?`, `t_us` | The writer's colour (0 to 7, an index into the member palette) and avatar (an image data URL as above, or a built-in name of 1 to 16 lowercase letters). A full snapshot; a missing field is none. |
 | `offset` | `peer` (short ID), `t_us`, `rtt_us`, `offset_us` | The writer measured the peer's clock: `offset_us` is theirs minus the writer's. |
 | `layout` | `set`, `t_us`, `layout` | The writer's layout for the set; `set` is also inside `layout`. A `layout` record without `set`, written while watching, belongs to no set's default layout and is ignored. |
 | `plugin` | `plugin`, `on`, `version`, `settings`, `runner?`, `t_us` | The room's choice for a plugin. `runner` is the member who runs it; without it, the writer. |
@@ -92,7 +94,7 @@ How readers derive things:
 - The set starts at the earliest start of any part, and ends at the latest end. A part with no `rec_end` is open; a set is recording while a part is open and present, and a `rec_end` with `stop` true by anyone ends the set.
 - Clock offset: the writer's own log has offset 0. Another log's offset is the newest `offset` measurement of that member by the reader, or its live measurement; a recording made elsewhere takes the offset of the member named in `imported`. A record's time on the reader's clock is `t_us` minus the offset.
 - Events: for each author and `id`, the first `event` counts; later `event_edit`, `event_del` and `event_restore` records of the same author change its text, tags and deletion. A plugin result cannot be edited, and is shown only while its plugin is on, for the newest run of that plugin and file that has a `job` record with state `done`, whatever its version or settings (the lowest member ID and run on a tie). A `board` event is a card: `values` {`card`, `title?`, `pos?`, `gone?`}, the newest event of a card wins, and an event without `card` is the team card.
-- The room name is the newest `room_name` by corrected time. The newest `plugin` record per plugin wins. The latest `remove` or `admit` per member wins: the member is removed or in. The `layout` of a set is the newest one for it. The state of a plugin on a file is its newest `job` record over every key and member. `worker` records of older versions are ignored.
+- The room name is the newest `room_name` by corrected time, and the room icon the newest `room_icon` the same way. A member's colour and avatar are those of the newest valid `profile` in their own log, by file order; a record with a wrong field is skipped. The colour of a member is the first free palette index from a hash of their ID, tried in ID order over everyone in the room (removed members too), unless they chose one; a choice replaces only that member's colour, and two members may share one. A built-in name the reader does not know shows the initial. The newest `plugin` record per plugin wins. The latest `remove` or `admit` per member wins: the member is removed or in. The `layout` of a set is the newest one for it. The state of a plugin on a file is its newest `job` record over every key and member. `worker` records of older versions are ignored.
 - A debrief is a voice-only set whose `rec` names a recording in `of`; an older one without `of` links to the `shared.set` of its first `party` record. Its `party` records are what the Watch Party showed while it was recorded.
 
 ## Placing a recording made elsewhere

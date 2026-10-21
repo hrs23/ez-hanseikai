@@ -25,7 +25,7 @@
 <div id="app" class="app" hidden>
   <aside id="side" class="side">
     <div class="sidehead">
-      <button id="roomname" class="roombtn" aria-haspopup="menu"><span class="nm"></span><span class="chev" data-icon="chevron-down" data-icon-class="sm"></span></button>
+      <button id="roomname" class="roombtn" aria-haspopup="menu"><span id="roomicon"></span><span class="nm"></span><span class="chev" data-icon="chevron-down" data-icon-class="sm"></span></button>
       <div class="facesrow"><span id="roomfaces" class="roomfaces"></span></div>
     </div>
     <nav id="sidenav" class="sidenav" data-t-label="Room">
@@ -153,6 +153,7 @@
 <dialog id="roomdlg">
   <div class="dlghead"><h2 data-t="Room settings">Room settings</h2><button class="icon close" data-icon="x" data-t-label="Close"></button></div>
   <label class="field"><span data-t="Room name">Room name</span><input id="roomnameinput" class="lg" autocomplete="off"></label>
+  <div class="field"><span data-t="Room icon">Room icon</span><div class="row"><span id="roomiconshow"></span><button id="roomiconpick" data-t="Choose image…">Choose image…</button><button id="roomiconclear" data-t="Remove">Remove</button></div></div>
   <div class="row end"><button id="roomno" data-t="Cancel">Cancel</button><button id="roomsave" class="primary" data-t="Save">Save</button></div>
 </dialog>
 <dialog id="settings" class="settings">
@@ -170,6 +171,8 @@
     <section data-pane="general">
       <h2 data-t="General">General</h2>
       <div class="srow2"><span class="lab" data-t="Name">Name</span><input id="name" maxlength="24" class="w240"></div>
+      <div class="srow2"><span class="lab" data-t="Color">Color</span><div id="colorpick" class="swatches" role="group" data-t-label="Color"></div></div>
+      <div class="srow2"><span class="lab" data-t="Avatar">Avatar</span><div id="facegrid" class="faces" role="group" data-t-label="Avatar"></div><button id="avatarimage" data-t="Choose image…">Choose image…</button><button id="avatarclear" data-t="Remove">Remove</button></div>
       <div class="srow2"><span class="lab">ID</span><span id="myid" class="mono"></span><button id="copyid" class="icon sm" data-icon="copy" data-t-label="Copy ID" data-t-title="Copy ID"></button></div>
       <div class="srow2"><span class="lab" data-t="Language">Language</span><select id="language" class="w240"><option value="" data-t="Automatic">Automatic</option><option value="en">English</option><option value="ja">日本語</option></select></div>
       <div class="srow2"><span class="lab" data-t="Recording sounds">Recording sounds</span><input id="sessionsound" type="checkbox" class="switch" role="switch"></div>
@@ -241,6 +244,7 @@
   <p id="confirmtext" class="muted" hidden></p>
   <div class="row end"><button id="confirmno" data-t="Cancel">Cancel</button><button id="confirmyes"></button></div>
 </dialog>
+<input id="imagefile" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
 <div id="toast" class="toast" hidden><span id="toasttext"></span><button id="toastaction" class="sm" hidden></button></div>
 <div id="menu" class="menu" role="menu" hidden></div>
 <div id="pop" class="pop" hidden></div>
@@ -259,6 +263,7 @@
 </div>
 <script src="util.js"></script>
 <script src="icons.js"></script>
+<script src="faces.js"></script>
 <script src="i18n.js"></script>
 <script src="layout.js"></script>
 <script src="dock.js"></script>

@@ -58,6 +58,8 @@ pub struct Room {
     pub members: Vec<String>,
     #[serde(default)]
     pub names: HashMap<String, String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub icon: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub invite: Option<(String, String)>,
     #[serde(default)]
@@ -248,6 +250,7 @@ pub fn remember_name(core: &Core, id: &str, name: &str, replace: bool) {
 }
 
 pub fn apply_active(core: &Arc<Core>) {
+    share_profile(core);
     let room = core.active_room().unwrap_or_default();
     let wanted: Vec<EndpointId> = room.members.iter().filter_map(|m| m.parse().ok()).filter(|id| *id != core.ep.id()).collect();
     let mut peers = core.peers.lock().unwrap();
@@ -345,50 +348,151 @@ pub fn rename_room(core: &Arc<Core>, name: &str) -> Result<(), String> {
     if name.is_empty() {
         return Err("Enter a room name.".into());
     }
-    let t_us = named(&logs(core, &room)).map_or(now_us(), |(t, ..)| now_us().max(t + 1));
+    let t_us = stamp(&logs(core, &room), "room_name", "name", |_| true);
     core.append_log(&room, &json!({"k": "room_name", "name": name, "t_us": t_us}));
-    keep_name(core, &room, &name);
+    keep_room(core, &room, Some(&name), None);
     Ok(())
 }
 
-fn named(logs: &[Log]) -> Option<(i64, &String, &str)> {
-    logs.iter().flat_map(|log| log.records.iter().filter(|r| r["k"] == "room_name").filter_map(|r| Some((r["t_us"].as_i64()? - log.offset_us, &log.owner, r["name"].as_str()?)))).max()
+pub fn set_room_icon(core: &Arc<Core>, icon: &str) -> Result<(), String> {
+    let room = core.room_id().ok_or("Join a room first.")?;
+    if !icon.is_empty() {
+        check_image(icon)?;
+    }
+    let t_us = stamp(&logs(core, &room), "room_icon", "icon", icon_fits);
+    core.append_log(&room, &json!({"k": "room_icon", "icon": icon, "t_us": t_us}));
+    keep_room(core, &room, None, Some(icon));
+    Ok(())
+}
+
+fn newest<'a>(logs: &'a [Log], kind: &str, field: &str, fits: fn(&str) -> bool) -> Option<(i64, &'a str)> {
+    let found = logs.iter().flat_map(|log| log.records.iter().filter(|r| r["k"] == kind).filter_map(|r| Some((r["t_us"].as_i64()? - log.offset_us, &log.owner, r[field].as_str().filter(|v| fits(v))?))));
+    found.max().map(|(t, _, value)| (t, value))
+}
+
+fn stamp(logs: &[Log], kind: &str, field: &str, fits: fn(&str) -> bool) -> i64 {
+    newest(logs, kind, field, fits).map_or(now_us(), |(t, _)| now_us().max(t + 1))
 }
 
 pub fn latest_name(logs: &[Log]) -> Option<String> {
-    named(logs).map(|(_, _, name)| clean_text(name, ROOM_NAME_MAX)).filter(|name| !name.is_empty())
+    newest(logs, "room_name", "name", |_| true).map(|(_, name)| clean_text(name, ROOM_NAME_MAX)).filter(|name| !name.is_empty())
 }
 
-fn keep_name(core: &Core, room: &str, name: &str) {
-    let changed = match core.rooms.lock().unwrap().list.iter_mut().find(|r| r.id == room) {
-        Some(r) if r.name != name => {
-            r.name = name.to_string();
-            true
+fn icon_fits(icon: &str) -> bool {
+    icon.is_empty() || valid_image(icon)
+}
+
+fn latest_icon(logs: &[Log]) -> String {
+    newest(logs, "room_icon", "icon", icon_fits).map(|(_, icon)| icon.to_string()).unwrap_or_default()
+}
+
+fn keep_room(core: &Core, room: &str, name: Option<&str>, icon: Option<&str>) {
+    let mut changed = false;
+    if let Some(r) = core.rooms.lock().unwrap().list.iter_mut().find(|r| r.id == room) {
+        for (field, value) in [(&mut r.name, name), (&mut r.icon, icon)] {
+            if let Some(value) = value.filter(|v| field != v) {
+                *field = value.to_string();
+                changed = true;
+            }
         }
-        _ => false,
-    };
+    }
     if changed {
         core.save_rooms();
     }
 }
 
-pub const PALETTE: [&str; 8] = ["#ff8a00", "#00d5ff", "#7cff4f", "#ff5ad6", "#ffe83d", "#b48cff", "#ff6b6b", "#5affc8"];
+pub const COLORS: usize = 8;
+pub const IMAGE_MAX: usize = 16384;
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Profile {
+    pub color: Option<usize>,
+    pub avatar: String,
+}
+
+fn check_image(text: &str) -> Result<(), String> {
+    let body = ["png", "jpeg", "webp"].iter().find_map(|kind| text.strip_prefix(&format!("data:image/{kind};base64,")));
+    if text.len() > IMAGE_MAX {
+        Err("That image is too large.".into())
+    } else if body.is_some_and(|b| !b.is_empty() && b.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'/' | b'='))) {
+        Ok(())
+    } else {
+        Err("That image is not valid.".into())
+    }
+}
+
+fn valid_image(text: &str) -> bool {
+    check_image(text).is_ok()
+}
+
+fn builtin_avatar(text: &str) -> bool {
+    (1..=16).contains(&text.len()) && text.bytes().all(|b| b.is_ascii_lowercase())
+}
+
+pub fn check_avatar(text: &str) -> Result<(), String> {
+    if text.is_empty() || builtin_avatar(text) { Ok(()) } else { check_image(text) }
+}
+
+pub fn my_profile(core: &Core) -> Profile {
+    Profile { color: *core.color.lock().unwrap(), avatar: core.avatar.lock().unwrap().clone() }
+}
+
+fn read_profile(record: &Value) -> Option<Profile> {
+    let color = match &record["color"] {
+        Value::Null => None,
+        c => Some(c.as_u64().filter(|c| *c < COLORS as u64)? as usize),
+    };
+    let avatar = match &record["avatar"] {
+        Value::Null => "",
+        a => a.as_str().filter(|a| check_avatar(a).is_ok())?,
+    };
+    Some(Profile { color, avatar: avatar.to_string() })
+}
+
+fn newest_profile(records: &[Value]) -> Option<Profile> {
+    records.iter().rev().filter(|r| r["k"] == "profile").find_map(read_profile)
+}
+
+pub fn profiles(logs: &[Log]) -> HashMap<String, Profile> {
+    logs.iter().filter_map(|log| Some((log.owner.clone(), newest_profile(&log.records)?))).collect()
+}
+
+fn profile_to_write(room: &str, wanted: &Profile, own: &[Value]) -> Option<Value> {
+    if room.starts_with("pending-") || *wanted == newest_profile(own).unwrap_or_default() {
+        return None;
+    }
+    let mut record = json!({"k": "profile", "t_us": now_us()});
+    if let Some(color) = wanted.color {
+        record["color"] = json!(color);
+    }
+    if !wanted.avatar.is_empty() {
+        record["avatar"] = json!(wanted.avatar);
+    }
+    Some(record)
+}
+
+pub fn share_profile(core: &Core) {
+    let Some(room) = core.room_id() else { return };
+    if let Some(record) = profile_to_write(&room, &my_profile(core), &core.own_log(&room)) {
+        core.append_log(&room, &record);
+    }
+}
 
 fn preferred_color(id: &str) -> usize {
     let hash = id.bytes().fold(0u64, |h, b| h.wrapping_mul(31).wrapping_add(b as u64));
-    (hash % PALETTE.len() as u64) as usize
+    (hash % COLORS as u64) as usize
 }
 
-pub fn colors(people: &[String]) -> HashMap<String, usize> {
+pub fn colors(people: &[String], chosen: &HashMap<String, usize>) -> HashMap<String, usize> {
     let mut sorted: Vec<(usize, &String)> = people.iter().map(|id| (preferred_color(id), id)).collect();
     sorted.sort();
     sorted.dedup();
-    let mut taken = [false; PALETTE.len()];
+    let mut taken = [false; COLORS];
     let mut out = HashMap::new();
     for (preferred, id) in sorted {
-        let color = (0..PALETTE.len()).map(|step| (preferred + step) % PALETTE.len()).find(|c| !taken[*c]).unwrap_or(preferred);
+        let color = (0..COLORS).map(|step| (preferred + step) % COLORS).find(|c| !taken[*c]).unwrap_or(preferred);
         taken[color] = true;
-        out.insert(id.clone(), color);
+        out.insert(id.clone(), chosen.get(id).copied().unwrap_or(color));
     }
     out
 }
@@ -1264,9 +1368,7 @@ pub fn state_json(core: &Core) -> Value {
     names.insert(my_id.clone(), "You".to_string());
     names.extend(imported_views(core, &room_id).into_iter().map(|(id, v)| (id, v.name)));
     let logs = logs(core, &room_id);
-    if let Some(name) = latest_name(&logs) {
-        keep_name(core, &room_id, &name);
-    }
+    keep_room(core, &room_id, latest_name(&logs).as_deref(), Some(&latest_icon(&logs)));
     let active = core.active_room();
     let caps = core.party.lock().unwrap().caps();
     let mut events = events(&logs, caps.as_ref());
@@ -1289,9 +1391,16 @@ pub fn state_json(core: &Core) -> Value {
             }
         }
     }
-    let people = active.as_ref().map(Room::people).unwrap_or_default();
+    let mut looks = profiles(&logs);
+    looks.insert(my_id.clone(), my_profile(core));
+    let chosen: HashMap<String, usize> = looks.iter().filter_map(|(id, p)| Some((id.clone(), p.color?))).collect();
+    let avatars: HashMap<&String, &String> = looks.iter().filter(|(_, p)| !p.avatar.is_empty()).map(|(id, p)| (id, &p.avatar)).collect();
+    let mut people = active.as_ref().map(Room::people).unwrap_or_default();
+    if !people.contains(&my_id) {
+        people.push(my_id.clone());
+    }
     let rooms = core.rooms.lock().unwrap();
-    let room_list: Vec<Value> = rooms.list.iter().map(|r| json!({"id": r.id, "name": r.name, "active": rooms.active.as_deref() == Some(&r.id), "members": r.members, "names": r.names, "colors": colors(&r.people()), "used_us": last_used(core, &r.id)})).collect();
+    let room_list: Vec<Value> = rooms.list.iter().map(|r| json!({"id": r.id, "name": r.name, "icon": r.icon, "active": rooms.active.as_deref() == Some(&r.id), "used_us": last_used(core, &r.id)})).collect();
     drop(rooms);
     json!({
         "app": crate::shell::app_name(&core.app, &crate::language(core)),
@@ -1305,8 +1414,8 @@ pub fn state_json(core: &Core) -> Value {
         "name": core.name.lock().unwrap().clone(),
         "lang": crate::language(core),
         "language": *core.language.lock().unwrap(),
-        "colors": colors(&people),
-        "palette": PALETTE,
+        "colors": colors(&people, &chosen),
+        "avatars": avatars,
         "invites": core.invites.lock().unwrap().len(),
         "limit_mbps": *core.limit_mbps.lock().unwrap(),
         "recovery": core.recovery.lock().unwrap().clone(),
@@ -1318,7 +1427,7 @@ pub fn state_json(core: &Core) -> Value {
         "recording": core.active_set.lock().unwrap().is_some(),
         "capture": record::capture_json(core, stream::live_json(core, &room_id, &my_id)),
         "active_set": core.active_set_json(),
-        "room": active.map(|r| json!({"id": r.id, "name": r.name, "pending": r.invite.is_some(), "waiting": r.waiting})),
+        "room": active.map(|r| json!({"id": r.id, "name": r.name, "icon": r.icon, "pending": r.invite.is_some(), "waiting": r.waiting})),
         "rooms": room_list,
         "layout": core.layout.lock().unwrap().clone(),
         "hotkey": core.hotkey.lock().unwrap().clone(),
@@ -1691,9 +1800,22 @@ pub mod tests {
     }
 
     #[test]
+    fn the_newest_room_icon_wins_on_every_clock_and_an_empty_one_clears_it() {
+        let icon = |t: i64, icon: &str| json!({"k": "room_icon", "icon": icon, "t_us": t});
+        assert_eq!(latest_icon(&[log("a", 0, vec![json!({"k": "rec"})])]), "");
+        let a = log("a", 0, vec![icon(100, "data:image/png;base64,AAAA"), icon(300, "data:image/png;base64,BBBB")]);
+        let b = log("b", 1000, vec![icon(1200, "data:image/png;base64,CCCC")]);
+        assert_eq!(latest_icon(&[a, b]), "data:image/png;base64,BBBB");
+        let cleared = log("c", -500, vec![icon(-150, "")]);
+        assert_eq!(latest_icon(&[cleared, log("a", 0, vec![icon(340, "data:image/png;base64,AAAA")])]), "");
+        let bad = log("a", 0, vec![icon(1, "data:image/png;base64,AAAA"), icon(2, "data:image/svg+xml;base64,AAAA"), json!({"k": "room_icon", "icon": 5, "t_us": 3})]);
+        assert_eq!(latest_icon(&[bad]), "data:image/png;base64,AAAA");
+    }
+
+    #[test]
     fn a_rename_made_here_beats_a_name_from_a_fast_clock() {
         let ahead = log("b", 0, vec![json!({"k": "room_name", "name": "Theirs", "t_us": 5000})]);
-        let t = named(std::slice::from_ref(&ahead)).map_or(0, |(t, ..)| 1000i64.max(t + 1));
+        let t = 1000i64.max(stamp(std::slice::from_ref(&ahead), "room_name", "name", |_| true));
         let mine = log("a", 0, vec![json!({"k": "room_name", "name": "Mine", "t_us": t})]);
         assert_eq!(latest_name(&[ahead, mine]), Some("Mine".to_string()));
     }
@@ -1771,10 +1893,10 @@ pub mod tests {
     #[test]
     fn colors_are_the_same_everywhere() {
         let ids: Vec<String> = (0..5).map(|i| format!("{i:064x}")).collect();
-        let a = colors(&ids);
+        let a = colors(&ids, &HashMap::new());
         let mut reversed = ids.clone();
         reversed.reverse();
-        assert_eq!(a, colors(&reversed));
+        assert_eq!(a, colors(&reversed, &HashMap::new()));
         let mut seen: Vec<usize> = a.values().copied().collect();
         seen.sort();
         seen.dedup();
@@ -1782,14 +1904,65 @@ pub mod tests {
     }
 
     #[test]
+    fn a_chosen_colour_replaces_only_its_owners_colour_and_is_the_same_everywhere() {
+        let first = "a".repeat(64);
+        let preferred = preferred_color(&first);
+        let clash = (0..).map(|i| format!("{i:064x}")).find(|id| preferred_color(id) == preferred && *id != first).unwrap();
+        let other = (0..).map(|i| format!("{i:064x}")).find(|id| preferred_color(id) != preferred && *id != clash).unwrap();
+        let people = [first.clone(), clash.clone(), other.clone()];
+        let plain = colors(&people, &HashMap::new());
+        let pick = (preferred + 3) % COLORS;
+        let chosen = HashMap::from([(first.clone(), pick)]);
+        let with = colors(&people, &chosen);
+        assert_eq!(with[&first], pick);
+        assert_eq!((with[&clash], with[&other]), (plain[&clash], plain[&other]));
+        let mut reversed = people.to_vec();
+        reversed.reverse();
+        assert_eq!(with, colors(&reversed, &chosen));
+        let both = colors(&people, &HashMap::from([(first.clone(), pick), (other.clone(), pick)]));
+        assert_eq!((both[&first], both[&other]), (pick, pick));
+    }
+
+    #[test]
+    fn the_newest_profile_in_a_members_own_log_gives_their_look_and_bad_records_are_skipped() {
+        let image = "data:image/webp;base64,AAAA";
+        let record = |extra: Value| {
+            let mut r = json!({"k": "profile", "t_us": 1});
+            r.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            r
+        };
+        let own = |records: Vec<Value>| profiles(&[log("a", 0, records)]).remove("a");
+        let look = |color: Option<usize>, avatar: &str| Some(Profile { color, avatar: avatar.into() });
+        assert_eq!(own(vec![json!({"k": "rec"})]), None);
+        assert_eq!(own(vec![record(json!({"color": 2})), record(json!({"avatar": "bolt"}))]), look(None, "bolt"));
+        assert_eq!(own(vec![record(json!({"color": 2, "avatar": image}))]), look(Some(2), image));
+        for bad in [json!({"color": 8}), json!({"color": "1"}), json!({"avatar": 5}), json!({"avatar": "data:image/svg+xml;base64,AAAA"}), json!({"avatar": "data:image/png;base64,<svg>"}), json!({"avatar": "Bolt"}), json!({"avatar": format!("data:image/png;base64,{}", "A".repeat(IMAGE_MAX))})] {
+            assert_eq!(own(vec![record(json!({"color": 4})), record(bad.clone())]), look(Some(4), ""), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_profile_is_written_only_when_the_look_differs_and_never_into_a_pending_room() {
+        let wanted = Profile { color: Some(5), avatar: "star".into() };
+        assert!(profile_to_write("r1", &Profile::default(), &[]).is_none());
+        assert!(profile_to_write("pending-ab", &wanted, &[]).is_none());
+        let record = profile_to_write("r1", &wanted, &[]).unwrap();
+        assert_eq!((record["k"].as_str(), record["color"].as_u64(), record["avatar"].as_str()), (Some("profile"), Some(5), Some("star")));
+        assert!(profile_to_write("r1", &wanted, &[record.clone()]).is_none());
+        let cleared = profile_to_write("r1", &Profile::default(), &[record]).unwrap();
+        assert!(cleared["color"].is_null() && cleared["avatar"].is_null());
+        assert!(profile_to_write("r1", &Profile::default(), &[cleared]).is_none());
+    }
+
+    #[test]
     fn colors_stay_when_someone_joins_without_a_clash() {
         let first = "a".repeat(64);
-        let alone = colors(std::slice::from_ref(&first))[&first];
+        let alone = colors(std::slice::from_ref(&first), &HashMap::new())[&first];
         assert_eq!(alone, preferred_color(&first));
         let newcomer = (0..).map(|i| format!("{i:064x}")).find(|id| preferred_color(id) != alone).unwrap();
-        assert_eq!(colors(&[first.clone(), newcomer])[&first], alone);
+        assert_eq!(colors(&[first.clone(), newcomer], &HashMap::new())[&first], alone);
         let clash = (0..).map(|i| format!("{i:064x}")).find(|id| preferred_color(id) == alone && *id != first).unwrap();
-        let both = colors(&[first.clone(), clash.clone()]);
+        let both = colors(&[first.clone(), clash.clone()], &HashMap::new());
         assert_ne!(both[&first], both[&clash]);
     }
 
