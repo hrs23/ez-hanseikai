@@ -69,6 +69,7 @@ pub const OPS: &[(&str, Op)] = &[
     ("download_set", download_set),
     ("focus_set", focus_set),
     ("export_set", export_set),
+    ("export_check", export_check),
     ("export_folder", export_folder),
     ("import_plan", import_plan),
     ("import_recording", import_recording),
@@ -497,6 +498,10 @@ fn export_set(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     export::start(core, &room, &set, PathBuf::from(arg::<String>(&args, "path")?)).map(|skipped| json!({"skipped": skipped}))
 }
 
+fn export_check(core: &Arc<Core>, _: Value) -> Result<Value, String> {
+    export::check(core).map(|_| Value::Null)
+}
+
 fn export_folder(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     let (room, set) = recording(&args)?;
     bundle::run(core, &room, &set, Path::new(&arg::<String>(&args, "folder")?), arg(&args, "aligned")?)
@@ -591,11 +596,12 @@ mod tests {
         for name in names(r#"\binvoke\(\w+, "([a-z_]+)""#, &e2e) {
             assert!(find(&name).is_some(), "the end-to-end test calls {name}, which is not an operation");
         }
-        let (api, llms) = (include_str!("../../docs/api.md"), include_str!("../../docs/llms.txt"));
+        let listed = include_str!("../../docs/llms.txt").lines().skip_while(|l| !l.starts_with("POST /v1/ops/{name}")).skip(2).take_while(|l| l.starts_with("  ")).collect::<Vec<_>>().join("\n");
+        let listed = regex::Regex::new(r"\{[^}]*\}|\([^)]*\)").unwrap().replace_all(&listed, "").to_string();
+        let listed: Vec<&str> = listed.split(|c| c == ',' || c == ':' || c == '\n').filter_map(|item| item.split_whitespace().next()).collect();
         for (i, (name, _)) in OPS.iter().enumerate() {
             assert!(OPS[..i].iter().all(|(other, _)| other != name), "{name} is listed twice");
-            assert!(api.contains(&format!("`{name}`")), "{name} is not in docs/api.md");
-            assert!(regex::Regex::new(&format!(r"\b{name}\b")).unwrap().is_match(llms), "{name} is not in docs/llms.txt");
+            assert!(listed.contains(name), "{name} is not in the operations of docs/llms.txt");
         }
     }
 

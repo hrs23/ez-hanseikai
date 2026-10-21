@@ -141,62 +141,7 @@ The body is a JSON object with the operation's arguments (empty means `{}`). Ans
 
 Long operations hold the connection until they are done: `import_recording`, `export_folder`, `prepare_plugin`, `check_peer` (up to 12 s for this PC), `check_update`. `reset` and `install_update` restart the app, so their request ends without an answer. After `set_api` with `on: false` the API is off, after `new_api_token` the next request needs the new token (read `api.json`), and `set_api_lan` restarts the listener on the new address. Arguments marked `?` are optional; the rest are required (`<name> is missing or not valid.`). Ids and values are those of `GET` answers and of the window's state.
 
-| Operation | Arguments | What it does |
-|---|---|---|
-| `create_room` | `name` | Makes a room and opens it; answers its id. An empty name becomes "<your name>'s room". Refused while recording. |
-| `join_room` | `code` | Joins with an invite code (`ezh-<id>-<token>`); the room is pending until a member approves. |
-| `enter_room` | `id` | Opens a room from the list. Refused while recording. |
-| `close_room` | `id` | Leaves the open room (ends this PC's recording there); the room stays in the list. |
-| `remove_room` | `id` | Leaves and deletes the room with its recordings and notes on this PC. Refused while it is exported or imported into. |
-| `rename_room` | `name` | Renames the open room for everyone. |
-| `create_invite` | `reuse` | Answers an invite code; `reuse: true` returns the open one if there is one. |
-| `cancel_invites` | | Cancels open invites and pending join requests. |
-| `answer_ask` | `id`, `approve` | Approves or refuses a join request. |
-| `remove_peer` | `id` | Removes a member from the open room. |
-| `check_peer` | `id` | The environment check of that member, or of this PC for its own id. |
-| `start_recording` | `debrief?` | Starts recording in the open room for everyone; `debrief: true` records voices only. |
-| `stop_recording` | | Stops it for everyone. |
-| `mark` | | Marks this moment while recording; answers the event id (what the hotkey does). |
-| `list_sources` | | The screens and windows that can be captured; `id` is what `set_source` takes. |
-| `set_source` | `source` | An `id` from `list_sources`, or `null` to stop sharing. |
-| `list_mics` | | Microphones as `{id, name}`. |
-| `set_mic`, `set_audio_process`, `set_quality`, `set_limit`, `set_codecs` | `id`, `name`, `id`, `mbps`, `list` | The microphone, the app whose sound is recorded, the quality (`light`, `standard` or `high`), the upload limit (`null` for none), and what the window can decode (it sends that at start). |
-| `set_mix` | `kind`, `volume`, `muted` | `kind` is `app` or `mic`; `volume` is 0 to 1. |
-| `list_processes` | | Names of running apps whose sound can be recorded. |
-| `set_name`, `set_channel`, `set_warn_hours`, `set_layout`, `log_layout` | `name`, `channel`, `hours`, `layout`, `layout` | Your name, the update channel (`stable` or `beta`), the hours of recording before the warning, the player layout, and a record of it in the room log. |
-| `set_language` | `language` | `""` (the system's), `en` or `ja`. |
-| `set_hotkey` | `keys` | Such as `Ctrl+Alt+M`; refused when another app holds it. |
-| `check_update` | | The available version, or `null`. |
-| `install_update` | | Downloads, installs and restarts; refused while recording or exporting. |
-| `data_info` | | `{dir, used_bytes, free_bytes}`. |
-| `reset` | `keep_rooms` | Resets the app and restarts; `keep_rooms: false` deletes rooms and recordings. |
-| `dismiss_recovery`, `retry_ffmpeg` | | Dismisses the recovery notice; retries the video tools download. |
-| `add_event` | `kind`, `text`, `target`, `values` | The raw form of a note, drawing or board card; `kind` is `note`, `drawing` or `board`; `target` is `{t_us, set}` with wall-clock microseconds. Answers the event id. |
-| `event_action` | `kind`, `id`, `text` | `edit`, `delete` or `restore` an event of this PC. |
-| `party_on` | `on`, `view` | Joins or leaves Watch Party; `view` is `{set, playing, live, wall_us, at_us, rate, focus, mode, slots, order}`. |
-| `party_act`, `party_typing`, `draw` | `view`, `on`, `stroke` | Shares a play, pause or seek as the new `view`; shows that you are typing; sends a drawing stroke to the room. |
-| `room_plugins` | | The room's plugins with settings, readiness and workers. |
-| `set_room_plugin` | `id`, `on`, `settings` | Turns a plugin on or off for the room. |
-| `set_plugin_runner` | `id`, `runner` | The member who runs it, or `null` for Auto. |
-| `set_process_plugin` | `id`, `on` | This PC's processing switch. |
-| `prepare_plugin` | `id` | Downloads the plugin's files. |
-| `jobs` | | `{jobs, running, tags}`. |
-| `retry_job`, `run_job_next`, `cancel_job` | `job`, `job` | Retries a job, runs it next, cancels the running one. |
-| `delete_set` | `room`, `set` | Deletes a recording's files on this PC; answers whether anything was deleted. |
-| `discard_set` | `room`, `set` | Deletes a recording for everyone. |
-| `download_set` | `room`, `set` | Fetches the others' parts. |
-| `focus_set` | `set` | Which recording to fetch first. |
-| `export_set` | `room`, `set`, `path` | Starts the MP4 export into `path`; answers `{skipped}`, the members whose parts are not here. Progress is only in the window. |
-| `export_folder` | `room`, `set`, `folder`, `aligned` | Writes a [session folder](session-format.md) into a new or empty folder and answers `{folder, files, skipped}` when done. `aligned` pads every file so all start together. |
-| `import_plan` | `spec` | What an import would make. |
-| `import_recording` | `spec` | Imports a recording and answers `{id, views, notes}`. `spec` is `{folder, title?, names?}` or `{files}` (paths on this PC). Refused while another import runs. |
-| `cancel_import` | | Cancels the import. |
-| `set_api`, `set_api_lan`, `new_api_token` | `on`, `lan` | Turns the API on or off, Other devices on or off, and makes a new token. |
-| `api_info` | | `{on, lan, address, hosts, token, error}`. |
-| `api_reference` | | The endpoint list shown in Settings. |
-| `state` | | The window's whole state. |
-| `debug_view` | `tab`, `since`, `set` | One Diagnostics view (`tab` is `connections`, `network`, `recording`, `data`, `jobs`, `flow` or `log`), addresses hidden. |
-| `debug_report` | `save`, `head` | The report text, or the path of `report.txt` in the data folder when `save` is true. |
+The operations, with their arguments and answers, are listed in [llms.txt](llms.txt) (also under Settings > API).
 
 Not available: the operations that open a window, that is choosing files or folders, opening links and folders, and the identity file.
 

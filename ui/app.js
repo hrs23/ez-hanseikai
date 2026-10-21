@@ -1383,7 +1383,7 @@ function renderNotices() {
 }
 function exportSet(set) {
   if (!set) { flash(t("Open a recording first")); return; }
-  dialog("save_file", { name: `${set.id}.mp4` }).then((path) => path && invoke("export_set", { room: set.room, set: set.id, path }).then((r) => {
+  invoke("export_check").then(() => dialog("save_file", { name: `${set.id}.mp4` })).then((path) => path && invoke("export_set", { room: set.room, set: set.id, path }).then((r) => {
     exporting = { set: set.id, percent: 0 };
     if (r.skipped.length) flash(t("Exporting without {names}: not on this PC yet", { names: r.skipped.map(nameOf).join(", ") }));
     refresh();
@@ -1392,9 +1392,11 @@ function exportSet(set) {
 let folderSet = null;
 function exportFolder(set) {
   if (!set) { flash(t("Open a recording first")); return; }
-  folderSet = set;
-  $("folderaligned").checked = false;
-  $("folderdlg").showModal();
+  invoke("export_check").then(() => {
+    folderSet = set;
+    $("folderaligned").checked = false;
+    $("folderdlg").showModal();
+  }).catch(fail);
 }
 function startFolderExport() {
   const set = folderSet;
@@ -1404,7 +1406,7 @@ function startFolderExport() {
     if (!folder) return;
     exporting = { set: set.id, percent: 0 };
     refresh();
-    return invoke("export_folder", { room: set.room, set: set.id, folder: `${folder}\\${set.id}`, aligned }).then((r) => {
+    return invoke("export_folder", { room: set.room, set: set.id, folder, aligned }).then((r) => {
       if (r.skipped.length) flash(t("Exporting without {names}: not on this PC yet", { names: r.skipped.join(", ") }));
     }).catch((e) => { if (exporting) { exporting = null; fail(e); refresh(); } });
   }).catch(fail);

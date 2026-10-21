@@ -1,6 +1,8 @@
 const { invoke: tauriInvoke, convertFileSrc } = window.__TAURI__.core;
+const inOrder = new Set(["draw", "party_act"]);
 const queue = {};
-const invoke = (name, args) => (queue[name] = (queue[name] || Promise.resolve()).catch(() => {}).then(() => tauriInvoke("call", { name, args: args || {} })));
+const send = (name, args) => tauriInvoke("call", { name, args: args || {} });
+const invoke = (name, args) => inOrder.has(name) ? (queue[name] = (queue[name] || Promise.resolve()).catch(() => {}).then(() => send(name, args))) : send(name, args);
 const dialog = (name, args) => tauriInvoke(name, args || {});
 const $ = (id) => document.getElementById(id);
 
