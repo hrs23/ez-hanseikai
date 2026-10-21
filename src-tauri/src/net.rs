@@ -479,18 +479,21 @@ pub async fn check_peer(core: &Arc<Core>, id: &str) -> Value {
     reply.and_then(|b| serde_json::from_slice::<Value>(&b).ok()).unwrap_or(Value::Null)
 }
 
-pub async fn farewell(core: &Arc<Core>) {
-    let message = hello_message(core);
-    let sends: Vec<_> = core
-        .connections()
-        .into_iter()
-        .map(|conn| {
-            let message = message.clone();
-            tokio::spawn(async move { request_within(&conn, &message, FAREWELL_WAIT).await })
-        })
-        .collect();
-    for send in sends {
-        let _ = send.await;
+pub fn farewell(core: &Core) -> impl std::future::Future<Output = ()> {
+    let mut message = hello_message(core);
+    message["set"] = Value::Null;
+    let connections = core.connections();
+    async move {
+        let sends: Vec<_> = connections
+            .into_iter()
+            .map(|conn| {
+                let message = message.clone();
+                tokio::spawn(async move { request_within(&conn, &message, FAREWELL_WAIT).await })
+            })
+            .collect();
+        for send in sends {
+            let _ = send.await;
+        }
     }
 }
 

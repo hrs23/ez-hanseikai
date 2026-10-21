@@ -325,7 +325,7 @@ pub fn enter_room(core: &Arc<Core>, id: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn close_room(core: &Arc<Core>, id: &str) {
+pub fn close_room(core: &Core, id: &str) {
     {
         let mut rooms = core.rooms.lock().unwrap();
         if rooms.active.as_deref() == Some(id) {
@@ -333,7 +333,6 @@ pub fn close_room(core: &Arc<Core>, id: &str) {
         }
     }
     core.save_rooms();
-    apply_active(core);
 }
 
 pub fn forget_room(core: &Arc<Core>, id: &str) {
@@ -571,7 +570,7 @@ pub fn adopt_room(core: &Arc<Core>, pending: &str, id: &str, name: &str, members
     }
 }
 
-pub fn begin_set(core: &Arc<Core>, set: &str, by: &str, start_us: i64, voice: bool) -> Result<(), String> {
+pub fn begin_set(core: &Arc<Core>, set: &str, by: &str, start_us: i64, voice: bool) -> Result<bool, String> {
     ffmpeg::ready()?;
     if core.disk_full() {
         return Err("The disk is almost full.".into());
@@ -581,12 +580,12 @@ pub fn begin_set(core: &Arc<Core>, set: &str, by: &str, start_us: i64, voice: bo
     {
         let mut slot = core.active_set.lock().unwrap();
         if slot.is_some() {
-            return Err("A recording is already in progress.".into());
+            return Ok(false);
         }
         *slot = Some(active);
     }
     tracing::info!("{} {set} started by {by}", if voice { "review session" } else { "session" });
-    Ok(())
+    Ok(true)
 }
 
 pub fn end_set(core: &Arc<Core>, stop: bool, only: Option<&str>) {
@@ -632,7 +631,9 @@ pub fn start_set(core: &Arc<Core>, debrief: Option<bool>) -> Result<(), String> 
     let set = unused_set(&logs(core, &room), &core.room_dir(&room), start_us, core.tz_offset_s);
     let by = core.name.lock().unwrap().clone();
     let voice = debrief.unwrap_or_else(|| core.party.lock().unwrap().reviewing());
-    begin_set(core, &set, &by, start_us, voice)?;
+    if !begin_set(core, &set, &by, start_us, voice)? {
+        return Ok(());
+    }
     log_set_layout(core);
     party::log(core);
     net::broadcast(core, json!({"t": "rec", "action": "start", "set": set, "room": room, "by": by, "start_us": start_us, "voice": voice}));

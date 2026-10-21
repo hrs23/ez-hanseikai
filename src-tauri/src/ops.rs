@@ -115,18 +115,19 @@ fn enter_room(core: &Arc<Core>, args: Value) -> Result<Value, String> {
 }
 
 fn quit_room(core: &Arc<Core>, id: &str) {
+    let farewell = (core.room_id().as_deref() == Some(id)).then(|| net::farewell(core));
+    room::close_room(core, id);
     if core.active_set.lock().unwrap().as_ref().is_some_and(|s| s.room == id) {
         room::end_set(core, false, None);
     }
-    if core.room_id().as_deref() == Some(id) {
-        tauri::async_runtime::block_on(net::farewell(core));
+    if let Some(farewell) = farewell {
+        tauri::async_runtime::block_on(farewell);
     }
+    room::apply_active(core);
 }
 
 fn close_room(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    let id: String = arg(&args, "id")?;
-    quit_room(core, &id);
-    room::close_room(core, &id);
+    quit_room(core, &arg::<String>(&args, "id")?);
     Ok(Value::Null)
 }
 

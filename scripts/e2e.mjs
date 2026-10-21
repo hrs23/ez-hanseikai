@@ -278,7 +278,9 @@ function start(key, extra) {
     EZH_NTP: NTP[key],
     ...app.extra,
   };
-  app.proc = spawn(EXE, [], { env, stdio: "ignore", windowsHide: true });
+  const stderr = fs.openSync(path.join(OUT, `${key}-stderr.txt`), "a");
+  app.proc = spawn(EXE, [], { env, stdio: ["ignore", "ignore", stderr], windowsHide: true });
+  fs.closeSync(stderr);
   app.killed = false;
   app.cdp = null;
   apps[key] = app;
@@ -416,14 +418,32 @@ function bytes(n) {
   return `${n.toFixed(i && n < 10 ? 1 : 0)} ${units[i]}`;
 }
 
+function descendants(pid) {
+  const out = spawnSync("powershell", ["-NoProfile", "-Command", "Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId) $($_.ParentProcessId)\" }"], { encoding: "utf8" }).stdout || "";
+  const pairs = out.trim().split(/\r?\n/).map((line) => line.split(" ").map(Number));
+  const found = [pid];
+  for (let i = 0; i < found.length; i++) found.push(...pairs.filter(([child, parent]) => parent === found[i] && !found.includes(child)).map(([child]) => child));
+  return found;
+}
+
+function alive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function kill(app, tree = true) {
   if (!app.proc || app.proc.exitCode !== null) return;
   app.killed = true;
+  app.tree = descendants(app.proc.pid);
   spawnSync("taskkill", ["/PID", String(app.proc.pid), ...(tree ? ["/T"] : []), "/F"], { stdio: "ignore" });
 }
 
 async function stopped(app) {
-  await waitFor(`${app.key} exits`, CALL_S, () => app.proc.exitCode !== null);
+  await waitFor(`${app.key} and its child processes exit`, within(CALL_S), () => app.proc.exitCode !== null && !app.tree.some(alive));
 }
 
 function records(file) {
@@ -817,14 +837,15 @@ async function live(ctx) {
   await step("B leaves the room from its menu, enters it again with its recordings and notes, and deletes it from the list, which forgets B's personal plan", async () => {
     const plan = JSON.stringify(`board/${ctx.room}`);
     await evaluate(b, `localStorage.setItem(${plan}, JSON.stringify("# Mine")); true`);
-    const kept = (st) => [st.sets.map((s) => `${s.id} ${s.players.map((p) => p.have).join()}`), st.events.map((e) => e.key)].map((x) => x.sort().join()).join();
+    const kept = (st) => ({ ids: [st.sets.map((s) => s.id), st.events.map((e) => e.key)].map((x) => x.sort().join()).join(), have: Object.fromEntries(st.sets.flatMap((s) => s.players.map((p) => [`${s.id} ${p.owner}`, p.have]))) });
     const before = kept(await state(b));
     await waitFor("B shows the room header", within(UI_REFRESH_S * 5), () => evaluate(b, `!$("app").hidden && !!st.room`));
     await evaluate(b, `$("roomname").click(); [...$("menu").querySelectorAll("button")].find((x) => x.textContent === t("Leave room")).click(); true`);
     await waitFor("B shows the start screen and still lists the room", within(UI_REFRESH_S * 5), async () => { const st = await state(b); return !st.room && st.rooms.some((r) => r.id === ctx.room) && evaluate(b, `!$("start").hidden && $("app").hidden`); });
     await invoke(b, "enter_room", { id: ctx.room });
     await meshed([a, b], ctx.room);
-    check(kept(await state(b)) === before, "B lost recordings or notes by leaving and entering again");
+    const after = kept(await state(b));
+    check(after.ids === before.ids && Object.entries(before.have).every(([k, n]) => after.have[k] >= n), "B lost recordings or notes by leaving and entering again");
     await invoke(b, "close_room", { id: ctx.room });
     await waitFor("B lists the room", within(UI_REFRESH_S * 5), () => evaluate(b, `!$("start").hidden && $("roomlist").children.length > 0`));
     await pressAndConfirm(b, `[...$("roomlist").children].find((r) => r.firstChild.textContent === st.rooms.find((x) => x.id === ${JSON.stringify(ctx.room)}).name).querySelector(".more").click(); [...$("menu").querySelectorAll("button")].find((x) => x.textContent === t("Delete…")).click()`);
