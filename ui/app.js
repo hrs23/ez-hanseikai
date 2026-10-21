@@ -48,6 +48,8 @@ let volume = stored("volume", 1);
 let sessionSound = stored("sessionSound", true);
 let gameSound = stored("gameSound", null);
 let seekRun = null;
+let bezelTimer = 0;
+const BEZEL_MS = 500;
 let muted = false;
 let live = false;
 let watchParty = stored("watchParty", true);
@@ -153,7 +155,7 @@ function tile(s, key) {
       if (tl.drew) { tl.drew = false; return; }
       chooseSound(key);
     };
-    tl.box.ondblclick = (e) => { if (!e.target.closest(".nl")) setView(s, s.view ? 0 : s.keys.indexOf(key) + 1); };
+    tl.box.ondblclick = (e) => { if (!e.target.closest(".nl")) focus(); };
     tl.lab.onclick = (e) => { e.stopPropagation(); openReceive(key, tl.lab); };
     tl.box.oncontextmenu = (e) => { e.preventDefault(); stageMenu(e); };
   } else {
@@ -434,7 +436,7 @@ function applyAudio() {
   $("gamesound").hidden = !pick;
   if (pick && changed("gamesound", [heard, nameOf(heard), colorIndex(heard), st.palette, lang])) {
     $("gamesound").replaceChildren(avatar(heard, "sm"));
-    $("gamesound").title = $("gamesound").ariaLabel = t("Game sound: {name}", { name: nameOf(heard) });
+    $("gamesound").title = $("gamesound").ariaLabel = t("App sound: {name}", { name: nameOf(heard) });
   }
   if (changed("mute", [muted || volume === 0])) $("mute").replaceChildren(icon(muted || volume === 0 ? "volume-x" : "volume-2"));
   $("volume").value = muted ? 0 : volume;
@@ -680,7 +682,7 @@ function tick() {
     feedParts(tl, p, m, b);
     if (tl.mic) {
       tl.loud = clock.playing && !away ? talking(tl.loud, peakOf(tl.mic.tap), now) : -Infinity;
-      markVoice(tl.box, now - tl.loud < SPEAK_HANG_MS, recv(p.key).voice.muted);
+      markVoice(tl.box, speaking(tl.loud, now), recv(p.key).voice.muted);
     }
     const end = wallEnd(tl.media);
     const pictured = !!(partAt(p, wall) || {}).v;
@@ -751,6 +753,8 @@ function bezel(...children) {
   b.hidden = true;
   void b.offsetWidth;
   b.hidden = false;
+  clearTimeout(bezelTimer);
+  bezelTimer = setTimeout(() => { b.hidden = true; seekRun = null; }, BEZEL_MS);
 }
 function apply(cmd, m, who, prev = { playing: clock.playing, m: nowM() }) {
   live = false;
@@ -818,7 +822,6 @@ function jump(delta) {
   bezel(t(delta < 0 ? "◀◀ {n} s" : "{n} s ▶▶", { n: Math.abs(run) }));
   seekRun = run;
 }
-$("bezel").onanimationend = () => { seekRun = null; };
 
 function indexOf(state) {
   const byKey = new Map(state.events.map((e) => [e.key, e]));
@@ -1586,7 +1589,7 @@ function menuKey(e) {
   const list = [...$("menu").querySelectorAll("button:not(:disabled)")];
   const i = list.indexOf(document.activeElement);
   if (e.key === "Escape" || e.key === "Tab") { e.preventDefault(); closeMenu(); }
-  else if ((e.key === "ArrowDown" || e.key === "ArrowUp") && list.length) { e.preventDefault(); list[(i + (e.key === "ArrowDown" ? 1 : -1) + list.length) % list.length].focus(); }
+  else if ((e.key === "ArrowDown" || e.key === "ArrowUp") && list.length) { e.preventDefault(); const down = e.key === "ArrowDown"; list[i < 0 ? (down ? 0 : list.length - 1) : (i + (down ? 1 : -1) + list.length) % list.length].focus(); }
 }
 function escapeKey() {
   closePop();

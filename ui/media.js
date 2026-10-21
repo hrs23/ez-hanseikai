@@ -13,6 +13,7 @@ const VOICE_WINDOW = 8192;
 let context = null;
 const audio = () => (context ||= new AudioContext());
 const talking = (last, peak, now) => (peak >= SPEAK_LEVEL ? now : last);
+const speaking = (last, now) => now - last < SPEAK_HANG_MS;
 
 const slot = (video) => {
   const s = { video, ms: null, sb: null, part: null, index: null, size: -1, base: null, shift: 0, got: new Map(), tail: 0, want: null, job: null, failedAt: 0, waitSince: 0 };

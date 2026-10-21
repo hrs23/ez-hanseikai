@@ -177,6 +177,8 @@ function send(app, method, params = {}) {
   return withTimeout(reply, CALL_S, `${app.key} ${method}`);
 }
 
+const mouse = (app, type, [x, y], buttons) => send(app, "Input.dispatchMouseEvent", { type, x, y, button: type === "mouseMoved" && !buttons ? "none" : "left", buttons, clickCount: 1 });
+
 async function evaluate(app, expression) {
   const r = await send(app, "Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
   if (r.exceptionDetails) {
@@ -1268,11 +1270,10 @@ async function library(ctx) {
     await invoke(a, "rename_room", { name: "Practice" });
     await evaluate(a, `setSideWidth(${264}); true`);
     const bar = await evaluate(a, `(() => { const r = $("splitter").getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()`);
-    const mouse = (type, [x, y], buttons) => send(a, "Input.dispatchMouseEvent", { type, x, y, button: type === "mouseMoved" && !buttons ? "none" : "left", buttons, clickCount: 1 });
-    await mouse("mouseMoved", bar, 0);
-    await mouse("mousePressed", bar, 1);
-    for (let i = 1; i <= 4; i++) await mouse("mouseMoved", [bar[0] + 15 * i, bar[1]], 1);
-    await mouse("mouseReleased", [bar[0] + 60, bar[1]], 0);
+    await mouse(a, "mouseMoved", bar, 0);
+    await mouse(a, "mousePressed", bar, 1);
+    for (let i = 1; i <= 4; i++) await mouse(a, "mouseMoved", [bar[0] + 15 * i, bar[1]], 1);
+    await mouse(a, "mouseReleased", [bar[0] + 60, bar[1]], 0);
     await waitFor("dragging the splitter widens the sidebar and keeps the width", within(UI_REFRESH_S * 3), () => evaluate(a, `Math.round($("side").getBoundingClientRect().width) === 324 && localStorage.getItem("sideWidth") === "324"`));
     await evaluate(a, `$("splitter").dispatchEvent(new MouseEvent("dblclick", { bubbles: true })); true`);
     check(await evaluate(a, `Math.round($("side").getBoundingClientRect().width) === 264`), "a double click on the splitter does not reset the width");
@@ -1331,11 +1332,10 @@ async function library(ctx) {
   });
 
   const clickAt = async (app, selector) => {
-    const [x, y] = await evaluate(app, `(() => { const r = ${selector}.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()`);
-    const mouse = (type, buttons) => send(app, "Input.dispatchMouseEvent", { type, x, y, button: type === "mouseMoved" ? "none" : "left", buttons, clickCount: 1 });
-    await mouse("mouseMoved", 0);
-    await mouse("mousePressed", 1);
-    await mouse("mouseReleased", 0);
+    const at = await evaluate(app, `(() => { const r = ${selector}.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()`);
+    await mouse(app, "mouseMoved", at, 0);
+    await mouse(app, "mousePressed", at, 1);
+    await mouse(app, "mouseReleased", at, 0);
   };
   const press = (app, key, code, keyCode) => send(app, "Input.dispatchKeyEvent", { type: "keyDown", key, code, windowsVirtualKeyCode: keyCode, text: key === " " ? " " : undefined }).then(() => send(app, "Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode: keyCode }));
   const openTiles = async (app) => {
@@ -1355,14 +1355,14 @@ async function library(ctx) {
     await evaluate(a, `act("pause", nowM()); true`);
   });
 
-  await step("clicking a tile picks whose game sound plays and clicks keep no focus", async () => {
+  await step("clicking a tile picks whose app sound plays and clicks keep no focus", async () => {
     await openTiles(a);
     const pick = await evaluate(a, `play.keys.find((k) => k !== soundKey(0, play.keys, st.id, gameSound))`);
     await clickAt(a, `play.tiles[${JSON.stringify(pick)}].box`);
-    await waitFor("the clicked tile's sound plays", within(UI_REFRESH_S * 3), () => evaluate(a, `soundKey(0, play.keys, st.id, gameSound) === ${JSON.stringify(pick)} && play.keys.every((k) => (k === ${JSON.stringify(pick)}) === !play.tiles[k].media.video.muted && (k === ${JSON.stringify(pick)}) === !play.tiles[k].snd.hidden) && $("gamesound").title === t("Game sound: {name}", { name: nameOf(${JSON.stringify(pick)}) })`));
+    await waitFor("the clicked tile's sound plays", within(UI_REFRESH_S * 3), () => evaluate(a, `soundKey(0, play.keys, st.id, gameSound) === ${JSON.stringify(pick)} && play.keys.every((k) => (k === ${JSON.stringify(pick)}) === !play.tiles[k].media.video.muted && (k === ${JSON.stringify(pick)}) === !play.tiles[k].snd.hidden) && $("gamesound").title === t("App sound: {name}", { name: nameOf(${JSON.stringify(pick)}) })`));
     const next = await evaluate(a, `play.keys[(play.keys.indexOf(${JSON.stringify(pick)}) + 1) % play.keys.length]`);
     await clickAt(a, `$("gamesound")`);
-    await waitFor("the Game sound button picks the next member", within(UI_REFRESH_S * 3), () => evaluate(a, `soundKey(0, play.keys, st.id, gameSound) === ${JSON.stringify(next)}`));
+    await waitFor("the app sound button picks the next member", within(UI_REFRESH_S * 3), () => evaluate(a, `soundKey(0, play.keys, st.id, gameSound) === ${JSON.stringify(next)}`));
     for (const id of ["volume", "play"]) {
       await clickAt(a, `$(${JSON.stringify(id)})`);
       check(await evaluate(a, `document.activeElement === document.body`), `a click on ${id} kept the keyboard focus`);
@@ -1375,15 +1375,13 @@ async function library(ctx) {
   });
 
   await step("dragging a name label swaps two tiles", async () => {
-    await evaluate(a, `openSession(${JSON.stringify(ctx.set)}); true`);
-    await waitFor("A shows the tiles", within(UI_REFRESH_S * 5), () => evaluate(a, `page === "player" && play.keys.length >= 2 && play.keys.every((k) => play.tiles[k] && play.tiles[k].box.getBoundingClientRect().width > 0)`));
+    await openTiles(a);
     const before = await evaluate(a, `play.keys.join()`);
     const pts = await evaluate(a, `(() => { const [k0, k1] = play.keys; const l = play.tiles[k0].lab.getBoundingClientRect(); const t = play.tiles[k1].box.getBoundingClientRect(); return { from: [l.left + l.width / 2, l.top + l.height / 2], to: [t.left + t.width / 2, t.top + t.height / 2] }; })()`);
-    const mouse = (type, [x, y], buttons) => send(a, "Input.dispatchMouseEvent", { type, x, y, button: type === "mouseMoved" && !buttons ? "none" : "left", buttons, clickCount: 1 });
-    await mouse("mouseMoved", pts.from, 0);
-    await mouse("mousePressed", pts.from, 1);
-    for (let i = 1; i <= 5; i++) await mouse("mouseMoved", [pts.from[0] + ((pts.to[0] - pts.from[0]) * i) / 5, pts.from[1] + ((pts.to[1] - pts.from[1]) * i) / 5], 1);
-    await mouse("mouseReleased", pts.to, 0);
+    await mouse(a, "mouseMoved", pts.from, 0);
+    await mouse(a, "mousePressed", pts.from, 1);
+    for (let i = 1; i <= 5; i++) await mouse(a, "mouseMoved", [pts.from[0] + ((pts.to[0] - pts.from[0]) * i) / 5, pts.from[1] + ((pts.to[1] - pts.from[1]) * i) / 5], 1);
+    await mouse(a, "mouseReleased", pts.to, 0);
     const [x0, x1, ...rest] = before.split(",");
     await waitFor("dragging a label swaps the two tiles", within(UI_REFRESH_S * 3), () => evaluate(a, `play.keys.join() === ${JSON.stringify([x1, x0, ...rest].join())}`));
     await screenshot(a, "player-swapped");
