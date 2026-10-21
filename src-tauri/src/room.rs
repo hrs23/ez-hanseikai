@@ -327,16 +327,16 @@ pub fn enter_room(core: &Arc<Core>, id: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn forget_room(core: &Arc<Core>, id: &str) {
-    {
-        let mut rooms = core.rooms.lock().unwrap();
-        rooms.list.retain(|r| r.id != id);
-        if rooms.active.as_deref() == Some(id) {
-            rooms.active = None;
-        }
+pub fn leave_room(core: &Arc<Core>, id: &str) {
+    if core.rooms.lock().unwrap().active.as_deref() == Some(id) {
+        leave(core);
     }
+}
+
+pub fn forget_room(core: &Arc<Core>, id: &str) {
+    leave_room(core, id);
+    core.rooms.lock().unwrap().list.retain(|r| r.id != id);
     core.save_rooms();
-    apply_active(core);
 }
 
 pub fn rename_room(core: &Arc<Core>, name: &str) -> Result<(), String> {

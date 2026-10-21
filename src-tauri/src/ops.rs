@@ -110,14 +110,8 @@ fn enter_room(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     room::enter_room(core, &arg::<String>(&args, "id")?).map(|_| Value::Null)
 }
 
-fn leave_if_open(core: &Arc<Core>, id: &str) {
-    if core.rooms.lock().unwrap().active.as_deref() == Some(id) {
-        room::leave(core);
-    }
-}
-
 fn close_room(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    leave_if_open(core, &arg::<String>(&args, "id")?);
+    room::leave_room(core, &arg::<String>(&args, "id")?);
     Ok(Value::Null)
 }
 
@@ -129,7 +123,6 @@ fn remove_room(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     if core.export.lock().unwrap().as_ref().is_some_and(|e| e.set.0 == id) {
         return Err("This recording is being exported. Cancel the export first.".into());
     }
-    leave_if_open(core, &id);
     room::forget_room(core, &id);
     jobs::release_room(&id);
     core.removed_rooms.lock().unwrap().insert(id);

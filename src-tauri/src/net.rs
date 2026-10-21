@@ -563,9 +563,11 @@ fn watch_paths(core: &Arc<Core>, conn: &Connection, label: String) {
 }
 
 async fn admitted(core: &Arc<Core>, from: EndpointId, conn: &Connection) -> bool {
+    let mut first = true;
     while let Ok((send, recv)) = conn.accept_bi().await {
         match join(core, from, send, recv).await {
-            Ok(None | Some(room::Step::Wait(_))) | Err(_) => continue,
+            Ok(None) if first => return false,
+            Ok(None | Some(room::Step::Wait(_))) | Err(_) => first = false,
             Ok(Some(room::Step::Admitted)) => return core.has_peer(&from),
             Ok(Some(_)) => return false,
         }

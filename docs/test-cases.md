@@ -23,6 +23,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - each member row says one short state. `e2e` (`library`)
 - A real two-PC test with friends: create a room, invite, join, approve, and see everyone's name, color and state. `manual`
 - Pasting your own invite code is refused as not valid. `todo`
+- A member dialing someone who left the room logs that the other app closed it as not a member. `manual`
 - room: joining waits for an answer and ends the invite; the latest remove or admit wins; the latest room name wins on every clock; a rename made here beats a name from a fast clock; invite tokens and room ids cannot leave the rooms folder; a peer can only name a room with an id this app makes; a member is present while connected or seen within a minute; colors are the same everywhere; colors stay when someone joins without a clash; an old debrief links through its first party record; ai del hides ai notes from every log but not human notes; board cards newest event wins and old team card reads. `unit`
 - a member row says one short state. `ui-test`
 
