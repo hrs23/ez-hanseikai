@@ -17,8 +17,10 @@
     DeleteRegKey /ifempty HKCU "Software\ez-hanseikai"
     CreateShortcut "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
     !insertmacro SetLnkAppUserModelId "$SMPROGRAMS\${PRODUCTNAME}.lnk"
-    CreateShortcut "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
-    !insertmacro SetLnkAppUserModelId "$DESKTOP\${PRODUCTNAME}.lnk"
+    ${If} $UpdateMode = 1
+      CreateShortcut "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+      !insertmacro SetLnkAppUserModelId "$DESKTOP\${PRODUCTNAME}.lnk"
+    ${EndIf}
     Rename "$APPDATA\dev.ez-hanseikai.app" "$APPDATA\dev.ggi-hanseikai.app"
   ${EndIf}
 !macroend
