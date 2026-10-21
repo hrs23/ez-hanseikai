@@ -1527,7 +1527,7 @@ async function library(ctx) {
     const rowsOf = async (app) => (await invoke(app, "jobs")).jobs.filter((j) => j.set === bare).length;
     await waitFor("A and B list a job row for the recording nobody else holds", within(JOB_CHECK_S + LOG_SYNC_S * 3), async () => (await rowsOf(a)) > 0 && (await rowsOf(b)) > 0);
     check((await state(a)).sets.find((x) => x.id === bare).shared === false, "A thinks others hold the recording nobody else holds");
-    check(await evaluate(b, `!canDelete(setById(${JSON.stringify(bare)}))`), "B may delete a recording it does not hold while A does");
+    await waitFor("B's page does not offer to delete a recording it does not hold while A does", within(UI_REFRESH_S * 5), () => evaluate(b, `!canDelete(setById(${JSON.stringify(bare)}))`));
     await waitFor("A made the thumbnail", within(30), async () => setOf(await state(a), bare)?.thumb === true);
     await confirmDeletion(a, bare, "This deletes it completely");
     await allSee(all, "the recording nobody else holds gone from the list", within(LOG_SYNC_S * 3), (st) => !setOf(st, bare));
