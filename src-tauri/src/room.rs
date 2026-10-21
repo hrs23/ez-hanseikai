@@ -1138,14 +1138,14 @@ fn last_end(f: &File, series: &str) -> Option<i64> {
     f.segs.iter().filter(|s| s.series == series).map(|s| s.t_us + s.d_us - f.offset_us).max()
 }
 
-fn parts_json(core: &Core, room: &str, set: &Set, f: &File) -> Vec<Value> {
+fn parts_json(room: &str, set: &Set, f: &File, size_of: &dyn Fn(&str, &str) -> (u64, bool)) -> Vec<Value> {
     let mut out = Vec::new();
     for capture in f.captures() {
+        let Some(start_us) = f.caps.get(capture).and_then(|cap| cap["start_us"].as_i64()) else { continue };
         let mut part = json!({"capture": capture});
-        for series in SERIES {
-            let Some(first) = f.segs.iter().find(|s| s.capture == capture && s.series == series) else { continue };
-            let size = stream::size(&stream::set_pieces(core, room, f, capture, series));
-            part[series] = json!({"path": format!("set/{room}/{}/{}/{series}/{capture}", set.id, f.owner), "start_us": first.t_us, "size": size});
+        for series in SERIES.iter().filter(|series| f.segs.iter().any(|s| s.capture == capture && s.series == **series)) {
+            let (size, open) = size_of(capture, series);
+            part[series] = json!({"path": format!("set/{room}/{}/{}/{series}/{capture}", set.id, f.owner), "start_us": start_us, "size": size, "open": open});
         }
         out.push(part);
     }
@@ -1188,7 +1188,7 @@ pub fn sets_json(core: &Core, room: &str, logs: &[Log], events: &[Value]) -> Vec
             let by: Vec<&str> = holders.iter().filter(|h| full(h.have, &set, f)).map(|h| h.id).collect();
             players.push(json!({
                 "owner": f.owner, "imported": f.view.is_some(), "start_us": f.start_us, "end_us": f.end_us, "offset_us": f.offset_us, "have": have, "total": total,
-                "recording": f.recording(), "verified_by": by, "stuck": stuck(&mine, &online, &set, f), "parts": parts_json(core, room, &set, f),
+                "recording": f.recording(), "verified_by": by, "stuck": stuck(&mine, &online, &set, f), "parts": parts_json(room, &set, f, &|capture, series| { let pieces = stream::set_pieces(core, room, f, capture, series); (stream::size(&pieces), stream::open(&pieces)) }),
                 "last_us": {"v": last_end(f, SERIES[0]), "m": last_end(f, SERIES[1])},
             }));
         }
@@ -1358,6 +1358,16 @@ pub mod tests {
         records.extend((1..=segs).map(|n| json!({"k": "seg", "capture": "1000", "series": "v", "n": n, "set": "s1", "t_us": n * 4, "d_us": 4, "size": 4, "sha256": format!("s{n}")})));
         records.extend(ended.then(|| json!({"k": "rec_end", "set": "s1", "t_us": 100})));
         derive_sets("r", &[log("a", 0, records)]).remove(0).files.remove(0)
+    }
+
+    #[test]
+    fn a_part_starts_when_its_capture_began_and_a_capture_without_a_start_has_none() {
+        let cap = |capture: &str, start: Option<i64>| json!({"k": "cap", "capture": capture, "start_us": start, "init": {"v": {"size": 4, "sha256": "i"}}});
+        let seg = |capture: &str, t_us: i64| json!({"k": "seg", "capture": capture, "series": "v", "n": 1, "set": "s1", "t_us": t_us, "d_us": 4, "size": 4, "sha256": "s"});
+        let records = vec![json!({"k": "rec", "set": "s1", "start_us": 0}), cap("1000", Some(700)), seg("1000", 800), cap("2000", None), seg("2000", 900)];
+        let set = derive_sets("r", &[log("a", 0, records)]).remove(0);
+        let parts = parts_json("r", &set, &set.files[0], &|capture, series| (capture.parse::<u64>().unwrap() + series.len() as u64, true));
+        assert_eq!(parts, [json!({"capture": "1000", "v": {"path": "set/r/s1/a/v/1000", "start_us": 700, "size": 1001, "open": true}})]);
     }
 
     #[test]

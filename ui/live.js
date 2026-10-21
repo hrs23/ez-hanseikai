@@ -25,14 +25,13 @@ const LIVE_SHRINK_GAP_S = 3;
 const LIVE_CATCH_UP = 1.05;
 
 function liveAvail(slots) {
-  const ends = slots.filter(([start, v]) => start !== null && v && v.readyState > 0 && isFinite(v.duration)).map(([start, v]) => start + v.duration);
+  const ends = slots.filter(([base, v]) => base !== null && bufferedEnd(v) > 0).map(([base, v]) => base + bufferedEnd(v));
   return ends.length ? Math.min(...ends) : null;
 }
 
-function liveFollow(duration, at, loadSec) {
-  const keep = LIVE_HEADROOM_S + 2 * loadSec;
-  const lag = duration - at;
-  return { target: lag > keep + LIVE_HEADROOM_S + LIVE_SHRINK_GAP_S ? duration - keep : at, playing: lag > 0 };
+function liveFollow(end, at) {
+  const lag = end - at;
+  return { target: lag > 2 * LIVE_HEADROOM_S + LIVE_SHRINK_GAP_S ? end - LIVE_HEADROOM_S : at, playing: lag > 0 };
 }
 
 function liveStep(state, members, now, dt) {

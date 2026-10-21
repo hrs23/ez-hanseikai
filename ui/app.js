@@ -41,6 +41,8 @@ let page = "player";
 let nowView = false;
 let nowSet = null;
 let selected = null;
+let held = false;
+let actedAt = 0;
 let rate = 1;
 let volume = stored("volume", 1);
 let sessionSound = stored("sessionSound", true);
@@ -269,18 +271,18 @@ function recOf(id) {
   const set = liveSet();
   return !!(set && set.players.some((p) => p.owner === id && p.recording));
 }
-const liveStart = (key, part) => (part && typeof part.start_us === "number" ? (part.start_us - (key === st.id ? 0 : (peerOf(key) || {}).offset_us || 0)) / 1e6 : null);
+const offOf = (key) => (key === st.id ? 0 : (peerOf(key) || {}).offset_us || 0);
 function liveMembers() {
   if (playSet()) {
     return players().filter((p) => play.tiles[p.key]).map((p) => {
       const tl = play.tiles[p.key];
       const last = p.file.parts[p.file.parts.length - 1] || {};
       const on = (s, part) => !!(s && part && pathOf(s.part) === pathOf(part));
-      const slots = [[tl.media, last.v], [tl.mic, last.m]].filter(([s, part]) => on(s, part)).map(([s]) => [(s.part.start_us - p.off) / 1e6, s.video]);
+      const slots = [[tl.media, last.v], [tl.mic, last.m]].filter(([s, part]) => on(s, part)).map(([s]) => [s.base, s.video]);
       return { key: p.key, avail: on(tl.media, last.v) ? liveAvail(slots) : null, ended: !p.recording };
     });
   }
-  return livePlayers(st).filter((p) => rec.tiles[p.key]).map(({ key, file }) => ({ key, avail: file ? liveAvail([[liveStart(key, rec.tiles[key].media.part), rec.tiles[key].media.video]]) : null, ended: false }));
+  return livePlayers(st).filter((p) => rec.tiles[p.key]).map(({ key, file }) => ({ key, avail: file ? liveAvail([[rec.tiles[key].media.base, rec.tiles[key].media.video]]) : null, ended: false }));
 }
 function goLive() {
   live = true;
@@ -303,12 +305,13 @@ function tickLive() {
     if (!tl) continue;
     tl.box.classList.toggle("late", liveClock.late.includes(p.key));
     if (!p.file) continue;
-    const v = tl.media.video;
-    const start = liveStart(p.key, tl.media.part);
-    const edge = start === null || liveClock.pos === null;
-    const step = edge ? liveFollow(v.duration, v.currentTime, tl.media.loadSec) : { target: liveClock.pos - start, playing: !liveClock.held };
-    sync(v, step.target, step.playing);
-    v.playbackRate = edge ? 1 : liveClock.rate;
+    const s = tl.media;
+    feed(s, p.file, offOf(p.key), liveClock.pos === null ? Infinity : liveClock.pos * 1e6);
+    const edge = s.base === null || liveClock.pos === null;
+    const step = edge ? liveFollow(bufferedEnd(s.video), s.video.currentTime) : { target: liveClock.pos - s.base, playing: !liveClock.held };
+    aim(s, step.target);
+    pace(s, step.target, step.playing);
+    s.video.playbackRate = edge ? 1 : liveClock.rate;
   }
 }
 function liveWhat(p) {
@@ -346,10 +349,6 @@ function renderLive() {
     tl.box.classList.toggle("hatch", state === "away" || state === "quiet");
     tl.box.classList.toggle("off", state === "away");
     tl.box.classList.toggle("mine", state === "select");
-    if (!p.file) continue;
-    const start = liveStart(p.key, p.file);
-    if (tl.media.src === srcOf(p.file)) tl.media.part = p.file;
-    feed(tl.media, p.file, true, p.file, () => (start === null || liveClock.pos === null ? 0 : liveClock.pos - start));
   }
   place(rec);
 }
@@ -386,16 +385,16 @@ function received(list = players()) {
   const b = base(list);
   const ends = [];
   for (const p of list) {
-    if (p.file.end_us) ends.push((p.file.end_us - p.off - b) / 1e6);
     const tl = play.tiles[p.key];
-    if (tl && tl.media.part && isFinite(tl.media.video.duration)) ends.push(tl.media.video.duration - shiftOf(p, tl.media.part, b));
+    const end = p.file.end_us ? (p.file.end_us - p.off) / 1e6 : tl && wallEnd(tl.media);
+    if (end) ends.push(end - b / 1e6);
   }
   return ends.length ? Math.max(...ends) : 0;
 }
 function total(list = players()) {
   return Math.max(received(list), list.some((p) => p.recording) ? (nowUs() - base(list)) / 1e6 : 0);
 }
-const nowM = () => (livePinned() ? liveClock.pos - base() / 1e6 : clock.playing ? clock.m + ((performance.now() - clock.at) / 1000) * rate : clock.m);
+const nowM = () => (livePinned() ? liveClock.pos - base() / 1e6 : clock.playing && !held ? clock.m + ((performance.now() - clock.at) / 1000) * rate : clock.m);
 const wallOf = (m) => Math.round(base() + m * 1e6);
 const holding = () => st.recording && !played && !(st.active_set && st.active_set.voice);
 function setClock(playing, m) {
@@ -413,10 +412,10 @@ function applyAudio() {
     if (!tl) return;
     const heard = key === soundKey(play.view, play.keys, st.id);
     const mine = recv(key);
-    for (const [s, on, mix] of [[tl.media, heard, mine.app], [tl.mic, true, mine.voice]]) if (s) for (const v of [s.video, s.pending && s.pending.video]) if (v) {
-      v.muted = away || muted || !on || mix.muted;
-      v.volume = volume * mix.volume;
-      v.playbackRate = livePinned() ? liveClock.rate : rate;
+    for (const [s, on, mix] of [[tl.media, heard, mine.app], [tl.mic, true, mine.voice]]) if (s) {
+      s.video.muted = away || muted || !on || mix.muted;
+      s.video.volume = volume * mix.volume;
+      s.video.playbackRate = livePinned() ? liveClock.rate : rate;
     }
   });
   if (changed("mute", [muted || volume === 0])) $("mute").replaceChildren(icon(muted || volume === 0 ? "volume-x" : "volume-2"));
@@ -471,7 +470,6 @@ function renderPlayer() {
   for (const p of list) {
     const tl = tile(play, p.key);
     nameTile(tl, p.key);
-    feedParts(tl, p, nowM(), base(list), clock.playing);
   }
   place(play);
   applyAudio();
@@ -654,23 +652,30 @@ function tick() {
   if (clock.playing && tot && m >= tot) { clock.playing = false; clock.m = tot; m = tot; }
   const b = base(list);
   const away = page !== "player";
+  const wall = b + m * 1e6;
+  const pinned = livePinned();
+  const todo = [];
   for (const p of list) {
     const tl = play.tiles[p.key];
     if (!tl) continue;
-    const wall = b + m * 1e6;
-    if (pathOf(tl.media.part) !== pathOf(partFor(p, "v", wall)) || pathOf(tl.mic && tl.mic.part) !== pathOf(partFor(p, "m", wall))) feedParts(tl, p, m, b, clock.playing && !away);
-    const v = tl.media.video;
-    const target = tl.media.part ? m + shiftOf(p, tl.media.part, b) : 0;
-    const have = tl.media.part && v.readyState > 0 && isFinite(v.duration) ? v.duration : 0;
-    const pinned = livePinned();
+    feedParts(tl, p, m, b);
+    const end = wallEnd(tl.media);
     const pictured = !!(partAt(p, wall) || {}).v;
-    const behind = !pinned && !!p.file.total && p.file.have < p.file.total && target > have;
+    const behind = !pinned && !!p.file.total && p.file.have < p.file.total && end !== null && wall / 1e6 > end;
     tl.box.classList.toggle("wait", !tl.media.part || !pictured || behind);
     tl.box.classList.toggle("late", !!tl.media.part && pinned && liveClock.late.includes(p.key));
     const line = !pictured || behind ? viewLine(set, viewContext(), p.key) : null;
     const what = line ? line.text : !pictured ? "voice" : nameOf(p.key);
     if (changed("what/" + p.key, [what, line && line.action, nameOf(p.key), lang])) tl.what.replaceChildren(...whatNodes(what, line, set));
-    for (const s of [tl.media, tl.mic]) if (s && s.part && !switching(s)) sync(s.video, m + shiftOf(p, s.part, b), clock.playing && !away && !(pinned && liveClock.held));
+    for (const s of [tl.media, tl.mic]) if (s && s.base !== null) todo.push([s, wall / 1e6 - s.base, clock.playing && !away && !(pinned && liveClock.held)]);
+  }
+  const now = Date.now();
+  const ready = todo.map(([s, at]) => aim(s, at));
+  hold(!pinned && !away && todo.map(([s, at], i) => waiting(s, ready[i], at, now)).includes(true));
+  for (const [s, at, playing] of todo) pace(s, at, playing && !held);
+  if (peek.at) {
+    feedSeries(peek.slot, peek.at.p, "v", peek.at.wall);
+    if (peek.slot.base !== null) aim(peek.slot, peek.at.wall / 1e6 - peek.slot.base);
   }
   if (st.active_set) tickSide();
   if (away) return;
@@ -760,6 +765,7 @@ function applyParty(p) {
   const first = !partyLast;
   partyLast = p;
   const mine = p.origin === st.id;
+  if (mine && !first && p.stamp < actedAt) return;
   if (quick && !mine) quick.moved = true;
   const set = playSet();
   if (!set || p.set !== set.id) return;
@@ -774,6 +780,7 @@ function applyParty(p) {
   else setClock(p.playing, m);
 }
 function act(cmd, m, prev) {
+  actedAt = nowUs();
   if (!playSet()) return;
   if (cmd === "play") played = true;
   apply(cmd, m, st.id, prev);
@@ -1412,9 +1419,17 @@ function setSpeaking(id, on) {
   for (const e of document.querySelectorAll("[data-speak]")) e.classList.toggle("speaking", speaking.has(e.dataset.speak));
 }
 listenMain("speaking", (e) => setSpeaking(e.payload.from, e.payload.on));
-function setRate(r) {
+function anchor() {
   clock.m = nowM();
   clock.at = performance.now();
+}
+function hold(on) {
+  if (on === held) return;
+  anchor();
+  held = on;
+}
+function setRate(r) {
+  anchor();
   rate = r;
   applyAudio();
 }
@@ -1494,11 +1509,10 @@ $("seek").onpointerdown = (e) => {
     act("seek", nowM(), from);
   };
 };
-const peek = { video: el("video", { muted: true, preload: "auto" }), want: null };
-peek.video.onseeked = () => {
+const peek = { slot: slot(el("video", { muted: true, preload: "auto" })), at: null };
+peek.slot.video.onseeked = () => {
   const c = $("peek").querySelector("canvas");
-  c.getContext("2d").drawImage(peek.video, 0, 0, c.width, c.height);
-  if (peek.want !== null && Math.abs(peek.want - peek.video.currentTime) > SEEK_TOLERANCE) peek.video.currentTime = peek.want;
+  c.getContext("2d").drawImage(peek.slot.video, 0, 0, c.width, c.height);
 };
 function peekAt(x) {
   const r = $("seek").getBoundingClientRect();
@@ -1513,17 +1527,10 @@ function peekAt(x) {
   const chapter = chapterAt(m);
   $("peekchapter").textContent = chapter ? chapter.body : "";
   if (!p) return;
-  const b = base(list);
-  const part = partFor(p, "v", b + m * 1e6);
-  if (!part) return;
-  const src = convertFileSrc(part.path, "ezh");
-  if (peek.src !== src) { peek.src = src; peek.video.src = src; }
-  peek.want = m + shiftOf(p, part, b);
-  if (!peek.video.seeking && peek.video.readyState > 0) peek.video.currentTime = peek.want;
-  else if (peek.video.readyState === 0) peek.video.onloadedmetadata = () => { peek.video.currentTime = peek.want; };
+  peek.at = { p, wall: base(list) + m * 1e6 };
 }
 $("seek").onmousemove = (e) => peekAt(e.clientX);
-$("seek").onmouseleave = () => { $("peek").hidden = true; };
+$("seek").onmouseleave = () => { $("peek").hidden = true; peek.at = null; };
 $("filter").oninput = () => renderEvents();
 addEventListener("resize", () => renderShell());
 
@@ -1597,11 +1604,11 @@ document.addEventListener("keydown", (e) => {
 });
 
 async function reportCodecs() {
-  const types = { av1: 'video/mp4; codecs="av01.0.08M.08"', hevc: 'video/mp4; codecs="hvc1.1.6.L93.B0"', h264: 'video/mp4; codecs="avc1.640028"' };
+  const types = { av1: CODECS.av01, hevc: CODECS.hvc1, h264: CODECS.avc1 };
   const list = [];
-  for (const [name, contentType] of Object.entries(types)) {
+  for (const [name, codec] of Object.entries(types)) {
     try {
-      const info = await navigator.mediaCapabilities.decodingInfo({ type: "file", video: { contentType, ...CODEC_PROBE } });
+      const info = await navigator.mediaCapabilities.decodingInfo({ type: "media-source", video: { contentType: `video/mp4; codecs="${codec}"`, ...CODEC_PROBE } });
       if (info.supported) list.push(name);
     } catch (e) { warn(e); }
   }

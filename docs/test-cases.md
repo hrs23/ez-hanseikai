@@ -56,7 +56,6 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - Your own tile shows and moves right after recording ends and while it records. `todo`
 - net: a live reply names the recording of each series; history gets its share while live fills the limit. `unit`
 - record: a segment opens only beside its init; a live stream serves only segments of the recording it asked for. `unit`
-- stream: live window moves in steps and keeps a whole segment. `unit`
 - receiving speed and the live edge; live tiles wait for the slowest member, never go back, stop waiting for one too far behind, mark it late once passed, and advance while nobody holds; the live delay shrinks slowly only while the slack is above the gap, and a tile with no start follows its own edge; a Live tile tells at most one problem, only while this PC records; live lists every room member in the saved order and then in join order, whatever their connection. `ui-test`
 
 ## Playback
@@ -64,10 +63,12 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - recording alone, the player follows the picture as it grows. `e2e` (`live`)
 - each ended recording gets a thumbnail, and the sidebar lists recordings with it. `e2e` (`library`)
 - A recording in HEVC and in AV1 plays on every PC; a PC that cannot play one makes the room choose another codec. `manual`
-- Seeking far and pressing play at once still plays when the data is read. `todo`
-- Playing your own recording just after it ended shows your own picture. `todo`
-- stream: ranges are capped and checked; a recording plays from its own folder up to the first missing segment; paths are decoded. `unit`
+- a far seek and an immediate Play start every tile at once, alone and in Watch Party. `e2e` (`library`)
+- playing your own recording right after it ended shows your own picture, moves on and reaches its end. `e2e` (`recover`)
+- stream: a recording folder lists its pieces from the lowest segment and the live folder its newest run, each with first times and an open tail, served whole or from a byte; a recording plays from its own folder up to the first missing segment; ids are checked and paths decoded. `unit`
+- room: a part starts when its capture began, with the listing's size and whether its last piece is still open. `unit`
 - thumbs: the middle segment holds half of the length. `unit`
+- the player plans the segment holding the moment and the next ones, continues a grown tail, ends a part where its last piece ends, and holds every tile until all can play. `ui-test`
 - the all-players view plays the viewer's own sound and a focused player plays its own; the view line names the first member who blocks the playback, in one sentence. `ui-test`
 
 ## Watch Party
@@ -75,7 +76,6 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - Watch Party converges on a seek and a play, and a member who joins midway converges too. `e2e` (`library`)
 - a session started while watching together records voices and the Watch Party. `e2e` (`library`)
 - A real Watch Party of a recording from several PCs stays in step through seeks and pauses. `manual`
-- Seeking far and pressing play at once still plays for everyone. `todo`
 - party: newest wins by seq then time then origin; simultaneous actions converge; a joiner adopts the running state; turning on joins the party without moving it; rejoining takes the running state again; party messages for another recording are not followed; watching counts viewers per recording and includes me while in the party; positions move to the receivers clock; heads only grow and show who is behind; typing shows while the viewer is seen; other rooms and off are ignored but viewers are counted; a review starts only while watching a session together; party records come back on the local clock in order. `unit`
 
 ## Debrief

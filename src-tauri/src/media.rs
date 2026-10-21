@@ -8,8 +8,6 @@ const WIDE_HEADER: usize = 16;
 
 #[derive(Clone)]
 pub struct Time {
-    pub at: u64,
-    pub wide: bool,
     pub track: u32,
     pub value: u64,
 }
@@ -116,23 +114,21 @@ pub fn timescales(init: &[u8]) -> HashMap<u32, u32> {
     out
 }
 
-pub fn fragment_times(moof: &[u8], base: u64) -> Vec<Time> {
+pub fn fragment_times(moof: &[u8]) -> Vec<Time> {
     let mut out = Vec::new();
     let Some((kind, head, _)) = header(moof) else { return out };
     if &kind != b"moof" {
         return out;
     }
-    for (kind, start, traf) in children(&moof[head..]) {
+    for (kind, _, traf) in children(&moof[head..]) {
         if &kind != b"traf" {
             continue;
         }
         let track = child(traf, b"tfhd").and_then(|t| be32(t, 4));
-        let tfdt = children(traf).into_iter().find(|(k, _, _)| k == b"tfdt");
-        let (Some(track), Some((_, at, body))) = (track, tfdt) else { continue };
-        let wide = body.first() == Some(&1);
-        let value = if wide { be64(body, 4) } else { be32(body, 4).map(u64::from) };
+        let Some((track, body)) = track.zip(child(traf, b"tfdt")) else { continue };
+        let value = if body.first() == Some(&1) { be64(body, 4) } else { be32(body, 4).map(u64::from) };
         if let Some(value) = value {
-            out.push(Time { at: base + (head + start + at + 4) as u64, wide, track, value });
+            out.push(Time { track, value });
         }
     }
     out
@@ -161,7 +157,7 @@ pub fn scan(path: &Path) -> std::io::Result<(Vec<Time>, u64)> {
             let mut body = vec![0u8; size as usize];
             file.seek(SeekFrom::Start(at))?;
             file.read_exact(&mut body)?;
-            times.extend(fragment_times(&body, at));
+            times.extend(fragment_times(&body));
             moof = true;
         } else if &kind == b"mdat" && moof {
             whole = at + size;
@@ -170,28 +166,6 @@ pub fn scan(path: &Path) -> std::io::Result<(Vec<Time>, u64)> {
         at += size;
     }
     Ok((times, whole))
-}
-
-pub fn bases(times: &[Time]) -> HashMap<u32, u64> {
-    let mut out = HashMap::new();
-    for t in times {
-        out.entry(t.track).or_insert(t.value);
-    }
-    out
-}
-
-pub fn patch(buf: &mut [u8], start: u64, times: &[Time], bases: &HashMap<u32, u64>) {
-    let end = start + buf.len() as u64;
-    for t in times {
-        let value = t.value.saturating_sub(bases.get(&t.track).copied().unwrap_or(0));
-        let bytes = if t.wide { value.to_be_bytes().to_vec() } else { (value as u32).to_be_bytes().to_vec() };
-        let field = (t.at, t.at + bytes.len() as u64);
-        let (from, to) = (field.0.max(start), field.1.min(end));
-        if from >= to {
-            continue;
-        }
-        buf[(from - start) as usize..(to - start) as usize].copy_from_slice(&bytes[(from - field.0) as usize..(to - field.0) as usize]);
-    }
 }
 
 pub fn cut(open: bool, count: u32, per_segment: u32, current: Option<&str>, wanted: Option<&str>) -> bool {
@@ -245,7 +219,7 @@ pub mod tests {
         let Out::Init(i) = &outs[0] else { panic!() };
         assert_eq!(timescales(i), HashMap::from([(1, 90000)]));
         let Out::Fragment(f) = &outs[2] else { panic!() };
-        assert_eq!(fragment_times(f, 0)[0].value, 90000);
+        assert_eq!(fragment_times(f)[0].value, 90000);
         assert!(Splitter::default().push(&[0, 0, 0, 3, b'b', b'a', b'd', b'!']).is_none());
     }
 
@@ -259,7 +233,6 @@ pub mod tests {
         assert_eq!(whole, (a.len() + b.len()) as u64);
         assert!(scan(&dir.join("2.m4s")).is_err());
         assert_eq!(times.iter().map(|t| (t.track, t.value)).collect::<Vec<_>>(), [(1, 10), (2, 20), (1, 30), (2, 40), (1, 30), (2, 40)]);
-        assert_eq!(times[2].at, a.len() as u64 + times[0].at);
         assert_eq!(micros(&times[0], &HashMap::from([(1, 1000)])), 10_000);
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -275,21 +248,6 @@ pub mod tests {
         assert!(children(&huge).is_empty());
         assert_eq!(Splitter::default().push(&huge).map(|o| o.len()), Some(0));
         let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn patch_moves_times_to_zero_even_in_partial_ranges() {
-        let data = [fragment(&[(1, 900), (2, 50)], b"aa"), fragment(&[(1, 990), (2, 60)], b"bb")].concat();
-        let times: Vec<Time> = [fragment_times(&data, 0), fragment_times(&data[data.len() / 2..], (data.len() / 2) as u64)].concat();
-        let base = bases(&times);
-        let mut whole = data.clone();
-        patch(&mut whole, 0, &times, &base);
-        let after: Vec<u64> = [fragment_times(&whole, 0), fragment_times(&whole[data.len() / 2..], 0)].concat().iter().map(|t| t.value).collect();
-        assert_eq!(after, [0, 0, 90, 10]);
-        let at = times[2].at as usize + 3;
-        let mut part = data[at..at + 9].to_vec();
-        patch(&mut part, at as u64, &times, &base);
-        assert_eq!(part, whole[at..at + 9]);
     }
 
     #[test]

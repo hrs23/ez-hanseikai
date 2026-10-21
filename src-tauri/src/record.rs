@@ -633,7 +633,7 @@ impl Sink {
 
     fn take_fragment(&self, core: &Core, which: usize, bytes: &[u8]) {
         let Some(&(_, start_us)) = self.start.get() else { return };
-        let times = media::fragment_times(bytes, 0);
+        let times = media::fragment_times(bytes);
         let mut series = self.outputs[which].lock().unwrap();
         let Some(first) = times.first() else { return };
         let t_us = start_us + media::micros(first, &series.scales);

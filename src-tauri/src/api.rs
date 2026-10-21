@@ -751,7 +751,7 @@ impl Backend for Live {
         for capture in file.captures() {
             let pieces = crate::stream::set_pieces(core, room, file, capture, room::SERIES[1]);
             if pieces.len() > 1 {
-                out.extend(crate::stream::read(core, &pieces, 0, crate::stream::size(&pieces)).ok()?);
+                out.extend(crate::stream::read(&pieces, 0, crate::stream::size(&pieces)).ok()?);
             }
         }
         (!out.is_empty()).then_some(out)

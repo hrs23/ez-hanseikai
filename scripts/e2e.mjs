@@ -38,6 +38,8 @@ const SHORT_SET_SEGMENTS = 5;
 const LIVE_ROUNDS = 2;
 const KEYFRAME_DECODE_SPEED = 10;
 const SEEK_TO_S = 5;
+const FAR_FROM_END_S = 8;
+const PLAY_START_S = 8;
 const LOG_TAIL_LINES = 15;
 const APPROVAL_WAIT_S = LOG_SYNC_S * 3;
 const SOURCE = { kind: "display", index: 1 };
@@ -58,13 +60,11 @@ const LIVE_PROBE = `(() => {
   const grid = playSet() ? play : rec;
   const at = (tl) => {
     const s = tl.media;
-    if (s.video.readyState < 2 || s.video.seeking || s.pending) return null;
-    const p = players().find((x) => x.key === tl.key);
-    const start = grid === play ? s.part && (s.part.start_us - p.off) / 1e6 : liveStart(tl.key, s.part);
-    return start === null || start > liveClock.pos ? null : start + s.video.currentTime;
+    if (s.video.readyState < 2 || s.video.seeking || s.base === null || s.base + s.shift > liveClock.pos) return null;
+    return s.base + s.video.currentTime;
   };
   const tiles = Object.values(grid.tiles);
-  return { now: grid === play, pos: liveClock.pos, rate: liveClock.rate, held: liveClock.held, avail: Object.fromEntries(liveMembers().map((m) => [m.key, m.avail])), at: tiles.map(at).filter((x) => x !== null), wait: tiles.some((tl) => tl.box.classList.contains("wait")), late: tiles.filter((tl) => tl.box.classList.contains("late")).map((tl) => tl.key) };
+  return { now: grid === play, pos: liveClock.pos, rate: liveClock.rate, held: liveClock.held, avail: Object.fromEntries(liveMembers().map((m) => [m.key, m.avail])), at: tiles.map(at).filter((x) => x !== null), wait: tiles.some((tl) => tl.box.classList.contains("wait")), why: tiles.map((tl) => [tl.key.slice(0, 4), !!tl.media.part, !!tl.media.index, tl.box.classList.contains("wait"), tl.media.video.readyState]), late: tiles.filter((tl) => tl.box.classList.contains("late")).map((tl) => tl.key) };
 })()`;
 
 const DIAL_S = DIAL_RETRY_S + CONNECT_TIMEOUT_S;
@@ -371,7 +371,7 @@ async function watchLive(app, b, seconds, until = () => false) {
   let last = null;
   while (Date.now() < end) {
     const x = await evaluate(app, LIVE_PROBE);
-    check(!x.wait, "a live tile with a picture hid it");
+    check(!x.wait, `a live tile with a picture hid it: ${JSON.stringify(x)}`);
     check(x.at.length < 2 || Math.max(...x.at) - Math.min(...x.at) < 1, `live tiles are apart: ${brief(x)}`);
     check(x.pos === null || x.avail[b.id] === null || x.late.includes(b.id) || x.pos <= x.avail[b.id], `the live position passed B's media: ${brief(x)}`);
     check(!last || (x.pos >= last.pos && x.now === last.now), `the live position went back or the view changed: ${brief([last, x])}`);
@@ -380,6 +380,41 @@ async function watchLive(app, b, seconds, until = () => false) {
     await sleep(POLL_MS);
   }
   return last;
+}
+
+async function follow(ctx, from, others, playing, position) {
+  const seconds = within(PARTY_REPEAT_S + UI_REFRESH_S * 2);
+  const shared = await waitFor(`${from.key} shares its action`, seconds, async () => {
+    const mine = (await state(from)).party.shared;
+    return mine.origin === from.id && mine.set === ctx.set && mine.playing === playing && mine;
+  });
+  await Promise.all(others.map((app) => waitFor(`${app.key} follows ${from.key}`, seconds, async () => {
+    const mine = (await state(app)).party.shared;
+    const same = mine.seq === shared.seq && mine.stamp === shared.stamp && mine.origin === shared.origin;
+    return same && evaluate(app, `selected === ${JSON.stringify(ctx.set)} && clock.playing === ${playing} && Math.abs(nowM() - ${position}) < ${JUMP_MIN_S}`);
+  })));
+}
+
+const TILES_PROBE = `(() => {
+  const wall = wallOf(nowM()) / 1e6;
+  return { m: nowM(), playing: clock.playing, tiles: Object.values(play.tiles).map(({ media: s }) => { const want = wall - s.base; return { has: s.base !== null && !!s.index && covers(s.index, want - s.shift), paused: s.video.paused, ready: s.video.readyState, off: s.video.currentTime - want, at: s.video.currentTime, buf: JSON.stringify(rangesOf(s.video.buffered)), dur: s.video.duration, segs: s.index ? s.index.segs.length + (s.index.open ? "+" : "") : -1, end: s.index ? endOf(s.index) : -1, shift: s.shift, seeking: s.video.seeking, err: !!s.video.error }; }) };
+})()`;
+
+async function together(app, [from, to]) {
+  const wrong = [];
+  let seen = null;
+  const first = await waitFor(`${app.key} plays every tile`, within(PLAY_START_S), async () => {
+    const x = await evaluate(app, TILES_PROBE);
+    seen = x;
+    if (x.m < from || x.m > to) return false;
+    const shown = x.tiles.filter((t) => t.has);
+    if (!x.playing || shown.some((t) => t.paused !== shown[0].paused)) wrong.push(x);
+    return shown.length > 0 && shown.every((t) => !t.paused && t.ready >= 3 && Math.abs(t.off) < 1) && x;
+  }).catch((e) => { throw new Error(`${e.message} ${JSON.stringify(seen)}`); });
+  check(!wrong.length, `${app.key}'s tiles started apart or Play was undone: ${brief(wrong[0])}`);
+  await sleep(1000);
+  const later = await evaluate(app, TILES_PROBE);
+  check(later.playing && later.tiles.every((t, i) => !t.has || !first.tiles[i].has || t.at > first.tiles[i].at), `${app.key}'s tiles did not move on: ${JSON.stringify([first, later])}`);
 }
 
 async function connects(app, peer, since = 0) {
@@ -642,7 +677,7 @@ async function live(ctx) {
     await evaluate(a, "openNow(); true");
     await waitFor("A's player holds the growing recording still while this PC records", within(SEGMENT_S * 4), () => evaluate(a, `selected === ${JSON.stringify(alone)} && !clock.playing && liveClock.pos === null`));
     await evaluate(a, "act('play', nowM()); true");
-    const view = () => evaluate(a, `(() => { const v = Object.values(play.tiles)[0]?.media.video; return { shown: selected === ${JSON.stringify(alone)}, playing: clock.playing, cur: v ? v.currentTime : 0, dur: v && isFinite(v.duration) ? v.duration : 0 }; })()`);
+    const view = () => evaluate(a, `(() => { const v = Object.values(play.tiles)[0]?.media.video; return { shown: selected === ${JSON.stringify(alone)}, playing: clock.playing, cur: v ? v.currentTime : 0, dur: v ? bufferedEnd(v) : 0 }; })()`);
     const first = await waitFor("A's player plays the growing recording once play is pressed", within(SEGMENT_S * 4), async () => { const x = await view(); return x.shown && x.playing && x.cur > 0 && x.dur > 0 && x; });
     await waitFor("A's player moves on with the picture", within(SEGMENT_S * 3), async () => { const x = await view(); return x.cur > first.cur + FRAGMENT_S * 2 && x.dur > first.dur + SEGMENT_S && x; });
     await pressAndConfirm(a, "toggleRecording()");
@@ -1018,6 +1053,15 @@ async function recover(ctx) {
     await allSee([a, b], "the set shown ended at once, not before C's last segment", within(LOG_SYNC_S * 2), (st, app) => { const set = setOf(st, ctx.set); return !st.active_set && set && !set.live && set.end_us >= lastOf(app) - set.players.find((p) => p.owner === c.id).offset_us; });
     const ended = setOf(await state(a), ctx.set);
     ctx.durationS = (ended.end_us - ended.start_us) / 1e6;
+    const far = Math.max(0, ctx.durationS - FAR_FROM_END_S);
+    await evaluate(a, `setParty(false); openSession(${JSON.stringify(ctx.set)}); act("seek", ${far}); act("play", ${far}); true`);
+    const own = `(() => { const v = play.tiles[st.id].media.video; return v.videoWidth > 0 && !v.paused && v.readyState >= 3 ? v.currentTime : 0; })()`;
+    const shown = await waitFor("A's own tile plays right after the stop", within(PLAY_START_S), () => evaluate(a, own));
+    await waitFor("A's own tile moves on", within(PLAY_START_S), async () => (await evaluate(a, own)) > shown);
+    const mine = ended.players.find((p) => p.owner === a.id);
+    await evaluate(a, `act("seek", ${(mine.last_us.v - ended.start_us) / 1e6 - 0.1}); true`);
+    await waitFor("A's own tile covers the end", within(SEGMENT_S + PLAY_START_S), () => evaluate(a, `(() => { const s = play.tiles[st.id].media; return !!s.index && covers(s.index, wallOf(nowM()) / 1e6 - s.base - s.shift) && s.video.readyState >= 2; })()`));
+    await evaluate(a, `act("pause", nowM()); setParty(true); true`);
     start("c", {});
     await attach(c);
     await share(c);
@@ -1225,28 +1269,17 @@ async function library(ctx) {
   await step("Watch Party converges on a seek and a play, and a member who joins midway converges too", async () => {
     const all = [a, b, c];
     const seconds = within(PARTY_REPEAT_S + UI_REFRESH_S * 2);
-    const follow = async (from, others, playing, position) => {
-      const shared = await waitFor(`${from.key} shares its action`, seconds, async () => {
-        const mine = (await state(from)).party.shared;
-        return mine.origin === from.id && mine.set === ctx.set && mine.playing === playing && mine;
-      });
-      await Promise.all(others.map((app) => waitFor(`${app.key} follows ${from.key}`, seconds, async () => {
-        const mine = (await state(app)).party.shared;
-        const same = mine.seq === shared.seq && mine.stamp === shared.stamp && mine.origin === shared.origin;
-        return same && evaluate(app, `selected === ${JSON.stringify(ctx.set)} && clock.playing === ${playing} && Math.abs(nowM() - ${position}) < ${JUMP_MIN_S}`);
-      })));
-    };
     await Promise.all(all.map((app) => evaluate(app, `openSession(${JSON.stringify(ctx.set)}); true`)));
     for (const app of all) await waitFor(`${app.key} watches the set`, seconds, async () => (await state(app)).party.shared.set === ctx.set);
     await evaluate(c, `setParty(false); true`);
     await waitFor("C leaves the party", seconds, async () => !(await state(c)).party.on);
     await evaluate(a, `act("seek", ${SEEK_TO_S}); true`);
-    await follow(a, [b], false, SEEK_TO_S);
+    await follow(ctx, a, [b], false, SEEK_TO_S);
     await evaluate(b, `act("play", nowM()); true`);
-    await follow(b, [a], true, "nowM()");
+    await follow(ctx, b, [a], true, "nowM()");
     check(await evaluate(c, `!clock.playing`), "C moved with a party it had left");
     await evaluate(c, `setParty(true); true`);
-    await follow(b, [c], true, "nowM()");
+    await follow(ctx, b, [c], true, "nowM()");
     const clocks = await Promise.all(all.map((app) => evaluate(app, "nowM()")));
     check(Math.max(...clocks) - Math.min(...clocks) < JUMP_MIN_S, `clocks differ: ${brief(clocks)}`);
     check(Math.min(...clocks) >= SEEK_TO_S, `played from before the seek: ${brief(clocks)}`);
@@ -1257,6 +1290,19 @@ async function library(ctx) {
     await evaluate(a, `window.e2eDraw = null; window.__TAURI__.event.listen("draw", (e) => { window.e2eDraw = e.payload; }).then(() => true)`);
     await invoke(b, "draw", { stroke: { clear: true, set: ctx.set } });
     await waitFor("A receives B's stroke", seconds, async () => (await evaluate(a, "window.e2eDraw"))?.from === b.id);
+  });
+
+  await step("a far seek and an immediate Play start every tile at once, alone and in Watch Party", async () => {
+    const far = Math.max(0, ctx.durationS - FAR_FROM_END_S);
+    await Promise.all([a, b, c].map((app) => evaluate(app, `openSession(${JSON.stringify(ctx.set)}); true`)));
+    await evaluate(a, `act("seek", ${far}); act("play", ${far}); true`);
+    await together(a, [far - 1, Infinity]);
+    await follow(ctx, a, [b, c], true, "nowM()");
+    await Promise.all([b, c].map((app) => together(app, [far - 1, Infinity])));
+    await evaluate(b, `act("seek", 1); act("play", 1); true`);
+    await follow(ctx, b, [a, c], true, "nowM()");
+    await Promise.all([a, c].map((app) => together(app, [0, far / 2])));
+    await evaluate(a, `act("pause", nowM()); true`);
   });
 
   await step("dragging a name label swaps two tiles", async () => {

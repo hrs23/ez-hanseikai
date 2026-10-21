@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fs::File as Disk;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 use tauri::http::{header, Request, Response, StatusCode};
@@ -10,9 +10,9 @@ use tauri::http::{header, Request, Response, StatusCode};
 use crate::room::{self, capture_id, part_of, seg_name, valid_id, File, INIT, SERIES};
 use crate::{data, file_len, media, Core};
 
-pub const LIVE_WINDOW: u32 = 3;
-const RANGE_MAX: u64 = 4 << 20;
-const INDEX_MAX: usize = 4096;
+const INDEX_MAX: usize = 1 << 16;
+
+pub type Indexes = Mutex<HashMap<PathBuf, (u64, Arc<Vec<media::Time>>)>>;
 
 #[derive(Clone)]
 pub struct Piece {
@@ -28,55 +28,35 @@ fn piece(path: PathBuf) -> Piece {
     Piece { len: file_len(&path), path }
 }
 
-fn growing(dir: &Path, mut n: u32, out: &mut Vec<Piece>) {
-    loop {
-        let path = dir.join(seg_name(n));
-        if !path.exists() {
-            out.extend(Some(part_of(&path)).filter(|part| part.exists()).map(piece));
-            return;
-        }
-        out.push(piece(path));
-        n += 1;
-    }
-}
-
-fn pieces_in(files: &data::Files, dir: &Path, f: &File, capture: &str, series: &str) -> Vec<Piece> {
-    if !data::has(files, dir, INIT, f.init(capture, series).map(|(size, _)| size)) {
-        return Vec::new();
-    }
-    let mut out = vec![piece(dir.join(INIT))];
-    let mut next = None;
-    let open = f.end_us.is_none();
-    for seg in f.segs.iter().filter(|s| s.capture == capture && s.series == series) {
-        let name = seg_name(seg.n);
-        if !data::has(files, dir, &name, Some(seg.size)) {
-            out.extend(Some(part_of(&dir.join(name))).filter(|part| open && part.exists()).map(piece));
-            return out;
-        }
-        out.push(Piece { path: dir.join(name), len: seg.size });
-        next = Some(seg.n + 1);
-    }
-    if let Some(n) = next.filter(|_| open) {
-        growing(dir, n, &mut out);
-    }
-    out
-}
-
 pub fn set_pieces(core: &Core, room: &str, f: &File, capture: &str, series: &str) -> Vec<Piece> {
-    pieces_in(&core.files, &data::seg_dir(&core.room_dir(room), f, capture, series), f, capture, series)
+    listed(&core.files, &data::seg_dir(&core.room_dir(room), f, capture, series), false)
 }
 
-pub fn window(newest: u32) -> u32 {
-    if newest < 2 { 1 } else { (newest - 2) / LIVE_WINDOW * LIVE_WINDOW + 1 }
-}
-
-fn live_from(numbers: &[u32]) -> Option<u32> {
-    let newest = *numbers.iter().max()?;
-    let mut from = newest;
-    while from > window(newest) && numbers.contains(&(from - 1)) {
-        from -= 1;
+pub fn run_of(numbers: &[u32], live: bool) -> &[u32] {
+    if live {
+        let mut from = numbers.len().saturating_sub(1);
+        while from > 0 && numbers.len() - from < data::LIVE_KEEP as usize && numbers[from - 1] + 1 == numbers[from] {
+            from -= 1;
+        }
+        &numbers[from..]
+    } else {
+        let end = (1..numbers.len()).find(|&i| numbers[i - 1] + 1 != numbers[i]).unwrap_or(numbers.len());
+        &numbers[..end]
     }
-    Some(from)
+}
+
+fn listed(files: &data::Files, dir: &Path, live: bool) -> Vec<Piece> {
+    let names = data::listing(files, dir);
+    let Some(init) = names.get(INIT) else { return Vec::new() };
+    let mut numbers: Vec<u32> = names.keys().filter_map(|name| room::seg_number(name)).collect();
+    numbers.sort_unstable();
+    let next = numbers.last().map_or(1, |n| n + 1);
+    numbers.extend(Some(next).filter(|n| part_of(&dir.join(seg_name(*n))).exists()));
+    let segments = run_of(&numbers, live).iter().map(|n| {
+        let name = seg_name(*n);
+        names.get(&name).map_or_else(|| piece(part_of(&dir.join(&name))), |len| Piece { path: dir.join(&name), len: *len })
+    });
+    std::iter::once(Piece { path: dir.join(INIT), len: *init }).chain(segments).collect()
 }
 
 fn live_folder(core: &Core, room: &str, owner: &str) -> Option<(PathBuf, String, Option<i64>)> {
@@ -90,33 +70,10 @@ fn live_folder(core: &Core, room: &str, owner: &str) -> Option<(PathBuf, String,
     Some((core.series_dir(room, set.as_deref(), owner, &capture, SERIES[0]), capture, start_us))
 }
 
-fn pieces_from(dir: &Path, from: u32) -> Vec<Piece> {
-    let init = dir.join(INIT);
-    if !init.exists() {
-        return Vec::new();
-    }
-    let mut out = vec![piece(init)];
-    growing(dir, from, &mut out);
-    out
-}
-
-fn live_start(dir: &Path) -> Option<(u32, Vec<Piece>)> {
-    let numbers: Vec<u32> = crate::entries(dir).iter().filter_map(|(name, _)| room::seg_number(name)).collect();
-    let from = live_from(&numbers)?;
-    let pieces = pieces_from(dir, from);
-    (pieces.len() > 1).then_some((from, pieces))
-}
-
-fn first_us(core: &Core, pieces: &[Piece]) -> Option<i64> {
-    let scales = media::timescales(&std::fs::read(&pieces.first()?.path).ok()?);
-    Some(media::micros(index(core, pieces.get(1)?).first()?, &scales))
-}
-
 pub fn live_json(core: &Core, room: &str, owner: &str) -> Option<Value> {
     let (dir, capture, start_us) = live_folder(core, room, owner)?;
-    let (from, pieces) = live_start(&dir)?;
-    let start_us = start_us.zip(first_us(core, &pieces)).map(|(start, first)| start + first);
-    Some(json!({"path": format!("live/{room}/{owner}/{capture}/{from}"), "size": size(&pieces), "start_us": start_us}))
+    let pieces = listed(&core.files, &dir, true);
+    (pieces.len() > 1).then(|| json!({"path": format!("live/{room}/{owner}/{capture}"), "size": size(&pieces), "start_us": start_us}))
 }
 
 fn decode(path: &str) -> String {
@@ -139,25 +96,22 @@ fn decode(path: &str) -> String {
     String::from_utf8_lossy(&out).to_string()
 }
 
-pub fn pieces_for(core: &Core, path: &str) -> Option<(Vec<Piece>, &'static str)> {
-    let path = decode(path.trim_start_matches('/'));
-    let parts: Vec<&str> = path.split('/').collect();
-    match parts.as_slice() {
-        ["live", room, owner, capture, from] if valid_id(room) && room::member_id(owner) && capture_id(capture) => {
-            let (dir, _, _) = live_folder(core, room, owner).filter(|(_, current, _)| current == capture)?;
-            Some((pieces_from(&dir, from.parse().ok()?), "video/mp4"))
-        }
-        ["set", room, set, owner, series, capture] if valid_id(room) && valid_id(set) && room::member_id(owner) && SERIES.contains(series) && capture_id(capture) => {
-            let found = room::sets(core, room, &room::logs(core, room)).into_iter().find(|s| s.id == *set)?;
-            let f = found.files.iter().find(|f| f.owner == *owner)?;
-            Some((set_pieces(core, room, f, capture, series), if *series == SERIES[1] { "audio/mp4" } else { "video/mp4" }))
-        }
+#[derive(Debug, PartialEq)]
+enum Target<'a> {
+    Live { room: &'a str, owner: &'a str, capture: &'a str },
+    Set { room: &'a str, set: &'a str, owner: &'a str, series: &'a str, capture: &'a str },
+}
+
+fn target<'a>(parts: &[&'a str]) -> Option<(Target<'a>, &'a str)> {
+    match *parts {
+        ["live", room, owner, capture, what] if valid_id(room) && room::member_id(owner) && capture_id(capture) => Some((Target::Live { room, owner, capture }, what)),
+        ["set", room, set, owner, series, capture, what] if valid_id(room) && valid_id(set) && room::member_id(owner) && SERIES.contains(&series) && capture_id(capture) => Some((Target::Set { room, set, owner, series, capture }, what)),
         _ => None,
     }
 }
 
-fn index(core: &Core, piece: &Piece) -> Arc<Vec<media::Time>> {
-    let mut cache = core.indexes.lock().unwrap();
+fn index(indexes: &Indexes, piece: &Piece) -> Arc<Vec<media::Time>> {
+    let mut cache = indexes.lock().unwrap();
     if let Some((len, times)) = cache.get(&piece.path) {
         if *len == piece.len {
             return times.clone();
@@ -172,36 +126,61 @@ fn index(core: &Core, piece: &Piece) -> Arc<Vec<media::Time>> {
     times
 }
 
-pub fn read(core: &Core, pieces: &[Piece], start: u64, len: u64) -> std::io::Result<Vec<u8>> {
-    let bases: HashMap<u32, u64> = pieces.get(1).map(|p| media::bases(&index(core, p))).unwrap_or_default();
+pub fn open(pieces: &[Piece]) -> bool {
+    pieces.last().is_some_and(|p| p.path.extension().is_some_and(|e| e == "part"))
+}
+
+fn index_json(indexes: &Indexes, dir: &Path, pieces: &[Piece]) -> Value {
+    let scales = media::timescales(&std::fs::read(dir.join(INIT)).unwrap_or_default());
+    let mut segs = Vec::new();
+    for p in pieces {
+        let n = p.path.file_name().and_then(|name| room::seg_number(&name.to_string_lossy()));
+        let Some((n, time)) = n.zip(index(indexes, p).first().map(|t| media::micros(t, &scales))) else { break };
+        segs.push(json!({"n": n, "len": p.len, "t_us": time}));
+    }
+    json!({"segs": segs, "open": segs.len() == pieces.len() && open(pieces)})
+}
+
+fn serve(files: &data::Files, indexes: &Indexes, dir: &Path, live: bool, kind: &'static str, what: &str, from: usize) -> Option<(&'static str, Vec<u8>)> {
+    let segment = |n: u32| {
+        let path = dir.join(seg_name(n));
+        std::fs::read(&path).or_else(|_| std::fs::read(part_of(&path))).ok()
+    };
+    let mut bytes = match what {
+        "index" => return Some(("application/json", index_json(indexes, dir, listed(files, dir, live).get(1..).unwrap_or_default()).to_string().into_bytes())),
+        "init" => std::fs::read(dir.join(INIT)).ok()?,
+        n => segment(n.parse().ok()?)?,
+    };
+    (from <= bytes.len()).then(|| (kind, bytes.split_off(from)))
+}
+
+fn answer(core: &Core, path: &str, from: usize) -> Option<(&'static str, Vec<u8>)> {
+    let path = decode(path.trim_start_matches('/'));
+    let (found, what) = target(&path.split('/').collect::<Vec<_>>())?;
+    match found {
+        Target::Live { room, owner, capture } => {
+            let (dir, _, _) = live_folder(core, room, owner).filter(|(_, current, _)| current == capture)?;
+            serve(&core.files, &core.indexes, &dir, true, "video/mp4", what, from)
+        }
+        Target::Set { room, set, owner, series, capture } => serve(&core.files, &core.indexes, &core.series_dir(room, Some(set), owner, capture, series), false, if series == SERIES[1] { "audio/mp4" } else { "video/mp4" }, what, from),
+    }
+}
+
+pub fn read(pieces: &[Piece], start: u64, len: u64) -> std::io::Result<Vec<u8>> {
     let mut out = Vec::with_capacity(len as usize);
     let (end, mut at) = (start + len, 0u64);
-    for (i, p) in pieces.iter().enumerate() {
+    for p in pieces {
         let (from, to) = (start.max(at), end.min(at + p.len));
         if from < to {
             let mut file = Disk::open(&p.path).or_else(|_| Disk::open(p.path.with_extension("")))?;
             file.seek(SeekFrom::Start(from - at))?;
             let mut buf = vec![0u8; (to - from) as usize];
             file.read_exact(&mut buf)?;
-            if i > 0 {
-                media::patch(&mut buf, from - at, &index(core, p), &bases);
-            }
             out.extend_from_slice(&buf);
         }
         at += p.len;
     }
     Ok(out)
-}
-
-pub fn range(text: Option<&str>, total: u64) -> Option<(u64, u64)> {
-    let spec = text.unwrap_or("bytes=0-").trim().strip_prefix("bytes=")?;
-    let (a, b) = spec.split_once('-')?;
-    let start: u64 = a.trim().parse().ok()?;
-    if start >= total {
-        return None;
-    }
-    let last = b.trim().parse::<u64>().unwrap_or(total - 1).min(total - 1).min(start + RANGE_MAX - 1);
-    (last >= start).then_some((start, last))
 }
 
 fn thumb(core: &Core, path: &str) -> Option<Vec<u8>> {
@@ -213,80 +192,107 @@ fn thumb(core: &Core, path: &str) -> Option<Vec<u8>> {
     }
 }
 
+fn reply(status: StatusCode, kind: &str, cache: &str, body: Vec<u8>) -> Response<Vec<u8>> {
+    Response::builder().status(status).header(header::CONTENT_TYPE, kind).header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*").header(header::CACHE_CONTROL, cache).body(body).unwrap()
+}
+
 pub fn respond(core: &Core, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
-    let empty = |status: StatusCode| Response::builder().status(status).body(Vec::new()).unwrap();
-    if let Some(body) = thumb(core, request.uri().path()) {
-        return Response::builder().status(StatusCode::OK).header(header::CONTENT_TYPE, "image/jpeg").header(header::CACHE_CONTROL, "max-age=3600").body(body).unwrap();
+    let path = request.uri().path();
+    if let Some(body) = thumb(core, path) {
+        return reply(StatusCode::OK, "image/jpeg", "max-age=3600", body);
     }
-    let Some((pieces, kind)) = pieces_for(core, request.uri().path()) else { return empty(StatusCode::NOT_FOUND) };
-    let total = size(&pieces);
-    let wanted = request.headers().get(header::RANGE).and_then(|v| v.to_str().ok());
-    let Some((start, last)) = range(wanted, total) else {
-        return Response::builder().status(StatusCode::RANGE_NOT_SATISFIABLE).header(header::CONTENT_RANGE, format!("bytes */{total}")).body(Vec::new()).unwrap();
-    };
-    let Ok(body) = read(core, &pieces, start, last - start + 1) else { return empty(StatusCode::INTERNAL_SERVER_ERROR) };
-    Response::builder()
-        .status(StatusCode::PARTIAL_CONTENT)
-        .header(header::CONTENT_TYPE, kind)
-        .header(header::ACCEPT_RANGES, "bytes")
-        .header(header::CONTENT_RANGE, format!("bytes {start}-{}/{total}", start + body.len() as u64 - 1))
-        .header(header::CACHE_CONTROL, "no-store")
-        .body(body)
-        .unwrap()
+    let from = request.uri().query().and_then(|q| q.strip_prefix("from=")).and_then(|v| v.parse().ok()).unwrap_or(0);
+    match answer(core, path, from) {
+        Some((kind, body)) => reply(StatusCode::OK, kind, "no-store", body),
+        None => reply(StatusCode::NOT_FOUND, "text/plain", "no-store", Vec::new()),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::log::tests::{put, seed, temp};
-    use crate::room::tests::small_file;
+    use crate::log::tests::{put, temp};
+    use crate::media::tests::{fragment, init};
 
-    #[test]
-    fn ranges_are_capped_and_checked() {
-        assert_eq!(range(None, 10), Some((0, 9)));
-        assert_eq!(range(Some("bytes=2-"), 10), Some((2, 9)));
-        assert_eq!(range(Some("bytes=2-4"), 10), Some((2, 4)));
-        assert_eq!(range(Some("bytes=2-40"), 10), Some((2, 9)));
-        assert_eq!(range(Some("bytes=10-"), 10), None);
-        assert_eq!(range(Some("bytes=0-"), RANGE_MAX * 3), Some((0, RANGE_MAX - 1)));
-        assert_eq!(range(Some("items=0-"), 10), None);
+    fn names(pieces: &[Piece]) -> Vec<String> {
+        pieces.iter().map(|p| p.path.file_name().unwrap().to_string_lossy().to_string()).collect()
+    }
+
+    fn folder(name: &str, segments: &[(u32, u64)], open: Option<(u32, u64)>) -> PathBuf {
+        let dir = temp(name);
+        put(&dir, INIT, &init(&[(1, 1000)]));
+        for (n, t) in segments {
+            put(&dir, &seg_name(*n), &fragment(&[(1, *t)], b"data"));
+        }
+        if let Some((n, t)) = open {
+            put(&dir, &format!("{}.part", seg_name(n)), &fragment(&[(1, t)], b"open"));
+        }
+        dir
     }
 
     #[test]
-    fn a_recording_plays_from_its_own_folder_up_to_the_first_missing_segment() {
-        let dir = temp("pieces");
-        let (recording, ended, files) = (small_file(4, false), small_file(4, true), data::Files::default());
-        let lens = |f: &File| {
-            data::forget(&files, &dir);
-            pieces_in(&files, &dir, f, "1000", "v").iter().map(|p| (p.path.file_name().unwrap().to_string_lossy().to_string(), p.len)).collect::<Vec<_>>()
-        };
-        let write = |all: &[(&str, &str)]| all.iter().for_each(|(name, body)| put(&dir, name, body.as_bytes()));
-        assert!(lens(&ended).is_empty());
-        write(&[(INIT, "init"), ("000001.m4s", "seg!"), ("000002.m4s", "seg!"), ("000003.m4s", "bad"), ("000004.m4s", "seg!")]);
-        assert_eq!(lens(&ended), [(INIT.to_string(), 4), ("000001.m4s".to_string(), 4), ("000002.m4s".to_string(), 4)]);
-        write(&[("000003.m4s", "seg!"), ("000005.m4s", "next"), ("000006.m4s.part", "open")]);
-        assert_eq!(lens(&ended).len(), 4 + 1);
-        assert_eq!(lens(&recording)[5..], [("000005.m4s".to_string(), 4), ("000006.m4s.part".to_string(), 4)]);
-        assert_eq!(lens(&small_file(6, false)), lens(&recording));
-        assert_eq!(lens(&small_file(6, true)).len(), 6);
-        write(&[(INIT, "other init")]);
-        assert!(lens(&ended).is_empty());
+    fn the_live_folder_lists_its_newest_run_and_a_recording_its_oldest() {
+        let live = data::LIVE_KEEP as usize;
+        let numbers: Vec<u32> = (4..=10).chain(12..=12 + live as u32).collect();
+        assert_eq!(run_of(&numbers, true), (12..=12 + live as u32).skip(1).collect::<Vec<_>>());
+        assert_eq!(run_of(&numbers[..9], true), [12, 13]);
+        assert_eq!(run_of(&numbers, false), (4..=10).collect::<Vec<_>>());
+        assert_eq!(run_of(&[], true), [] as [u32; 0]);
+        assert_eq!(run_of(&[], false), [] as [u32; 0]);
+        let dir = folder("listed", &[(4, 0), (5, 4000), (7, 12000)], Some((8, 16000)));
+        let files = data::Files::default();
+        assert_eq!(names(&listed(&files, &dir, true)), [INIT, "000007.m4s", "000008.m4s.part"]);
+        assert_eq!(names(&listed(&files, &dir, false)), [INIT, "000004.m4s", "000005.m4s"]);
+        assert!(listed(&files, &dir.join("missing"), true).is_empty());
+        std::fs::remove_file(dir.join(INIT)).unwrap();
+        data::forget(&files, &dir);
+        assert!(listed(&files, &dir, false).is_empty());
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
-    fn live_window_moves_in_steps_and_keeps_a_whole_segment() {
-        assert_eq!([1, 2, 3, 4, 5, 6, 7, 8].map(window), [1, 1, 1, 1, 4, 4, 4, 7]);
-        let standby = |after: &[u32]| [(4..=10).collect::<Vec<u32>>(), after.to_vec()].concat();
-        assert_eq!([&[][..], &[12], &[12, 13], &[12, 13, 14]].map(|after| live_from(&standby(after))), [Some(7), Some(12), Some(12), Some(13)]);
-        assert_eq!(live_from(&[]), None);
-        let dir = temp("live");
-        seed(&dir, (4..=11).map(seg_name).chain([format!("{}.part", seg_name(12))]));
-        let start = |dir: &Path| live_start(dir).map(|(from, p)| (from, size(&p)));
-        assert_eq!(start(&dir), None);
-        put(&dir, INIT, b"init");
-        assert_eq!((start(&dir), start(&dir.join("missing"))), (Some((10, 4 + 3)), None));
+    fn the_index_lists_pieces_with_their_first_time_and_marks_an_open_tail() {
+        let dir = folder("index", &[(1, 0), (2, 4000), (3, 8000)], Some((4, 12000)));
+        let (files, indexes) = (data::Files::default(), Indexes::default());
+        let json = |dir: &Path| index_json(&indexes, dir, &listed(&files, dir, false)[1..]);
+        let whole = fragment(&[(1, 0)], b"data").len();
+        assert_eq!(json(&dir), json!({"segs": [{"n": 1, "len": whole, "t_us": 0}, {"n": 2, "len": whole, "t_us": 4_000_000}, {"n": 3, "len": whole, "t_us": 8_000_000}, {"n": 4, "len": whole, "t_us": 12_000_000}], "open": true}));
+        put(&dir, "000004.m4s.part", b"no fragment yet");
+        data::forget(&files, &dir);
+        assert_eq!(json(&dir)["segs"].as_array().unwrap().len(), 3);
+        assert_eq!(json(&dir)["open"], false);
+        std::fs::rename(dir.join("000004.m4s.part"), dir.join("000004.m4s")).unwrap();
+        data::forget(&files, &dir);
+        assert_eq!(json(&dir)["segs"].as_array().unwrap().len(), 3);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_folder_serves_its_index_init_and_segments_and_a_tail_from_a_byte() {
+        let dir = folder("serve", &[(1, 0)], Some((2, 4000)));
+        let (files, indexes) = (data::Files::default(), Indexes::default());
+        let get = |what: &str, from: usize| serve(&files, &indexes, &dir, false, "video/mp4", what, from);
+        assert_eq!(get("index", 0).unwrap().0, "application/json");
+        assert_eq!(get("init", 0).unwrap().1, init(&[(1, 1000)]));
+        assert_eq!(get("1", 0).unwrap().1, fragment(&[(1, 0)], b"data"));
+        let tail = fragment(&[(1, 4000)], b"open");
+        assert_eq!(get("2", 0).unwrap().1, tail);
+        assert_eq!(get("2", 5).unwrap().1, tail[5..]);
+        assert_eq!(get("2", tail.len()).unwrap().1, Vec::<u8>::new());
+        assert!(get("2", tail.len() + 1).is_none());
+        assert!(get("3", 0).is_none() && get("x", 0).is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn paths_resolve_to_a_folder_without_a_log_and_bad_ids_are_refused() {
+        let owner = iroh::SecretKey::generate().public().to_string();
+        let split = |path: String| target(&path.split('/').collect::<Vec<_>>()).map(|(_, what)| what.to_string());
+        assert_eq!(split(format!("live/room/{owner}/1000/index")).as_deref(), Some("index"));
+        assert_eq!(split(format!("set/room/2026-01-02 12-00-00/{owner}/m/1000/7")).as_deref(), Some("7"));
+        for bad in [format!("live/../{owner}/1000/index"), format!("live/room/nobody/1000/index"), format!("live/room/{owner}/10x/index"), format!("set/room/set/{owner}/x/1000/init"), format!("set/room/a%2Fb/{owner}/v/1000/init"), format!("set/room/set/{owner}/v/1000"), format!("live/room/{owner}/1000/index/more")] {
+            assert!(split(bad.clone()).is_none(), "{bad}");
+        }
     }
 
     #[test]

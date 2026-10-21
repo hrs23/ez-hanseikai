@@ -229,7 +229,7 @@ pub struct Core {
     pub writing: Mutex<HashSet<PathBuf>>,
     pub bad: Mutex<HashSet<(String, PathBuf)>>,
     pub removed_rooms: Mutex<HashSet<String>>,
-    pub indexes: Mutex<HashMap<PathBuf, (u64, Arc<Vec<media::Time>>)>>,
+    pub indexes: stream::Indexes,
 }
 
 impl Core {

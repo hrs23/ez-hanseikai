@@ -7,9 +7,9 @@ import { fileURLToPath } from "node:url";
 
 const ui = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "ui");
 const read = (f) => fs.readFileSync(path.join(ui, f), "utf8");
-const source = ["util.js", "i18n.js", "live.js", "layout.js", "dock.js", "events.js", "markdown.js", "members.js", "recordings.js", "extensions.js", "ai.js", "diag.js"].map(read).join("\n");
+const source = ["util.js", "i18n.js", "live.js", "media.js", "layout.js", "dock.js", "events.js", "markdown.js", "members.js", "recordings.js", "extensions.js", "ai.js", "diag.js"].map(read).join("\n");
 const context = vm.createContext({ window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id, location: { search: "" } });
-const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, memberStatus, viewLine, viewText, tileProblem, livePlayers, ordered, extensionLine, analysisReason, recordingAnalysis, cardParts, dropPos, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, aiPreview, aiDebrief, apiUrl, apiBadge, apiReferenceBlocks, rateOf, liveEdge, netState, summaryLines, leftText, pcCards, clockSummary, flowRows, skewText, liveStep, liveFollow, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, memberStatus, viewLine, viewText, tileProblem, livePlayers, ordered, extensionLine, analysisReason, recordingAnalysis, cardParts, dropPos, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, aiPreview, aiDebrief, apiUrl, apiBadge, apiReferenceBlocks, rateOf, liveEdge, netState, summaryLines, leftText, pcCards, clockSummary, flowRows, skewText, liveStep, liveFollow, liveAvail, plan, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 const plain = (v) => JSON.parse(JSON.stringify(v));
 
 const moment = (m, extra = {}) => ({ role: "moment", m, plugin: { id: "apex-matches" }, tags: ["match"], ...extra });
@@ -209,7 +209,81 @@ test("the live delay shrinks slowly only while the slack is above the gap, and a
   assert.deepEqual(plain(others.late), []);
   assert.deepEqual(plain(liveStep({ pos: 5 }, [{ key: "none", avail: null, ended: false }], now, 1)), { pos: 6, rate: 1, held: false, late: [] });
   assert.equal(liveStep({ pos: null }, [], now, 1).pos, null);
-  assert.deepEqual([ui$.liveFollow(20, 19.5, 0), ui$.liveFollow(20, 12, 0.5), ui$.liveFollow(20, 10, 0.5), ui$.liveFollow(20, 20, 0).playing].map(plain), [{ target: 19.5, playing: true }, { target: 12, playing: true }, { target: 17, playing: true }, false]);
+  assert.deepEqual([ui$.liveFollow(20, 19.5), ui$.liveFollow(20, 14), ui$.liveFollow(20, 12), ui$.liveFollow(20, 20).playing].map(plain), [{ target: 19.5, playing: true }, { target: 14, playing: true }, { target: 18, playing: true }, false]);
+  const ending = (end) => ({ buffered: { length: end === null ? 0 : 1, end: () => end } });
+  assert.equal(ui$.liveAvail([[100, ending(5)], [90, ending(8)], [null, ending(30)], [80, ending(null)]]), 98);
+  assert.equal(ui$.liveAvail([[null, ending(5)]]), null);
+});
+
+const piece = (n, len = 100) => ({ n, len, t_us: (n - 1) * 4e6 });
+const index = (count, open = false) => ({ segs: Array.from({ length: count }, (_, i) => piece(i + 1)), open });
+
+test("the player appends the segment that holds a far target, then the next ones up to the look-ahead, and nothing more", () => {
+  const { plan, AHEAD_S } = ui$;
+  const everything = index(1000);
+  const buffered = [];
+  const got = new Map();
+  const appended = [];
+  for (let next = plan(everything, buffered, got, 0, 2000.5, 0); next; next = plan(everything, buffered, got, next.n, 2000.5, 0)) {
+    assert.equal(next.from, 0);
+    appended.push(next.n);
+    got.set(next.n, 100);
+    buffered.push([(next.n - 1) * 4 + 0.05, next.n * 4]);
+  }
+  assert.deepEqual(appended, [501, 502, 503]);
+  assert.ok((appended.at(-1) - 1) * 4 < 2000.5 + AHEAD_S);
+  assert.deepEqual(plain(plan(everything, [], new Map(), 0, -3, 0)), { n: 1, from: 0 });
+  assert.deepEqual(plain(plan(everything, [], new Map(), 0, 8.5, 5)), { n: 1, from: 0 });
+});
+
+test("a grown tail continues from the byte appended, and a tail that shrank or lost its place is appended whole again", () => {
+  const { plan } = ui$;
+  const grown = { segs: [piece(1), piece(2), { ...piece(3), len: 80 }], open: true };
+  const here = [[0.05, 9]];
+  const got = new Map([[1, 100], [2, 100], [3, 50]]);
+  assert.deepEqual(plain(plan(grown, here, got, 3, 9, 0)), { n: 3, from: 50 });
+  assert.deepEqual(plain(plan(grown, here, got, 2, 9, 0)), { n: 3, from: 0 });
+  assert.equal(plan({ ...grown, segs: [piece(1), piece(2), { ...piece(3), len: 30 }] }, here, got, 3, 9, 0).from, 0);
+  assert.equal(plan(grown, here, new Map([[1, 100], [2, 100], [3, 80]]), 3, 9, 0), null);
+  assert.deepEqual(plain(plan(grown, [[0.05, 8]], new Map([[1, 100], [2, 100], [3, 80]]), 3, 9, 0)), { n: 3, from: 0 });
+});
+
+test("a last piece shorter than the probe is not asked for again, and following the edge first finishes the tail that has since grown", () => {
+  const { plan } = ui$;
+  const short = { segs: [piece(1), piece(2)], open: false };
+  assert.equal(plan(short, [[0.05, 4.02]], new Map([[1, 100], [2, 100]]), 2, 5, 0), null);
+  assert.deepEqual(plain(plan(short, [[0.05, 4]], new Map([[1, 100], [2, 100]]), 2, 5, 0)), { n: 2, from: 0 });
+  const edge = { segs: [{ ...piece(1), len: 150 }, piece(2)], open: true };
+  assert.deepEqual(plain(plan(edge, [[0.05, 4]], new Map([[1, 100]]), 1, Infinity, 0)), { n: 1, from: 100 });
+  assert.deepEqual(plain(plan(edge, [[0.05, 8]], new Map([[1, 150]]), 1, Infinity, 0)), { n: 2, from: 0 });
+});
+
+test("a growing tail adds nothing to what is known to be there, and a lone piece lasts a fragment", () => {
+  const { covers, endOf } = ui$;
+  assert.deepEqual([endOf(index(0)), endOf(index(1)), endOf(index(3)), endOf(index(3, true))], [0, 1, 12, 8]);
+  assert.deepEqual([covers(index(1), 0.5), covers(index(1), 1), covers(index(3), 11.9), covers(index(3), 12), covers(index(3, true), 7.9), covers(index(3, true), 8), covers(index(3), -0.1), covers(index(0), 0)], [true, false, true, false, true, false, false, false]);
+});
+
+test("a slot holds the others only while its data is here, it is not ready, and for a limited time", () => {
+  const { waiting, HOLD_MAX_MS, RETRY_MS } = ui$;
+  const slot = (over = {}) => ({ video: { paused: true, seeking: false, error: null, buffered: { length: 0 } }, got: new Map(), want: { part: { path: "p" } }, part: { path: "p" }, index: index(3), shift: 0, failedAt: 0, waitSince: 0, ...over });
+  const now = 100 * RETRY_MS;
+  assert.equal(waiting(slot(), false, 5, now), true);
+  assert.equal(waiting(slot(), true, 5, now), false);
+  assert.equal(waiting(slot(), false, 12, now), false);
+  assert.equal(waiting(slot({ index: index(3, true) }), false, 9, now), false);
+  assert.equal(waiting(slot({ index: null }), false, 5, now), true);
+  assert.equal(waiting(slot({ part: { path: "q" } }), false, 5, now), true);
+  const video = (over) => ({ paused: true, seeking: false, error: null, buffered: { length: 0 }, ...over });
+  assert.equal(waiting(slot({ video: video({ paused: false }) }), false, 5, now), false);
+  assert.equal(waiting(slot({ video: video({ paused: false, seeking: true }) }), false, 5, now), true);
+  assert.equal(waiting(slot({ video: video({ error: {} }) }), false, 5, now), false);
+  const ended = { got: new Map([[3, 100]]), video: video({ buffered: { length: 1, end: () => 10.5 } }) };
+  assert.deepEqual([waiting(slot(ended), false, 11, now), waiting(slot(ended), false, 10, now), waiting(slot({ ...ended, index: index(3, true) }), false, 7, now)], [false, true, true]);
+  assert.equal(waiting(slot({ failedAt: now - 1 }), false, 5, now), false);
+  assert.equal(waiting(slot({ want: null }), false, 5, now), false);
+  const long = slot();
+  assert.deepEqual([waiting(long, false, 5, now), waiting(long, false, 5, now + HOLD_MAX_MS - 1), waiting(long, false, 5, now + HOLD_MAX_MS), waiting(long, true, 5, now + HOLD_MAX_MS), waiting(long, false, 5, now + HOLD_MAX_MS + 1)], [true, true, false, false, true]);
 });
 
 test("where data goes says when a relay or a server is involved", () => {

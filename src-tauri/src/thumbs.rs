@@ -70,7 +70,7 @@ fn make(core: &Core, room: &str, set: &Set, f: &File, capture: &str, index: usiz
     let (init, seg) = (pieces.first().cloned(), pieces.get(index + 1).cloned());
     let (Some(init), Some(seg)) = (init, seg) else { return Err("the video is not all here".into()) };
     let both = [init, seg];
-    let bytes = stream::read(core, &both, 0, stream::size(&both)).map_err(|e| e.to_string())?;
+    let bytes = stream::read(&both, 0, stream::size(&both)).map_err(|e| e.to_string())?;
     let out = path(&core.room_dir(room), &set.id);
     let dir = out.parent().ok_or("no folder")?.to_path_buf();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;

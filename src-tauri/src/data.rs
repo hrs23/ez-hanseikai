@@ -18,7 +18,7 @@ const AGE_EVERY: Duration = Duration::from_secs(3600);
 const OLD_AFTER: Duration = Duration::from_secs(7 * 86_400);
 const MOVE_WAIT: Duration = Duration::from_secs(5);
 const MOVE_GAP: Duration = Duration::from_millis(200);
-pub const LIVE_KEEP: u32 = 2 * crate::stream::LIVE_WINDOW + 1;
+pub const LIVE_KEEP: u32 = 7;
 
 pub type Listing = Arc<HashMap<String, u64>>;
 pub type Files = Mutex<HashMap<PathBuf, Listing>>;
@@ -284,7 +284,7 @@ fn names(dir: &Path) -> HashMap<String, u64> {
     out
 }
 
-fn listing(files: &Files, dir: &Path) -> Listing {
+pub fn listing(files: &Files, dir: &Path) -> Listing {
     files.lock().unwrap().entry(dir.to_path_buf()).or_insert_with(|| Arc::new(names(dir))).clone()
 }
 

@@ -241,7 +241,7 @@ fn feed(core: Arc<Core>, listener: TcpListener, pieces: Vec<Piece>) {
     let total = stream::size(&pieces);
     let mut at = 0;
     while at < total {
-        let Ok(bytes) = stream::read(&core, &pieces, at, FEED_CHUNK.min(total - at)) else { return };
+        let Ok(bytes) = stream::read(&pieces, at, FEED_CHUNK.min(total - at)) else { return };
         if stream.write_all(&bytes).is_err() {
             return;
         }
