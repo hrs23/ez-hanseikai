@@ -112,6 +112,7 @@ function renderFaces() {
   const faces = ids.slice(0, SIDE_FACES).map((id) => {
     const dot = memberDot(id);
     const a = avatar(id, "sm", dot);
+    a.dataset.speak = id;
     if (!dot) a.classList.add("dim");
     return a;
   });

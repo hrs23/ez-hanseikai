@@ -9,7 +9,7 @@ const ui = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "ui");
 const read = (f) => fs.readFileSync(path.join(ui, f), "utf8");
 const source = ["util.js", "i18n.js", "live.js", "media.js", "layout.js", "dock.js", "events.js", "markdown.js", "members.js", "recordings.js", "extensions.js", "ai.js", "diag.js"].map(read).join("\n");
 const context = vm.createContext({ window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id, location: { search: "" } });
-const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, memberStatus, viewLine, viewText, tileProblem, livePlayers, ordered, extensionLine, analysisReason, recordingAnalysis, cardParts, dropPos, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, aiPreview, aiDebrief, apiUrl, apiBadge, apiReferenceBlocks, rateOf, liveEdge, netState, summaryLines, leftText, pcCards, clockSummary, flowRows, skewText, liveStep, liveFollow, liveAvail, plan, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, memberStatus, viewLine, viewText, tileProblem, livePlayers, ordered, extensionLine, analysisReason, recordingAnalysis, cardParts, dropPos, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, talking, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, aiPreview, aiDebrief, apiUrl, apiBadge, apiReferenceBlocks, rateOf, liveEdge, netState, summaryLines, leftText, pcCards, clockSummary, flowRows, skewText, liveStep, liveFollow, liveAvail, plan, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 const plain = (v) => JSON.parse(JSON.stringify(v));
 
 const moment = (m, extra = {}) => ({ role: "moment", m, plugin: { id: "apex-matches" }, tags: ["match"], ...extra });
@@ -322,12 +322,27 @@ test("every fixed text has a Japanese translation", () => {
   assert.deepEqual(missing, []);
 });
 
-test("the all-players view plays the viewer's own sound and a focused player plays its own", () => {
-  assert.equal(ui$.soundKey(0, ["a", "b", "c"], "b"), "b");
-  assert.equal(ui$.soundKey(0, ["a", "b"], "z"), "a");
-  assert.equal(ui$.soundKey(0, ["a"], "z"), "a");
-  assert.equal(ui$.soundKey(3, ["a", "b", "c"], "a"), "c");
-  assert.equal(ui$.soundKey(0, [], "a"), null);
+test("a focused player plays its own sound; otherwise the chosen player, else the viewer's own, else the first", () => {
+  assert.equal(ui$.soundKey(3, ["a", "b", "c"], "a", "b"), "c");
+  assert.equal(ui$.soundKey(0, ["a", "b", "c"], "b", "c"), "c");
+  assert.equal(ui$.soundKey(0, ["a", "b", "c"], "b", null), "b");
+  assert.equal(ui$.soundKey(0, ["a", "b"], "z", "y"), "a");
+  assert.equal(ui$.soundKey(0, [], "a", "a"), null);
+});
+
+test("a voice counts as talking while loud and for the hang after", () => {
+  const last = ui$.talking(-Infinity, 0.5, 1000);
+  assert.equal(last, 1000);
+  assert.equal(ui$.talking(last, 0.001, 1100), 1000);
+  assert.ok(1100 - last < ui$.SPEAK_HANG_MS);
+  assert.equal(ui$.talking(last, 0.5, 1500), 1500);
+});
+
+test("repeated seeks in one direction add up and a change of direction starts over", () => {
+  assert.equal(ui$.seekSum(null, -5), -5);
+  assert.equal(ui$.seekSum(-5, -5), -10);
+  assert.equal(ui$.seekSum(-10, 5), 5);
+  assert.equal(ui$.seekSum(5, 30), 35);
 });
 
 test("a download shows its percent, speed and time left", () => {

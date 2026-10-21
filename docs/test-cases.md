@@ -70,7 +70,11 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - room: a part starts when its capture began, with the listing's size and whether its last piece is still open. `unit`
 - thumbs: the middle segment holds half of the length. `unit`
 - the player plans the segment holding the moment and the next ones, continues a grown tail, ends a part where its last piece ends, and holds every tile until all can play. `ui-test`
-- the all-players view plays the viewer's own sound and a focused player plays its own; the view line names the first member who blocks the playback, in one sentence. `ui-test`
+- a focused player plays its own sound; otherwise the sound is the one chosen by a click, else the viewer's own, else the first player's; the view line names the first member who blocks the playback, in one sentence. `ui-test`
+- live speaking leaves the player alone and a played voice lights its tile: a live `speaking` message lights no player tile and every voice moves with the media through Web Audio (`e2e`, `library`); the ring following a real voice and fading after the hang (`manual`); a voice counts as talking while loud and for the hang after (`ui-test`).
+- clicking a tile picks whose game sound plays and clicks keep no focus: the clicked tile is heard and marked, the Game sound button picks the next member, and after clicks on the volume and play buttons Space and the arrows still work (`e2e`, `library`).
+- repeated seeks in one direction add up and a change of direction starts over (`ui-test`); the seek bezel shows the sum, for example 15 s back after three quick left arrows, and the seek bar shows the target time (`manual`).
+- dragging the volume and the popover ranges still works with clicks not taking focus; Tab still reaches the controls with a visible focus ring. `manual`
 
 ## Watch Party
 

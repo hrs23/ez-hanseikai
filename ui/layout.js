@@ -38,10 +38,12 @@ function rects(n, id, width, height, gap, slots = n) {
   return { tiles: all.slice(0, n), free: all.slice(n) };
 }
 
-function soundKey(view, keys, me) {
+function soundKey(view, keys, me, chosen) {
   if (view > 0) return keys[view - 1] || null;
-  return keys.includes(me) ? me : keys[0] || null;
+  return [chosen, me].find((k) => keys.includes(k)) || keys[0] || null;
 }
+
+const seekSum = (run, delta) => (Math.sign(run) === Math.sign(delta) ? run + delta : delta);
 
 function dropPos(positions, index) {
   const before = positions[index - 1];

@@ -46,7 +46,8 @@ let actedAt = 0;
 let rate = 1;
 let volume = stored("volume", 1);
 let sessionSound = stored("sessionSound", true);
-let chimeAudio = null;
+let gameSound = stored("gameSound", null);
+let seekRun = null;
 let muted = false;
 let live = false;
 let watchParty = stored("watchParty", true);
@@ -74,7 +75,6 @@ let receive = stored("receive", {});
 let sidebar = stored("sidebar", true);
 let panel = stored("panel", true);
 let panelOpen = false;
-let clickTimer = null;
 let quick = null;
 let partyRoom = null;
 let played = false;
@@ -106,12 +106,20 @@ function initial(name) {
 }
 
 function avatar(id, size, dot, grey) {
-  const a = el("span", { className: "av" + (size ? " " + size : "") + (speaking.has(id) ? " speaking" : ""), textContent: initial(id === st.id ? st.name : st.names[id]), title: nameOf(id) });
-  a.dataset.speak = id;
+  const a = el("span", { className: "av" + (size ? " " + size : ""), textContent: initial(id === st.id ? st.name : st.names[id]), title: nameOf(id) });
   a.style.background = grey ? "var(--raised-3)" : colorOf(colorIndex(id));
   if (grey) a.style.color = "var(--muted)";
   if (dot) a.append(el("i", { className: dot }));
   return a;
+}
+
+function markVoice(e, on, off) {
+  e.classList.toggle("speaking", on && !off);
+  e.classList.toggle("micoff", off);
+}
+function markLive() {
+  if (!st) return;
+  for (const e of document.querySelectorAll("[data-speak]")) markVoice(e, speaking.has(e.dataset.speak), e.dataset.speak === st.id && st.capture.mix.mic.muted);
 }
 
 function avatars(ids, size = "sm", max = AVATARS_SHOWN) {
@@ -128,11 +136,12 @@ function pill(cls, iconName, text) {
 
 function tile(s, key) {
   if (s.tiles[key]) return s.tiles[key];
-  const tl = { key, media: slot(el("video", { muted: true, preload: "auto" })), mic: null, name: el("span", { className: "nm" }), av: el("span"), imp: el("span", { className: "imp", hidden: true }), who: el("div", { className: "who" }), what: el("div", { className: "what" }), sub: el("div", { className: "subt", hidden: true }), problem: el("div", { className: "problem", hidden: true }) };
-  tl.lab = el("div", { className: "nl" + (speaking.has(key) ? " speaking" : "") }, tl.av, tl.name, tl.imp);
-  tl.lab.dataset.speak = key;
+  const tl = { key, media: slot(el("video", { muted: true, preload: "auto" })), mic: null, loud: -Infinity, name: el("span", { className: "nm" }), av: el("span"), imp: el("span", { className: "imp", hidden: true }), who: el("div", { className: "who" }), what: el("div", { className: "what" }), sub: el("div", { className: "subt", hidden: true }), problem: el("div", { className: "problem", hidden: true }) };
+  tl.snd = el("span", { className: "snd", hidden: true }, icon("volume-2", "sm"));
+  tl.lab = el("div", { className: "nl" }, tl.av, tl.name, tl.imp, tl.snd, el("span", { className: "moff" }, icon("mic-off", "sm")));
   tl.box = el("div", { className: "tile", tabIndex: 0 }, tl.media.video, el("div", { className: "waitbox" }, tl.who, tl.what), tl.sub, tl.problem, tl.lab);
   const focus = () => { const i = s.keys.indexOf(key) + 1; setView(s, s.view === i ? 0 : i); };
+  if (s === rec) tl.box.dataset.speak = key;
   tl.box.onkeydown = (e) => { if (e.key === "Enter") focus(); };
   if (s === play) {
     tl.box.onpointerdown = (e) => inkDown(tl, e);
@@ -142,10 +151,9 @@ function tile(s, key) {
     tl.box.onclick = (e) => {
       if (e.target.closest(".nl")) return;
       if (tl.drew) { tl.drew = false; return; }
-      clearTimeout(clickTimer);
-      clickTimer = setTimeout(togglePlay, DOUBLE_CLICK_MS);
+      chooseSound(key);
     };
-    tl.box.ondblclick = (e) => { if (!e.target.closest(".nl")) { clearTimeout(clickTimer); focus(); } };
+    tl.box.ondblclick = (e) => { if (!e.target.closest(".nl")) setView(s, s.view ? 0 : s.keys.indexOf(key) + 1); };
     tl.lab.onclick = (e) => { e.stopPropagation(); openReceive(key, tl.lab); };
     tl.box.oncontextmenu = (e) => { e.preventDefault(); stageMenu(e); };
   } else {
@@ -403,21 +411,33 @@ function setClock(playing, m) {
 }
 
 const recv = (key) => ({ app: { volume: 1, muted: false }, voice: { volume: 1, muted: false }, ...(receive[key] || {}) });
+function chooseSound(key) {
+  gameSound = key;
+  store("gameSound", key);
+  applyAudio();
+}
 function applyAudio() {
   const away = page !== "player";
-  play.keys.forEach((key, i) => {
+  const heard = soundKey(play.view, play.keys, st.id, gameSound);
+  const level = (on, mix) => (away || muted || !on || mix.muted ? 0 : volume * mix.volume);
+  play.keys.forEach((key) => {
     const tl = play.tiles[key];
     if (!tl) return;
-    const heard = key === soundKey(play.view, play.keys, st.id);
     const mine = recv(key);
-    for (const [s, on, mix] of [[tl.media, heard, mine.app], [tl.mic, true, mine.voice]]) if (s) {
-      s.video.muted = away || muted || !on || mix.muted;
-      s.video.volume = volume * mix.volume;
+    tl.snd.hidden = key !== heard || play.keys.length < 2;
+    for (const [s, on, mix] of [[tl.media, key === heard, mine.app], [tl.mic, true, mine.voice]]) if (s) {
+      setLevel(s, level(on, mix));
       s.video.playbackRate = livePinned() ? liveClock.rate : rate;
     }
   });
+  const pick = play.keys.length > 1 && !play.view;
+  $("gamesound").hidden = !pick;
+  if (pick && changed("gamesound", [heard, nameOf(heard), colorIndex(heard), st.palette, lang])) {
+    $("gamesound").replaceChildren(avatar(heard, "sm"));
+    $("gamesound").title = $("gamesound").ariaLabel = t("Game sound: {name}", { name: nameOf(heard) });
+  }
   if (changed("mute", [muted || volume === 0])) $("mute").replaceChildren(icon(muted || volume === 0 ? "volume-x" : "volume-2"));
-  if (document.activeElement !== $("volume")) $("volume").value = muted ? 0 : volume;
+  $("volume").value = muted ? 0 : volume;
   rangeFill($("volume"));
   $("speed").textContent = `${rate}×`;
 }
@@ -653,10 +673,15 @@ function tick() {
   const wall = b + m * 1e6;
   const pinned = livePinned();
   const todo = [];
+  const now = Date.now();
   for (const p of list) {
     const tl = play.tiles[p.key];
     if (!tl) continue;
     feedParts(tl, p, m, b);
+    if (tl.mic) {
+      tl.loud = clock.playing && !away ? talking(tl.loud, peakOf(tl.mic.tap), now) : -Infinity;
+      markVoice(tl.box, now - tl.loud < SPEAK_HANG_MS, recv(p.key).voice.muted);
+    }
     const end = wallEnd(tl.media);
     const pictured = !!(partAt(p, wall) || {}).v;
     const behind = !pinned && !!p.file.total && p.file.have < p.file.total && end !== null && wall / 1e6 > end;
@@ -667,7 +692,6 @@ function tick() {
     if (changed("what/" + p.key, [what, line && line.action, nameOf(p.key), lang])) tl.what.replaceChildren(...whatNodes(what, line, set));
     for (const s of [tl.media, tl.mic]) if (s && s.base !== null) todo.push([s, wall / 1e6 - s.base, clock.playing && !away && !(pinned && liveClock.held)]);
   }
-  const now = Date.now();
   const ready = todo.map(([s, at]) => aim(s, at));
   hold(!pinned && !away && todo.map(([s, at], i) => waiting(s, ready[i], at, now)).includes(true));
   for (const [s, at, playing] of todo) pace(s, at, playing && !held);
@@ -720,9 +744,10 @@ function runUndo() {
   undo = null;
   u.fn();
 }
-function bezel(playing) {
+function bezel(...children) {
   const b = $("bezel");
-  b.replaceChildren(icon(playing ? "play" : "pause"));
+  seekRun = null;
+  b.replaceChildren(...children);
   b.hidden = true;
   void b.offsetWidth;
   b.hidden = false;
@@ -733,7 +758,7 @@ function apply(cmd, m, who, prev = { playing: clock.playing, m: nowM() }) {
   else if (cmd === "pause") setClock(false, m);
   else if (cmd === "seek") setClock(clock.playing, m);
   else return;
-  if (cmd !== "seek") bezel(cmd === "play");
+  if (cmd !== "seek") bezel(icon(cmd === "play" ? "play" : "pause"));
   if (who !== st.id) {
     const name = nameOf(who);
     const where = [fmt(m), matchNow(m)].filter(Boolean).join(" · ");
@@ -787,7 +812,13 @@ function act(cmd, m, prev) {
 listenMain("party", () => refresh());
 const togglePlay = () => act(clock.playing ? "pause" : "play", nowM());
 const seekTo = (m) => act("seek", Math.max(0, m));
-const jump = (delta) => seekTo(Math.min(total(), nowM() + delta));
+function jump(delta) {
+  const run = seekSum(seekRun, delta);
+  seekTo(Math.min(total(), nowM() + delta));
+  bezel(t(delta < 0 ? "◀◀ {n} s" : "{n} s ▶▶", { n: Math.abs(run) }));
+  seekRun = run;
+}
+$("bezel").onanimationend = () => { seekRun = null; };
 
 function indexOf(state) {
   const byKey = new Map(state.events.map((e) => [e.key, e]));
@@ -1312,6 +1343,7 @@ async function update() {
   if (partyRoom !== roomId) { partyRoom = roomId; editing = null; await joinParty(); st = await invoke("state"); idx = indexOf(st); }
   if (!drag && watchParty && st.party.on && newer(st.party.shared, partyLast)) applyParty(st.party.shared);
   for (const step of steps()) try { step(); } catch (e) { console.error(e); }
+  markLive();
 }
 function renderRecovery() {
   $("recovery").hidden = !st.recovery;
@@ -1381,15 +1413,15 @@ function ask(title, action, danger, text) {
 function chime(action) {
   if (!sessionSound) return;
   try {
-    chimeAudio = chimeAudio || new AudioContext();
+    const ctx = audio();
     CHIME[action].forEach((hz, i) => {
-      const osc = chimeAudio.createOscillator();
-      const gain = chimeAudio.createGain();
-      const at = chimeAudio.currentTime + i * CHIME_NOTE_S;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const at = ctx.currentTime + i * CHIME_NOTE_S;
       osc.frequency.value = hz;
       gain.gain.setValueAtTime(CHIME_GAIN, at);
       gain.gain.exponentialRampToValueAtTime(0.0001, at + CHIME_NOTE_S);
-      osc.connect(gain).connect(chimeAudio.destination);
+      osc.connect(gain).connect(ctx.destination);
       osc.start(at);
       osc.stop(at + CHIME_NOTE_S);
     });
@@ -1399,7 +1431,7 @@ function chime(action) {
 }
 function setSpeaking(id, on) {
   if (on) speaking.add(id); else speaking.delete(id);
-  for (const e of document.querySelectorAll("[data-speak]")) e.classList.toggle("speaking", speaking.has(e.dataset.speak));
+  markLive();
 }
 listenMain("speaking", (e) => setSpeaking(e.payload.from, e.payload.on));
 function anchor() {
@@ -1455,6 +1487,7 @@ async function toggleRecording(kind) {
 const current = () => (playSet() ? play : rec);
 
 $("play").onclick = togglePlay;
+$("gamesound").onclick = () => chooseSound(play.keys[(play.keys.indexOf(soundKey(play.view, play.keys, st.id, gameSound)) + 1) % play.keys.length]);
 $("back").onclick = () => jump(-STEP.normal);
 $("fwd").onclick = () => jump(STEP.normal);
 $("addnote").onclick = openQuick;
@@ -1490,6 +1523,7 @@ $("seek").onpointerdown = (e) => {
     const from = drag;
     drag = null;
     act("seek", nowM(), from);
+    bezel(fmt(nowM()));
   };
 };
 const peek = { slot: slot(el("video", { muted: true, preload: "auto" })), at: null };
@@ -1561,6 +1595,9 @@ function escapeKey() {
   else if (boardFull) toggleBoardFull();
   else if (panelOpen) showPanel(false);
 }
+document.addEventListener("focusin", (e) => {
+  if (!e.target.matches(":focus-visible") && !typing() && !e.target.closest("dialog")) e.target.blur();
+});
 document.addEventListener("keydown", (e) => {
   if (composing(e) || listening) return;
   if (!$("menu").hidden) { menuKey(e); return; }

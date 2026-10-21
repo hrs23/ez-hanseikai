@@ -1330,6 +1330,50 @@ async function library(ctx) {
     await evaluate(a, `act("pause", nowM()); true`);
   });
 
+  const clickAt = async (app, selector) => {
+    const [x, y] = await evaluate(app, `(() => { const r = ${selector}.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()`);
+    const mouse = (type, buttons) => send(app, "Input.dispatchMouseEvent", { type, x, y, button: type === "mouseMoved" ? "none" : "left", buttons, clickCount: 1 });
+    await mouse("mouseMoved", 0);
+    await mouse("mousePressed", 1);
+    await mouse("mouseReleased", 0);
+  };
+  const press = (app, key, code, keyCode) => send(app, "Input.dispatchKeyEvent", { type: "keyDown", key, code, windowsVirtualKeyCode: keyCode, text: key === " " ? " " : undefined }).then(() => send(app, "Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode: keyCode }));
+  const openTiles = async (app) => {
+    await evaluate(app, `openSession(${JSON.stringify(ctx.set)}); true`);
+    await waitFor(`${app.key} shows the tiles`, within(UI_REFRESH_S * 5), () => evaluate(app, `page === "player" && play.keys.length >= 2 && play.keys.every((k) => play.tiles[k] && play.tiles[k].box.getBoundingClientRect().width > 0)`));
+    await evaluate(app, `setView(play, 0); act("pause", nowM()); true`);
+  };
+
+  await step("live speaking leaves the player alone and a played voice lights its tile", async () => {
+    await openTiles(a);
+    await evaluate(a, `play.keys.forEach((k) => setSpeaking(k, true)); true`);
+    check(await evaluate(a, `!$("playtiles").querySelector("[data-speak], .speaking")`), "a live speaking message lit a player tile");
+    await evaluate(a, `play.keys.forEach((k) => setSpeaking(k, false)); act("seek", 1); act("play", 1); true`);
+    const at = (expression) => evaluate(a, `play.keys.map((k) => play.tiles[k].mic).filter(Boolean).map((m) => ${expression})`);
+    const from = await at("m.video.currentTime");
+    await waitFor("every voice moves with the media", within(UI_REFRESH_S * 5), async () => (await at("m.video.currentTime")).every((x, i) => x > from[i] + 1));
+    await evaluate(a, `act("pause", nowM()); true`);
+  });
+
+  await step("clicking a tile picks whose game sound plays and clicks keep no focus", async () => {
+    await openTiles(a);
+    const pick = await evaluate(a, `play.keys.find((k) => k !== soundKey(0, play.keys, st.id, gameSound))`);
+    await clickAt(a, `play.tiles[${JSON.stringify(pick)}].box`);
+    await waitFor("the clicked tile's sound plays", within(UI_REFRESH_S * 3), () => evaluate(a, `soundKey(0, play.keys, st.id, gameSound) === ${JSON.stringify(pick)} && play.keys.every((k) => (k === ${JSON.stringify(pick)}) === !play.tiles[k].media.video.muted && (k === ${JSON.stringify(pick)}) === !play.tiles[k].snd.hidden) && $("gamesound").title === t("Game sound: {name}", { name: nameOf(${JSON.stringify(pick)}) })`));
+    const next = await evaluate(a, `play.keys[(play.keys.indexOf(${JSON.stringify(pick)}) + 1) % play.keys.length]`);
+    await clickAt(a, `$("gamesound")`);
+    await waitFor("the Game sound button picks the next member", within(UI_REFRESH_S * 3), () => evaluate(a, `soundKey(0, play.keys, st.id, gameSound) === ${JSON.stringify(next)}`));
+    for (const id of ["volume", "play"]) {
+      await clickAt(a, `$(${JSON.stringify(id)})`);
+      check(await evaluate(a, `document.activeElement === document.body`), `a click on ${id} kept the keyboard focus`);
+    }
+    await press(a, " ", "Space", 32);
+    await waitFor("Space pauses once", within(UI_REFRESH_S * 3), () => evaluate(a, `!clock.playing`));
+    const before = await evaluate(a, `nowM()`);
+    await press(a, "ArrowRight", "ArrowRight", 39);
+    await waitFor("the right arrow moves 5 s", within(UI_REFRESH_S * 3), async () => Math.abs((await evaluate(a, `nowM()`)) - before - 5) < 0.5);
+  });
+
   await step("dragging a name label swaps two tiles", async () => {
     await evaluate(a, `openSession(${JSON.stringify(ctx.set)}); true`);
     await waitFor("A shows the tiles", within(UI_REFRESH_S * 5), () => evaluate(a, `page === "player" && play.keys.length >= 2 && play.keys.every((k) => play.tiles[k] && play.tiles[k].box.getBoundingClientRect().width > 0)`));

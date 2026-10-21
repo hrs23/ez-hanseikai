@@ -6,6 +6,13 @@ const HOLD_MAX_MS = 1000;
 const SEEK_TOLERANCE = 0.05;
 const DRIFT_MAX = 0.4;
 const HAVE_FUTURE_DATA = 3;
+const SPEAK_LEVEL = 0.02;
+const SPEAK_HANG_MS = 300;
+const VOICE_WINDOW = 8192;
+
+let context = null;
+const audio = () => (context ||= new AudioContext());
+const talking = (last, peak, now) => (peak >= SPEAK_LEVEL ? now : last);
 
 const slot = (video) => {
   const s = { video, ms: null, sb: null, part: null, index: null, size: -1, base: null, shift: 0, got: new Map(), tail: 0, want: null, job: null, failedAt: 0, waitSince: 0 };
@@ -73,7 +80,27 @@ function broken(s) {
 function drop(s) {
   if (!s) return;
   detach(s);
+  if (s.tap) s.tap.out.disconnect();
   s.video.remove();
+}
+
+function voiceTap(video) {
+  const ctx = audio();
+  const out = ctx.createMediaElementSource(video);
+  const an = ctx.createAnalyser();
+  an.fftSize = VOICE_WINDOW;
+  const gain = ctx.createGain();
+  out.connect(an);
+  out.connect(gain).connect(ctx.destination);
+  return { out, an, gain, buf: new Float32Array(VOICE_WINDOW) };
+}
+function peakOf({ an, buf }) {
+  an.getFloatTimeDomainData(buf);
+  return buf.reduce((peak, x) => Math.max(peak, Math.abs(x)), 0);
+}
+function setLevel(s, level) {
+  if (s.tap) s.tap.gain.gain.value = level;
+  else Object.assign(s.video, { muted: !level, volume: level });
 }
 
 const buffer = (sb, op) => new Promise((done, failed) => {
@@ -177,6 +204,7 @@ function feedParts(tl, p, m, b) {
   const mic = partFor(p, "m", wall);
   if (mic && !tl.mic) {
     tl.mic = slot(tl.box.appendChild(el("audio", { preload: "auto" })));
+    tl.mic.tap = voiceTap(tl.mic.video);
     applyAudio();
   }
   feedSeries(tl.media, p, "v", wall);
