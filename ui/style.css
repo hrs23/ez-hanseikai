@@ -132,6 +132,7 @@ button.plain { background: none; border: 0; padding: 0; height: auto; border-rad
 .avs { display: inline-flex; align-items: center; flex: none; }
 .avs .av { box-shadow: 0 0 0 2px var(--ring, var(--chrome)); }
 .avs .av + .av { margin-left: -5px; }
+.avs .more { margin-left: 4px; font-weight: var(--w-semibold); }
 .avs .av.xs + .av.xs { margin-left: -4px; }
 
 .start { flex: 1; display: grid; place-items: center; overflow-y: auto; background: var(--bg); padding: var(--s5) var(--s4); }

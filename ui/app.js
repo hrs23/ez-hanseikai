@@ -111,7 +111,7 @@ function markLive() {
 }
 
 function avatars(ids, size = "sm", max = ids.length) {
-  return el("span", { className: "avs" }, ...ids.slice(0, max).map((id) => avatar(id, size)));
+  return el("span", { className: "avs" }, ...ids.slice(0, max).map((id) => avatar(id, size)), ids.length > max ? el("span", { className: "more", textContent: `+${ids.length - max}` }) : null);
 }
 
 function iconButton(name, label, onclick, cls = "icon sm") {
