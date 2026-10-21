@@ -338,6 +338,7 @@ function setBoardScope(scope) {
   delete sigs.board;
   renderBoard();
 }
+let boardWrites = Promise.resolve();
 function writeBoard(text) {
   delete sigs.board;
   if (personal()) {
@@ -345,7 +346,8 @@ function writeBoard(text) {
     renderBoard();
     return Promise.resolve();
   }
-  return invoke("add_event", { kind: "board", text, target: {}, values: { card: "team" } }).then(() => refresh()).catch(fail);
+  boardWrites = boardWrites.then(() => invoke("add_event", { kind: "board", text, target: {}, values: { card: "team" } })).then(() => refresh()).catch(fail);
+  return boardWrites;
 }
 function tickTask(n) {
   const next = toggleTask(boardDraft, n);
