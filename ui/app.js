@@ -785,14 +785,16 @@ function share() {
 function joinParty() {
   partyLast = null;
   partyLayout = null;
-  return invoke("party_on", { on: watchParty, view: view() }).catch(fail);
+  const args = { on: watchParty, view: view() };
+  partySends = partySends.then(() => invoke("party_on", args)).catch(fail);
+  return partySends;
 }
 const newer = (a, b) => !b || (a.seq !== b.seq ? a.seq > b.seq : a.stamp !== b.stamp ? a.stamp > b.stamp : a.origin > b.origin);
 function applyParty(p) {
   const first = !partyLast;
   partyLast = p;
   const mine = p.origin === st.id;
-  if (mine && !first && p.stamp < actedAt) return;
+  if (mine && p.stamp < actedAt) return;
   if (quick && !mine) quick.moved = true;
   const set = playSet();
   if (!set || p.set !== set.id) return;

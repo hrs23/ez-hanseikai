@@ -809,7 +809,7 @@ async function live(ctx) {
     await waitFor("A plays at 1 again once the delay is small", within(CATCH_UP_S), async () => (await evaluate(a, LIVE_PROBE)).rate === 1);
     await evaluate(a, `openNow(); act("play", nowM()); goLive(); true`);
     await invoke(b, "set_limit", { mbps: TRICKLE_MBPS });
-    const gone = await waitFor("A stops waiting for B and marks its tile", within(LIVE_LAG_MAX_S + SEGMENT_S * 2), async () => { const x = await evaluate(a, LIVE_PROBE); return x.late.join() === b.id && x.pos > x.avail[b.id] && x; });
+    const gone = await waitFor("A stops waiting for B and marks its tile", within(LIVE_LAG_MAX_S + SEGMENT_S * 2), async () => { const x = await evaluate(a, LIVE_PROBE); check(x.late.join() === b.id && x.pos > x.avail[b.id], brief(x)); return x; });
     await sleep(1000);
     check((await evaluate(a, LIVE_PROBE)).pos > gone.pos, "the others stopped while waiting for B");
     await invoke(b, "set_limit", { mbps: null });
