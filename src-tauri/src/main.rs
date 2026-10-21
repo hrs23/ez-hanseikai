@@ -20,6 +20,7 @@ mod party;
 mod plugins;
 mod proc;
 mod record;
+mod relay;
 mod room;
 mod shell;
 mod sources;
@@ -28,12 +29,12 @@ mod thumbs;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use iroh::endpoint::{presets, Connection};
-use iroh::{Endpoint, EndpointId, SecretKey};
+use iroh::{Endpoint, EndpointId, RelayUrl, SecretKey};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -174,6 +175,8 @@ pub struct Peer {
     pub have: HashMap<String, u64>,
     pub logs: HashMap<String, u64>,
     pub asks: Vec<Value>,
+    pub drops: [Option<Instant>; 2],
+    pub served: Option<Instant>,
     pub task: tauri::async_runtime::JoinHandle<()>,
 }
 
@@ -182,8 +185,12 @@ impl Peer {
         self.conn.as_ref().filter(|c| c.close_reason().is_none())
     }
 
+    pub fn picture(&self) -> bool {
+        self.alive().is_some_and(|c| !relay::relayed(c))
+    }
+
     pub fn new(id: EndpointId, name: String, task: tauri::async_runtime::JoinHandle<()>) -> Self {
-        Self { id, name, conn: None, offset_us: None, failures: 0, announce: true, codecs: default_codecs(), info: None, hw: Value::Null, live: None, speaking: false, seen_us: None, have: HashMap::new(), logs: HashMap::new(), asks: Vec::new(), task }
+        Self { id, name, conn: None, offset_us: None, failures: 0, announce: true, codecs: default_codecs(), info: None, hw: Value::Null, live: None, speaking: false, seen_us: None, have: HashMap::new(), logs: HashMap::new(), asks: Vec::new(), drops: [None; 2], served: None, task }
     }
 }
 
@@ -218,6 +225,9 @@ pub struct Core {
     pub export: Mutex<Option<export::Running>>,
     pub log_lock: Mutex<()>,
     pub wake: tokio::sync::Notify,
+    pub relays: Mutex<Vec<RelayUrl>>,
+    pub relay_wake: tokio::sync::Notify,
+    pub live_writes: AtomicUsize,
     pub focus: Mutex<Option<String>>,
     pub asks: Mutex<Vec<room::Ask>>,
     pub party: Mutex<party::Party>,
@@ -317,6 +327,7 @@ impl Core {
             "api": *self.api_on.lock().unwrap(),
             "api_lan": *self.api_lan.lock().unwrap(),
             "api_token": *self.api_token.lock().unwrap(),
+            "relays": self.relays.lock().unwrap().iter().map(|u| u.to_string()).collect::<Vec<_>>(),
         });
         let _ = write_whole(&self.dir.join("settings.json"), value.to_string().as_bytes());
     }
@@ -473,6 +484,9 @@ async fn init(app: AppHandle, dir: PathBuf, left_lock: bool) -> Result<Arc<Core>
         export: Mutex::new(None),
         log_lock: Mutex::new(()),
         wake: tokio::sync::Notify::new(),
+        relays: Mutex::new(relay::parse(&strings::<Vec<String>>(&settings["relays"])).unwrap_or_default()),
+        relay_wake: tokio::sync::Notify::new(),
+        live_writes: AtomicUsize::new(0),
         focus: Mutex::new(None),
         asks: Mutex::new(Vec::new()),
         party: Mutex::new(party::Party::default()),
@@ -513,6 +527,7 @@ pub fn clean_settings(mut settings: Value) -> Value {
     if !settings["quality"].as_str().is_some_and(|q| record::QUALITIES.iter().any(|(id, _)| *id == q)) {
         settings["quality"] = Value::Null;
     }
+    settings["relays"] = json!(strings::<Vec<String>>(&settings["relays"]).iter().filter_map(|u| relay::parse(std::slice::from_ref(u)).ok()?.pop().map(|u| u.to_string())).collect::<Vec<_>>());
     settings
 }
 
@@ -584,6 +599,7 @@ fn main() {
             std::thread::spawn(move || data::keeper(c));
             tauri::async_runtime::spawn(net::accept_loop(core.clone()));
             tauri::async_runtime::spawn(party::repeat(core.clone()));
+            tauri::async_runtime::spawn(relay::keep(core.clone()));
             room::apply_active(&core);
             if api::requested() || *core.api_on.lock().unwrap() {
                 ops::enable_api(&core, true);
@@ -685,6 +701,9 @@ mod tests {
         assert_eq!(old["name"], "Ren");
         assert!(old["limit_mbps"].is_null() && old["channel"].is_null() && old["quality"].is_null());
         assert_eq!(old["language"], "");
+        assert_eq!(old["relays"], json!([]));
+        assert_eq!(clean_settings(json!({"relays": ["https://relay.example.org/", "http://relay.example.org", "relay", 5, " "]}))["relays"], json!(["https://relay.example.org/"]));
+        assert_eq!(clean_settings(json!({"relays": "https://relay.example.org/"}))["relays"], json!([]));
         let kept = clean_settings(json!({"limit_mbps": 8.5, "channel": "beta", "language": "ja", "quality": "high"}));
         assert_eq!((kept["limit_mbps"].as_f64(), kept["channel"].as_str(), kept["language"].as_str(), kept["quality"].as_str()), (Some(8.5), Some("beta"), Some("ja"), Some("high")));
         assert_eq!(clean_settings(json!([1, 2])), clean_settings(json!({})));

@@ -23,6 +23,7 @@ const FINISH_WAIT_S = 10;
 const KEEP_EVERY_S = 5;
 const PARTY_REPEAT_S = 4;
 const UI_REFRESH_S = 1;
+const RELAY_WAIT_S = 10;
 const JUMP_MIN_S = 1;
 const SERIES = ["v", "m"];
 const PLUGIN = "apex-matches";
@@ -801,6 +802,8 @@ async function live(ctx) {
     }
     await inStep("openLive()");
     await invoke(b, "set_limit", { mbps: TRICKLE_MBPS });
+    const captures = () => logOf(b, ctx.room, b.id).filter((r) => r.k === "cap").length;
+    const before = captures();
     const held = await watchLive(a, b, LIVE_LAG_MAX_S + SEGMENT_S, (x) => x.held || x.late.length > 0);
     await invoke(b, "set_limit", { mbps: null });
     check(held.held || held.wall - held.pos > LIVE_LAG_MAX_S, `A never held for B: ${brief(held)}`);
@@ -814,6 +817,7 @@ async function live(ctx) {
     check((await evaluate(a, LIVE_PROBE)).pos > gone.pos, "the others stopped while waiting for B");
     await invoke(b, "set_limit", { mbps: null });
     await waitFor("B's tile is no longer late", within(SEGMENT_S * 3), async () => !(await evaluate(a, LIVE_PROBE)).late.length);
+    check(captures() === before, "B's capture changed while the set recorded");
   });
 
   await step("a note with a tag, its edit and its deletion reach everyone", async () => {
@@ -941,10 +945,25 @@ async function gather(ctx, extra) {
 
 async function recover(ctx) {
   let a, b, c;
-  await step("A, B and C record the same set, C joining late and reaching the others only through the relay", async () => {
+  await step("A, B and C record the same set, C joining late only through the relay: it sends and gets voice and logs but no picture, and catches up once it comes back on a direct path", async () => {
     [a, b, c] = await gather(ctx, { EZH_RELAY_ONLY: "1" });
+    const all = [a, b, c];
     await allSee([a, b], "C's path is the relay", within(DIAL_S), (st) => st.peers.find((p) => p.id === c.id)?.path === "relay");
-    await allSee([b, c], "A's live picture available", within(COLD_START_S), (st) => st.peers.find((p) => p.id === a.id)?.live);
+    for (const x of [a, b]) await waitFor(`${x.key} says C has no picture via relay`, within(UI_REFRESH_S * 10), () => evaluate(x, `memberOf(${JSON.stringify(c.id)}).status.text === t("No picture via relay")`));
+    const voiced = segsOf(logOf(a, ctx.room, a.id), ctx.set, "m").length;
+    const voice = pieces(logOf(a, ctx.room, a.id), ctx.set, voiced).filter((p) => p.series === "m");
+    await waitFor("C holds A's voice", within((SEGMENT_S + SYNC_ROUND_S) * 2), () => !badCopies(c, ctx.room, a.id, voice).length);
+    const pictures = (holder, owner) => filesUnder(path.join(roomDir(holder, ctx.room), "recordings", ctx.set, owner.id)).filter((f) => f.split(path.sep).includes("v"));
+    check(!pictures(c, a).length && !pictures(a, c).length, `a picture crossed the relay: ${brief([pictures(c, a).length, pictures(a, c).length])}`);
+    kill(c);
+    await stopped(c);
+    start("c", {});
+    await attach(c);
+    await share(c);
+    await meshed(all);
+    await allSee([a, b], "C's path is direct", within(DIAL_S), (st) => st.peers.find((p) => p.id === c.id)?.path === "direct");
+    const limits = Object.fromEntries(all.map((x) => [x.key, segsOf(logOf(x, ctx.room, x.id), ctx.set, "v").length]));
+    await waitFor(`everyone holds what was logged by now (${brief(limits)})`, within((SEGMENT_S + SYNC_ROUND_S) * 6), () => !holdEverything(all, ctx.room, ctx.set, all, limits));
   });
 
   await step("B crashes mid-recording and recovers its open segment", async () => {
@@ -1303,6 +1322,27 @@ async function library(ctx) {
     await waitFor("A shows the live tiles while idle", within(UI_REFRESH_S * 10), () => evaluate(a, `!$("livetiles").hidden && Object.keys(rec.tiles).length === 3 && navActive() === "live" && $("psub").textContent.startsWith("Free ")`));
     await screenshot(a, "live-idle");
     check(rows.length === 3 && rows.every((x) => x === "Standby"), `member states ${brief(rows)}`);
+  });
+
+  await step("measuring the speed to a member gives up and down in Mbit/s, the round trip and the path", async () => {
+    const speed = await invoke(a, "measure_speed", { id: b.id });
+    check(speed.up_mbps > 0 && speed.down_mbps > 0 && speed.rtt_ms >= 0 && speed.path === "direct", `speed ${brief(speed)}`);
+    await evaluate(a, `roomTab = "members"; drawerFor = ${JSON.stringify(b.id)}; go("room"); true`);
+    await waitFor("the member pane has Measure speed", within(UI_REFRESH_S * 5), () => evaluate(a, `[...$("drawer").querySelectorAll("button")].some((x) => x.textContent === t("Measure speed"))`));
+    await evaluate(a, `drawerFor = null; renderRoom(); true`);
+  });
+
+  await step("a relay server from the settings is tried first and a dead one is skipped", async () => {
+    const relayHost = async () => (await invoke(a, "debug_view", { tab: "flow", since: 0, set: null })).relay || "";
+    const refused = await invoke(a, "set_relays", { urls: ["relay"] }).then(() => null, (e) => String(e.message || e));
+    check(refused && refused.includes("Not a relay URL: relay"), `a non-URL was taken: ${brief(refused)}`);
+    await invoke(a, "set_relays", { urls: ["https://127.0.0.1:9/", "https://euc1-1.relay.n0.iroh.link./"] });
+    await waitFor("A's relay is the second server of its list", within(RELAY_WAIT_S * 3), async () => (await relayHost()).startsWith("euc1-1."));
+    check(connected(await state(a), [b.id, c.id]), "A lost a member while it changed relays");
+    check((await state(a)).relays.length === 2, "the relay list is not kept");
+    await invoke(a, "set_relays", { urls: [] });
+    await waitFor("A is back on the public relays", within(RELAY_WAIT_S * 3), async () => (await invoke(a, "debug_view", { tab: "connections", since: 0, set: null })).events.some((e) => e.text.startsWith("relay: the public relays")));
+    check(connected(await state(a), [b.id, c.id]), "A lost a member after the relay list was cleared");
   });
 
   await step("Watch Party converges on a seek and a play, and a member who joins midway converges too", async () => {

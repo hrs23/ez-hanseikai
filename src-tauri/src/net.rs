@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -14,7 +15,7 @@ use tokio::time::{sleep, timeout};
 
 use crate::record::{self, LiveStep};
 use crate::room::{self, capture_id, part_of, seg_name, valid_id, INIT, SERIES};
-use crate::{data, debug, default_codecs, file_len, hw, log, merge, now_us, party, short, strings, test_flag, Core, ALPN, PROTOCOL, VERSION};
+use crate::{data, debug, default_codecs, relay, tenth, file_len, hw, log, merge, now_us, party, short, strings, test_flag, Core, ALPN, PROTOCOL, VERSION};
 
 const CHUNK: usize = 64 << 10;
 pub const LOG_SYNC: Duration = Duration::from_secs(2);
@@ -27,7 +28,9 @@ const STABLE_FOR: Duration = Duration::from_secs(10);
 const PING_WAIT: Duration = Duration::from_secs(3);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
-const REQUEST_MAX: usize = 1 << 20;
+const REQUEST_MAX: usize = 4 << 20;
+const SPEED_BYTES: usize = 2 << 20;
+const SPEED_TIMEOUT: Duration = Duration::from_secs(60);
 const RESPONSE_MAX: usize = 32 << 20;
 const PULL_MAX: u64 = 1 << 20;
 const JOIN_MAX: usize = 4096;
@@ -188,8 +191,7 @@ fn holdings(core: &Core) -> Value {
     static HELD: Mutex<Option<(Instant, String, Value)>> = Mutex::new(None);
     let room = core.active_room_id();
     let mut held = HELD.lock().unwrap();
-    if let Some((at, r, value)) = held.as_ref().filter(|(at, r, _)| at.elapsed() < LOG_SYNC / 2 && *r == room) {
-        let _ = (at, r);
+    if let Some((_, _, value)) = held.as_ref().filter(|(at, r, _)| at.elapsed() < LOG_SYNC / 2 && *r == room) {
         return value.clone();
     }
     let value = count_holdings(core, &room);
@@ -265,7 +267,17 @@ async fn send_file(core: &Core, send: &mut SendStream, n: u32, path: &Path, at: 
         let k = file.read(&mut buf).await?;
         if k > 0 {
             let wrote = Instant::now();
-            write_frame(send, n, &buf[..k]).await?;
+            if history {
+                while core.live_writes.load(Ordering::Relaxed) > 0 {
+                    sleep(HISTORY_WAIT).await;
+                }
+                write_frame(send, n, &buf[..k]).await?;
+            } else {
+                core.live_writes.fetch_add(1, Ordering::Relaxed);
+                let done = write_frame(send, n, &buf[..k]).await;
+                core.live_writes.fetch_sub(1, Ordering::Relaxed);
+                done?;
+            }
             debug::slow_send(what, wrote.elapsed());
             row.add(k);
             sent += k as u64;
@@ -285,14 +297,30 @@ async fn send_file(core: &Core, send: &mut SendStream, n: u32, path: &Path, at: 
     Ok(true)
 }
 
-async fn follow(core: &Core, from: EndpointId, send: &mut SendStream, req: &Value) -> Result<()> {
+fn note_drop(core: &Core, from: &EndpointId) {
+    let now = Instant::now();
+    let starts = core.update_peer(from, |p| {
+        let starts = p.drops[1].is_none_or(|d| now.duration_since(d) >= record::THIN_WINDOW);
+        p.drops = [p.drops[1], Some(now)];
+        starts
+    });
+    if starts == Some(true) {
+        debug::event(core, now, format!("{}: live picture fell behind, restarting at the newest segment", short(from)));
+    }
+    record::lower_if_thin(core);
+}
+
+async fn follow(core: &Core, conn: &Connection, send: &mut SendStream, req: &Value) -> Result<()> {
+    let from = conn.remote_id();
     let text = |k: &str| req[k].as_str().unwrap_or_default().to_string();
     let (room, owner, capture, series) = (text("room"), text("owner"), text("capture"), text("series"));
     let set = Some(text("set")).filter(|s| valid_id(s));
     let own = owner == core.me();
     let live = req["live"] == true;
     let valid = in_active_room(core, &room) && room::member_id(&owner) && SERIES.contains(&series.as_str()) && capture_id(&capture);
-    if !valid || (live && !own) || (!own && set.is_none()) {
+    let picture = series == SERIES[0];
+    let relayed = || picture && relay::relayed(conn);
+    if !valid || (live && !own) || (!own && set.is_none()) || relayed() {
         return Ok(());
     }
     let _ = send.set_priority(priority(live, &series));
@@ -311,7 +339,7 @@ async fn follow(core: &Core, from: EndpointId, send: &mut SendStream, req: &Valu
     }
     let to = req["to"].as_u64().map(|t| t as u32);
     let (mut n, mut at) = (req["from"].as_u64().unwrap_or(1) as u32, req["at"].as_u64().unwrap_or(0));
-    while to.is_none_or(|to| n <= to) {
+    while to.is_none_or(|to| n <= to) && !relayed() {
         let path = dir.join(seg_name(n));
         let sent = if own && live {
             match current().map(|l| record::live_step(&l.recent[which], set.as_deref(), n)) {
@@ -319,7 +347,16 @@ async fn follow(core: &Core, from: EndpointId, send: &mut SendStream, req: &Valu
                     sleep(FILE_WATCH).await;
                     continue;
                 }
-                Some(LiveStep::Serve) => send_file(core, send, n, &path, at, false, &|| current().is_some(), &what).await?,
+                Some(LiveStep::Serve) => {
+                    if picture {
+                        core.update_peer(&from, |p| p.served = Some(Instant::now()));
+                    }
+                    send_file(core, send, n, &path, at, false, &|| current().is_some(), &what).await?
+                }
+                Some(LiveStep::Behind) if picture => {
+                    note_drop(core, &from);
+                    false
+                }
                 _ => false,
             }
         } else {
@@ -366,7 +403,8 @@ fn compatible(core: &Core, id: &EndpointId) -> bool {
     core.peers.lock().unwrap().iter().find(|p| p.id == *id).is_none_or(|p| p.info.as_ref().is_none_or(|(_, proto)| *proto == PROTOCOL))
 }
 
-async fn handle(core: Arc<Core>, from: EndpointId, mut send: SendStream, mut recv: RecvStream) -> Result<()> {
+async fn handle(core: Arc<Core>, conn: Connection, mut send: SendStream, mut recv: RecvStream) -> Result<()> {
+    let from = conn.remote_id();
     let body = recv.read_to_end(REQUEST_MAX).await?;
     let req: Value = serde_json::from_slice(&body)?;
     if !core.has_peer(&from) || (req["t"] != "hello" && !compatible(&core, &from)) {
@@ -378,7 +416,6 @@ async fn handle(core: Arc<Core>, from: EndpointId, mut send: SendStream, mut rec
         Some("pull") => {
             let (room, of) = (req["room"].as_str().unwrap_or_default(), req["of"].as_str().unwrap_or_default());
             if room::may_share(&core, room, &from.to_string(), of) {
-                let _ = send.set_priority(LOG_PRIORITY);
                 if let Ok(mut file) = tokio::fs::File::open(core.log_path(room, of)).await {
                     let started = Instant::now();
                     file.seek(std::io::SeekFrom::Start(req["from"].as_u64().unwrap_or(0))).await?;
@@ -393,7 +430,18 @@ async fn handle(core: Arc<Core>, from: EndpointId, mut send: SendStream, mut rec
                 }
             }
         }
-        Some("follow") => follow(&core, from, &mut send, &req).await?,
+        Some("follow") => follow(&core, &conn, &mut send, &req).await?,
+        Some("speed") => {
+            let _ = send.set_priority(Default::default());
+            let mut left = req["bytes"].as_u64().unwrap_or(0).min(SPEED_BYTES as u64) as usize;
+            let zeros = [0u8; CHUNK];
+            while left > 0 {
+                let k = left.min(CHUNK);
+                send.write_all(&zeros[..k]).await?;
+                pace(&core, k, false).await;
+                left -= k;
+            }
+        }
         Some("report") => {
             let c = core.clone();
             let text = tokio::task::spawn_blocking(move || debug::shared_report(&c)).await?;
@@ -484,6 +532,39 @@ pub async fn check_peer(core: &Arc<Core>, id: &str) -> Value {
     reply.and_then(|b| serde_json::from_slice::<Value>(&b).ok()).unwrap_or(Value::Null)
 }
 
+pub fn speed_json(up_bytes: usize, up_took: Duration, down_bytes: usize, down_took: Duration, rtt_ms: u64, path: &str) -> Value {
+    let mbps = |bytes: usize, took: Duration| tenth(bytes as f64 / BYTES_PER_MBIT / took.as_secs_f64().max(f64::EPSILON));
+    json!({"up_mbps": mbps(up_bytes, up_took), "down_mbps": mbps(down_bytes, down_took), "rtt_ms": rtt_ms, "path": path})
+}
+
+pub async fn measure_speed(core: &Arc<Core>, id: &str) -> Option<Value> {
+    let conn = core.peers.lock().unwrap().iter().find(|p| p.id.to_string() == id).and_then(|p| p.alive().cloned())?;
+    let body = serde_json::to_vec(&json!({"t": "speed", "bytes": SPEED_BYTES, "pad": "0".repeat(SPEED_BYTES)})).ok()?;
+    let speed = timeout(SPEED_TIMEOUT, async {
+        let (mut send, mut recv) = conn.open_bi().await?;
+        debug::message("out", Some("speed"), body.len());
+        let started = Instant::now();
+        for chunk in body.chunks(CHUNK) {
+            send.write_all(chunk).await?;
+            pace(core, chunk.len(), false).await;
+        }
+        send.finish()?;
+        let mut buf = vec![0u8; CHUNK];
+        let Some(mut got) = recv.read(&mut buf).await? else { anyhow::bail!("no reply") };
+        let first = Instant::now();
+        while let Some(k) = recv.read(&mut buf).await? {
+            got += k;
+        }
+        let (path, rtt_ms, _) = relay::path_kind(&conn);
+        anyhow::Ok(speed_json(body.len(), first - started, got, first.elapsed(), rtt_ms, path))
+    })
+    .await
+    .ok()?
+    .ok()?;
+    debug::event(core, Instant::now(), format!("{}: speed {speed}", short(id)));
+    Some(speed)
+}
+
 pub fn pending_asks(core: &Core) -> Vec<Value> {
     core.asks.lock().unwrap().iter().filter(|a| a.answer.is_none()).map(|a| json!({"id": a.id, "name": a.name})).collect()
 }
@@ -539,10 +620,6 @@ async fn join(core: &Arc<Core>, from: EndpointId, mut send: SendStream, mut recv
     Ok(Some(step))
 }
 
-fn path_name(conn: &Connection) -> &'static str {
-    conn.paths().iter().find(|p| p.is_selected()).map_or("none", |p| if p.is_ip() { "direct" } else { "relay" })
-}
-
 fn watch_paths(core: &Arc<Core>, conn: &Connection, label: String) {
     let core = core.clone();
     let mut events = conn.path_events();
@@ -552,7 +629,7 @@ fn watch_paths(core: &Arc<Core>, conn: &Connection, label: String) {
         let mut last = "";
         while let Some(event) = events.next().await {
             if let iroh::endpoint::PathEvent::Selected { remote_addr, .. } = &event {
-                let now = if remote_addr.is_ip() { "direct" } else { "relay" };
+                let now = relay::kind(remote_addr);
                 if now != last {
                     last = now;
                     debug::event(&core, started, format!("{label}: {now} path"));
@@ -777,7 +854,7 @@ async fn follow_live(core: Arc<Core>, id: EndpointId, conn: Connection, room: St
             data::keep_capture(&core.series_dir(&room, None, &owner, &capture, series));
         }
         let (n, set) = (info.n[which], info.set[which].clone());
-        if n > 0 {
+        if n > 0 && !(which == 0 && relay::relayed(&conn)) {
             let dir = core.series_dir(&room, set.as_deref(), &owner, &capture, series);
             let mut req = json!({"t": "follow", "room": room, "owner": owner, "capture": capture, "series": series, "from": n, "at": 0, "init": !dir.join(INIT).exists(), "live": true});
             if let Some(set) = set {
@@ -815,8 +892,8 @@ fn fetch_history(core: &Arc<Core>, peer: &EndpointId, conn: &Connection, room: &
         return;
     }
     let via = peer.to_string();
-    let haves: Vec<(String, HashMap<String, u64>)> = core.peers.lock().unwrap().iter().filter(|p| p.conn.is_some()).map(|p| (p.id.to_string(), p.have.clone())).collect();
-    let count = |who: &str, key: &str| haves.iter().find(|(id, _)| id == who).and_then(|(_, h)| h.get(key)).copied().unwrap_or(0);
+    let haves: Vec<(String, HashMap<String, u64>, bool)> = core.peers.lock().unwrap().iter().filter(|p| p.conn.is_some()).map(|p| (p.id.to_string(), p.have.clone(), p.picture())).collect();
+    let count = |who: &str, key: &str, series: &str| haves.iter().find(|(id, ..)| id == who).filter(|(.., picture)| *picture || series != SERIES[0]).and_then(|(_, h, _)| h.get(key)).copied().unwrap_or(0);
     let focus = core.focus.lock().unwrap().clone();
     let logs = room::logs(core, room);
     let mut sets = room::sets(core, room, &logs);
@@ -846,7 +923,7 @@ fn fetch_history(core: &Arc<Core>, peer: &EndpointId, conn: &Connection, room: &
                 if waiting && !focused {
                     continue;
                 }
-                let here = count(&via, &key) > run.index && (f.owner == via || count(&f.owner, &key) <= run.index);
+                let here = count(&via, &key, series) > run.index && (f.owner == via || count(&f.owner, &key, series) <= run.index);
                 if !focused && history_fetches(core) >= HISTORY_FETCHES {
                     return;
                 }
@@ -1000,9 +1077,9 @@ async fn adopt(core: &Core, id: &EndpointId, conn: &Connection) -> bool {
     core.update_peer(id, |p| p.conn = Some(conn.clone())).is_some()
 }
 
-async fn serve(core: Arc<Core>, from: EndpointId, conn: Connection) {
+async fn serve(core: Arc<Core>, conn: Connection) {
     while let Ok((send, recv)) = conn.accept_bi().await {
-        tokio::spawn(handle(core.clone(), from, send, recv));
+        tokio::spawn(handle(core.clone(), conn.clone(), send, recv));
     }
 }
 
@@ -1011,7 +1088,7 @@ async fn run(core: &Arc<Core>, id: EndpointId, conn: Connection, outgoing: bool)
     let label = format!("{} {}", short(&id), if outgoing { "outgoing" } else { "incoming" });
     debug::event(core, started, format!("{label}: connected"));
     watch_paths(core, &conn, label.clone());
-    let serving = tokio::spawn(serve(core.clone(), id, conn.clone()));
+    let serving = tokio::spawn(serve(core.clone(), conn.clone()));
     if !outgoing || present_invite(core, &id, &conn).await {
         match hello(core, &id, &conn).await {
             Some(PROTOCOL) => {
@@ -1027,7 +1104,7 @@ async fn run(core: &Arc<Core>, id: EndpointId, conn: Connection, outgoing: bool)
         }
     }
     serving.abort();
-    let path = path_name(&conn);
+    let path = relay::path_kind(&conn).0;
     let by = match conn.close_reason() {
         Some(ConnectionError::ApplicationClosed(c)) => format!(" by the other app: {}", String::from_utf8_lossy(&c.reason)),
         _ => String::new(),
@@ -1126,6 +1203,13 @@ mod tests {
         assert_eq!(live(json!({"sharing": true, "capture": "1700", "start_us": 9, "n": [7, 5], "set": ["s1", null]})), Some(("1700".into(), Some(9), [7, 5], [Some("s1".into()), None])));
         assert_eq!(live(json!({"sharing": true, "capture": "1700", "n": [3], "set": ["../x", 5]})), Some(("1700".into(), None, [3, 0], [None, None])));
         assert_eq!((live(json!({"sharing": false, "capture": "1700"})), live(json!({"sharing": true, "capture": "../x"}))), (None, None));
+    }
+
+    #[test]
+    fn speed_is_bytes_over_time_in_mbit_per_second_with_the_path_at_the_end() {
+        let speed = speed_json(2_500_000, Duration::from_secs(2), 1_250_000, Duration::from_millis(500), 19, "direct");
+        assert_eq!(speed, json!({"up_mbps": 10.0, "down_mbps": 20.0, "rtt_ms": 19, "path": "direct"}));
+        assert_eq!(speed_json(1, Duration::ZERO, 0, Duration::ZERO, 0, "relay")["down_mbps"], 0.0);
     }
 
     #[test]

@@ -7,7 +7,7 @@ use iroh::Watcher;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
-use crate::{api, audio, check, clean_name, clean_note, clean_text, data, debug, export, ffmpeg, jobs, merge, net, now_us, party, record, room, shell, sources, Core, BOARD_MAX, CHANNELS, EVENT_KINDS, NAME_MAX, NOTE_MAX, REPO, VALUES_MAX};
+use crate::{api, audio, check, clean_name, clean_note, clean_text, data, debug, export, ffmpeg, jobs, merge, net, now_us, party, record, relay, room, shell, sources, Core, BOARD_MAX, CHANNELS, EVENT_KINDS, NAME_MAX, NOTE_MAX, REPO, VALUES_MAX};
 
 pub type Op = fn(&Arc<Core>, Value) -> Result<Value, String>;
 
@@ -24,6 +24,7 @@ pub const OPS: &[(&str, Op)] = &[
     ("answer_ask", answer_ask),
     ("remove_peer", remove_peer),
     ("check_peer", check_peer),
+    ("measure_speed", measure_speed),
     ("start_recording", start_recording),
     ("stop_recording", stop_recording),
     ("mark", mark),
@@ -34,6 +35,7 @@ pub const OPS: &[(&str, Op)] = &[
     ("set_mix", set_mix),
     ("set_quality", set_quality),
     ("set_limit", set_limit),
+    ("set_relays", set_relays),
     ("set_codecs", set_codecs),
     ("set_name", set_name),
     ("set_profile", set_profile),
@@ -172,6 +174,11 @@ fn remove_peer(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     Ok(Value::Null)
 }
 
+fn measure_speed(core: &Arc<Core>, args: Value) -> Result<Value, String> {
+    let id: String = arg(&args, "id")?;
+    tauri::async_runtime::block_on(net::measure_speed(core, &id)).ok_or_else(|| "No answer".into())
+}
+
 fn check_peer(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     let id: String = arg(&args, "id")?;
     if id != core.me() {
@@ -260,6 +267,7 @@ fn set_quality(core: &Arc<Core>, args: Value) -> Result<Value, String> {
         return Err(format!("unknown quality {id}"));
     }
     *core.engine.quality.lock().unwrap() = id;
+    *core.engine.cap.lock().unwrap() = None;
     core.save_settings();
     Ok(Value::Null)
 }
@@ -267,6 +275,13 @@ fn set_quality(core: &Arc<Core>, args: Value) -> Result<Value, String> {
 fn set_limit(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     *core.limit_mbps.lock().unwrap() = arg::<Option<f64>>(&args, "mbps")?.filter(|v| *v > 0.0);
     *core.pacer.lock().unwrap() = net::Pacer::new();
+    core.save_settings();
+    Ok(Value::Null)
+}
+
+fn set_relays(core: &Arc<Core>, args: Value) -> Result<Value, String> {
+    *core.relays.lock().unwrap() = relay::parse(&arg::<Vec<String>>(&args, "urls")?)?;
+    core.relay_wake.notify_one();
     core.save_settings();
     Ok(Value::Null)
 }

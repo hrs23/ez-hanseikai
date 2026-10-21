@@ -3,8 +3,11 @@ const PICTURE_LAG_S = 10;
 
 function memberStatus(m, now) {
   if (!m.connected) return { kind: "off", text: m.seen_us ? t("Offline · last seen {time}", { time: seenLabel(m.seen_us, now) }) : t("Offline") };
-  return m.sharing ? { kind: "standby", text: t("Standby") } : { kind: "idle", text: t("Not sharing") };
+  if (!m.sharing) return { kind: "idle", text: t("Not sharing") };
+  return m.relayed ? { kind: "idle", text: t("No picture via relay") } : { kind: "standby", text: t("Standby") };
 }
+
+const sendsPicture = (p) => !!p && p.connected && p.path !== "relay";
 
 function seenLabel(us, now) {
   const at = new Date(us / 1000);

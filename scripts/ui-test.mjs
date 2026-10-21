@@ -9,7 +9,7 @@ const ui = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "ui");
 const read = (f) => fs.readFileSync(path.join(ui, f), "utf8");
 const source = ["util.js", "i18n.js", "live.js", "media.js", "layout.js", "dock.js", "events.js", "markdown.js", "members.js", "recordings.js", "extensions.js", "ai.js", "diag.js"].map(read).join("\n");
 const context = vm.createContext({ window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id, location: { search: "" } });
-const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, memberStatus, viewLine, viewText, tileProblem, livePlayers, ordered, extensionLine, analysisReason, recordingAnalysis, cardParts, dropPos, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, talking, stillTalking, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, aiPreview, aiDebrief, apiUrl, apiBadge, apiReferenceBlocks, rateOf, liveEdge, netState, summaryLines, leftText, pcCards, clockSummary, flowRows, skewText, liveStep, liveFollow, liveAvail, plan, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, memberStatus, sendsPicture, viewLine, viewText, tileProblem, livePlayers, ordered, extensionLine, analysisReason, recordingAnalysis, cardParts, dropPos, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, talking, stillTalking, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, aiPreview, aiDebrief, apiUrl, apiBadge, apiReferenceBlocks, rateOf, liveEdge, netState, summaryLines, leftText, pcCards, clockSummary, flowRows, skewText, liveStep, liveFollow, liveAvail, plan, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 const plain = (v) => JSON.parse(JSON.stringify(v));
 
 const moment = (m, extra = {}) => ({ role: "moment", m, plugin: { id: "apex-matches" }, tags: ["match"], ...extra });
@@ -475,11 +475,14 @@ test("a member row says one short state", () => {
   const say = (m) => ui$.memberStatus({ connected: true, sharing: false, ...m }, at).text;
   assert.equal(say({}), "Not sharing");
   assert.equal(say({ sharing: true }), "Standby");
+  assert.equal(say({ sharing: true, relayed: true }), "No picture via relay");
+  assert.equal(say({ relayed: true }), "Not sharing");
   assert.equal(say({ connected: false }), "Offline");
   assert.equal(say({ connected: false, seen_us: new Date(2026, 9, 19, 9, 5).getTime() * 1000 }), "Offline · last seen Today 09:05");
   ui$.setLanguage("ja");
   assert.equal(say({}), "共有していません");
   assert.equal(say({ sharing: true }), "待機中");
+  assert.equal(say({ sharing: true, relayed: true }), "中継のため映像なし");
   assert.match(say({ connected: false }), /^オフライン/);
   ui$.setLanguage("en");
 });
@@ -676,6 +679,9 @@ test("the view line names the first member who blocks the playback, in one sente
   assert.equal(line(finishedSet([view("me"), view("ren", { verified_by: ["ren"], have: 0 })], { wanted: true })).text, "Receiving Ren's video");
   assert.equal(line(finishedSet([view("koya", { verified_by: ["koya"] })])).text, "Koya's video is only on Koya's PC");
   assert.equal(line(finishedSet([view("koya", { verified_by: ["ren", "koya"] })]), ctx({ online: () => false })).text, "Koya's video is only on Ren's PC");
+  const peers = { ren: { connected: true, path: "relay" }, koya: { connected: true, path: "direct" } };
+  assert.equal(line(finishedSet([view("koya", { verified_by: ["ren"] })]), ctx({ online: (id) => ui$.sendsPicture(peers[id]) })).text, "Koya's video is only on Ren's PC");
+  assert.equal(line(finishedSet([view("ren", { verified_by: ["koya"] })]), ctx({ online: (id) => ui$.sendsPicture(peers[id]) })).text, "Receiving Ren's video");
   const silent = finishedSet([view("me", { parts: [{ m: {} }] })]);
   assert.equal(line(silent), null);
   assert.equal(line(silent, ctx(), "me").text, "Aki didn't record a screen");
@@ -716,6 +722,8 @@ test("Live lists every room member in the saved order and then in join order, wh
   assert.deepEqual(plain(list.map((p) => p.online)), [false, true, true, true]);
   assert.deepEqual(plain(list.map((p) => p.sharing)), [false, false, true, false]);
   assert.equal(list[2].file.size, 5);
+  const relayed = ui$.livePlayers(state({ peers: [{ id: "ren", connected: true, sharing: true, path: "relay", live: { size: 5 } }] })).find((p) => p.key === "ren");
+  assert.deepEqual(plain({ relayed: relayed.relayed, file: relayed.file }), { relayed: true, file: null });
   assert.equal(ui$.livePlayers(state({ layout: null })).map((p) => p.key).join(), "me,ren,koya,mia");
   const recording = ui$.livePlayers(state({ capture: { source: {}, live: { size: 9 }, working: true }, sets: [{ live: true, players: [{ owner: "me", recording: true, last_us: { v: 3, m: 4 }, start_us: 10, offset_us: 2 }, { owner: "ren", recording: true }] }] }));
   const me = recording.find((p) => p.key === "me");

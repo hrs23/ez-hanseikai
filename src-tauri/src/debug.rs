@@ -17,7 +17,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::room::{self, part_of, SERIES};
 use crate::ops::arg;
-use crate::{check, data, download, ffmpeg, hw, net, now_us, party, record, short, Core, NO_WINDOW};
+use crate::{check, data, download, ffmpeg, hw, net, now_us, party, record, relay, short, Core, NO_WINDOW};
 
 const MAX_LOG: u64 = 10 << 20;
 pub const LOG_FILES: [&str; 3] = ["log.txt", "log.old.txt", "log.older.txt"];
@@ -385,7 +385,7 @@ fn path_json(conn: &Connection) -> Vec<Value> {
         .map(|path| {
             let stats = path.stats();
             json!({
-                "kind": if path.is_relay() { "relay" } else if path.is_ip() { "direct" } else { "other" },
+                "kind": relay::kind(path.remote_addr()),
                 "selected": path.is_selected(),
                 "rtt_ms": stats.rtt.as_secs_f64() * 1000.0,
                 "tx": stats.udp_tx.bytes,
@@ -410,12 +410,12 @@ fn conn_json(label: &str, conn: &Connection) -> Value {
 
 fn endpoint_json(core: &Core, addresses: bool) -> Value {
     let report = core.ep.net_report().get();
-    let relay = format!("{:?}", core.ep.home_relay_status().get());
+    let home = relay::home(core);
     let hidden = |text: String| if addresses { text } else { String::new() };
     json!({
         "id": core.me(),
-        "relay_connected": relay.contains("Connected"),
-        "relay": hidden(relay),
+        "relay_connected": home.is_some(),
+        "relay": hidden(home.map(|u| u.to_string()).unwrap_or_default()),
         "sockets": hidden(format!("{:?}", core.ep.bound_sockets())),
         "addr": hidden(format!("{:?}", core.ep.addr())),
         "relay_only": std::env::var_os("EZH_RELAY_ONLY").is_some(),
@@ -494,20 +494,19 @@ fn recording_json(core: &Core, since: u64) -> Value {
 }
 
 fn flow_json(core: &Core) -> Value {
-    let home = format!("{:?}", core.ep.home_relay_status().get());
     let members: Vec<Value> = core
         .peers
         .lock()
         .unwrap()
         .iter()
         .map(|p| {
-            let kind = p.alive().map(room::path_kind);
+            let kind = p.alive().map(relay::path_kind);
             json!({"id": p.id.to_string(), "path": kind.as_ref().map(|k| k.0).filter(|k| *k != "none"), "relay": kind.and_then(|k| k.2)})
         })
         .collect();
     json!({
         "members": members,
-        "relay": if home.contains("Connected") { room::relay_host(&home) } else { None },
+        "relay": relay::home(core).and_then(|u| u.host_str().map(String::from)),
         "downloads": download::active(),
         "update": {"host": UPDATE_HOST, "channel": *core.channel.lock().unwrap()},
         "time": {"host": crate::clock::HOST, "ok": crate::clock::status()["ok"] == true},

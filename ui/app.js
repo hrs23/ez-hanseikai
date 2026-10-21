@@ -312,12 +312,12 @@ function tickLive() {
 function liveWhat(p) {
   if (p.me && !p.sharing) return [el("button", { className: "pick", onclick: (e) => { e.stopPropagation(); openSource($("screenmore")); } }, icon("monitor"), t("Select screen"))];
   if (!p.online || !p.sharing) return [];
-  return [el("span", { textContent: (p.me && captureProblem(st.capture)) || t("Starting…") })];
+  return [el("span", { textContent: (p.me && captureProblem(st.capture)) || (p.relayed ? t("No picture via relay") : t("Starting…")) })];
 }
 function liveState(p) {
   if (p.file) return "video";
   if (p.me && !p.sharing) return "select";
-  return !p.online ? "away" : p.sharing ? "starting" : "quiet";
+  return !p.online ? "away" : p.sharing && !p.relayed ? "starting" : "quiet";
 }
 function renderLive() {
   const idle = page === "player" && showingNow() && !playSet();
@@ -335,7 +335,7 @@ function renderLive() {
     const state = liveState(p);
     nameTile(tl, p.key, p.online);
     const problem = tileProblem({ recording: mine && p.online, sharing: p.sharing, now: nowUs(), start: p.start, voiceEnd: p.last && p.last.m, pictureEnd: p.last && p.last.v });
-    if (changed("livewhat/" + p.key, [state, captureProblem(st.capture), nameOf(p.key), problem, lang])) {
+    if (changed("livewhat/" + p.key, [state, p.relayed, captureProblem(st.capture), nameOf(p.key), problem, lang])) {
       tl.what.replaceChildren(...liveWhat(p));
       tl.problem.textContent = problem || "";
       tl.problem.hidden = !problem;
@@ -821,7 +821,7 @@ function indexOf(state) {
 const setOf = (e) => idx.setOfKey.get(e.key) || null;
 const setLength = (s) => fmt(((s.end_us || nowUs()) - s.start_us) / 1e6);
 const pluginName = (id) => t((plugins.find((p) => p.id === id) || {}).name || id);
-const viewContext = () => ({ me: st.id, name: nameOf, online: (id) => id === st.id || !!(peerOf(id) || {}).connected, left: (set) => { const r = receiving(set); return r && r.left; } });
+const viewContext = () => ({ me: st.id, name: nameOf, online: (id) => id === st.id || sendsPicture(peerOf(id)), left: (set) => { const r = receiving(set); return r && r.left; } });
 function itemOf(e, set) {
   const r = role(e);
   const at = (us) => (us === null || us === undefined || !set ? null : (us - set.start_us) / 1e6);

@@ -30,7 +30,7 @@ The hardware code is in `src-tauri/src/hw.rs` and the time check in `src-tauri/s
 
 The folder export needs ffmpeg: the app uses the one it downloaded, and the end-to-end test makes its tiny test videos with the ffmpeg in its folder. [session-format.md](session-format.md) is the storage format and [protocol.md](protocol.md) the messages; a test fails when a record kind or message the code writes is missing from them.
 
-Set `EZH_RELAY_ONLY=1` to start an instance that uses only the relay, to test the slow path.
+Set `EZH_RELAY_ONLY=1` to start an instance that uses only the relay, to test the slow path and that no picture crosses it.
 
 Set `EZH_TEST=<port>` for test mode: capture encodes a generated picture and two tones (ffmpeg `testsrc2` and `sine`) instead of the screen, app sound and microphone (a display source gives the test picture and a window source is never found, so it reads as closed), and the window's page accepts DevTools (CDP) connections on that local port. With `EZH_TEST` set, an empty file named `offline` in the instance's data folder cuts its network (it neither dials nor accepts, and its open connections close) until the file is removed, and an empty file named `full` makes its disk read as full.
 

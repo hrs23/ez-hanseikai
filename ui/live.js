@@ -14,8 +14,9 @@ function livePlayers(s) {
     const me = key === s.id;
     const peer = peers.get(key);
     const file = me ? s.capture.live : peer && peer.live;
+    const relayed = !me && !!peer && peer.connected && peer.path === "relay";
     const mine = live ? live.players.find((p) => p.owner === key) : null;
-    return { key, me, online: me || !!(peer && peer.connected), file: file && file.size > 0 ? file : null, sharing: me ? !!s.capture.source : !!(peer && peer.sharing), recording: !!(mine && mine.recording) && (!me || s.capture.working), last: mine ? mine.last_us : null, start: mine ? mine.start_us - (mine.offset_us || 0) : null };
+    return { key, me, online: me || !!(peer && peer.connected), relayed, file: file && file.size > 0 && !relayed ? file : null, sharing: me ? !!s.capture.source : !!(peer && peer.sharing), recording: !!(mine && mine.recording) && (!me || s.capture.working), last: mine ? mine.last_us : null, start: mine ? mine.start_us - (mine.offset_us || 0) : null };
   });
 }
 

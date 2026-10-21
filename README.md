@@ -48,7 +48,7 @@ Data lives in `%LOCALAPPDATA%\dev.ez-hanseikai.app`; File > Open data folder ope
 ## Security
 
 - Only the teammates you connect to receive your recording, game sound, notes and name. Anything visible on your main screen, such as chats or notifications, is recorded too.
-- Your ID is the public half of a key made on first start. Connections are encrypted and accepted only from room members. An invite code works once; anyone who joins can invite others, so share it only with your team.
+- Your ID is the public half of a key made on first start. Connections are encrypted and accepted only from room members. When two members reach each other only through a relay server, only voice, notes and logs go that way and the picture waits for a direct connection, so until then a member reachable only through a relay keeps the only copy of their picture. Settings > General lists relay servers to try before the public ones; the one in use is published with your ID. An invite code works once; anyone who joins can invite others, so share it only with your team.
 - The local API (Settings > API) is off by default, listens on 127.0.0.1 only unless you choose Other devices, and needs a token, and then does what the window does: see [docs/api.md](docs/api.md).
 - With the Screen button off, nothing of your screen is sent; what was already recorded still reaches the room. The upload limit (Settings > Capture) caps your upload. The app asks time.cloudflare.com for the time at start and every hour and sends nothing else there. Help > Diagnostics > Where data goes shows each connection and what goes over it.
 

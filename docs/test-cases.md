@@ -27,7 +27,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - Pasting your own invite code is refused as not valid. `todo`
 - A member dialing someone who left the room logs that the other app closed it as not a member. `manual`
 - room: joining waits for an answer and ends the invite; the latest remove or admit wins; the latest room name wins on every clock; a rename made here is stamped one after the newest name known, even from a fast clock; invite tokens and room ids cannot leave the rooms folder; a peer can only name a room with an id this app makes; a member is present while connected or seen within a minute; colors are the same everywhere; colors stay when someone joins without a clash; a chosen colour replaces only its owner's colour and is the same everywhere; the newest profile in a member's own log gives their colour and avatar and a bad colour, an svg or an oversized image is skipped; a profile is written only when the look differs and never into a pending room; the newest room icon wins on every clock and an empty one clears it; settings drop a bad colour and avatar; an old debrief links through its first party record; ai del hides ai notes from every log but not human notes; board cards newest event wins and old team card reads. `unit`
-- a member row says one short state; an offline avatar is dimmed whatever it shows; Settings shows a picked image as a pressed tile; an avatar shows the image, a built-in shape or the initial, an unknown shape shows the initial, and a room without an icon shows its initial. `ui-test`
+- a member row says one short state, also for a member reached through a relay; an offline avatar is dimmed whatever it shows; Settings shows a picked image as a pressed tile; an avatar shows the image, a built-in shape or the initial, an unknown shape shows the initial, and a room without an icon shows its initial. `ui-test`
 
 ## Recording
 
@@ -58,8 +58,9 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - dragging a name label swaps two tiles. `e2e` (`library`)
 - Your own tile shows and moves right after recording ends and while it records. `todo`
 - net: a live reply names the recording of each series; history gets its share while live fills the limit. `unit`
-- record: a segment opens only beside its init; a live stream serves only segments of the recording it asked for. `unit`
-- receiving speed and the live edge; live tiles wait for the slowest member, never go back, stop waiting for one too far behind, mark it late once passed, and advance while nobody holds; the live delay shrinks slowly only while the slack is above the gap, and a tile with no start follows its own edge; a Live tile tells at most one problem, only while this PC records; live lists every room member in the saved order and then in join order, whatever their connection. `ui-test`
+- record: a segment opens only beside its init; a live stream serves only segments of the recording it asked for and ends once it is two segments behind; quality steps down only while every direct receiver fell behind twice recently. `unit`
+- History to one member waits while live goes to another, and in standby the quality drops one preset when live falls behind for every receiver. `manual`
+- receiving speed and the live edge; live tiles wait for the slowest member, never go back, stop waiting for one too far behind, mark it late once passed, and advance while nobody holds; the live delay shrinks slowly only while the slack is above the gap, and a tile with no start follows its own edge; a Live tile tells at most one problem, only while this PC records; live lists every room member in the saved order and then in join order, whatever their connection, without a picture from a member reached through a relay. `ui-test`
 
 ## Playback
 
@@ -72,7 +73,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - room: a part starts when its capture began, with the listing's size and whether its last piece is still open. `unit`
 - thumbs: the middle segment holds half of the length. `unit`
 - the player plans the segment holding the moment and the next ones, continues a grown tail, ends a part where its last piece ends, and holds every tile until all can play. `ui-test`
-- a focused player plays its own sound; otherwise the sound is the one chosen by a click, else the viewer's own, else the first player's; the view line names the first member who blocks the playback, in one sentence. `ui-test`
+- a focused player plays its own sound; otherwise the sound is the one chosen by a click, else the viewer's own, else the first player's; the view line names the first member who blocks the playback, in one sentence, and a holder reached through a relay does not count. `ui-test`
 - live speaking leaves the player alone and a played voice lights its tile: a live `speaking` message lights no player tile and every voice moves with its media through Web Audio (`e2e`, `library`); the ring following a real voice and fading after the hang (`manual`); a voice counts as talking while loud and for the hang after (`ui-test`).
 - clicking a tile picks whose app sound plays and clicks keep no focus: the clicked tile is heard and marked, the app sound button picks the next member, and after clicks on the volume and play buttons Space and the arrows still work (`e2e`, `library`).
 - repeated seeks in one direction add up and a change of direction starts over (`ui-test`); the seek bezel shows the sum, for example 15 s back after three quick left arrows, and releasing a seekbar drag shows the target time in the centre bezel (`manual`).
@@ -128,7 +129,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - The old repository address still reaches the update manifest and the installer download. `todo`
 - The installer run over GGI Hanseikai 0.19.4 leaves one app with its shortcuts, moves the data folder with the same ID (also when an empty new data folder exists), removes the old install folder when only ffmpeg.exe is left in it, and a 0.19.4 peer still connects. `manual`
 - data: one app holds a data folder and a leftover lock is noticed; the data folder moves to its new name once and never while the old app runs, and when both names exist the old folder stays in use and the new one is untouched, unless the new one holds no key.bin and no rooms, which is replaced by the old one; a reset keeps the logs, and the rooms only when asked; a restart removes nothing under recordings and never touches old files; old files are exactly the older shapes; counts come from the files present with their logged size. `unit`
-- main: settings from older versions fall back to defaults; rooms from older versions keep what still reads. `unit`
+- main: settings from older versions fall back to defaults and keep only https relay URLs; rooms from older versions keep what still reads. `unit`
 - ops: each update channel reads its own manifest. `unit`
 
 ## API
@@ -141,13 +142,16 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 ## Network and clocks
 
 - B's time answer runs 8.2 s ahead and C gets none, and the recording still lines up. `e2e` (`live`)
-- A, B and C record the same set, C joining late and reaching the others only through the relay. `e2e` (`recover`)
+- A, B and C record the same set, C joining late only through the relay: it sends and gets voice and logs but no picture, and catches up once it comes back on a direct path. `e2e` (`recover`)
+- a relay server from the settings is tried first and a dead one is skipped. `e2e` (`library`)
+- measuring the speed to a member gives up and down in Mbit/s, the round trip and the path. `e2e` (`library`)
 - B loses its network while everyone records, keeps recording its part, and everything reaches everyone once it is back. `e2e` (`recover`)
 - Members on different app versions in one room keep working and ignore what they do not understand. `todo`
 - clock: a request asks as a client and only a server answer to it is read; the offset is how far the server runs ahead in unix time; a clock that moved since the measurement keeps true time and asks again past a step; a dead server fails within one timeout. `unit`
 - ffmpeg: download retries back off up to a limit. `unit`
-- net: a fetched copy is kept only when it matches its record; only a run of failed connects is reported once; a ping reply is eight bytes and an empty one is no answer; a pull holds at least one whole record; own log is restored only when no member holds more; redials back off with jitter up to a limit; the connection dialed by the lower id is kept on both sides. `unit`
-- room: the relay shows by its host name; logs are shared only with members of that room. `unit`
+- net: a fetched copy is kept only when it matches its record; only a run of failed connects is reported once; a ping reply is eight bytes and an empty one is no answer; a pull holds at least one whole record; own log is restored only when no member holds more; redials back off with jitter up to a limit; the connection dialed by the lower id is kept on both sides; speed is bytes over time in Mbit/s with the path at the end. `unit`
+- room: logs are shared only with members of that room. `unit`
+- relay: custom relays come first, each alone, and the public relays last together. `unit`
 - the connection badge shows a relay when any member uses one; the diagnostics overview marks problems; each PC lists its hardware and its clock, this PC against true time and members against this PC; dropped frames are a warning; clock differences read in milliseconds or seconds; the clock summary warns about a big spread between members; where data goes says when a relay or a server is involved; the new Diagnostics texts have Japanese translations; a download shows its percent, speed and time left. `ui-test`
 
 ## Robustness

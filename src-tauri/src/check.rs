@@ -76,13 +76,13 @@ pub fn run(core: &Arc<Core>) -> Vec<Value> {
     let usable = core.codecs.lock().unwrap().clone();
     let (encoder, codec, _) = ffmpeg::pick(&usable);
     lines.push(line("info", "Recording with {encoder} ({codec})", json!({"encoder": encoder, "codec": codec})));
-    lines.push(if format!("{:?}", core.ep.home_relay_status().get()).contains("Connected") { line("ok", "A relay server is reachable", json!({})) } else { line("warn", "No relay connection yet", json!({})) });
-    let report = format!("{:?}", core.ep.net_report().get());
-    lines.push(if report.contains("udp_v4: true") { line("ok", "UDP works", json!({})) } else { line("warn", "UDP may be blocked; connections will use the relay and may be slower", json!({})) });
-    if report.contains("mapping_varies_by_dest_ipv4: Some(true)") {
-        lines.push(line("warn", "This network changes the address per destination, so a direct connection may fail and the relay will be used", json!({})));
+    lines.push(if crate::relay::home(core).is_some() { line("ok", "A relay server is reachable", json!({})) } else { line("warn", "No relay connection yet", json!({})) });
+    let report = core.ep.net_report().get();
+    lines.push(if report.as_ref().is_some_and(|r| r.udp_v4) { line("ok", "UDP works", json!({})) } else { line("warn", "UDP may be blocked", json!({})) });
+    if report.is_some_and(|r| r.mapping_varies_by_dest_ipv4 == Some(true)) {
+        lines.push(line("warn", "This network changes the address per destination", json!({})));
     }
-    lines.push(line("info", "Windows may ask once to allow the app through the firewall; click Allow. If it is declined, connections can still work through the relay", json!({})));
+    lines.push(line("info", "Windows may ask once to allow the app through the firewall; click Allow", json!({})));
     lines
 }
 

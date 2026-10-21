@@ -37,6 +37,9 @@ const PCM_FRAME_BYTES: u64 = 4;
 const PAD_AFTER_FRAMES: u64 = SAMPLE_RATE as u64 / 50;
 pub const QUALITIES: [(&str, u32); 3] = [("light", 960), ("standard", 1280), ("high", 1920)];
 const WIDE: (u32, u32) = (16, 9);
+const LIVE_LAG: u32 = 2;
+pub const THIN_WINDOW: Duration = Duration::from_secs(60);
+const STEP_EVERY: Duration = Duration::from_secs(60);
 const LEVELS_PER_SECOND: u64 = 30;
 const SPEAK_LEVEL: f32 = 0.02;
 const SPEAK_HANG: Duration = Duration::from_millis(300);
@@ -60,8 +63,12 @@ pub const MIX_KEYS: [&str; 2] = ["app", "mic"];
 const TEST_SIZE: (u32, u32) = (1280, 720);
 const TEST_TONES_HZ: [u32; 2] = [440, 880];
 
+fn level(id: &str) -> usize {
+    QUALITIES.iter().position(|q| q.0 == id).unwrap_or(1)
+}
+
 pub fn quality_width(id: &str) -> u32 {
-    QUALITIES.iter().find(|q| q.0 == id).unwrap_or(&QUALITIES[1]).1
+    QUALITIES[level(id)].1
 }
 
 pub fn scaled(size: (u32, u32), width: u32) -> (u32, u32) {
@@ -209,12 +216,15 @@ pub enum LiveStep {
     Wait,
     Serve,
     Stop,
+    Behind,
 }
 
 pub fn live_step(recent: &[(u32, Option<String>)], wanted: Option<&str>, n: u32) -> LiveStep {
     match recent.last() {
         Some((newest, _)) if n <= *newest => {
-            if recent.iter().any(|(k, set)| *k == n && set.as_deref() == wanted) {
+            if n + LIVE_LAG <= *newest {
+                LiveStep::Behind
+            } else if recent.iter().any(|(k, set)| *k == n && set.as_deref() == wanted) {
                 LiveStep::Serve
             } else {
                 LiveStep::Stop
@@ -229,6 +239,7 @@ pub struct Engine {
     pub mic: Mutex<String>,
     pub mix: Mutex<Value>,
     pub quality: Mutex<String>,
+    pub cap: Mutex<Option<(usize, Instant)>>,
     pub source_lost: AtomicBool,
     pub status: Mutex<String>,
     pub names: Mutex<Names>,
@@ -253,6 +264,7 @@ impl Engine {
             mic: Mutex::new(settings["mic"].as_str().unwrap_or_default().to_string()),
             mix: Mutex::new(starting_mix(&settings["mix"])),
             quality: Mutex::new(settings["quality"].as_str().unwrap_or(QUALITIES[1].0).to_string()),
+            cap: Mutex::new(None),
             source_lost: AtomicBool::new(false),
             status: Mutex::new(String::new()),
             names: Mutex::new(Names::default()),
@@ -274,6 +286,11 @@ impl Engine {
     pub fn gain(&self, track: usize) -> (f32, bool) {
         let mix = self.mix.lock().unwrap();
         (mix[MIX_KEYS[track]]["volume"].as_f64().unwrap_or(1.0) as f32, mix[MIX_KEYS[track]]["muted"].as_bool().unwrap_or(false))
+    }
+
+    pub fn quality_now(&self) -> String {
+        let chosen = level(&self.quality.lock().unwrap());
+        QUALITIES[self.cap.lock().unwrap().map_or(chosen, |(cap, _)| cap.min(chosen))].0.to_string()
     }
 
     pub fn live(&self) -> Option<Live> {
@@ -308,6 +325,27 @@ impl Engine {
         *self.status.lock().unwrap() = format!("Capture problem: {why}. Retrying in {} s.", delay.as_secs());
         tracing::warn!("capture problem: {why}");
     }
+}
+
+pub fn thin(receivers: &[[Option<Instant>; 2]], now: Instant) -> bool {
+    !receivers.is_empty() && receivers.iter().all(|drops| drops.iter().all(|d| d.is_some_and(|d| now.duration_since(d) < THIN_WINDOW)))
+}
+
+pub fn lower_if_thin(core: &Core) {
+    let now = Instant::now();
+    let receivers: Vec<[Option<Instant>; 2]> = core.peers.lock().unwrap().iter().filter(|p| p.picture() && p.served.is_some_and(|s| now.duration_since(s) < THIN_WINDOW)).map(|p| p.drops).collect();
+    if !thin(&receivers, now) || core.active_set.lock().unwrap().is_some() {
+        return;
+    }
+    let e = &core.engine;
+    let running = level(&e.quality_now());
+    let mut cap = e.cap.lock().unwrap();
+    if running == 0 || cap.is_some_and(|(_, at)| now.duration_since(at) < STEP_EVERY) {
+        return;
+    }
+    *cap = Some((running - 1, now));
+    drop(cap);
+    debug::event(core, now, format!("quality lowered to {}: live sending fell behind for every receiver", QUALITIES[running - 1].0));
 }
 
 pub fn starting_mix(saved: &Value) -> Value {
@@ -346,13 +384,13 @@ pub fn capture_json(core: &Core, live: Option<Value>) -> Value {
 fn quality_json(core: &Core) -> Value {
     let e = &core.engine;
     let id = e.quality.lock().unwrap().clone();
-    let sink = e.sink.lock().unwrap().clone().filter(|s| s.quality == id && !s.voice);
+    let sink = e.sink.lock().unwrap().clone().filter(|s| !s.voice);
     let (size, kbps, codec) = match sink {
         Some(s) => (Some(s.out), s.kbps, s.codec),
         None => {
             let chosen = ffmpeg::pick(&usable_codecs(core));
-            let canvas = *e.canvas.lock().unwrap();
-            (canvas.map(|c| scaled(c, quality_width(&id))), bitrate_kbps(quality_width(&id), chosen.2), chosen.1)
+            let width = quality_width(&e.quality_now());
+            (e.canvas.lock().unwrap().map(|c| scaled(c, width)), bitrate_kbps(width, chosen.2), chosen.1)
         }
     };
     json!({"id": id, "width": size.map(|s| s.0), "height": size.map(|s| s.1), "fps": FPS, "kbps": kbps, "codec": codec})
@@ -497,7 +535,7 @@ impl Sink {
             data::keep_capture(&dir);
         }
         let chosen = ffmpeg::pick(&usable_codecs(core));
-        let quality = core.engine.quality.lock().unwrap().clone();
+        let quality = core.engine.quality_now();
         let width = quality_width(&quality);
         let (out, kbps) = (scaled(size, width), bitrate_kbps(width, chosen.2));
         let listeners = [TcpListener::bind("127.0.0.1:0")?, TcpListener::bind("127.0.0.1:0")?];
@@ -868,7 +906,7 @@ pub(crate) fn current_sink(core: &Arc<Core>, canvas: Option<(u32, u32)>) -> Opti
     let stale = slot.as_ref().map(|sink| {
         let resized = !recording && canvas.is_some_and(|c| scaled(c, quality_width(&sink.quality)) != sink.out);
         let codec = ffmpeg::pick(&usable).0 != sink.encoder && (!recording || !usable.iter().any(|c| c == sink.codec));
-        let requality = !recording && *e.quality.lock().unwrap() != sink.quality;
+        let requality = !recording && e.quality_now() != sink.quality;
         let kind = want.as_ref().map(|(room, voice)| (room.as_str(), *voice)) != Some((sink.room.as_str(), sink.voice));
         let rebased = sink.start.get().is_some_and(|(at, at_us)| clock::stepped(*at_us, now_us(), at.elapsed()));
         (sink.dead.load(Ordering::Relaxed), !sink.voice && (resized || codec || requality) || kind || rebased)
@@ -1344,11 +1382,23 @@ mod tests {
         let set = |s: &str| Some(s.to_string());
         let recent = vec![(5, None), (6, None), (7, set("s1")), (8, set("s1"))];
         assert_eq!(live_step(&[], None, 1), Wait);
-        for (wanted, n, step) in [(None, 9, Wait), (None, 6, Serve), (None, 7, Stop), (Some("s1"), 7, Serve), (Some("s1"), 6, Stop), (Some("s2"), 8, Stop), (None, 4, Stop)] {
+        for (wanted, n, step) in [(None, 9, Wait), (None, 6, Behind), (None, 7, Stop), (Some("s1"), 7, Serve), (Some("s1"), 6, Behind), (Some("s2"), 8, Stop), (None, 4, Behind)] {
             assert_eq!(live_step(&recent, wanted, n), step);
         }
         let ended = vec![(7, set("s1")), (8, None), (9, None)];
         assert_eq!((live_step(&ended, Some("s1"), 8), live_step(&ended, Some("s1"), 10)), (Stop, Wait));
+    }
+
+    #[test]
+    fn quality_steps_down_only_while_every_direct_receiver_fell_behind_twice_recently() {
+        let now = Instant::now() + THIN_WINDOW * 2;
+        let (fresh, old) = (Some(now - Duration::from_secs(5)), Some(now - THIN_WINDOW));
+        assert!(!thin(&[], now));
+        assert!(thin(&[[fresh, fresh]], now));
+        assert!(!thin(&[[None, fresh]], now));
+        assert!(!thin(&[[old, fresh]], now));
+        assert!(thin(&[[fresh, fresh], [fresh, fresh]], now));
+        assert!(!thin(&[[fresh, fresh], [None, None]], now));
     }
 
     #[test]

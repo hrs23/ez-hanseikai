@@ -25,6 +25,7 @@ let roomTab = "members";
 let drawerFor = null;
 let checks = {};
 let checking = {};
+let speed = null;
 let settingsPane = "general";
 let storageInfo = null;
 let picked = new Set();
@@ -119,7 +120,7 @@ function renderRoom() {
 function memberOf(id) {
   const me = id === st.id;
   const p = me ? null : peerOf(id);
-  const status = memberStatus({ connected: me || !!(p && p.connected), sharing: me ? !!st.capture.source : !!(p && p.sharing), seen_us: p && p.seen_us }, new Date());
+  const status = memberStatus({ connected: me || !!(p && p.connected), sharing: me ? !!st.capture.source : !!(p && p.sharing), relayed: !!p && p.path === "relay", seen_us: p && p.seen_us }, new Date());
   return { p, status };
 }
 function renderMembers() {
@@ -161,16 +162,23 @@ function checkMember(id) {
   renderDrawer();
   invoke("check_peer", { id }).then((lines) => { checks[id] = Array.isArray(lines) ? lines : [{ level: "fail", text: t("No answer") }]; }).catch(() => { checks[id] = [{ level: "fail", text: t("No answer") }]; }).finally(() => { checking[id] = false; delete sigs.drawer; renderDrawer(); });
 }
+const speedLine = (r) => [t("Up {n} Mbit/s", { n: r.up_mbps.toFixed(1) }), t("Down {n} Mbit/s", { n: r.down_mbps.toFixed(1) }), `${r.rtt_ms} ms`, r.path === "relay" ? t("Relay") : t("Direct")].join(" · ");
+function measureSpeed(id) {
+  speed = { id, line: null };
+  delete sigs.drawer;
+  renderDrawer();
+  invoke("measure_speed", { id }).then(speedLine, () => t("No answer")).then((line) => { if (speed && speed.id === id) speed.line = line; delete sigs.drawer; renderDrawer(); });
+}
 function renderDrawer() {
   const box = $("drawer");
   const id = roomTab === "members" ? drawerFor : null;
   box.hidden = !id || !people().includes(id);
-  if (box.hidden) return;
+  if (box.hidden) { speed = null; return; }
   const me = id === st.id;
   const p = me ? null : peerOf(id);
   if (!checks[id] && !checking[id] && (me || (p && p.connected))) checkMember(id);
   const receivingFrom = st.sets.filter((s) => !s.live).flatMap((s) => s.players.filter((x) => x.owner === id && x.total && x.have < x.total).map((x) => ({ s, x })));
-  const sig = [id, p && [p.connected, p.path, p.rtt_ms, p.sent, p.received, p.offset_us, p.version], checks[id], checking[id], receivingFrom.map((r) => [r.s.id, r.x.have]), st.names, look(id), lang];
+  const sig = [id, p && [p.connected, p.path, p.rtt_ms, p.sent, p.received, p.offset_us, p.version], checks[id], checking[id], speed, receivingFrom.map((r) => [r.s.id, r.x.have]), st.names, look(id), lang];
   if (!changed("drawer", sig)) return;
   const kv = [];
   const add = (k, v) => kv.push(el("dt", { textContent: k }), el("dd", { textContent: v }));
@@ -183,8 +191,10 @@ function renderDrawer() {
     if (p.offset_us !== null && p.offset_us !== undefined) add(t("Clock offset"), `${p.offset_us >= 0 ? "+" : "−"}${(Math.abs(p.offset_us) / 1e6).toFixed(2)} s`);
   } else if (!me) path = el("div", { className: "pathbox off" }, el("b", { textContent: memberOf(id).status.text }));
   add(t("Version"), (me ? st.version : p && p.version) || "—");
+  const measuring = !!speed && speed.id === id && !speed.line;
+  if (speed && speed.id === id && speed.line) add(t("Speed"), speed.line);
   const lines = checks[id];
-  const checkBox = [el("div", { className: "h3", textContent: t("Checks") }), ...(lines ? lines.filter((l) => l.level !== "info").map((l) => el("div", { className: "line lv-" + l.level }, icon({ ok: "ok", warn: "alert", fail: "fail" }[l.level] || "info", "sm"), el("span", { textContent: t(l.text, l.args) }))) : checking[id] ? [el("div", { className: "line" }, icon("spinner", "sm spin"), t("Checking…"))] : []), el("button", { className: "sm", disabled: !!checking[id] || (!me && !(p && p.connected)), onclick: () => checkMember(id) }, icon("refresh", "sm"), t("Check again"))];
+  const checkBox = [el("div", { className: "h3", textContent: t("Checks") }), ...(lines ? lines.filter((l) => l.level !== "info").map((l) => el("div", { className: "line lv-" + l.level }, icon({ ok: "ok", warn: "alert", fail: "fail" }[l.level] || "info", "sm"), el("span", { textContent: t(l.text, l.args) }))) : checking[id] ? [el("div", { className: "line" }, icon("spinner", "sm spin"), t("Checking…"))] : []), el("div", { className: "row" }, el("button", { className: "sm", disabled: !!checking[id] || (!me && !(p && p.connected)), onclick: () => checkMember(id) }, icon("refresh", "sm"), t("Check again")), me ? "" : el("button", { className: "sm", disabled: measuring || !(p && p.connected), onclick: () => measureSpeed(id) }, icon("activity", "sm"), measuring ? t("Measuring…") : t("Measure speed")))];
   box.replaceChildren(
     el("div", { className: "dhead" }, avatar(id, "xl"), el("div", { className: "t" }, el("b", { textContent: nameOf(id) }), el("small", { className: "mono", textContent: `${id.slice(0, 4)}·${id.slice(4, 8)}·${id.slice(8, 12)}` })), iconButton("x", t("Close"), () => { drawerFor = null; delete sigs.roomtab; renderRoom(); })),
     path || "",
@@ -202,6 +212,7 @@ function openSettings(pane) {
   $("name").value = st.name;
   $("language").value = st.language;
   $("sessionsound").checked = sessionSound;
+  $("relays").value = st.relays.join("\n");
   $("hotkey").textContent = st.hotkey;
   $("hotkeyerr").hidden = true;
   $("myid").textContent = st.id.match(/.{4}/g).slice(0, 4).join("·");
@@ -464,6 +475,7 @@ $("exportid").onclick = () => dialog("identity", { export: true }).catch(warn);
 $("importid").onclick = () => dialog("identity", { export: false }).catch(warn);
 $("opendata").onclick = $("storeopen").onclick = () => dialog("open_data_folder").catch(fail);
 for (const b of $("quality").children) b.onclick = () => run("set_quality", { id: b.dataset.q });
+$("relays").onchange = () => run("set_relays", { urls: $("relays").value.split("\n") });
 $("limit").onchange = () => run("set_limit", { mbps: $("limit").value ? Number($("limit").value) : null });
 for (const b of $("channel").children) b.onclick = () => run("set_channel", { channel: b.dataset.c }, () => { refresh(); checkUpdate(false); });
 $("checkupdate").onclick = () => checkUpdate(true);

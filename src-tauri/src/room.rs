@@ -4,7 +4,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use iroh::endpoint::Connection;
 use iroh::EndpointId;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -1270,7 +1269,8 @@ pub fn progress(core: &Core, set: &Set, mine: &HashMap<String, u64>, others: &[&
 pub fn sets_json(core: &Core, room: &str, logs: &[Log], events: &[Value]) -> Vec<Value> {
     let me = core.me();
     let peers = others_have(core);
-    let online: Vec<&HashMap<String, u64>> = peers.iter().filter(|p| p.2).map(|p| &p.1).collect();
+    let online: Vec<HashMap<String, u64>> = core.peers.lock().unwrap().iter().filter(|p| p.conn.is_some()).map(|p| (p, p.picture())).map(|(p, picture)| p.have.iter().filter(|(k, _)| picture || !k.ends_with(&format!("/{}", SERIES[0]))).map(|(k, n)| (k.clone(), *n)).collect()).collect();
+    let online: Vec<&HashMap<String, u64>> = online.iter().collect();
     let reports: Vec<&HashMap<String, u64>> = peers.iter().map(|p| &p.1).collect();
     let all = sets(core, room, logs);
     let mine = data::have_counts(core, room, &all);
@@ -1302,25 +1302,9 @@ pub fn sets_json(core: &Core, room: &str, logs: &[Log], events: &[Value]) -> Vec
     out
 }
 
-pub fn path_kind(conn: &Connection) -> (&'static str, u64, Option<String>) {
-    for path in conn.paths().iter() {
-        if path.is_selected() {
-            let relay = (!path.is_ip()).then(|| relay_host(&format!("{:?}", path.remote_addr()))).flatten();
-            return (if path.is_ip() { "direct" } else { "relay" }, path.rtt().as_millis() as u64, relay);
-        }
-    }
-    ("none", 0, None)
-}
-
-pub fn relay_host(text: &str) -> Option<String> {
-    let rest = &text[text.find("://")? + 3..];
-    let host: String = rest.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '-').collect();
-    (!host.is_empty()).then_some(host)
-}
-
 fn peer_json(p: &Peer) -> Value {
     let alive = p.alive();
-    let kind = alive.map(path_kind);
+    let kind = alive.map(crate::relay::path_kind);
     let (path, rtt, relay) = (kind.as_ref().map(|k| k.0), kind.as_ref().map(|k| k.1), kind.and_then(|k| k.2));
     let stats = alive.map(|c| c.stats());
     let other_version = p.info.as_ref().is_some_and(|(_, proto)| *proto != PROTOCOL);
@@ -1422,6 +1406,7 @@ pub fn state_json(core: &Core) -> Value {
         "avatars": avatars,
         "invites": core.invites.lock().unwrap().len(),
         "limit_mbps": *core.limit_mbps.lock().unwrap(),
+        "relays": core.relays.lock().unwrap().iter().map(|u| u.to_string()).collect::<Vec<_>>(),
         "recovery": core.recovery.lock().unwrap().clone(),
         "notice": core.notice.lock().unwrap().clone(),
         "disk": disk,
@@ -1659,12 +1644,6 @@ pub mod tests {
         assert!(auto_receive(false, false, Some(true)));
         assert!(!auto_receive(true, true, Some(false)));
         assert!(!auto_receive(false, true, Some(false)));
-    }
-
-    #[test]
-    fn the_relay_shows_by_its_host_name() {
-        assert_eq!(relay_host("Relay(RelayUrl(\"https://use1-1.relay.n0.example/\"))").as_deref(), Some("use1-1.relay.n0.example"));
-        assert_eq!(relay_host("Ip(192.0.2.1:5000)"), None);
     }
 
     #[test]
