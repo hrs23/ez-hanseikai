@@ -435,7 +435,7 @@ fn event_action(core: &Arc<Core>, args: Value) -> Result<Value, String> {
         "edit" => "event_edit",
         "delete" => "event_del",
         "restore" => "event_restore",
-        _ => return Ok(Value::Null),
+        other => return Err(format!("unknown kind {other}")),
     };
     let text = clean_note(&arg::<String>(&args, "text")?, BOARD_MAX);
     core.append_log(&core.active_room_id(), &json!({"k": kind, "id": arg::<i64>(&args, "id")?, "t_us": now_us(), "text": text, "tags": room::tags(&text)}));
@@ -589,6 +589,9 @@ mod tests {
             }
             for name in names(r#"\bdialog\("([a-z_]+)""#, text) {
                 assert!(WINDOW_COMMANDS.contains(&name.as_str()) && find(&name).is_none(), "{file} opens {name}, which is not a window command");
+            }
+            for name in names(r#"\bnew Set\(\[([^\]]*)\]"#, text).iter().flat_map(|list| names(r#""([a-z_]+)""#, list)) {
+                assert!(find(&name).is_some(), "{file} lists {name}, which is not an operation");
             }
             assert!(file == "util.js" || !text.contains("__TAURI__.core"), "{file} reaches the backend around invoke");
         }

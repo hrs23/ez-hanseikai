@@ -1209,7 +1209,7 @@ async function scenario(ctx) {
     check(opened.status === 200 && opened.json === null, `enter_room: ${opened.status} ${brief(opened.text)}`);
     check((await operation("enter_room", { id: "nope" })).status === 400 && (await operation("enter_room", {})).json.error === "id is missing or not valid.", "enter_room takes a room that is not in the list");
     check((await operation("nothing", {})).status === 404 && (await api(a, "GET", "/v1/ops/state", { token })).status === 405 && (await operation("state", "[]")).status === 400, "an operation takes any name, method or body");
-    check((await operation("state")).json.id === a.id, "an operation without a body is refused");
+    check((await operation("state")).json.id === a.id, "an operation without a body is not run as {}");
     const board = "# Through the API\n**Goal: hold the high ground**";
     const put = await api(a, "PUT", `${room}/board`, { token, body: { text: board } });
     check(put.status === 200 && put.json.text === board, `the game plan: ${put.status} ${brief(put.text)}`);

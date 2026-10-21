@@ -1,5 +1,5 @@
 const { invoke: tauriInvoke, convertFileSrc } = window.__TAURI__.core;
-const long = new Set(["import_recording", "export_folder", "prepare_plugin", "check_peer", "check_update"]);
+const long = new Set(["import_recording", "export_folder", "prepare_plugin", "check_peer", "check_update", "debug_report"]);
 const queue = {};
 const send = (name, args) => tauriInvoke("call", { name, args: args || {} });
 const invoke = (name, args) => long.has(name) ? send(name, args) : (queue[name] = (queue[name] || Promise.resolve()).catch(() => {}).then(() => send(name, args)));
