@@ -944,8 +944,8 @@ async function recover(ctx) {
     const before = { a: logged(a), b: logged(b) };
     marker(b, "offline", true);
     await allSee([a, c], "B gone", within(DIAL_S), (st) => !connected(st, [b.id]));
-    await waitFor("B records on while cut off", within(OFFLINE_S + SEGMENT_S * 2), () => logged(b) >= before.b + OFFLINE_S / SEGMENT_S);
-    check((await state(b)).active_set?.id === ctx.set && logged(a) >= before.a + OFFLINE_S / SEGMENT_S, "B or A stopped recording while B was cut off");
+    await waitFor("A and B record on while B is cut off", within(OFFLINE_S + SEGMENT_S * 2), () => logged(a) >= before.a + OFFLINE_S / SEGMENT_S && logged(b) >= before.b + OFFLINE_S / SEGMENT_S);
+    check((await state(a)).active_set?.id === ctx.set && (await state(b)).active_set?.id === ctx.set, "B or A stopped recording while B was cut off");
     marker(b, "offline", false);
     await meshed(all);
     const limits = Object.fromEntries(all.map((x) => [x.key, logged(x)]));
