@@ -288,7 +288,7 @@ function goLive() {
 }
 function tickLive() {
   const at = performance.now();
-  const on = !holding() && (playSet() ? followingLive() : Object.keys(rec.tiles).length > 0);
+  const on = playSet() ? !holding() && followingLive() : Object.keys(rec.tiles).length > 0;
   if (!on) {
     Object.assign(liveClock, { pos: null, rate: 1, held: false, late: [], at });
     if (clock.playing && holding()) setClock(false, nowM());

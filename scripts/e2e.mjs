@@ -746,7 +746,7 @@ async function live(ctx) {
 
   await step("connections stay up while live tiles stay in step, a member stalls, and the others stop waiting for one too far behind", async () => {
     const inStep = async (view) => {
-      for (const x of [a, b, c]) await evaluate(x, `${view}; true`);
+      for (const x of [a, b, c]) await evaluate(x, `${view}; if (playSet()) { act("play", nowM()); goLive(); } true`);
       await waitFor(`A's live tiles in step after ${view}`, within(SEGMENT_S * 3), async () => { const x = await evaluate(a, LIVE_PROBE); check(x.pos !== null && x.at.length === 3 && Math.max(...x.at) - Math.min(...x.at) < 1, brief(x)); return true; });
     };
     const all = [a, b, c];
@@ -768,7 +768,7 @@ async function live(ctx) {
     const fast = await watchLive(a, b, SEGMENT_S * 3, (x) => x.rate === LIVE_CATCH_UP);
     check(fast.rate === LIVE_CATCH_UP, `A never caught up at ${LIVE_CATCH_UP}: ${brief(fast)}`);
     await waitFor("A plays at 1 again once the delay is small", within(CATCH_UP_S), async () => (await evaluate(a, LIVE_PROBE)).rate === 1);
-    await evaluate(a, `openNow(); true`);
+    await evaluate(a, `openNow(); act("play", nowM()); goLive(); true`);
     await invoke(b, "set_limit", { mbps: TRICKLE_MBPS });
     const gone = await waitFor("A stops waiting for B and marks its tile", within(LIVE_LAG_MAX_S + SEGMENT_S * 2), async () => { const x = await evaluate(a, LIVE_PROBE); return x.late.join() === b.id && x.pos > x.avail[b.id] && x; });
     await sleep(1000);
