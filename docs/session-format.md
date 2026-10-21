@@ -45,7 +45,7 @@ rooms/<room>/
   thumbs/<set>.jpg
 ```
 
-- A series is fMP4: `init.mp4` and numbered fragments of four seconds (`000001.m4s`, `000002.m4s`, ...). `init.mp4` followed by the fragments 1..n, concatenated in order, is a playable file. Codecs are H.264, HEVC or AV1, and AAC.
+- A series is fMP4: `init.mp4` and numbered segments (`000001.m4s`, `000002.m4s`, ...) of four one-second fragments each. `init.mp4` followed by the segments 1..n, concatenated in order, is a playable file. Codecs are H.264, HEVC or AV1, and AAC.
 - A name ending in `.part` is being written or received; a program ignores it.
 - `standby/` holds live-only segments that belong to no recording, and is emptied at every start.
 - `pending.bin` is a log of the member's own records that wait until the member's own log is restored from the room; it has the log format.
@@ -62,7 +62,7 @@ A record is `u32 LE length`, `u32 LE CRC32 (IEEE) of the body`, then the body: a
 
 ## Records
 
-Every kind the app writes. Fields marked `?` are optional.
+Every kind the app writes. The body's field `k` holds the kind, for example {`k`: "rec", `room`: ...}. Fields marked `?` are optional.
 
 | Kind | Fields | Meaning |
 | --- | --- | --- |
@@ -79,7 +79,7 @@ Every kind the app writes. Fields marked `?` are optional.
 | `admit` | `member`, `t_us` | The member is let in (again). |
 | `room_name` | `name`, `t_us` | The room is renamed. |
 | `offset` | `peer` (short ID), `t_us`, `rtt_us`, `offset_us` | The writer measured the peer's clock: `offset_us` is theirs minus the writer's. |
-| `layout` | `set`, `t_us`, `layout` | The writer's layout for the set. |
+| `layout` | `set`, `t_us`, `layout` | The writer's layout for the set; `set` is also inside `layout`. A `layout` record without `set`, written while watching, belongs to no set's default layout and is ignored. |
 | `plugin` | `plugin`, `on`, `version`, `settings`, `runner?`, `t_us` | The room's choice for a plugin. |
 | `job` | `state`, `job`, `run`, `t_us`, `plugin?`, `version?`, `settings?`, `file?`, `error?`, `events?`, `tags?`, `note?` | A step of an analysis job: `state` is `claim`, `yield`, `stop`, `fail`, `done` or `retry`. |
 | `worker` | `plugin`, `on`, `ready`, `t_us` | Whether the writer processes the plugin and has its files. |
@@ -102,12 +102,12 @@ A tool can add a recording that was made by other software, such as the views of
 1. Close the app; a tool writes only while it can open `app.lock` for writing.
 2. Make a new Ed25519 key per view and throw the secret away. Its public key, in iroh's text form, is the view's member ID.
 3. Write `rooms/<room>/logs/<view id>.bin` with these records in order:
-   - `rec` {`room`, `set`, `start_us`, `by`: a display name, `voice`: false, `imported`: your own member ID, `view`: the view's name, `title?`}
-   - `cap` {`room`, `capture`, `start_us`, `init`: {`v` or `m`: {`size`, `sha256`}}, `source_kind`: "import", `width`, `height`, `kbps`, `codec`, `version`}
-   - one `seg` per segment
-   - `rec_end` {`set`, `room`, `t_us`, `stop`: false}
+   - `rec` {`k`: "rec", `room`, `set`, `start_us`, `by`: a display name, `voice`: false, `imported`: your own member ID, `view`: the view's name, `title?`}
+   - `cap` {`k`: "cap", `room`, `capture`, `start_us`, `init`: {`v` or `m`: {`size`, `sha256`}}, `source_kind`: "import", `width`, `height`, `kbps`, `codec`, `version`}
+   - one `seg` (with `k`: "seg") per segment
+   - `rec_end` {`k`: "rec_end", `set`, `room`, `t_us`, `stop`: false}
 4. Put the media at `recordings/<set>/<view id>/<capture>/{v,m}/init.mp4` and `NNNNNN.m4s`. The sizes and SHA-256 must match the records.
-5. Append `remove` {`member`: the view ID, `t_us`} to your own log, or to `pending.bin` when that file exists (your own log is then being restored, and the app appends to `pending.bin`; writing the log itself would fork it). In your entry in `rooms.json`, add the view ID to `removed` and its name to `names`.
+5. Append `remove` {`k`: "remove", `member`: the view ID, `t_us`} to your own log, or to `pending.bin` when that file exists (your own log is then being restored, and the app appends to `pending.bin`; writing the log itself would fork it). In your entry in `rooms.json`, add the view ID to `removed` and its name to `names`.
 
 Members get the view like any other: a removed member's log is pulled and shared, nobody dials it, and it is not listed as a member. The reader takes the view's name, title and importer from its first `rec`.
 
