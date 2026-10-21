@@ -646,7 +646,7 @@ mod tests {
             messages.extend(names(r#""t":\s*"([a-z_]+)""#, code));
         }
         let listed = |file: &str, heading: &str| -> BTreeSet<String> {
-            let doc = std::fs::read_to_string(root.join("../docs").join(file)).unwrap();
+            let doc = std::fs::read_to_string(root.join("../docs").join(file)).unwrap().replace("\r\n", "\n");
             names(r"(?m)^\| `([a-z_]+)` \|", section(&doc, heading)).into_iter().collect()
         };
         assert_eq!(listed("session-format.md", "Records"), kinds, "docs/session-format.md Records does not match the record kinds the code writes");

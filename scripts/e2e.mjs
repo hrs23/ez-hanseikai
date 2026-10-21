@@ -789,6 +789,7 @@ async function live(ctx) {
   });
 
   await step("removing C for the whole room while a recording runs stops it fetching and leaves the others recording", async () => {
+    for (const x of [a, b, c]) await invoke(x, "party_on", { on: false });
     await invoke(a, "start_recording");
     const running = (await state(a)).active_set.id;
     await allSee([b, c], "recording the new set", within(LOG_SYNC_S * 2), (st) => st.active_set?.id === running);
@@ -1492,6 +1493,7 @@ async function library(ctx) {
     marker(b, "offline", true);
     marker(c, "offline", true);
     await allSee([a], "A alone", within(DIAL_S), (st) => !connected(st, [b.id]) && !connected(st, [c.id]));
+    for (const x of all) await invoke(x, "party_on", { on: false });
     await invoke(a, "start_recording");
     const bare = (await state(a)).active_set.id;
     await waitFor("A logs two segments", within(SEGMENT_S * 4), () => segsOf(logOf(a, ctx.room, a.id), bare, "v").length >= 2);
