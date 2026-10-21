@@ -900,7 +900,7 @@ async function live(ctx) {
     await invoke(b, "remove_room", { id: other });
     await invoke(b, "close_room", { id: ctx.room });
     await waitFor("B lists the room", within(UI_REFRESH_S * 5), () => evaluate(b, `!$("start").hidden && $("roomlist").children.length > 0`));
-    await pressAndConfirm(b, `[...$("roomlist").children].find((r) => r.firstChild.textContent === st.rooms.find((x) => x.id === ${JSON.stringify(ctx.room)}).name).querySelector(".more").click(); [...$("menu").querySelectorAll("button")].find((x) => x.textContent === t("Delete…")).click()`);
+    await pressAndConfirm(b, `[...$("roomlist").children].find((r) => r.querySelector("b").textContent === st.rooms.find((x) => x.id === ${JSON.stringify(ctx.room)}).name).querySelector(".more").click(); [...$("menu").querySelectorAll("button")].find((x) => x.textContent === t("Delete…")).click()`);
     await waitFor("B no longer lists the room", within(UI_REFRESH_S * 5), async () => { const st = await state(b); return !st.room && !st.rooms.some((r) => r.id === ctx.room); });
     await waitFor("B removes the folder of the room it left", within(UI_REFRESH_S * 5), () => !fs.existsSync(roomDir(b, ctx.room)));
   });
