@@ -594,7 +594,7 @@ function logTail(app) {
   return fs.readFileSync(log, "utf8").trim().split("\n").slice(-LOG_TAIL_LINES).map((l) => l.slice(0, LOG_LINE_CHARS)).join("\n");
 }
 
-async function record(ctx) {
+async function live(ctx) {
   let a, b, c;
   await step("start A and B", async () => {
     a = await launch("a");
@@ -748,6 +748,34 @@ async function record(ctx) {
     await allSee(others, "the deletion", within(LOG_SYNC_S * 2), (st) => !seen(st));
   });
 
+}
+
+async function gather(ctx) {
+  const a = await launch("a");
+  const b = await launch("b");
+  ctx.room = await invoke(a, "create_room", { name: "Practice" });
+  await asks(a, b, a);
+  await invoke(a, "answer_ask", { id: b.id, approve: true });
+  await meshed([a, b], ctx.room);
+  await allSee([a, b], "encoding its test source", within(COLD_START_S), (st) => st.capture.live);
+  await invoke(a, "start_recording");
+  ctx.set = (await state(a)).active_set.id;
+  await waitFor(`A has logged ${SEGMENTS_BEFORE_LATE_JOIN} segments`, within(SEGMENT_S * (SEGMENTS_BEFORE_LATE_JOIN + 1)), () => segsOf(logOf(a, ctx.room, a.id), ctx.set, "v").length >= SEGMENTS_BEFORE_LATE_JOIN);
+  const c = await launch("c");
+  await asks(a, c, b);
+  await invoke(a, "answer_ask", { id: c.id, approve: true });
+  await meshed([a, b, c], ctx.room);
+  await waitFor("C logs a picture segment of the running set", within(COLD_START_S), () => segsOf(logOf(c, ctx.room, c.id), ctx.set, "v").length > 0);
+  return [a, b, c];
+}
+
+async function recover(ctx) {
+  let a, b, c;
+  await step("A, B and C record the same set, C joining late", async () => {
+    [a, b, c] = await gather(ctx);
+    await allSee([b, c], "A's live picture available", within(COLD_START_S), (st) => st.peers.find((p) => p.id === a.id)?.live);
+  });
+
   await step("B crashes mid-recording and recovers its open segment", async () => {
     const capture = segsOf(logOf(b, ctx.room, b.id), ctx.set, "v").at(-1).capture;
     const dir = path.join(roomDir(b, ctx.room), "recordings", ctx.set, b.id, capture);
@@ -880,23 +908,9 @@ async function record(ctx) {
 async function library(ctx) {
   let a, b, c;
   await step("A, B and C record a short set, C joining late", async () => {
-    [a, b] = await Promise.all([launch("a"), launch("b")]);
-    ctx.room = await invoke(a, "create_room", { name: "Practice" });
-    await asks(a, b, a);
-    await invoke(a, "answer_ask", { id: b.id, approve: true });
-    await meshed([a, b], ctx.room);
-    await allSee([a, b], "encoding its test source", within(COLD_START_S), (st) => st.capture.live);
-    await invoke(a, "start_recording");
-    ctx.set = (await state(a)).active_set.id;
-    const logged = () => segsOf(logOf(a, ctx.room, a.id), ctx.set, "v").length;
-    await waitFor(`A has logged ${SEGMENTS_BEFORE_LATE_JOIN} segments`, within(SEGMENT_S * (SEGMENTS_BEFORE_LATE_JOIN + 1)), () => logged() >= SEGMENTS_BEFORE_LATE_JOIN);
-    c = await launch("c");
-    await asks(a, c, b);
-    await invoke(a, "answer_ask", { id: c.id, approve: true });
+    [a, b, c] = await gather(ctx);
     const all = [a, b, c];
-    await meshed(all, ctx.room);
-    await waitFor("C logs a picture segment of the running set", within(COLD_START_S), () => segsOf(logOf(c, ctx.room, c.id), ctx.set, "v").length > 0);
-    await waitFor(`A has logged ${SHORT_SET_SEGMENTS} segments`, within(SEGMENT_S * SHORT_SET_SEGMENTS), () => logged() >= SHORT_SET_SEGMENTS);
+    await waitFor(`A has logged ${SHORT_SET_SEGMENTS} segments`, within(SEGMENT_S * SHORT_SET_SEGMENTS), () => segsOf(logOf(a, ctx.room, a.id), ctx.set, "v").length >= SHORT_SET_SEGMENTS);
     await invoke(a, "stop_recording");
     await allSee(all, "the set ended and everyone has it", within((SEGMENT_S + SYNC_ROUND_S) * 3), (st) => !st.active_set && setOf(st, ctx.set) && !setOf(st, ctx.set).live && heldByAll(st, ctx.set, all));
     const ended = setOf(await state(a), ctx.set);
@@ -1643,11 +1657,11 @@ async function main() {
   const started = Date.now();
   let failed = null;
   try {
-    for (const part of (process.env.E2E_PART || "record,library").split(",")) {
+    for (const part of (process.env.E2E_PART || "live,recover,library").split(",")) {
       for (const app of Object.values(apps)) kill(app);
       for (const key of Object.keys(apps)) delete apps[key];
       fs.rmSync(path.join(OUT, "apps"), { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
-      await { record, library }[part](ctx);
+      await { live, recover, library }[part](ctx);
     }
   } catch (e) {
     failed = e;
