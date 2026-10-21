@@ -1016,7 +1016,7 @@ async function recover(ctx) {
     await allSee([a, b], "the set shown ended at once, not before C's last segment", within(LOG_SYNC_S * 2), (st, app) => { const set = setOf(st, ctx.set); return !st.active_set && set && !set.live && set.end_us >= lastOf(app) - set.players.find((p) => p.owner === c.id).offset_us; });
     const ended = setOf(await state(a), ctx.set);
     ctx.durationS = (ended.end_us - ended.start_us) / 1e6;
-    start("c");
+    start("c", {});
     await attach(c);
     await share(c);
     await waitFor("C ends its part on restart", within(COLD_START_S), () => lastJoin(c, ctx.room, ctx.set)?.k === "rec_end");
