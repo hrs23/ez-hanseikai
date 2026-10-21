@@ -186,7 +186,7 @@ function sessionRow(s) {
   else l2 = el("div", { className: "l2" }, el("span", { textContent: setLength(s) }), s.imported_by ? importedPill(s) : null, state ? el("span", { className: "r " + (state.cls || ""), title: state.title || "" }, icon(state.icon, "sm"), state.text) : null);
   const row = el("div", { className: "srow" + (on ? " on" : "") + (here ? "" : " gone"), role: "option", tabIndex: 0, ariaSelected: on },
     thumbBox(s, s.players.map((p) => p.owner), "xs", THUMB_FACES, false),
-    el("div", { className: "txt" }, el("div", { className: "l1" }, el("b", { textContent: sessionName(s.id) }), watching ? el("span", { className: "wpn", title: t("{n} watching", { n: watching }) }, icon("users", "sm"), String(watching)) : null), l2, whereLine(s)));
+    el("div", { className: "txt" }, el("div", { className: "l1" }, el("b", { textContent: sessionName(s.id) }), watching ? el("span", { className: "wpn", title: t("{n} watching", { n: watching }) }, icon("users", "sm"), String(watching)) : null, partyFrom === s.id && watching ? el("button", { className: "sm", textContent: t("Back"), onclick: (e) => { e.stopPropagation(); openSession(s.id); } }) : null), l2, whereLine(s)));
   row.onclick = () => { if (onThisPc(s)) openSession(s.id); };
   row.onkeydown = (e) => { if (e.key === "Enter" && onThisPc(s)) openSession(s.id); };
   row.oncontextmenu = (e) => { e.preventDefault(); sessionMenu(s.id, e); };
@@ -195,7 +195,7 @@ function sessionRow(s) {
 function renderSessions() {
   if (!inRoom()) return;
   const rows = recordingRows();
-  const sig = [rows.map(rowSignature), page, nowView, selected, st.active_set, st.peers.map((p) => p.connected), lang, st.colors, st.names, dayOf(new Date())];
+  const sig = [rows.map(rowSignature), page, nowView, selected, partyFrom, st.active_set, st.peers.map((p) => p.connected), lang, st.colors, st.names, dayOf(new Date())];
   if (!changed("sessions", sig)) return;
   $("sessions").replaceChildren(...(st.active_set ? [liveRow()] : []), ...rows.map((r) => sessionRow(r.s)), rows.length || st.active_set ? "" : el("div", { className: "none", textContent: t("No recordings yet") }));
 }

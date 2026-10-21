@@ -298,7 +298,7 @@ pub trait Backend {
     fn logs(&self, room: &str) -> Vec<Log>;
     fn plugins(&self, room: &str) -> Vec<Value>;
     fn analysis(&self, room: &str) -> HashMap<String, Vec<Value>>;
-    fn voice(&self, room: &str, set: &str, member: &str, capture: &str) -> Option<Vec<u8>>;
+    fn voice(&self, room: &str, set: &str, member: &str) -> Option<Vec<u8>>;
     fn add(&self, room: &str, record: Value) -> Result<(), String>;
     fn call(&self, name: &str, args: Value) -> Option<Result<Value, String>>;
     fn diagnostics(&self, everyone: bool) -> Result<String, String>;
@@ -380,20 +380,6 @@ fn recording_json(l: &Loaded, set: &Set, extras: &Extras, now_us: i64) -> Value 
         out["watch"] = party::watch_json(extras.watch.get(&set.id).map(Vec::as_slice).unwrap_or(&[]));
     }
     out
-}
-
-fn voice_reply(be: &dyn Backend, room: &str, set: &Set, member: &str, asked: Option<&str>) -> Response {
-    let captures: Vec<&str> = set.files.iter().find(|f| f.owner == member).map_or_else(Vec::new, |f| f.captures().into_iter().filter(|c| f.segs.iter().any(|s| s.capture == *c && s.series == room::SERIES[1])).collect());
-    let capture = match (asked, captures.as_slice()) {
-        (Some(c), all) if all.contains(&c) => c,
-        (None, [only]) => only,
-        (None, [_, ..]) => return error(409, &format!("This voice has several captures ({}): add one to the path.", captures.join(", "))),
-        _ => return error(404, "No voice of that member in this recording."),
-    };
-    match be.voice(room, &set.id, member, capture) {
-        Some(body) => Response { status: 200, kind: "audio/mp4", body },
-        None => error(404, "No voice of that member in this recording."),
-    }
 }
 
 fn find_set(l: &Loaded, id: &str) -> Option<Set> {
@@ -613,7 +599,7 @@ fn route(req: &Request, be: &dyn Backend, parts: &[&str]) -> Response {
     let allowed: &[&str] = match parts {
         ["v1", "ops", _] => &["POST"],
         ["v1"] | ["v1", "status"] | ["v1", "diagnostics"] | ["v1", "rooms"] | ["v1", "rooms", _, "recordings"] | ["v1", "rooms", _, "recordings", _] => &["GET"],
-        ["v1", "rooms", _, "recordings", _, "chapters" | "transcript"] | ["v1", "rooms", _, "recordings", _, "voices", _] | ["v1", "rooms", _, "recordings", _, "voices", _, _] | ["v1", "rooms", _, "plugins"] => &["GET"],
+        ["v1", "rooms", _, "recordings", _, "chapters" | "transcript"] | ["v1", "rooms", _, "recordings", _, "voices", _] | ["v1", "rooms", _, "plugins"] => &["GET"],
         ["v1", "rooms", _, "recordings", _, "events"] => &["GET", "POST"],
         ["v1", "rooms", _, "board"] => &["GET", "PUT"],
         _ => return error(404, "No such endpoint."),
@@ -648,7 +634,10 @@ fn route(req: &Request, be: &dyn Backend, parts: &[&str]) -> Response {
             let Some(set) = find_set(&l, id) else { return error(404, "No such recording.") };
             match tail {
                 [] => reply(200, recording_json(&l, &set, &Extras::new(be, &l), be.now_us())),
-                ["voices", member, capture @ ..] => voice_reply(be, room, &set, member, capture.first().copied()),
+                ["voices", member] => match be.voice(room, &set.id, member) {
+                    Some(body) => Response { status: 200, kind: "audio/mp4", body },
+                    None => error(404, "No voice of that member in this recording."),
+                },
                 ["events"] if req.method == "POST" => add_event(be, &l, &set, req),
                 ["events"] => events_reply(&l, &set, req),
                 ["chapters"] => chapters_reply(&l, &set, be.now_us()),
@@ -754,12 +743,18 @@ impl Backend for Live {
         crate::jobs::analysis_by_set(core, room, &logs, &sets, &crate::data::have_counts(core, room, &sets))
     }
 
-    fn voice(&self, room: &str, set: &str, member: &str, capture: &str) -> Option<Vec<u8>> {
+    fn voice(&self, room: &str, set: &str, member: &str) -> Option<Vec<u8>> {
         let core = &self.0;
         let found = room::sets(core, room, &room::logs(core, room)).into_iter().find(|s| s.id == set)?;
         let file = found.files.iter().find(|f| f.owner == member)?;
-        let pieces = crate::stream::set_pieces(core, room, file, capture, room::SERIES[1]);
-        crate::stream::read(core, &pieces, 0, crate::stream::size(&pieces)).ok().filter(|bytes| !bytes.is_empty())
+        let mut out = Vec::new();
+        for capture in file.captures() {
+            let pieces = crate::stream::set_pieces(core, room, file, capture, room::SERIES[1]);
+            if pieces.len() > 1 {
+                out.extend(crate::stream::read(core, &pieces, 0, crate::stream::size(&pieces)).ok()?);
+            }
+        }
+        (!out.is_empty()).then_some(out)
     }
 
     fn add(&self, room: &str, record: Value) -> Result<(), String> {
@@ -929,7 +924,7 @@ mod tests {
         fn analysis(&self, _: &str) -> HashMap<String, Vec<Value>> {
             HashMap::from([("s1".to_string(), vec![json!({"plugin": "transcribe", "state": "left", "reason": "waiting", "waiting_for": "b"})])])
         }
-        fn voice(&self, _: &str, set: &str, member: &str, _: &str) -> Option<Vec<u8>> {
+        fn voice(&self, _: &str, set: &str, member: &str) -> Option<Vec<u8>> {
             (set == "s2" && member == "b").then(|| b"\0\0\0\x18ftypmp42".to_vec())
         }
         fn add(&self, room: &str, record: Value) -> Result<(), String> {
@@ -1311,12 +1306,10 @@ mod tests {
         assert_eq!(s2["watch"][0]["set"], "s1");
         let (_, s1) = get(&fake, "/v1/rooms/r1/recordings/s1");
         assert!(s1.get("of").is_none() && s1.get("watch").is_none());
-        assert_eq!(get(&fake, "/v1/rooms/r1/recordings/s2/voices/b").0, 409);
-        let text = format!("GET /v1/rooms/r1/recordings/s2/voices/b/222 HTTP/1.1\r\nHost: 127.0.0.1:{PORT_FOR_TESTS}\r\nAuthorization: Bearer {TOKEN}\r\n\r\n");
+        let text = format!("GET /v1/rooms/r1/recordings/s2/voices/b HTTP/1.1\r\nHost: 127.0.0.1:{PORT_FOR_TESTS}\r\nAuthorization: Bearer {TOKEN}\r\n\r\n");
         let voice = handle(&read_request(&mut text.as_bytes()).ok().unwrap(), &fake, TOKEN, PORT_FOR_TESTS, &[]);
         assert_eq!((voice.status, voice.kind), (200, "audio/mp4"));
         assert_eq!(&voice.body[4..8], b"ftyp");
-        assert_eq!(get(&fake, "/v1/rooms/r1/recordings/s2/voices/b/333").0, 404);
         assert_eq!(get(&fake, "/v1/rooms/r1/recordings/s2/voices/a").0, 404);
         assert_eq!(call(&fake, "POST", "/v1/rooms/r1/recordings/s2/voices/b", "{}").0, 405);
     }

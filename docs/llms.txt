@@ -33,13 +33,13 @@ GET /v1/rooms
 
 GET /v1/rooms/{room}/recordings
   {"recordings": [{"id": "2026-10-19 21-30-00", "kind": "play", "recording": false, "start_ms": 1792445400000, "end_ms": 1792448100000, "length_s": 2700.0, "members": [{"id": "...", "name": "Ann", "voice_only": false, "start_ms": 1792445400000, "end_ms": 1792448100000}]}]}
-  Newest first. A recording that was imported also has "title", "imported_by" ({"id", "name"}) and "imported": true on its members (the views). kind is "play" or "debrief" (a recording of people talking while they watched another one). A debrief also has "of" (the recording it is about) and "watch" (what the Watch Party showed: [{"t_us", "by", "set", "at_us", "playing", "rate"}]). "analysis" lists the extensions that are on: [{"plugin", "state": "done" | "running" | "left" | "failed", "progress"?, "reason"?, "waiting_for"?, "error"?}]. recording is true while it is being recorded. Put the id in the URL with spaces as %20.
+  Newest first. A recording that was imported also has "title", "imported_by" ({"id", "name"}) and "imported": true on its members (the views). kind is "play" or "debrief" (a recording of people talking while they watched another one). A debrief also has "of" (the recording it is about) and "watch" (what the Watch Party showed: [{"t_us", "by", "set", "at_us", "playing", "rate"}]). "analysis" lists the extensions that are on: [{"plugin", "state": "done" | "running" | "left" | "failed", "progress"?, "reason"?, "waiting_for"?, "error"?}] (reason "missing" on a failure: no member online holds the file; retry_job checks again). recording is true while it is being recorded. Put the id in the URL with spaces as %20.
 
 GET /v1/rooms/{room}/recordings/{recording}
   One element of the list above.
 
-GET /v1/rooms/{room}/recordings/{recording}/voices/{member}[/{capture}]
-  The member's voice in the recording as raw audio/mp4 (one capture of it); 409 with the capture ids when there are several; 404 when there is none. Read a debrief's voices here to transcribe them.
+GET /v1/rooms/{room}/recordings/{recording}/voices/{member}
+  The member's voice in the recording as raw audio/mp4; when it has several captures (the app restarted while recording) they follow one another in time order, each starting with its own ftyp. 404 when there is none. Read a debrief's voices here to transcribe them.
 
 GET /v1/rooms/{room}/recordings/{recording}/events[?tag=rotate][&kind=note]
   {"events": [{"key": "<author>/<id>", "id": 1792445520000000, "author": "...", "author_name": "Ann", "plugin": null, "kind": "note", "at_s": 120.5, "to_s": null, "member": null, "member_name": null, "text": "Rotate early #rotate", "tags": ["rotate"], "values": null}]}

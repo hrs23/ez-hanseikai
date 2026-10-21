@@ -19,7 +19,7 @@ function extensionLine(p, name) {
 }
 const analyzing = (a) => (typeof a.progress === "number" ? t("Analyzing {n}%", { n: Math.floor(a.progress * 100) }) : t("Analyzing"));
 function analysisReason(a, name) {
-  if (a.state === "failed") return t("Failed");
+  if (a.state === "failed") return a.reason === "missing" ? t("File missing") : t("Failed");
   if (a.state === "running") return analyzing(a);
   if (a.reason === "receiving") return t("Receiving");
   if (a.reason === "no_runner") return t("No runner");

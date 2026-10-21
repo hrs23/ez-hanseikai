@@ -311,30 +311,21 @@ pub enum Phase {
     Done,
     Running,
     Failed(String),
+    Missing,
     Left(Wait),
-}
-
-fn wait_for(runner: Option<&str>, me: &str, online: &HashSet<String>, holders: &[Holder]) -> Wait {
-    let Some(runner) = runner else { return Wait::NoRunner };
-    if runner != me && !online.contains(runner) {
-        return Wait::Member(runner.to_string());
-    }
-    if holders.iter().any(|h| h.id == runner) {
-        Wait::Queue
-    } else if holders.iter().any(|h| h.online) {
-        Wait::Receiving
-    } else {
-        holders.first().map_or(Wait::Queue, |h| Wait::Member(h.id.clone()))
-    }
 }
 
 pub fn phase(track: Option<&Track>, runner: Option<&str>, me: &str, online: &HashSet<String>, holders: &[Holder]) -> Phase {
     let alive = |who: &str| who == me || online.contains(who);
-    match track.and_then(|t| t.latest.as_ref()) {
-        Some(Latest { status: Status::Done(_), .. }) => Phase::Done,
-        Some(Latest { status: Status::Failed(e), .. }) => Phase::Failed(e.clone()),
-        Some(Latest { at: (_, owner), status: Status::Claimed(_), .. }) if Some(owner.as_str()) == runner && alive(owner) => Phase::Running,
-        _ => Phase::Left(wait_for(runner, me, online, holders)),
+    match (track.and_then(|t| t.latest.as_ref()), runner) {
+        (Some(Latest { status: Status::Done(_), .. }), _) => Phase::Done,
+        (Some(Latest { status: Status::Failed(e), .. }), _) => Phase::Failed(e.clone()),
+        (Some(Latest { at: (_, owner), status: Status::Claimed(_), .. }), Some(runner)) if owner == runner && alive(owner) => Phase::Running,
+        (_, None) => Phase::Left(Wait::NoRunner),
+        (_, Some(runner)) if !alive(runner) => Phase::Left(Wait::Member(runner.to_string())),
+        (_, Some(runner)) if holders.iter().any(|h| h.id == runner) => Phase::Left(Wait::Queue),
+        _ if holders.iter().any(|h| h.online) => Phase::Left(Wait::Receiving),
+        _ => Phase::Missing,
     }
 }
 
@@ -343,7 +334,7 @@ fn rank(phase: &Phase) -> u8 {
         Phase::Done => 0,
         Phase::Left(_) => 1,
         Phase::Running => 2,
-        Phase::Failed(_) => 3,
+        Phase::Failed(_) | Phase::Missing => 3,
     }
 }
 
@@ -362,7 +353,7 @@ pub fn analysis(
 ) -> HashMap<String, Vec<(String, Phase)>> {
     let mut out: HashMap<String, Vec<(String, Phase)>> = HashMap::new();
     for set in sets {
-        let finished: Vec<&File> = set.files.iter().filter(|f| f.end_us.is_some()).collect();
+        let finished: Vec<&File> = set.files.iter().filter(|f| analyzable(f)).collect();
         for (id, config) in configs.iter().filter(|(_, c)| c.on) {
             let phases: Vec<Phase> = finished
                 .iter()
@@ -387,6 +378,7 @@ pub fn analysis_json(phases: &[(String, Phase)], running: Option<&Running>, set:
                 json!({"plugin": plugin, "state": "running", "progress": progress})
             }
             Phase::Failed(error) => json!({"plugin": plugin, "state": "failed", "error": error}),
+            Phase::Missing => json!({"plugin": plugin, "state": "failed", "reason": "missing"}),
             Phase::Left(wait) => {
                 let (reason, who) = match wait {
                     Wait::Queue => ("queue", None),
@@ -443,10 +435,14 @@ fn series(core: &Core, room: &str, f: &File, capture: &str, series: &str) -> Opt
     (pieces.len() == count + 1).then(|| pieces.into_iter().map(|p| p.path).collect())
 }
 
+fn analyzable(f: &File) -> bool {
+    f.end_us.is_some() && f.segs.iter().any(|s| s.series == SERIES[0])
+}
+
 pub fn inputs(core: &Core, room: &str, logs: &[Log], locate: impl Fn(&str) -> bool) -> Vec<Input> {
     let mut out = Vec::new();
     for set in room::sets(core, room, logs) {
-        for f in set.files.iter().filter(|f| f.end_us.is_some()) {
+        for f in set.files.iter().filter(|f| analyzable(f)) {
             let file = format!("{}/{}", set.id, f.owner);
             let here = locate(&file);
             let mut parts = Vec::new();
@@ -494,7 +490,7 @@ pub fn members_run(mut configs: BTreeMap<String, Config>, members: &[String]) ->
 
 pub fn wanted_sets(core: &Core, room: &str, logs: &[Log], sets: &[Set]) -> HashSet<String> {
     let (me, configs, tracks, chosen) = (core.me(), room_configs(core, room, logs), tracks(logs, None), chosen(logs, None));
-    let wanted = |set: &Set, f: &File| f.end_us.is_some() && f.segs.iter().any(|s| s.series == SERIES[0]) && open(&format!("{}/{}", set.id, f.owner), &me, &configs, &tracks, &chosen);
+    let wanted = |set: &Set, f: &File| analyzable(f) && open(&format!("{}/{}", set.id, f.owner), &me, &configs, &tracks, &chosen);
     sets.iter().filter(|set| set.files.iter().any(|f| wanted(set, f))).map(|set| set.id.clone()).collect()
 }
 
@@ -1009,16 +1005,20 @@ mod tests {
             let logs = base_logs(vec![timed(job_record("claim", &key("s1/a"), 5, Value::Null), 5), timed(job_record(state, &key("s1/a"), 5, Value::Null), 6)], vec![]);
             assert_eq!(pick("a", false, &logs, &inputs).as_deref(), Some("s1/a"), "{state}");
             let t = tracks(&logs, None);
-            assert_eq!(phase(t.get(&("transcribe".into(), "s1/a".into())), Some("a"), "a", &HashSet::new(), &[]), Phase::Left(Wait::Queue));
+            assert_eq!(phase(t.get(&("transcribe".into(), "s1/a".into())), Some("a"), "a", &HashSet::new(), &[Holder { id: "a".into(), online: true }]), Phase::Left(Wait::Queue));
         }
     }
 
     #[test]
-    fn a_file_only_an_offline_member_holds_stays_left_not_failed() {
+    fn a_file_nobody_online_holds_fails_as_missing_and_only_an_offline_runner_waits() {
         let t = Track::default();
         let online = HashSet::from(["a".to_string()]);
         let held_by_b = [Holder { id: "b".into(), online: false }];
-        assert_eq!(phase(Some(&t), Some("a"), "a", &online, &held_by_b), Phase::Left(Wait::Member("b".into())));
+        assert_eq!(phase(Some(&t), Some("a"), "a", &online, &held_by_b), Phase::Missing);
+        assert_eq!(phase(None, Some("a"), "a", &online, &[]), Phase::Missing);
+        let retried = base_logs(vec![timed(job_record("retry", &key("s1/b"), 5, Value::Null), 5)], vec![]);
+        assert_eq!(phase(tracks(&retried, None).get(&("transcribe".to_string(), "s1/b".to_string())), Some("a"), "a", &online, &held_by_b), Phase::Missing);
+        assert_eq!(phase(None, Some("c"), "a", &online, &[]), Phase::Left(Wait::Member("c".into())));
         let held_online = [Holder { id: "c".into(), online: true }, Holder { id: "b".into(), online: false }];
         assert_eq!(phase(None, Some("a"), "a", &online, &held_online), Phase::Left(Wait::Receiving));
         let held_here = [Holder { id: "a".into(), online: true }];
@@ -1041,12 +1041,14 @@ mod tests {
         let seg = |set: &str| json!({"k": "seg", "series": "v", "set": set, "n": 1, "capture": "1", "t_us": 1, "d_us": 1, "size": 1, "sha256": "x"});
         let rec = |set: &str| json!({"k": "rec", "set": set, "start_us": 1});
         let end = |set: &str| json!({"k": "rec_end", "set": set, "t_us": 9});
-        let logs = vec![log("a", 0, vec![config_record(1, true, "small"), rec("s1"), seg("s1"), end("s1"), timed(job_record("done", &key("s1/a"), 3, Value::Null), 5)]), log("b", 0, vec![rec("s1"), seg("s1"), end("s1")])];
+        let voice = json!({"k": "seg", "series": "m", "set": "d1", "n": 1, "capture": "1", "t_us": 1, "d_us": 1, "size": 1, "sha256": "x"});
+        let logs = vec![log("a", 0, vec![config_record(1, true, "small"), rec("s1"), seg("s1"), end("s1"), timed(job_record("done", &key("s1/a"), 3, Value::Null), 5), rec("d1"), voice, end("d1")]), log("b", 0, vec![rec("s1"), seg("s1"), end("s1")])];
         let sets = room::derive_sets("r", &logs);
         let holders = |_: &Set, f: &File| vec![Holder { id: f.owner.clone(), online: true }];
         let run = |logs: &[Log]| analysis("a", &HashSet::from(["b".to_string()]), &configs(logs, None), &tracks(logs, None), &chosen(logs, None), &sets, &holders);
         let out = run(&logs);
         assert_eq!(out["s1"], vec![("transcribe".to_string(), Phase::Left(Wait::Receiving))]);
+        assert!(!out.contains_key("d1"));
         let mut done = logs;
         append(&mut done, 0, timed(job_record("done", &key("s1/b"), 4, Value::Null), 6));
         assert_eq!(run(&done)["s1"], vec![("transcribe".to_string(), Phase::Done)]);

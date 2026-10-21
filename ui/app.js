@@ -48,6 +48,7 @@ let chimeAudio = null;
 let muted = false;
 let live = false;
 let watchParty = stored("watchParty", true);
+let partyFrom = null;
 let partyLast = null;
 let partyLayout = null;
 let drag = null;
@@ -287,11 +288,10 @@ function goLive() {
 }
 function tickLive() {
   const at = performance.now();
-  const blocked = st.recording && !played;
-  const on = !blocked && (playSet() ? followingLive() : Object.keys(rec.tiles).length > 0);
+  const on = !holding() && (playSet() ? followingLive() : Object.keys(rec.tiles).length > 0);
   if (!on) {
     Object.assign(liveClock, { pos: null, rate: 1, held: false, late: [], at });
-    if (blocked && clock.playing) Object.assign(clock, { playing: false, m: nowM(), at });
+    if (clock.playing && holding()) setClock(false, nowM());
     return;
   }
   Object.assign(liveClock, liveStep(liveClock, liveMembers(), nowUs() / 1e6, (at - liveClock.at) / 1000), { at });
@@ -397,8 +397,9 @@ function total(list = players()) {
 }
 const nowM = () => (livePinned() ? liveClock.pos - base() / 1e6 : clock.playing ? clock.m + ((performance.now() - clock.at) / 1000) * rate : clock.m);
 const wallOf = (m) => Math.round(base() + m * 1e6);
+const holding = () => st.recording && !played && !(st.active_set && st.active_set.voice);
 function setClock(playing, m) {
-  clock.playing = playing;
+  clock.playing = playing && !holding();
   clock.m = Math.max(0, m);
   clock.at = performance.now();
   tick();
@@ -571,6 +572,7 @@ function renderParty(set) {
 }
 function setParty(on) {
   watchParty = on;
+  partyFrom = null;
   store("watchParty", watchParty);
   delete sigs.wpbox;
   joinParty().then(refresh);
@@ -613,6 +615,8 @@ function openSet(id, m = 0) {
 function selectSet(id) {
   if (id === selected) return;
   closeQuick(false);
+  if (watchParty && st.party.on && selected && watchers(selected) > 0) partyFrom = selected;
+  if (id === partyFrom) partyFrom = null;
   selected = id;
   clock.playing = false;
   clock.m = 0;

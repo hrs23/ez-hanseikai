@@ -73,7 +73,7 @@ Newest first.
 }]}
 ```
 
-`kind` is `play`, or `debrief` for a recording of voices made while watching another one together. A debrief also has `of`, the id of the recording it is about, and `watch`, what the Watch Party showed while it was recorded: `[{"t_us", "by", "set", "at_us", "playing", "rate"}]` in microseconds on this PC's clock. `end_ms` is `null` while recording. `analysis` has one entry per extension that is on, for the recording: `state` is `done`, `running` (with `progress`), `left` (with `reason`: `queue`, `receiving`, `waiting` with `waiting_for`, the member it waits for, or `no_runner`) or `failed` (with `error`). A recording placed from outside (see [the storage format](session-format.md#placing-a-recording-made-elsewhere)) has its `title`, `imported_by` (`{"id", "name"}` of the member who placed it) and `imported: true` on each member, which is a view with the name it was given.
+`kind` is `play`, or `debrief` for a recording of voices made while watching another one together. A debrief also has `of`, the id of the recording it is about, and `watch`, what the Watch Party showed while it was recorded: `[{"t_us", "by", "set", "at_us", "playing", "rate"}]` in microseconds on this PC's clock. `end_ms` is `null` while recording. `analysis` has one entry per extension that is on, for the recording: `state` is `done`, `running` (with `progress` on the runner's PC), `left` (with `reason`: `queue`, `receiving`, `waiting` with `waiting_for`, the runner while its PC is offline, or `no_runner`) or `failed` (with `error`, or `reason` `missing` when no member online holds the file). A recording placed from outside (see [the storage format](session-format.md#placing-a-recording-made-elsewhere)) has its `title`, `imported_by` (`{"id", "name"}` of the member who placed it) and `imported: true` on each member, which is a view with the name it was given.
 
 ### `GET /v1/rooms/{room}/recordings/{recording}`
 
@@ -81,7 +81,7 @@ One element of the list above.
 
 ### `GET /v1/rooms/{room}/recordings/{recording}/voices/{member}`
 
-The member's voice in the recording as raw fragmented MP4 (`audio/mp4`), one capture of it. When the member has several captures (the app restarted while recording), the reply is 409 with their ids and each is read at `voices/{member}/{capture}`. 404 when the member has no voice in the recording. A debrief's voices are read here, so an agent can transcribe them.
+The member's voice in the recording as raw fragmented MP4 (`audio/mp4`): each capture's `init.mp4` and segments, and when the member has several captures (the app restarted while recording) they follow one another in time order, each starting with its own `ftyp`. 404 when the member has no voice in the recording. A debrief's voices are read here, so an agent can transcribe them.
 
 ### `GET /v1/rooms/{room}/recordings/{recording}/events`
 
@@ -157,7 +157,7 @@ Not available: the operations that open a window, that is choosing files or fold
   "runner": "<id>", "runner_name": "Ren", "left": 2, "failed": 0, "waiting_for": null, "waiting_for_name": null}]}
 ```
 
-`on` is the room's choice; `ready` means this PC has the extension's files. `runner` is the one member whose PC processes every recording for it (`null` when that member left the room); `left` counts recordings still to do and `failed` those that failed, and `waiting_for` is the member whose PC they wait for. `retry_job` asks for a recording to be analyzed again.
+`on` is the room's choice; `ready` means this PC has the extension's files. `runner` is the one member whose PC processes every recording for it (`null` when that member left the room); `left` counts recordings still to do and `failed` those that failed, and `waiting_for` is the runner while its PC is offline. `retry_job` asks for a recording to be analyzed again.
 
 ### `GET /v1/diagnostics`
 

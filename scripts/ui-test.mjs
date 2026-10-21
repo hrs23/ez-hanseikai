@@ -627,6 +627,7 @@ test("an extension row says one thing: no runner, what failed, who it waits for,
   assert.equal(ui$.analysisReason({ state: "left", reason: "receiving" }, name), "Receiving");
   assert.equal(ui$.analysisReason({ state: "left", reason: "queue" }, name), "Waiting");
   assert.equal(ui$.analysisReason({ state: "failed" }, name), "Failed");
+  assert.equal(ui$.analysisReason({ state: "failed", reason: "missing" }, name), "File missing");
   assert.equal(ui$.analysisReason({ state: "running", progress: 0.424 }, name), "Analyzing 42%");
   assert.equal(ui$.recordingAnalysis({ analysis: [{ state: "done" }, { state: "running", progress: 0.42 }] }).text, "Analyzing 42%");
   assert.equal(ui$.analysisReason({ state: "running", progress: null }, name), "Analyzing");
