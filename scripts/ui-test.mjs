@@ -638,3 +638,9 @@ test("an extension row says one thing: no runner, what failed, who it waits for,
   assert.equal(line({ left: 3 }), "残り 3 件 · Ren のPC");
   ui$.setLanguage("en");
 });
+
+test("every end-to-end step is named in docs/test-cases.md", () => {
+  const cases = fs.readFileSync(path.join(ui, "..", "docs", "test-cases.md"), "utf8");
+  const steps = [...fs.readFileSync(path.join(ui, "..", "scripts", "e2e.mjs"), "utf8").matchAll(/await step\("((?:[^"\\]|\\.)*)"/g)].map((m) => JSON.parse(`"${m[1]}"`));
+  assert.deepEqual(steps.filter((s) => !cases.includes(s)), []);
+});

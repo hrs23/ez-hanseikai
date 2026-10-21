@@ -1,0 +1,161 @@
+# Test cases
+
+One list of every case the app is tested against, by area. Each line is a situation and its expected result, then where it is checked (unit and ui-test lines list their cases by file):
+
+- `e2e`: a step of `scripts/e2e.mjs`, named as it prints it, with its `E2E_PART` (`live`, `recover` or `library`).
+- `unit`: Rust tests, run by `cargo test` in `src-tauri`.
+- `ui-test`: a test of `scripts/ui-test.mjs`, run by `node --test scripts/ui-test.mjs`.
+- `manual`: only a person can check it.
+- `todo`: known, with no test yet.
+
+A test fails when an end-to-end step name is missing here. A new test or a new case adds its line.
+
+## Rooms and invites
+
+- start A and B. `e2e` (`live`)
+- B joins A's room with approval. `e2e` (`live`)
+- C joins late through B's invite while B is cut off, approved on A once B is back. `e2e` (`live`)
+- removing C for the whole room while a recording runs stops it fetching and leaves the others recording. `e2e` (`live`)
+- B leaves the room from its menu, enters it again with its recordings and notes, and deletes it from the list. `e2e` (`live`)
+- C removes the room from this PC while sharing and its folder does not come back. `e2e` (`live`)
+- B leaving ends only its part and rejoins, a crashed C does not keep the stopped set open, and everyone has it. `e2e` (`recover`)
+- the room header menu lists the room commands and a rename in its settings reaches everyone. `e2e` (`library`)
+- each member row says one short state. `e2e` (`library`)
+- A real two-PC test with friends: create a room, invite, join, approve, and see everyone's name, color and state. `manual`
+- Leaving a room and entering it again at once never stays on connecting; so does leaving and entering another room and coming back. `todo`
+- room: joining waits for an answer and ends the invite; the latest remove or admit wins; the latest room name wins on every clock; a rename made here beats a name from a fast clock; invite tokens and room ids cannot leave the rooms folder; a peer can only name a room with an id this app makes; a member is present while connected or seen within a minute; colors are the same everywhere; colors stay when someone joins without a clash; an old debrief links through its first party record; ai del hides ai notes from every log but not human notes; board cards newest event wins and old team card reads. `unit`
+- a member row says one short state. `ui-test`
+
+## Recording
+
+- Record on A starts the set on B. `e2e` (`live`)
+- while recording the start box says Stop recording with the time and the list gets the running recording. `e2e` (`live`)
+- the set stops and everyone has it. `e2e` (`live`)
+- A, B and C record a short set, C joining late. `e2e` (`library`)
+- Start pressed on A and B together makes one recording on every PC. `e2e` (`library`)
+- the microphone, the mix and the hotkey are kept in the settings. `e2e` (`library`)
+- A real two-PC recording of a real game with game sound and the microphone, lined up in playback. `manual`
+- A long recording of an hour or more with three members runs without a stall, a growing delay or a lost part (soak test). `manual`
+- The hardware encoders (NVENC, AMF, QSV) record on each GPU kind, and the fallback to the software encoder works. `manual`
+- The global hotkey starts and stops a recording while a game has the focus. `manual`
+- Closing the captured window while on standby shows that the source closed and lets the screen be chosen again, with no stuck encoder. `todo`
+- capture: a picture fits inside with even bars; colors become studio range bt709; a narrow picture gets black bars on the sides. `unit`
+- data: the standby ring keeps the newest segments and only standby is trimmed. `unit`
+- ffmpeg: choice skips dropped encoders down to the fallback; a dropped backend falls to another backend of the same codec; probe results are reused only for the same key. `unit`
+- media: splitter finds init and whole fragments across reads; scan finds times and the last whole fragment; huge box sizes in damaged files stop the scan; patch moves times to zero even in partial ranges; segments cut on count and on set changes. `unit`
+- record: speaking changes only when the mic turns loud or stays quiet past the hang; a window that sends no frames for a while is stalled; every start has the microphone muted and keeps the volumes; recording without a screen records the voice only; a capture born before the clock moved is finished; presets scale down only and keep even sizes; bitrate follows pixels and codec; an encoder that takes frames but gives nothing is stalled; a write that never returns is a stall; no frames to encode is not a stall; output is stable only after a long working run; a restart logs each unlogged own segment once; strikes count one encoder in a row. `unit`
+- room: sets come from rec and rec end records; records from other versions never break reading; an imported view carries its name importer and title in its first rec; set contents come from seg records; a new recording never takes an id in use; only a recording in progress or a requested one is received; log lines carry the local wall clock; restore and caps; coverage by moment or set; a stop in any log ends the set and a crash lets its member rejoin; a recording ends for the list once nobody present records it. `unit`
+- everyone is told who started or stopped recording; the screen and microphone buttons share one state: off, on or a warning; the microphone button shows a live level that sits flat while muted. `ui-test`
+
+## Live
+
+- live segments flow and C gets the history. `e2e` (`live`)
+- Live shows a tile for everyone who shares a screen, also while recording. `e2e` (`live`)
+- connections stay up while live tiles stay in step, a member stalls, and the others stop waiting for one too far behind. `e2e` (`live`)
+- dragging a name label swaps two tiles. `e2e` (`library`)
+- Your own tile shows and moves right after recording ends and while it records. `todo`
+- net: a live reply names the recording of each series; history gets its share while live fills the limit. `unit`
+- record: a segment opens only beside its init; a live stream serves only segments of the recording it asked for. `unit`
+- stream: live window moves in steps and keeps a whole segment. `unit`
+- receiving speed and the live edge; live tiles wait for the slowest member, never go back, stop waiting for one too far behind, mark it late once passed, and advance while nobody holds; the live delay shrinks slowly only while the slack is above the gap, and a tile with no start follows its own edge; a Live tile tells at most one problem, only while this PC records; live lists every room member in the saved order and then in join order, whatever their connection. `ui-test`
+
+## Playback
+
+- recording alone, the player follows the picture as it grows. `e2e` (`live`)
+- each ended recording gets a thumbnail, and the sidebar lists recordings with it. `e2e` (`library`)
+- A recording in HEVC and in AV1 plays on every PC; a PC that cannot play one makes the room choose another codec. `manual`
+- Seeking far and pressing play at once still plays when the data is read. `todo`
+- Playing your own recording just after it ended shows your own picture. `todo`
+- stream: ranges are capped and checked; a recording plays from its own folder up to the first missing segment; paths are decoded. `unit`
+- thumbs: the middle segment holds half of the length. `unit`
+- the all-players view plays the viewer's own sound and a focused player plays its own; the view line names the first member who blocks the playback, in one sentence. `ui-test`
+
+## Watch Party
+
+- Watch Party converges on a seek and a play, and a member who joins midway converges too. `e2e` (`library`)
+- a session started while watching together records voices and the Watch Party. `e2e` (`library`)
+- A real Watch Party of a recording from several PCs stays in step through seeks and pauses. `manual`
+- Seeking far and pressing play at once still plays for everyone. `todo`
+- party: newest wins by seq then time then origin; simultaneous actions converge; a joiner adopts the running state; turning on joins the party without moving it; rejoining takes the running state again; party messages for another recording are not followed; watching counts viewers per recording and includes me while in the party; positions move to the receivers clock; heads only grow and show who is behind; typing shows while the viewer is seen; other rooms and off are ignored but viewers are counted; a review starts only while watching a session together; party records come back on the local clock in order. `unit`
+
+## Debrief
+
+- a note with a tag, its edit and its deletion reach everyone. `e2e` (`live`)
+- the game plan is a board of cards with short Markdown, and a card is added, renamed, moved and deleted by anyone. `e2e` (`library`)
+- the sidebar width is dragged, kept, and never scrolls sideways. `e2e` (`library`)
+- jobs: room events hide unfinished plugin runs. `unit`
+- room: tags are read from text; events merge with their edits; peer events are cleaned. `unit`
+- match ends come only from plugin moments tagged match; matches run between consecutive ends, with the open one only while recording; a and D land a minute before the previous or next match end; strokes drawn at one moment by one person are one row; a recording is hidden from the list when it is a debrief of another, and debriefs are found by the recording they name; the sidebar width stays between limits and the splitter takes the arrow keys; markdown reads headings, lists and paragraphs only; markdown inline reads emphasis, code, links and tags, and only safe links become links; a card is a bold first line over short markdown, with marked text, scene links and tags; dropping a card between two others takes the middle position, and at the ends one step beyond; a card shows nothing a note can write as running or navigating; a moment link keeps a formatted label, and deep lists render without running out of stack. `ui-test`
+
+## Extensions
+
+- an Apex matches job for the set is claimed once and finished. `e2e` (`library`)
+- the runner of an extension is chosen and a rerun is processed there. `e2e` (`library`)
+- the transcription extension follows the chosen model and the runner is chosen from the members. `e2e` (`library`)
+- jobs: changing settings keeps old results and reruns nothing; the latest config wins on the shared clock; the runner defaults to who turned it on; only the runner processes and a runner who left is no runner; changing the runner keeps the rooms version and settings; the runner wants every finished file of an enabled extension; the runner wants only files that still need analysis; a recording with one file running reads running and a failure outranks it; old yield and stop records read as pending; a file nobody online holds fails as missing and only an offline runner waits; a recording shows its worst file and only enabled extensions; a change made here beats a record from a fast clock; the download size follows the chosen model until it is installed; keys change with version and settings; the newest recording comes first and an interrupted own claim before it; nothing runs while recording unless live or when off or mismatched; done and failed files wait for a retry; a job stopped twice without finishing fails and a stop on purpose does not count; a plugin for the whole set reads the longest file once; restarted captures of one person are one file and old keys are ignored; a file done twice shows the newest result and ties go to the lowest owner; results wait for the done record within caps; re running asks every enabled extension or the one named for each counted file; results land on the runners clock; a capture spans its segments on the local clock. `unit`
+- a link's text vouches only for the host it names; an extension row says one thing: no runner, what failed, who it waits for, or what is left. `ui-test`
+
+## Storage and export
+
+- the set exports to a folder of plain files lined up on its start. `e2e` (`library`)
+- deleting a recording others still hold takes its debrief along and keeps both as not on this PC until Download. `e2e` (`library`)
+- deleting a recording nobody else holds removes it and its entry everywhere. `e2e` (`library`)
+- a member cut off for a whole recording lists it as not on this PC and fetches it only when asked. `e2e` (`library`)
+- A folder export opens in a video editor with every file lined up on the recording start. `manual`
+- data: hours left come from the newest sessions. `unit`
+- download: pace gives speed and time left; hosts come from the url alone; part names are plain and follow the url. `unit`
+- export: one input without delay is copied and the rest is filtered; the filter places each capture on the timeline; the encode arguments map only what exists; the folder export always starts every file at the recording start; events become notes chapters and subtitles on the recording clock; the export is sized and paced by its sources; file names are safe and distinct; exported file names never meet the files beside them; notes are written as csv; webvtt is written with numbered cues; finishing replaces the destination and leaves no part. `unit`
+- log: append scan and repair a torn tail; extend takes whole records at the right offset only. `unit`
+- main: the docs name every record kind and message the code writes; notes keep line breaks and tabs and drop other control and direction characters; json files may start with a byte order mark; whole writes replace the file and leave no part. `unit`
+- room: a recording is removed completely only when no other member holds a part; deleting a recording removes only its folder and thumbnail; a recording removed completely takes its results and jobs with it; deleting a recording deletes only debriefs that name it and keeps peers copies. `unit`
+- the delete preview lists every part that is here and says whether the recording goes completely; a row is on this PC or not, always shows a size, and deleting needs media here or nobody else; the two delete confirmations read the same in both languages; an imported recording is named by its title and the others by their time; the folder export action, the old files button and their phrases exist; every fixed message the export code can send has a Japanese one. `ui-test`
+
+## Updates and migration
+
+- the update channel is kept in the settings. `e2e` (`library`)
+- C kept every file of an older version until Delete old files, which removes exactly those. `e2e` (`library`)
+- The installer run over a running app closes it, installs and starts the new version with the same rooms and recordings. `manual`
+- The in-app update on the stable and the Beta channel installs the right version, and while recording it waits until the recording ends. `manual`
+- The old repository address still reaches the update manifest and the installer download. `todo`
+- data: one app holds a data folder and a leftover lock is noticed; the data folder moves to its new name once and never while the old app runs; a reset keeps only the rooms when asked; a restart removes nothing under recordings and never touches old files; old files are exactly the older shapes; counts come from the files present with their logged size. `unit`
+- main: settings from older versions fall back to defaults; rooms from older versions keep what still reads. `unit`
+- ops: each update channel reads its own manifest. `unit`
+
+## API
+
+- the local API is on from launch, reads recordings and takes a note and a game plan that everyone sees, and the page switches it off and on. `e2e` (`library`)
+- api: only the loopback address and port are a valid host; a pcs own addresses and name are valid hosts only when given; the whole handler uses the hosts it is given; the token must match exactly; requests are read with their query and body; malformed and oversized requests are refused; a wrong host or token gets nothing and llms txt needs no token; rooms list their members and skip pending ones; a recording whose open file belongs to an absent member reads as ended; recordings come newest first with members length and kind; events have times from the recording start tags and authors; chapters are the matches between match ends; the transcript lists spoken lines in time order with the speaker; the board is the newest team card and can be replaced; a note added through the api is an ordinary event with its tags; bad events are refused without writing; an imported recording shows its title importer and views; an operation is called by name with its json arguments; unknown paths and methods are refused; plugins show their runner and what is left and recordings their analysis; a debrief names its recording carries the watch and serves its voices; the app info names the open room; status tells the state of this pc and every member; diagnostics give this pcs report or everyones; the reference lists every endpoint of the api page with an example; the address file holds the address and token for this user only; llms txt describes every endpoint. `unit`
+- ops: the page calls only listed operations and every operation is documented; arguments are read by name; displays get their size and windows do not. `unit`
+- the AI menu offers a few prompts, or the switch when the API is off; a prompt names the API address, the token, llms.txt, the room and the recording; the badge shows only while the API runs and warns when other devices can reach it; endpoint examples that are JSON are shown as indented code and the rest as text. `ui-test`
+
+## Network and clocks
+
+- B's time answer runs 8.2 s ahead and C gets none, and the recording still lines up. `e2e` (`live`)
+- A, B and C record the same set, C joining late and reaching the others only through the relay. `e2e` (`recover`)
+- B loses its network while everyone records, keeps recording its part, and everything reaches everyone once it is back. `e2e` (`recover`)
+- Members on different app versions in one room keep working and ignore what they do not understand. `todo`
+- clock: a request asks as a client and only a server answer to it is read; the offset is how far the server runs ahead in unix time; a clock that moved since the measurement keeps true time and asks again past a step; a dead server fails within one timeout. `unit`
+- ffmpeg: download retries back off up to a limit. `unit`
+- net: a fetched copy is kept only when it matches its record; only a run of failed connects is reported once; a ping reply is eight bytes and an empty one is no answer; a pull holds at least one whole record; own log is restored only when no member holds more; redials back off with jitter up to a limit; one side of each pair dials. `unit`
+- room: the relay shows by its host name; logs are shared only with members of that room. `unit`
+- the connection badge shows a relay when any member uses one; the diagnostics overview marks problems; each PC lists its hardware and its clock, this PC against true time and members against this PC; dropped frames are a warning; clock differences read in milliseconds or seconds; the clock summary warns about a big spread between members; where data goes says when a relay or a server is involved; the new Diagnostics texts have Japanese translations; a download shows its percent, speed and time left. `ui-test`
+
+## Robustness
+
+- a second app on A's data folder exits and leaves A running. `e2e` (`live`)
+- C loses its own log and gets all of it back before writing again. `e2e` (`live`)
+- B crashes mid-recording and recovers its open segment. `e2e` (`recover`)
+- A's encoder is killed and A keeps recording the set in a new part. `e2e` (`recover`)
+- closing the captured window during the recording goes on with the voice, and a new screen adds a part. `e2e` (`recover`)
+- C's disk is full during the recording: its part ends with a notice, the others go on, and C completes its copy once there is room. `e2e` (`recover`)
+- Diagnostics is one screen with a masked report and the old developer window is gone. `e2e` (`library`)
+- The first start shows the Windows firewall prompt and the app works after Allow. `manual`
+- The first start downloads ffmpeg, checks it and keeps retrying with no network. `manual`
+- The window, menus, dark theme and Japanese texts look right at normal and high DPI scaling. `manual`
+- A reset of the app data keeps the log files. `todo`
+- check: lines are filled from their arguments and carry no device names. `unit`
+- debug: the ring keeps the newest and counts on; kinds follow live series and init; a piece after a failure is a retry; a hash failure marks the last receipt or adds a row; numbers become ranges; records are counted by kind; jobs are grouped with their latest state; the encoder choice explains each candidate; reports hide addresses ids and names; reports hide a user folder with spaces; a job reads as one line; the page hides addresses but keeps the rest; errors keep the newest warnings; the log tail resumes and restarts after a roll; the flow text names each route and hides hosts; a combined report names each member by short id. `unit`
+- hw: hardware is read from the script output; bad output gives empty hardware; the encoder names its kind and the matching gpu; a shared pc carries only hardware and the recording rate; what members send is cleaned; a healthy recording logs nothing until it ends; an idle screen is not a collapse; a stalled encoder is logged once until it recovers; short or voice only recordings end quietly; slow sends are logged rarely; offsets read as milliseconds or seconds; the report lists hardware and clocks. `unit`
+- shell: colors are written blue first for windows; translations are unique and fall back to english; the start command says what it records; only plain web links open; the hotkey needs ctrl or alt; closing asks only while work would be lost; clocks read like the player. `unit`
+- sources: a closed window is never replaced by another window of the same program. `unit`
+- days read as today, yesterday or a date; shortcuts need Ctrl or Alt and read like the native menu; every fixed text has a Japanese translation; the pages call a recording a recording, never a session; every English phrase in the pages has a Japanese one; every end-to-end step is named in docs/test-cases.md. `ui-test`
