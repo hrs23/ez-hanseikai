@@ -1061,7 +1061,7 @@ async function library(ctx) {
     check(size && size[0] > 0 && size[1] > 0, `the page could not load the thumbnail: ${brief(size)}`);
     const file = fs.readFileSync(path.join(roomDir(a, ctx.room), "thumbs", `${ctx.set}.jpg`));
     check(file[0] === 0xff && file[1] === 0xd8 && file.length > 500, "the thumbnail file is not a JPEG");
-    check(await evaluate(a, `!!$("sessions").querySelector(".srow:not(.liverow) .thumb img") && !$("recsopen") && $("sessions").querySelectorAll(".srow:not(.liverow)").length === recordingRows().length`), "the sidebar does not list every recording with a thumbnail");
+    await waitFor("A's sidebar lists every recording with a thumbnail", within(UI_REFRESH_S * 5), () => evaluate(a, `!!$("sessions").querySelector(".srow:not(.liverow) .thumb img") && !$("recsopen") && $("sessions").querySelectorAll(".srow:not(.liverow)").length === recordingRows().length`));
     await evaluate(a, `$("sidenav").querySelector("[data-nav=members]").click(); true`);
     await waitFor("A shows the members", within(UI_REFRESH_S * 3), () => evaluate(a, `$("homename").textContent === t("Members") && navActive() === "members"`));
     await screenshot(a, "room-members");
@@ -1108,7 +1108,7 @@ async function library(ctx) {
     await invoke(b, "set_room_plugin", { id: "transcribe", on: true, settings: {} });
     await evaluate(b, `openExtensions.add("transcribe"); roomTab = "extensions"; go("room"); pollPlugins(); true`);
     const shown = `[...$("roomtab").querySelectorAll(".plug")].find((p) => p.querySelector(".pt b").textContent === t("Transcription"))`;
-    check(await evaluate(b, `[...$("roomtab").querySelectorAll(".plug")].filter((p) => p.classList.contains("open")).length === 1`), "the rows are not collapsed except the one opened");
+    await waitFor("B shows the extension rows collapsed except the one opened", within(UI_REFRESH_S * 5), () => evaluate(b, `(() => { const rows = [...$("roomtab").querySelectorAll(".plug")]; return rows.length > 1 && rows.filter((p) => p.classList.contains("open")).length === 1; })()`));
     for (const [model, size] of Object.entries(MODEL_BYTES)) {
       await waitFor("B shows the transcription settings", within(UI_REFRESH_S * 5), () => evaluate(b, `!!${shown} && !!${shown}.querySelector(".field select")`));
       await evaluate(b, `(() => { const s = ${shown}.querySelector(".field select"); s.value = ${JSON.stringify(model)}; s.dispatchEvent(new Event("change")); return true; })()`);
@@ -1475,18 +1475,26 @@ async function library(ctx) {
   };
   const mediaLeft = (app, set) => logOf(app, ctx.room, app.id).filter((r) => r.k === "seg" && r.set === set).filter((r) => fs.existsSync(mediaFile(app, ctx.room, set, app.id, r.capture, r.series, segName(r.n)))).length;
 
-  await step("deleting a recording others still hold keeps the row as not on this PC until Download", async () => {
+  await step("deleting a recording others still hold takes its debrief along and keeps both as not on this PC until Download", async () => {
     const all = [a, b, c];
-    const mine = setOf(await state(b), ctx.review);
-    check(mine.shared === true && mine.progress.have > 0 && await evaluate(b, `canDelete(setById(${JSON.stringify(ctx.review)}))`), `the review before deleting: ${brief({ shared: mine.shared, have: mine.progress.have })}`);
-    await confirmDeletion(b, ctx.review, "Others still have it");
-    await waitFor("B lists the review as not on this PC", within(UI_REFRESH_S * 3), async () => { const row = setOf(await state(b), ctx.review); return row && row.progress.have === 0 && !row.wanted; });
-    check(mediaLeft(b, ctx.review) === 0 && !fs.existsSync(path.join(roomDir(b, ctx.room), "recordings", ctx.review)), "B kept media of the review after deleting it");
-    check(!logOf(b, ctx.room, b.id).some((r) => r.k === "set_del"), "B removed the review for everyone although others hold it");
-    await onlyOnDownload([b], a, ctx.review);
-    await allSee(all, "everyone still lists the review", within(SYNC_ROUND_S), (st) => !!setOf(st, ctx.review));
-    for (const app of [a, c]) check(setOf(await state(app), ctx.review).progress.have > 0, `${app.key} lost the review`);
-    await waitFor("B fetches the review on request", within((SEGMENT_S + SYNC_ROUND_S) * 3), async () => heldByAll(await state(b), ctx.review, [b]) && !holdEverything([b], ctx.room, ctx.review, all));
+    const both = [ctx.set, ctx.review];
+    const before = await state(b);
+    check(both.every((id) => setOf(before, id).shared === true && setOf(before, id).progress.have > 0) && await evaluate(b, `canDelete(setById(${JSON.stringify(ctx.set)}))`), `before deleting: ${brief(both.map((id) => setOf(before, id).progress))}`);
+    await evaluate(b, `confirmDelete([${JSON.stringify(ctx.set)}]); true`);
+    await waitFor("B asks before deleting", within(UI_REFRESH_S * 5), () => evaluate(b, `$("deletedlg").open`));
+    const said = await evaluate(b, `[...$("dellist").querySelectorAll(".delcard .small")].map((x) => x.textContent).join("|") === [t("Others still have it"), t("Debriefs deleted with it: {names}", { names: sessionName(${JSON.stringify(ctx.review)}) })].join("|")`);
+    check(said, "B's confirmation does not say others hold it and name the debrief that goes with it");
+    await evaluate(b, `$("delyes").click(); true`);
+    for (const id of both) {
+      await waitFor(`B lists ${id} as not on this PC`, within(UI_REFRESH_S * 5), async () => { const row = setOf(await state(b), id); return row && row.progress.have === 0 && !row.wanted; });
+      check(mediaLeft(b, id) === 0 && !fs.existsSync(path.join(roomDir(b, ctx.room), "recordings", id)), `B kept media of ${id} after deleting it`);
+      for (const app of [a, c]) check(setOf(await state(app), id).progress.have > 0, `${app.key} lost ${id}`);
+    }
+    check(!logOf(b, ctx.room, b.id).some((r) => r.k === "set_del"), "B removed a recording for everyone although others hold it");
+    await onlyOnDownload([b], a, ctx.set);
+    await allSee(all, "everyone still lists both", within(SYNC_ROUND_S), (st) => both.every((id) => !!setOf(st, id)));
+    await waitFor("B fetches the recording on request", within((SEGMENT_S + SYNC_ROUND_S) * 3), async () => heldByAll(await state(b), ctx.set, [b]) && !holdEverything([b], ctx.room, ctx.set, all));
+    check(setOf(await state(b), ctx.review).progress.have === 0, "B fetched the debrief nobody asked for");
   });
 
   await step("deleting a recording nobody else holds removes it and its entry everywhere", async () => {

@@ -147,7 +147,7 @@ function matchCount(s) {
 }
 function receiving(s) {
   const p = s.progress;
-  if (!p.total || p.have >= p.total) { delete rates[s.id]; return null; }
+  if (!onThisPc(s) || !p.total || p.have >= p.total) { delete rates[s.id]; return null; }
   const now = Date.now();
   const r = rates[s.id] || (rates[s.id] = []);
   if (!r.length || r[r.length - 1].have !== p.have || now - r[r.length - 1].t > REFRESH_MS) r.push({ t: now, have: p.have });

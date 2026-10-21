@@ -597,14 +597,17 @@ function openSession(id) {
   if (id !== selected) openSet(id);
   go("player");
 }
+function followNow() {
+  const l = liveSet();
+  if (!l || selected === l.id) return;
+  selectSet(l.id);
+  nowSet = l.id;
+  goLive();
+}
 function openNow() {
   nowView = true;
-  const l = liveSet();
-  if (l) {
-    selectSet(l.id);
-    nowSet = l.id;
-    goLive();
-  } else if (selected) selectSet(null);
+  if (!liveSet() && selected) selectSet(null);
+  followNow();
   go("player");
 }
 function openSet(id, m = 0) {
@@ -1311,8 +1314,9 @@ async function update() {
   if (selected && !setById(selected)) selected = null;
   if (!st.recording) played = false;
   const l = liveSet();
-  if (nowView && !l && nowSet) { nowView = false; nowSet = null; }
   const voice = st.active_set && st.active_set.voice;
+  if (nowView && !voice) followNow();
+  if (nowView && !l && nowSet) { nowView = false; nowSet = null; }
   if (voice) debriefOpen = st.active_set.id;
   const roomId = st.room ? st.room.id : "";
   if (partyRoom !== roomId) { partyRoom = roomId; editing = null; await joinParty(); st = await invoke("state"); idx = indexOf(st); }

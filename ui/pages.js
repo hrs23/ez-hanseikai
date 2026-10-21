@@ -280,7 +280,7 @@ function confirmDelete(ids) {
     el("div", { className: "row" }, el("b", { textContent: sessionName(p.id) }), el("span", { className: "sp" }), el("span", { textContent: bytes(p.bytes) })),
     el("div", { className: "who" }, ...p.players.map((x) => el("span", {}, icon("film", "sm"), x.owner === st.id ? t("{name} (you)", { name: nameOf(x.owner) }) : nameOf(x.owner), el("span", { className: "muted", textContent: bytes(x.bytes) })))),
     el("div", { className: "small" + (p.form === "Others still have it" ? " muted" : " warn"), textContent: t(p.form) }),
-    p.debriefs.length ? el("div", { className: "small muted", textContent: t("Debriefs deleted with it: {names}", { names: p.debriefs.map(sessionName).join(", ") }) }) : null)));
+    p.debriefs.length ? el("div", { className: "small muted", textContent: t("Debriefs deleted with it: {names}", { names: p.debriefs.map((d) => sessionName(d)).join(", ") }) }) : null)));
   $("delyes").replaceChildren(icon("trash", "sm"), size ? t("Delete {size}", { size: bytes(size) }) : t("Delete"));
   $("delyes").onclick = async () => {
     $("deletedlg").close();
