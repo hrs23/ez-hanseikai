@@ -1349,9 +1349,13 @@ async function library(ctx) {
     await evaluate(a, `play.keys.forEach((k) => setSpeaking(k, true)); true`);
     check(await evaluate(a, `!$("playtiles").querySelector("[data-speak], .speaking")`), "a live speaking message lit a player tile");
     await evaluate(a, `play.keys.forEach((k) => setSpeaking(k, false)); act("seek", 1); act("play", 1); true`);
-    const at = (expression) => evaluate(a, `play.keys.map((k) => play.tiles[k].mic).filter(Boolean).map((m) => ${expression})`);
-    const from = await at("m.video.currentTime");
-    await waitFor("every voice moves with the media", within(UI_REFRESH_S * 5), async () => (await at("m.video.currentTime")).every((x, i) => x > from[i] + 1));
+    const at = (expression) => evaluate(a, `play.keys.map((k) => play.tiles[k]).map((tl) => ${expression})`);
+    const from = await at("[tl.media.video.currentTime, tl.mic && tl.mic.video.currentTime]");
+    await waitFor("every voice moves with its media", within(UI_REFRESH_S * 5), async () => {
+      const now = await at("[tl.media.video.currentTime, tl.mic && tl.mic.video.currentTime]");
+      const moved = now.filter(([m], i) => m > from[i][0] + 1);
+      return moved.length > 0 && now.every(([m, v], i) => m <= from[i][0] + 1 || v === null || v > from[i][1] + 1);
+    });
     await evaluate(a, `act("pause", nowM()); true`);
   });
 
