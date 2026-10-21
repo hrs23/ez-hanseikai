@@ -35,7 +35,7 @@ Requires Windows 10 version 2004 or later, or Windows 11.
 
 ## Update
 
-The app checks for a new version at start, every four hours while it runs (or Help > Check for updates), and shows it above the page with Install. While recording it offers to install after recording instead: then it asks once nothing records, plays, exports or analyses, and it never installs without asking. Updates are signed and checked before they install. An older version may not read data from a newer one, so going back means starting with an empty data folder. Updating from EZ Hanseikai moves the data folder to `%LOCALAPPDATA%\dev.ggi-hanseikai.app`, removes the old app and its shortcuts, and Windows asks about the firewall again.
+The app checks for a new version at start, every four hours while it runs (or Help > Check for updates), and shows it above the page with Install. While recording it offers to install after recording instead: then it asks once nothing records, plays, exports or analyses, and it never installs without asking. Updates are signed and checked before they install. An older version may not read data from a newer one, so going back means starting with an empty data folder. Updating from EZ Hanseikai moves the data folder to [its new name](#uninstall), removes the old app and its shortcuts, and Windows asks about the firewall again.
 
 Settings > Updates chooses the channel: Stable (the default) gets releases marked stable, Beta gets every release first.
 
