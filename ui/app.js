@@ -814,8 +814,11 @@ function view() {
   }
   return { set: set ? set.id : null, playing: clock.playing, live: followingLive(), wall_us: wallOf(nowM()), at_us: nowUs(), rate, focus: play.view ? play.keys[play.view - 1] : null, mode: play.mode, slots: play.slots, order: play.keys };
 }
+let partySends = Promise.resolve();
 function share() {
-  if (watchParty && st && st.party.on) invoke("party_act", { view: view() }).catch(fail);
+  if (!watchParty || !st || !st.party.on) return;
+  const args = { view: view() };
+  partySends = partySends.then(() => invoke("party_act", args)).catch(fail);
 }
 function joinParty() {
   partyLast = null;
