@@ -1006,8 +1006,8 @@ async function recover(ctx) {
     await sleep(SYNC_ROUND_S * 1000);
     await allSee([a, c], "still recording", 1, (st) => st.active_set?.id === ctx.set);
     await invoke(b, "enter_room", { id: ctx.room });
-    await recordsAgain(b, ctx.room, ctx.set, before);
     await meshed([a, b]);
+    await recordsAgain(b, ctx.room, ctx.set, before);
     await allSee([a], "B recording again", within(SEGMENT_S + LOG_SYNC_S * 2), (st) => setOf(st, ctx.set).players.find((p) => p.owner === b.id).recording);
     kill(c);
     await stopped(c);
