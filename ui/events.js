@@ -60,6 +60,8 @@ function matchEnds(list) {
   return list.filter((n) => n.role === "moment" && n.plugin && n.m !== null && (n.tags || []).includes(MATCH_TAG)).map((n) => n.m).sort((a, b) => a - b);
 }
 
+const noteMoments = (list) => list.filter((n) => (n.kind === "note" || n.kind === "mark") && n.role === "moment" && n.m !== null).sort((a, b) => a.m - b.m);
+
 function matchChapters(ends, total, live) {
   const out = [];
   let from = 0;

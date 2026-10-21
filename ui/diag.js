@@ -83,6 +83,10 @@ function leftText(seconds) {
   return t("{n} h left", { n: Math.round(seconds / 360) / 10 });
 }
 
+function progressText({ n, speed, left }) {
+  return [`${n}%`, speed ? `${bytes(speed)}/s` : null, left != null ? leftText(left) : null].filter(Boolean).join(" · ");
+}
+
 function summaryLines(s, failed) {
   const lines = [];
   const on = s.peers.filter((p) => p.connected);

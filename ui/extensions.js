@@ -8,7 +8,7 @@ function choiceText(key, c) {
 }
 function downloadStats(d) {
   const n = d.total ? Math.min(100, Math.floor((d.done / d.total) * 100)) : 0;
-  return { n, text: [`${n}%`, d.speed ? `${bytes(d.speed)}/s` : null, d.left_s !== null && d.left_s !== undefined ? leftText(d.left_s) : null].filter(Boolean).join(" · ") };
+  return { n, text: progressText({ n, speed: d.speed, left: d.left_s }) };
 }
 function extensionLine(p, name) {
   if (!p.on) return "";

@@ -449,16 +449,19 @@ async fn handle(core: Arc<Core>, conn: Connection, mut send: SendStream, mut rec
         }
         Some("rec") => {
             let by = req["by"].as_str().unwrap_or_default();
+            let set = req["set"].as_str().unwrap_or_default();
             let here = req["room"].as_str() == Some(core.active_room_id().as_str());
             if req["action"] == "start" {
                 if here {
-                    room::announce(&core, "start", by, req["voice"] == true);
+                    room::announce(&core, "start", by, req["voice"] == true, set);
                 }
                 react_to_set(&core, &json!({"id": req["set"], "room": req["room"], "by": req["by"], "start_us": req["start_us"], "voice": req["voice"], "of": req["of"]}));
             } else if req["action"] == "stop" && here {
-                room::announce(&core, "end", by, false);
-                let (core, set) = (core.clone(), req["set"].as_str().unwrap_or_default().to_string());
-                tokio::task::spawn_blocking(move || room::end_set(&core, true, Some(&set)));
+                let (core, by, set) = (core.clone(), by.to_string(), set.to_string());
+                tokio::task::spawn_blocking(move || {
+                    room::end_set(&core, true, Some(&set));
+                    room::announce(&core, "end", &by, false, &set);
+                });
             }
             send.write_all(b"ok").await?;
         }

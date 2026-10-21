@@ -84,9 +84,10 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 ## Watch Party
 
 - Watch Party converges on a seek and a play, and a member who joins midway converges too. `e2e` (`library`)
-- a session started while watching together records voices and the Watch Party. `e2e` (`library`)
+- stopping a recording opens it from the start for everyone in the Watch Party, and leaves a PC elsewhere alone. `e2e` (`library`)
+- a session started while watching together records voices and the Watch Party; ending a debrief moves nobody. `e2e` (`library`)
 - A real Watch Party of a recording from several PCs stays in step through seeks and pauses. `manual`
-- party: newest wins by seq then time then origin; simultaneous actions converge; a joiner adopts the running state; turning on joins the party without moving it; rejoining takes the running state again; party messages for another recording are not followed; watching counts viewers per recording and includes me while in the party; positions move to the receivers clock; heads only grow and show who is behind; typing shows while the viewer is seen; other rooms and off are ignored but viewers are counted; a review starts only while watching a session together; party records come back on the local clock in order. `unit`
+- party: newest wins by seq then time then origin; simultaneous actions converge; a joiner adopts the running state; turning on joins the party without moving it; rejoining takes the running state again; party messages for another recording are not followed; watching lists the viewers per recording and includes me while in the party; positions move to the receivers clock; heads only grow and show who is behind; typing shows while the viewer is seen; other rooms and off are ignored but viewers are counted; a review starts only while watching a session together; party records come back on the local clock in order. `unit`
 
 ## Debrief
 
@@ -95,7 +96,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - the sidebar width is dragged, kept, and never scrolls sideways. `e2e` (`library`)
 - jobs: room events hide unfinished plugin runs. `unit`
 - room: tags are read from text; events merge with their edits; peer events are cleaned. `unit`
-- match ends come only from plugin moments tagged match; matches run between consecutive ends, with the open one only while recording; a and D land a minute before the previous or next match end; strokes drawn at one moment by one person are one row; a recording is hidden from the list when it is a debrief of another, and debriefs are found by the recording they name; the sidebar width stays between limits and the splitter takes the arrow keys; markdown reads headings, lists and paragraphs only; markdown inline reads emphasis, code, links and tags, and only safe links become links; a card is a bold first line over short markdown, with marked text, scene links and tags; dropping a card between two others takes the middle position, and at the ends one step beyond; a card shows nothing a note can write as running or navigating; a moment link keeps a formatted label, and deep lists render without running out of stack. `ui-test`
+- match ends come only from plugin moments tagged match; matches run between consecutive ends, with the open one only while recording; a and D land a minute before the previous or next match end; Q and E step through notes and marks that have a time, in order; progress shows percent, speed and time left and drops what is unknown; strokes drawn at one moment by one person are one row; a recording is hidden from the list when it is a debrief of another, and debriefs are found by the recording they name; the sidebar width stays between limits and the splitter takes the arrow keys; markdown reads headings, lists and paragraphs only; markdown inline reads emphasis, code, links and tags, and only safe links become links; a card is a bold first line over short markdown, with marked text, scene links and tags; dropping a card between two others takes the middle position, and at the ends one step beyond; a card shows nothing a note can write as running or navigating; a moment link keeps a formatted label, and deep lists render without running out of stack. `ui-test`
 
 ## Extensions
 

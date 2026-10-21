@@ -736,12 +736,12 @@ pub fn start_set(core: &Arc<Core>, debrief: Option<bool>) -> Result<(), String> 
     log_set_layout(core);
     party::log(core);
     net::broadcast(core, json!({"t": "rec", "action": "start", "set": set, "room": room, "by": by, "start_us": start_us, "voice": voice, "of": of}));
-    announce(core, "start", &by, voice);
+    announce(core, "start", &by, voice, &set);
     Ok(())
 }
 
-pub fn announce(core: &Core, action: &str, by: &str, voice: bool) {
-    let _ = core.app.emit("session", json!({"action": action, "by": by, "voice": voice}));
+pub fn announce(core: &Core, action: &str, by: &str, voice: bool, set: &str) {
+    let _ = core.app.emit("session", json!({"action": action, "by": by, "voice": voice, "set": set}));
 }
 
 pub fn stop_set(core: &Arc<Core>) {
@@ -750,7 +750,7 @@ pub fn stop_set(core: &Arc<Core>) {
     if let Some(set) = set {
         let by = core.name.lock().unwrap().clone();
         net::broadcast(core, json!({"t": "rec", "action": "stop", "set": set, "room": core.active_room_id(), "by": by}));
-        announce(core, "end", &by, false);
+        announce(core, "end", &by, false, &set);
     }
 }
 

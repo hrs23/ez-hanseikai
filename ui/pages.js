@@ -301,8 +301,8 @@ function renderStorage() {
     const box = el("input", { type: "checkbox", checked: picked.has(s.id), disabled: !canDelete(s), ariaLabel: sessionName(s.id) });
     box.onchange = () => { if (box.checked) picked.add(s.id); else picked.delete(s.id); delete sigs.storage; renderStorage(); };
     const notes = noteCount(s);
-    const recv = onThisPc(s) && s.progress.total && s.progress.have < s.progress.total ? t("Receiving {n}%", { n: Math.floor((s.progress.have / s.progress.total) * 100) }) : "";
-    return el("tr", { className: picked.has(s.id) ? "sel" : "" }, el("td", {}, box), el("td", {}, el("b", { textContent: sessionName(s.id) }), " ", el("span", { className: "muted small", textContent: noPicture(s) ? t("voice only") : t(notes === 1 ? "{n} note" : "{n} notes", { n: notes }) })), el("td", { textContent: setLength(s) }), el("td", { textContent: String(s.players.length) }), el("td", {}, onThisPc(s) ? [el("span", { className: "sizebar" }, el("i", { style: `width:${(s.progress.have / biggest) * 100}%` })), bytes(s.progress.have)] : el("span", { className: "muted", textContent: t("Not on this PC") })), el("td", { className: "muted small", textContent: recv }));
+    const recv = receiving(s);
+    return el("tr", { className: picked.has(s.id) ? "sel" : "" }, el("td", {}, box), el("td", {}, el("b", { textContent: sessionName(s.id) }), " ", el("span", { className: "muted small", textContent: noPicture(s) ? t("voice only") : t(notes === 1 ? "{n} note" : "{n} notes", { n: notes }) })), el("td", { textContent: setLength(s) }), el("td", { textContent: String(s.players.length) }), el("td", {}, onThisPc(s) ? [el("span", { className: "sizebar" }, el("i", { style: `width:${(s.progress.have / biggest) * 100}%` })), bytes(s.progress.have)] : el("span", { className: "muted", textContent: t("Not on this PC") })), el("td", { className: "muted small", textContent: recv ? progressText(recv) : "" }));
   });
   const head = el("tr", {}, ...["", "Recorded", "Length", "People", "On this PC", ""].map((h) => el("th", { textContent: h ? t(h) : "" })));
   $("storetable").replaceChildren(el("table", { className: "table" }, el("thead", {}, head), el("tbody", {}, ...rows)));
@@ -555,6 +555,8 @@ listenMain("session", (e) => {
   flash(sessionNotice(e.payload.action, e.payload.by), "info", debrief && { label: t("Summarize with AI"), run: () => summarizeDebrief(debrief) });
   chime(e.payload.action);
   if (e.payload.action === "start" && !e.payload.voice) openLive();
+  const ended = e.payload.action === "end" && setById(e.payload.set);
+  if (ended && !ended.of && page === "player" && showingNow()) { selectSet(null); openSession(ended.id); }
 });
 listenMain("flash", (e) => flash(e.payload));
 

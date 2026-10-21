@@ -157,12 +157,14 @@ impl Party {
         self.seen(now).into_iter().filter(|(_, v)| v.typing).map(|(id, _)| id.clone()).collect()
     }
 
-    pub fn watching_by_set(&self, now: Instant) -> BTreeMap<String, usize> {
-        let mut out = BTreeMap::new();
-        let sets = self.seen(now).into_iter().map(|(_, v)| &v.set).chain(self.on.then_some(&self.shared["set"]));
-        for set in sets.filter_map(Value::as_str) {
-            *out.entry(set.to_string()).or_default() += 1;
+    pub fn watching(&self, own: &str, now: Instant) -> BTreeMap<String, Vec<String>> {
+        let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let me = self.on.then_some((own, &self.shared["set"]));
+        let seen = self.seen(now).into_iter().map(|(id, v)| (id.as_str(), &v.set));
+        for (id, set) in seen.chain(me).filter_map(|(id, set)| Some((id, set.as_str()?))) {
+            out.entry(set.to_string()).or_default().push(id.to_string());
         }
+        out.values_mut().for_each(|ids| ids.sort());
         out
     }
 
@@ -243,10 +245,11 @@ pub fn receive(core: &Arc<Core>, from: &str, msg: &Value, offset_us: i64) -> boo
 pub fn state_json(core: &Core, own: &Heads) -> Value {
     let party = core.party.lock().unwrap();
     let now = Instant::now();
+    let watching = party.watching(&core.ep.id().to_string(), now);
     if !party.on {
-        return json!({"on": false, "watching": party.watching_by_set(now)});
+        return json!({"on": false, "watching": watching});
     }
-    json!({"on": true, "shared": party.shared, "status": party.status(own, now), "watching": party.watching_by_set(now), "typing": party.typists(now)})
+    json!({"on": true, "shared": party.shared, "status": party.status(own, now), "watching": watching, "typing": party.typists(now)})
 }
 
 pub async fn repeat(core: Arc<Core>) {
@@ -359,15 +362,19 @@ mod tests {
     }
 
     #[test]
-    fn watching_counts_viewers_per_recording_and_includes_me_while_in_the_party() {
+    fn watching_lists_viewers_per_recording_and_includes_me_while_in_the_party() {
         let mut a = party("a");
         a.receive("c", &json!({"room": "r", "shared": {"seq": 0, "set": "s1"}}), 0, "r", Instant::now());
         a.receive("b", &json!({"room": "r", "shared": {"seq": 0, "set": "s1"}}), 0, "r", Instant::now());
         a.receive("d", &json!({"room": "r", "shared": {"seq": 0, "set": "s9"}}), 0, "r", Instant::now());
-        assert_eq!(a.watching_by_set(Instant::now()), BTreeMap::from([("s1".to_string(), 3), ("s9".to_string(), 1)]));
-        assert!(a.watching_by_set(Instant::now() + SEEN).get("s9").is_none());
+        assert_eq!(a.watching("a", Instant::now()), BTreeMap::from([("s1".to_string(), ids(&["a", "b", "c"])), ("s9".to_string(), ids(&["d"]))]));
+        assert!(a.watching("a", Instant::now() + SEEN).get("s9").is_none());
         a.turn(false, "a", &Value::Null, "r", 2_000);
-        assert_eq!(a.watching_by_set(Instant::now()).get("s1"), Some(&2));
+        assert_eq!(a.watching("a", Instant::now()).get("s1"), Some(&ids(&["b", "c"])));
+    }
+
+    fn ids(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
     }
 
     #[test]
@@ -415,7 +422,7 @@ mod tests {
         a.turn(false, "a", &Value::Null, "r", 2_000);
         assert!(!a.receive("b", &json!({"room": "r", "shared": {"seq": 9, "set": "s4"}}), 0, "r", Instant::now()));
         assert!(a.caps().is_none());
-        assert_eq!(a.watching_by_set(Instant::now()), BTreeMap::from([("s4".to_string(), 1)]));
+        assert_eq!(a.watching("a", Instant::now()), BTreeMap::from([("s4".to_string(), ids(&["b"]))]));
         assert_ne!(a.shared["set"], "s4");
     }
 

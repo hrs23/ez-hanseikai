@@ -23,8 +23,7 @@ function playerLine(set, p, ctx) {
   const holders = p.verified_by.filter((id) => id !== ctx.me);
   if (!holders.some(ctx.online)) return { kind: "away", text: t("{name}'s video is only on {holder}'s PC", { name, holder: ctx.name(holders[0] || p.owner) }) };
   if (set.wanted || p.have > 0) {
-    const left = ctx.left(set);
-    return { kind: "receiving", text: [t("Receiving {name}'s video", { name }), left ? leftText(left) : null].filter(Boolean).join(" · ") };
+    return { kind: "receiving", text: t("Receiving {name}'s video", { name }) };
   }
   return { kind: "missing", text: t("{name}'s video missing", { name }), action: t("Download") };
 }

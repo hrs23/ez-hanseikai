@@ -1140,8 +1140,21 @@ async function library(ctx) {
     [a, b, c] = await gather(ctx);
     const all = [a, b, c];
     await waitFor(`A has logged ${SHORT_SET_SEGMENTS} segments`, within(SEGMENT_S * SHORT_SET_SEGMENTS), () => segsOf(logOf(a, ctx.room, a.id), ctx.set, "v").length >= SHORT_SET_SEGMENTS);
+  });
+
+  await step("stopping a recording opens it from the start for everyone in the Watch Party, and leaves a PC elsewhere alone", async () => {
+    const all = [a, b, c];
+    await evaluate(a, `openLive(); selectSet(null); true`);
+    await evaluate(b, `openNow(); true`);
+    await evaluate(c, `$("sidenav").querySelector("[data-nav=members]").click(); true`);
+    for (const app of [a, b]) check(await evaluate(app, `page === "player" && showingNow()`), `${app.key} does not show Live before the stop`);
     await invoke(a, "stop_recording");
     await allSee(all, "the set ended and everyone has it", within((SEGMENT_S + SYNC_ROUND_S) * 3), (st) => !st.active_set && setOf(st, ctx.set) && !setOf(st, ctx.set).live && heldByAll(st, ctx.set, all));
+    for (const app of [a, b]) {
+      await waitFor(`${app.key} opens the ended recording at 0:00`, within(UI_REFRESH_S * 3), () => evaluate(app, `selected === ${JSON.stringify(ctx.set)} && nowM() === 0 && !clock.playing`));
+      await waitFor(`${app.key} is in the Watch Party of the recording`, within(PARTY_REPEAT_S + UI_REFRESH_S * 2), async () => (await state(app)).party.shared.set === ctx.set);
+    }
+    check(await evaluate(c, `page !== "player" && selected !== ${JSON.stringify(ctx.set)}`), "C was moved off the page it was on");
     const ended = setOf(await state(a), ctx.set);
     ctx.durationS = (ended.end_us - ended.start_us) / 1e6;
   });
@@ -1468,6 +1481,7 @@ async function library(ctx) {
     check(ending === "Stop recording for everyone?", `A was asked "${ending}"`);
     await waitFor("B is told who ended", within(LOG_SYNC_S * 2), () => evaluate(b, `e2eNotes.includes(${JSON.stringify(a.name + " stopped recording")})`));
     await allSee(all, "the review ended", within(LOG_SYNC_S * 2), (st) => !st.active_set && setOf(st, ctx.review) && !setOf(st, ctx.review).live);
+    for (const app of all) check(await evaluate(app, `selected === ${JSON.stringify(ctx.set)}`), `${app.key} was moved when the debrief ended`);
     for (const app of all) {
       const own = logOf(app, ctx.room, app.id);
       check(segsOf(own, ctx.review, "m").length > 0 && segsOf(own, ctx.review, "v").length === 0, `${app.key} recorded ${segsOf(own, ctx.review, "v").length} picture and ${segsOf(own, ctx.review, "m").length} voice segments in the review`);

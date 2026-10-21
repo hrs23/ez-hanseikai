@@ -161,7 +161,7 @@ function sessionState(s) {
   if (exporting && exporting.set === s.id) return { kind: "bar", icon: "film", text: t("Exporting {n}%", { n: Math.floor(exporting.percent) }), frac: exporting.percent / 100 };
   const line = viewLine(s, viewContext());
   const recv = receiving(s);
-  if (recv && !recv.stuck) return { kind: "bar", icon: "download", text: [`${recv.n}%`, recv.speed ? `${bytes(recv.speed)}/s` : null].filter(Boolean).join(" · "), right: recv.left ? leftText(recv.left) : "", frac: recv.n / 100, title: line ? viewText(line) : "" };
+  if (recv && !recv.stuck) return { kind: "bar", icon: "download", text: progressText(recv), frac: recv.n / 100, title: line ? viewText(line) : "" };
   if (line) return { kind: "line", icon: line.kind === "away" ? "alert" : "download", cls: line.kind === "away" ? "warn" : "", text: line.text, action: line.action };
   return recordingAnalysis(s);
 }
@@ -183,12 +183,12 @@ function sessionRow(s) {
   const state = sessionState(s);
   const watching = st.party.watching[s.id];
   let l2;
-  if (state && state.kind === "bar") l2 = el("div", { className: "prog", title: state.title || "" }, el("div", { className: "l2" }, icon(state.icon, "sm"), el("span", { textContent: state.text }), el("span", { className: "r", textContent: state.right || "" })), el("div", { className: "bar" }, el("i", { style: `width:${Math.round(state.frac * 100)}%` })));
+  if (state && state.kind === "bar") l2 = el("div", { className: "prog", title: state.title || "" }, el("div", { className: "l2" }, icon(state.icon, "sm"), el("span", { textContent: state.text })), el("div", { className: "bar" }, el("i", { style: `width:${Math.round(state.frac * 100)}%` })));
   else if (state && state.kind === "line") l2 = el("div", { className: "l2 " + (state.cls || "") }, icon(state.icon, "sm"), el("span", { textContent: state.text }), state.action ? el("button", { className: "sm", textContent: state.action, onclick: (e) => { e.stopPropagation(); run("download_set", { room: s.room, set: s.id }); } }) : null);
   else l2 = el("div", { className: "l2" }, el("span", { textContent: setLength(s) }), s.imported_by ? importedPill(s) : null, state ? el("span", { className: "r " + (state.cls || ""), title: state.title || "" }, icon(state.icon, "sm"), state.text) : null);
   const row = el("div", { className: "srow" + (on ? " on" : "") + (here ? "" : " gone"), role: "option", tabIndex: 0, ariaSelected: on },
     thumbBox(s, s.players.map((p) => p.owner), "xs", THUMB_FACES, false),
-    el("div", { className: "txt" }, el("div", { className: "l1" }, el("b", { textContent: sessionName(s.id) }), watching ? el("span", { className: "wpn", title: t("{n} watching", { n: watching }) }, icon("users", "sm"), String(watching)) : null, partyFrom === s.id && watching ? el("button", { className: "sm", textContent: t("Back"), onclick: (e) => { e.stopPropagation(); openSession(s.id); } }) : null), l2, whereLine(s)));
+    el("div", { className: "txt" }, el("div", { className: "l1" }, el("b", { textContent: sessionName(s.id) }), watching && watching.length ? el("span", { className: "wpn", title: watching.map(nameOf).join(", ") }, icon("users", "sm"), String(watching.length)) : null, partyFrom === s.id && watching && watching.length ? el("button", { className: "sm", textContent: t("Back"), onclick: (e) => { e.stopPropagation(); openSession(s.id); } }) : null), l2, whereLine(s)));
   row.onclick = () => { if (onThisPc(s)) openSession(s.id); };
   row.onkeydown = (e) => { if (e.key === "Enter" && onThisPc(s)) openSession(s.id); };
   row.oncontextmenu = (e) => { e.preventDefault(); sessionMenu(s.id, e); };

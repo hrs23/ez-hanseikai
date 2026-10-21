@@ -9,7 +9,7 @@ const ui = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "ui");
 const read = (f) => fs.readFileSync(path.join(ui, f), "utf8");
 const source = ["util.js", "i18n.js", "live.js", "media.js", "layout.js", "dock.js", "events.js", "markdown.js", "members.js", "recordings.js", "extensions.js", "ai.js", "diag.js"].map(read).join("\n");
 const context = vm.createContext({ window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id, location: { search: "" } });
-const ui$ = vm.runInContext(`${source}\n({ matchEnds, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, memberStatus, sendsPicture, viewLine, viewText, tileProblem, livePlayers, ordered, extensionLine, analysisReason, recordingAnalysis, cardParts, dropPos, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, talking, stillTalking, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, aiPreview, aiDebrief, apiUrl, apiBadge, apiReferenceBlocks, rateOf, liveEdge, netState, summaryLines, leftText, pcCards, clockSummary, flowRows, skewText, liveStep, liveFollow, liveAvail, plan, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, memberStatus, sendsPicture, viewLine, viewText, tileProblem, livePlayers, ordered, extensionLine, analysisReason, recordingAnalysis, cardParts, dropPos, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, talking, stillTalking, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, aiPreview, aiDebrief, apiUrl, apiBadge, apiReferenceBlocks, rateOf, liveEdge, netState, summaryLines, leftText, pcCards, clockSummary, flowRows, skewText, liveStep, liveFollow, liveAvail, plan, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 const plain = (v) => JSON.parse(JSON.stringify(v));
 
 const moment = (m, extra = {}) => ({ role: "moment", m, plugin: { id: "apex-matches" }, tags: ["match"], ...extra });
@@ -22,6 +22,16 @@ test("the page scripts together declare no name twice", () => {
 test("match ends come only from plugin moments tagged match", () => {
   const list = [moment(300), moment(100), moment(200, { tags: ["other"] }), moment(250, { plugin: null }), { role: "chapter", m: 50, tags: ["match"], plugin: {} }];
   assert.deepEqual([...ui$.matchEnds(list)], [100, 300]);
+});
+
+test("Q and E step through notes and marks that have a time, in order", () => {
+  const list = [moment(300, { kind: "note" }), moment(100, { kind: "mark" }), moment(200, { kind: "event" }), moment(250, { kind: "note", m: null }), moment(150, { kind: "note", role: "chapter" })];
+  assert.deepEqual(ui$.noteMoments(list).map((n) => n.m), [100, 300]);
+});
+
+test("progress shows percent, speed and time left, and drops what is unknown", () => {
+  assert.equal(ui$.progressText({ n: 42, speed: 3100000, left: 150 }), "42% · 3.1 MB/s · 3 min left");
+  assert.equal(ui$.progressText({ n: 42, speed: null, left: null }), "42%");
 });
 
 test("matches run between consecutive ends, with the open one only while recording", () => {
@@ -662,7 +672,7 @@ test("the microphone button shows a live level that sits flat while muted", () =
   assert.equal(ui$.meterPos(-60), 0);
 });
 
-const ctx = (extra = {}) => ({ me: "me", name: (id) => ({ me: "Aki", ren: "Ren", koya: "Koya" })[id] || id, online: (id) => id !== "koya", left: () => null, ...extra });
+const ctx = (extra = {}) => ({ me: "me", name: (id) => ({ me: "Aki", ren: "Ren", koya: "Koya" })[id] || id, online: (id) => id !== "koya", ...extra });
 const view = (owner, extra = {}) => ({ owner, recording: false, end_us: 9, have: 5, total: 10, verified_by: ["me"], parts: [{ v: {}, m: {} }], ...extra });
 const finishedSet = (players, extra = {}) => ({ id: "s1", live: false, wanted: false, players, ...extra });
 
@@ -673,9 +683,7 @@ test("the view line names the first member who blocks the playback, in one sente
   const missing = line(finishedSet([view("me"), view("ren", { verified_by: ["ren"], have: 0 })]));
   assert.deepEqual(plain({ text: missing.text, action: missing.action }), { text: "Ren's video missing", action: "Download" });
   assert.equal(ui$.viewText(missing), "Ren's video missing · Download");
-  const receiving = (left) => line(finishedSet([view("me"), view("ren", { verified_by: ["ren"] })]), ctx({ left: () => left })).text;
-  assert.equal(receiving(150), "Receiving Ren's video · 3 min left");
-  assert.equal(receiving(null), "Receiving Ren's video");
+  assert.equal(line(finishedSet([view("me"), view("ren", { verified_by: ["ren"] })])).text, "Receiving Ren's video");
   assert.equal(line(finishedSet([view("me"), view("ren", { verified_by: ["ren"], have: 0 })], { wanted: true })).text, "Receiving Ren's video");
   assert.equal(line(finishedSet([view("koya", { verified_by: ["koya"] })])).text, "Koya's video is only on Koya's PC");
   assert.equal(line(finishedSet([view("koya", { verified_by: ["ren", "koya"] })]), ctx({ online: () => false })).text, "Koya's video is only on Ren's PC");

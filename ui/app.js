@@ -559,20 +559,20 @@ function renderHeader(set) {
   $("panelbtn").classList.toggle("on", panelShown());
   if (changed("fullicon", [full])) $("full").replaceChildren(icon(full ? "minimize" : "maximize"));
 }
-const watchers = (id) => (st.party.watching[id] || 0) - (watchParty && st.party.on && st.party.shared.set === id ? 1 : 0);
+const watchers = (id) => (st.party.watching[id] || []).filter((w) => w !== st.id);
 function renderParty(set) {
   const on = watchParty && st.party.on;
   const box = $("wpbox");
   box.hidden = !set;
   $("shared").classList.toggle("wp", !!(on && set));
-  const others = set ? watchers(set.id) : 0;
+  const others = set ? watchers(set.id) : [];
   const status = on ? st.party.status || [] : [];
   if (changed("partystatus", [status, st.names, lang])) $("partystatus").replaceChildren(...status.map((s) => pill("gray", "spinner", t("Catching up with {name}", { name: nameOf(s.who) }))));
   if (!changed("wpbox", [on, others, st.names, lang])) return;
   if (on) {
-    box.replaceChildren(el("div", { className: "wpbar" }, icon("users", "sm"), el("span", { textContent: "Watch Party" }), el("span", { className: "n", textContent: String(others + 1) }), el("button", { className: "sm", onclick: () => setParty(false) }, icon("logout", "sm"), t("Leave"))));
+    box.replaceChildren(el("div", { className: "wpbar" }, icon("users", "sm"), el("span", { textContent: "Watch Party" }), avatars([st.id, ...others]), el("button", { className: "sm", onclick: () => setParty(false) }, icon("logout", "sm"), t("Leave"))));
   } else {
-    box.replaceChildren(el("button", { className: "wpoff", onclick: () => setParty(true) }, icon("users", "sm"), el("span", { textContent: "Watch Party" }), others ? el("span", { className: "muted", textContent: t("{n} watching", { n: others }) }) : null, el("span", { className: "join", textContent: t("Join") })));
+    box.replaceChildren(el("button", { className: "wpoff", onclick: () => setParty(true) }, icon("users", "sm"), el("span", { textContent: "Watch Party" }), others.length ? avatars(others) : null, el("span", { className: "join", textContent: t("Join") })));
   }
 }
 function setParty(on) {
@@ -623,7 +623,7 @@ function openSet(id, m = 0) {
 function selectSet(id) {
   if (id === selected) return;
   closeQuick(false);
-  if (watchParty && st.party.on && selected && watchers(selected) > 0) partyFrom = selected;
+  if (watchParty && st.party.on && selected && watchers(selected).length) partyFrom = selected;
   if (id === partyFrom) partyFrom = null;
   selected = id;
   clock.playing = false;
@@ -821,7 +821,7 @@ function indexOf(state) {
 const setOf = (e) => idx.setOfKey.get(e.key) || null;
 const setLength = (s) => fmt(((s.end_us || nowUs()) - s.start_us) / 1e6);
 const pluginName = (id) => t((plugins.find((p) => p.id === id) || {}).name || id);
-const viewContext = () => ({ me: st.id, name: nameOf, online: (id) => id === st.id || sendsPicture(peerOf(id)), left: (set) => { const r = receiving(set); return r && r.left; } });
+const viewContext = () => ({ me: st.id, name: nameOf, online: (id) => id === st.id || sendsPicture(peerOf(id)) });
 function itemOf(e, set) {
   const r = role(e);
   const at = (us) => (us === null || us === undefined || !set ? null : (us - set.start_us) / 1e6);
@@ -918,7 +918,7 @@ function renderReviewTab() {
   if (!set) return;
   const tot = total();
   const list = matchChapters(matchEnds(items), tot, !!set.live);
-  const notes = items.filter((n) => (n.kind === "note" || n.kind === "mark") && n.role === "moment" && n.m !== null).sort((a, b) => a.m - b.m);
+  const notes = noteMoments(items);
   const ends = items.filter((n) => n.plugin && (n.tags || []).includes(MATCH_TAG) && n.m !== null);
   const pending = (set.analysis || []).filter((a) => a.state !== "done");
   const now = nowM();
@@ -1059,7 +1059,7 @@ function stepTo(times, dir) {
   if (next !== undefined) seekTo(next);
   else osd(dir > 0 ? t("No next one") : t("No previous one"));
 }
-const stepNote = (dir) => stepTo(items.filter((n) => n.kind === "note" && n.role === "moment" && n.m !== null).map((n) => n.m), dir);
+const stepNote = (dir) => stepTo(noteMoments(items).map((n) => n.m), dir);
 function stepMatch(dir) {
   const ends = matchEnds(items);
   if (ends.length) { stepTo(matchTargets(ends), dir); return; }
