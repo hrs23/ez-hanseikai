@@ -35,7 +35,7 @@ Requires Windows 10 version 2004 or later, or Windows 11.
 
 ## Update
 
-The app checks for a new version at start, every four hours while it runs (or Help > Check for updates), and shows it above the page with Install. While recording it offers to install after recording instead: then it asks once nothing records, plays, exports or analyses, and it never installs without asking. Updates are signed and checked before they install. An older version may not read data from a newer one, so going back means starting with an empty data folder. Updating from GGI Hanseikai moves the data folder to [its name](#uninstall), removes the old app and its shortcuts, and Windows asks about the firewall again.
+The app checks for a new version at start, every four hours while it runs (or Help > Check for updates), and shows it above the page with Install. Install works while recording too: it ends your part like leaving the room, and after the restart the app is back in the room and, while the recording still runs, records again in a new part. Updates are signed and checked before they install. An older version may not read data from a newer one, so going back means starting with an empty data folder. Updating from GGI Hanseikai moves the data folder to [its name](#uninstall), removes the old app and its shortcuts, and Windows asks about the firewall again.
 
 Settings > Updates chooses the channel: Stable (the default) gets releases marked stable, Beta gets every release first.
 
@@ -43,7 +43,7 @@ Settings > Updates chooses the channel: Stable (the default) gets releases marke
 
 Settings > Apps > Installed apps > EZ Hanseikai > Uninstall. Your data stays unless you tick the option to delete it, so a reinstall keeps your ID and recordings.
 
-Data lives in `%LOCALAPPDATA%\dev.ez-hanseikai.app`; File > Open data folder opens it, and Help > Reset app resets it, keeping your ID, rooms and recordings unless you choose otherwise. `key.bin` is your identity: keep it private, and deleting it changes your ID.
+Data lives in `%LOCALAPPDATA%\dev.ez-hanseikai.app`; File > Open data folder opens it, and Help > Reset app resets it, keeping the log and, unless you choose otherwise, your ID, rooms and recordings. `key.bin` is your identity: keep it private, and deleting it changes your ID.
 
 ## Security
 

@@ -61,8 +61,6 @@ let toastTimer = null;
 let idleTimer = null;
 let undo = null;
 let available = null;
-let installAfter = false;
-let askingUpdate = false;
 let checkedAt = 0;
 let updateText = "";
 let menuReturn = null;
@@ -1221,8 +1219,7 @@ function notices() {
   if (st.ffmpeg === "failed") list.push({ key: "ffmpegfail", level: "error", icon: "fail", text: t("Couldn't download the video tools. Check your connection."), action: { label: t("Retry"), run: () => run("retry_ffmpeg", null) } });
   if (st.notice) list.push({ key: "n:" + st.notice, level: "warn", icon: "alert", text: t(st.notice) });
   for (const p of st.peers.filter((x) => x.connected && x.other_version)) list.push({ key: "v:" + p.id, level: "warn", icon: "alert", text: t("{name} is on a different version. Both of you need the latest one.", { name: nameOf(p.id) }) });
-  if (available && installAfter) list.push({ key: "after", level: "info", icon: "download", text: t("Version {version} installs after recording", { version: available.version }), action: { label: t("Cancel"), run: () => { installAfter = false; renderNotices(); } }, sticky: true });
-  else if (available) list.push({ key: "update", level: "info", icon: "download", text: t("Version {version} is available", { version: available.version }), action: st.recording ? { label: t("Install after recording"), run: () => { installAfter = true; renderNotices(); } } : { label: t("Install"), primary: true, run: installUpdate } });
+  if (available) list.push({ key: "update", level: "info", icon: "download", text: t("Version {version} is available", { version: available.version }), action: { label: t("Install"), primary: true, run: installUpdate } });
   if (updateText) list.push({ key: "updating", level: "info", icon: "spinner", spin: true, text: updateText, sticky: true });
   return list.filter((n) => !dismissed.has(n.key));
 }
@@ -1275,22 +1272,9 @@ async function checkUpdate(manual) {
   dismissed.delete("update");
   renderNotices();
 }
-function busy() {
-  const party = watchParty && st.party.on && watchers(st.party.shared.set) > 0;
-  return st.recording || party || clock.playing || !!exporting || (st.sets || []).some((s) => (s.analysis || []).some((a) => a.state === "running"));
-}
-async function askUpdate() {
-  askingUpdate = true;
-  const yes = await ask(t("Install version {version} now? The app restarts.", { version: available.version }), t("Install"));
-  askingUpdate = false;
-  installAfter = false;
-  if (yes && available) installUpdate();
-  else renderNotices();
-}
 async function installUpdate() {
   const update = available;
   available = null;
-  installAfter = false;
   updateText = t("Installing {version}… The app will restart.", { version: update.version });
   renderNotices();
   await invoke("install_update").catch((e) => { warn(e); updateText = ""; available = update; fail(e); renderNotices(); });
@@ -1317,7 +1301,6 @@ async function update() {
   if (lang !== st.lang) { lang = st.lang; setLanguage(lang); for (const k of Object.keys(sigs)) delete sigs[k]; }
   if (boardWindow) { for (const step of [renderShell, renderBoard]) try { step(); } catch (e) { console.error(e); } return; }
   if (!ready) { ready = true; pollPlugins(); }
-  if (installAfter && available && !busy() && !askingUpdate) askUpdate();
   if (selected && !setById(selected)) selected = null;
   if (!st.recording) played = false;
   const l = liveSet();

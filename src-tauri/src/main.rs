@@ -174,6 +174,7 @@ pub struct Peer {
     pub have: HashMap<String, u64>,
     pub logs: HashMap<String, u64>,
     pub asks: Vec<Value>,
+    pub task: tauri::async_runtime::JoinHandle<()>,
 }
 
 impl Peer {
@@ -181,8 +182,8 @@ impl Peer {
         self.conn.as_ref().filter(|c| c.close_reason().is_none())
     }
 
-    pub fn new(id: EndpointId, name: String) -> Self {
-        Self { id, name, conn: None, offset_us: None, failures: 0, announce: true, codecs: default_codecs(), info: None, hw: Value::Null, live: None, speaking: false, seen_us: None, have: HashMap::new(), logs: HashMap::new(), asks: Vec::new() }
+    pub fn new(id: EndpointId, name: String, task: tauri::async_runtime::JoinHandle<()>) -> Self {
+        Self { id, name, conn: None, offset_us: None, failures: 0, announce: true, codecs: default_codecs(), info: None, hw: Value::Null, live: None, speaking: false, seen_us: None, have: HashMap::new(), logs: HashMap::new(), asks: Vec::new(), task }
     }
 }
 
@@ -494,9 +495,6 @@ pub fn clean_settings(mut settings: Value) -> Value {
     if !settings["channel"].as_str().is_some_and(|c| CHANNELS.contains(&c)) {
         settings["channel"] = Value::Null;
     }
-    if !sources::valid(&settings["source"]) {
-        settings["source"] = Value::Null;
-    }
     if !settings["language"].as_str().is_some_and(|l| ["", "en", "ja"].contains(&l)) {
         settings["language"] = json!("");
     }
@@ -565,6 +563,7 @@ fn main() {
             };
             open_main(app, &dir)?;
             let core = tauri::async_runtime::block_on(init(app.handle().clone(), dir, left_lock))?;
+            data::resume(&core);
             app.manage(core.clone());
             shell::setup(app, core.clone())?;
             record::recover(&core);
@@ -670,13 +669,12 @@ mod tests {
 
     #[test]
     fn settings_from_older_versions_fall_back_to_defaults() {
-        let old = clean_settings(json!({"name": "Ren", "limit_mbps": 0, "keep_days": 30, "channel": "nightly", "source": "display:1", "language": "fr", "quality": "ultra", "obs_port": 4455}));
+        let old = clean_settings(json!({"name": "Ren", "limit_mbps": 0, "keep_days": 30, "channel": "nightly", "language": "fr", "quality": "ultra", "obs_port": 4455}));
         assert_eq!(old["name"], "Ren");
-        assert!(old["limit_mbps"].is_null() && old["channel"].is_null() && old["source"].is_null() && old["quality"].is_null());
+        assert!(old["limit_mbps"].is_null() && old["channel"].is_null() && old["quality"].is_null());
         assert_eq!(old["language"], "");
-        let kept = clean_settings(json!({"limit_mbps": 8.5, "channel": "beta", "source": {"kind": "display", "index": 1}, "language": "ja", "quality": "high"}));
+        let kept = clean_settings(json!({"limit_mbps": 8.5, "channel": "beta", "language": "ja", "quality": "high"}));
         assert_eq!((kept["limit_mbps"].as_f64(), kept["channel"].as_str(), kept["language"].as_str(), kept["quality"].as_str()), (Some(8.5), Some("beta"), Some("ja"), Some("high")));
-        assert_eq!(kept["source"]["index"], 1);
         assert_eq!(clean_settings(json!([1, 2])), clean_settings(json!({})));
     }
 

@@ -21,7 +21,7 @@ use crate::{check, data, download, ffmpeg, hw, net, now_us, party, record, short
 
 const MAX_LOG: u64 = 10 << 20;
 pub const LOG_FILES: [&str; 3] = ["log.txt", "log.old.txt", "log.older.txt"];
-const CRASH: &str = "crash.txt";
+pub const CRASH: &str = "crash.txt";
 const EVENTS_KEPT: usize = 500;
 const TRANSFERS_KEPT: usize = 1500;
 const CUTS_KEPT: usize = 120;

@@ -68,6 +68,7 @@ const LIVE_PROBE = `(() => {
 })()`;
 
 const DIAL_S = DIAL_RETRY_S + CONNECT_TIMEOUT_S;
+const REJOIN_S = DIAL_RETRY_S * 2 + SLOW_WAIT_S;
 const SYNC_ROUND_S = LOG_SYNC_S * HELLO_EVERY;
 const FRAGMENT_S = SEGMENT_S / FRAGMENTS_PER_SEGMENT;
 const CRASH_AFTER_FRAGMENTS = FRAGMENTS_PER_SEGMENT / 2;
@@ -589,7 +590,7 @@ async function allSee(list, label, seconds, probe) {
   await Promise.all(list.map((app) => waitFor(`${app.key}: ${label}`, seconds, async () => probe(await state(app), app))));
 }
 
-const meshed = (list, room) => allSee(list, "connected to each other", within(DIAL_S * 2), (st, app) => (!room || (st.room?.id === room && !st.room.pending)) && connected(st, list.filter((x) => x !== app).map((x) => x.id)));
+const meshed = (list, room, seconds = DIAL_S * 2) => allSee(list, "connected to each other", within(seconds), (st, app) => (!room || (st.room?.id === room && !st.room.pending)) && connected(st, list.filter((x) => x !== app).map((x) => x.id)));
 
 async function asks(approver, joiner, inviter) {
   await invoke(joiner, "join_room", { code: await invoke(inviter, "create_invite", { reuse: false }) });
@@ -874,16 +875,26 @@ async function live(ctx) {
     await invoke(c, "stop_recording");
   });
 
-  await step("B leaves the room from its menu, enters it again with its recordings and notes, and deletes it from the list", async () => {
+  await step("B leaves the room from its menu and enters it again with its recordings and notes, A and B leave and enter again at once, a new room moves B out of it, and B deletes it from the list", async () => {
     const kept = (st) => ({ ids: [st.sets.map((s) => s.id), st.events.map((e) => e.key)].map((x) => x.sort().join()).join(), have: Object.fromEntries(st.sets.flatMap((s) => s.players.map((p) => [`${s.id} ${p.owner}`, p.have]))) });
     const before = kept(await state(b));
     await waitFor("B shows the room header", within(UI_REFRESH_S * 5), () => evaluate(b, `!$("app").hidden && !!st.room`));
     await evaluate(b, `$("roomname").click(); [...$("menu").querySelectorAll("button")].find((x) => x.textContent === t("Leave room")).click(); true`);
     await waitFor("B shows the start screen and still lists the room", within(UI_REFRESH_S * 5), async () => { const st = await state(b); return !st.room && st.rooms.some((r) => r.id === ctx.room) && evaluate(b, `!$("start").hidden && $("app").hidden`); });
     await invoke(b, "enter_room", { id: ctx.room });
-    await meshed([a, b], ctx.room);
+    await meshed([a, b], ctx.room, REJOIN_S);
     const after = kept(await state(b));
     check(after.ids === before.ids && Object.entries(before.have).every(([k, n]) => after.have[k] >= n), "B lost recordings or notes by leaving and entering again");
+    for (const app of [b, a]) {
+      await invoke(app, "close_room", { id: ctx.room });
+      await invoke(app, "enter_room", { id: ctx.room });
+      await meshed([a, b], ctx.room, REJOIN_S);
+    }
+    const other = await invoke(b, "create_room", { name: "Other" });
+    check((await state(b)).room?.id === other, "B did not move to the room it created");
+    await invoke(b, "enter_room", { id: ctx.room });
+    await meshed([a, b], ctx.room, REJOIN_S);
+    await invoke(b, "remove_room", { id: other });
     await invoke(b, "close_room", { id: ctx.room });
     await waitFor("B lists the room", within(UI_REFRESH_S * 5), () => evaluate(b, `!$("start").hidden && $("roomlist").children.length > 0`));
     await pressAndConfirm(b, `[...$("roomlist").children].find((r) => r.firstChild.textContent === st.rooms.find((x) => x.id === ${JSON.stringify(ctx.room)}).name).querySelector(".more").click(); [...$("menu").querySelectorAll("button")].find((x) => x.textContent === t("Delete…")).click()`);
@@ -1034,6 +1045,20 @@ async function recover(ctx) {
     await waitFor("C completes its copy of A and B", within((SEGMENT_S + SYNC_ROUND_S) * 4), () => !holdEverything([c], ctx.room, ctx.set, [a, b], limits));
   });
 
+  await step("B restarts during the recording as an update does: the recording goes on and B is back in it with its screen in a new part", async () => {
+    const before = segsOf(logOf(b, ctx.room, b.id), ctx.set).map((s) => s.capture);
+    const resume = path.join(b.data, "resume.json");
+    kill(b);
+    await stopped(b);
+    fs.writeFileSync(resume, JSON.stringify({ source: SOURCE, muted: false }));
+    start("b");
+    await attach(b);
+    const st = await state(b);
+    check(st.capture.source && st.capture.mix.mic.muted === false && !fs.existsSync(resume), "B did not take its screen and microphone back from resume.json");
+    await recordsAgain(b, ctx.room, ctx.set, before);
+    await allSee([a], "B recording again in the same set", within(SEGMENT_S + LOG_SYNC_S * 2), (st) => st.active_set?.id === ctx.set && setOf(st, ctx.set).players.find((p) => p.owner === b.id).recording);
+  });
+
   await step("B leaving ends only its part and rejoins, a crashed C does not keep the stopped set open, and everyone has it", async () => {
     const all = [a, b, c];
     const before = segsOf(logOf(b, ctx.room, b.id), ctx.set).map((s) => s.capture);
@@ -1043,7 +1068,7 @@ async function recover(ctx) {
     await sleep(SYNC_ROUND_S * 1000);
     await allSee([a, c], "still recording", 1, (st) => st.active_set?.id === ctx.set);
     await invoke(b, "enter_room", { id: ctx.room });
-    await meshed([a, b]);
+    await meshed(all, ctx.room, REJOIN_S);
     await recordsAgain(b, ctx.room, ctx.set, before);
     await allSee([a], "B recording again", within(SEGMENT_S + LOG_SYNC_S * 2), (st) => setOf(st, ctx.set).players.find((p) => p.owner === b.id).recording);
     kill(c);

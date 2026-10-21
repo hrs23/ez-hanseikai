@@ -214,10 +214,6 @@ pub fn reachable(connected: bool, seen_us: Option<i64>, now_us: i64, up: Duratio
     connected || seen_us.map_or(up < UNREACHABLE_AFTER, |seen| now_us - seen < UNREACHABLE_AFTER.as_micros() as i64)
 }
 
-fn idle(core: &Core) -> Result<(), String> {
-    if core.active_set.lock().unwrap().is_some() { Err("Leave the room before entering another.".into()) } else { Ok(()) }
-}
-
 pub fn display_name(core: &Core, id: &str) -> String {
     if id == core.ep.id().to_string() {
         return core.name.lock().unwrap().clone();
@@ -254,43 +250,52 @@ pub fn remember_name(core: &Core, id: &str, name: &str, replace: bool) {
 pub fn apply_active(core: &Arc<Core>) {
     let room = core.active_room().unwrap_or_default();
     let wanted: Vec<EndpointId> = room.members.iter().filter_map(|m| m.parse().ok()).filter(|id| *id != core.ep.id()).collect();
-    let mut fresh = Vec::new();
-    {
-        let mut peers = core.peers.lock().unwrap();
-        peers.retain(|p| {
-            let keep = wanted.contains(&p.id);
-            if !keep {
-                for conn in p.conn.iter() {
-                    conn.close(2u32.into(), b"left");
-                }
-            }
-            keep
-        });
-        for id in &wanted {
-            if !peers.iter().any(|p| p.id == *id) {
-                peers.push(Peer::new(*id, room.names.get(&id.to_string()).cloned().unwrap_or_default()));
-                fresh.push(*id);
+    let mut peers = core.peers.lock().unwrap();
+    peers.retain(|p| {
+        let keep = wanted.contains(&p.id);
+        if !keep {
+            p.task.abort();
+            for conn in p.conn.iter() {
+                conn.close(2u32.into(), b"left");
             }
         }
-    }
-    for id in fresh {
-        tauri::async_runtime::spawn(net::peer_loop(core.clone(), id));
+        keep
+    });
+    for id in &wanted {
+        if !peers.iter().any(|p| p.id == *id) {
+            let task = tauri::async_runtime::spawn(net::peer_loop(core.clone(), *id));
+            peers.push(Peer::new(*id, room.names.get(&id.to_string()).cloned().unwrap_or_default(), task));
+        }
     }
 }
 
-fn activate(core: &Arc<Core>, room: Room) {
-    {
-        let mut rooms = core.rooms.lock().unwrap();
-        rooms.list.retain(|r| r.id != room.id);
-        rooms.active = Some(room.id.clone());
-        rooms.list.push(room);
+pub fn leave(core: &Arc<Core>) {
+    core.rooms.lock().unwrap().active = None;
+    core.save_rooms();
+    end_set(core, false, None);
+    apply_active(core);
+}
+
+fn open(core: &Arc<Core>, id: &str) {
+    if core.room_id().is_some() {
+        leave(core);
     }
+    core.rooms.lock().unwrap().active = Some(id.to_string());
     core.save_rooms();
     apply_active(core);
 }
 
+fn activate(core: &Arc<Core>, room: Room) {
+    let id = room.id.clone();
+    {
+        let mut rooms = core.rooms.lock().unwrap();
+        rooms.list.retain(|r| r.id != id);
+        rooms.list.push(room);
+    }
+    open(core, &id);
+}
+
 pub fn create_room(core: &Arc<Core>, name: &str) -> Result<String, String> {
-    idle(core)?;
     let id = random_hex(ROOM_ID_BYTES);
     let name = match clean_text(name, ROOM_NAME_MAX) {
         n if n.is_empty() => format!("{}'s room", core.name.lock().unwrap()),
@@ -304,8 +309,7 @@ pub fn join_room(core: &Arc<Core>, code: &str) -> Result<(), String> {
     let bad = || "That invite code is not valid. Ask for a new one.".to_string();
     let text: String = code.split_whitespace().collect();
     let (id, token) = text.strip_prefix("ezh-").and_then(|t| t.split_once('-')).filter(|(_, token)| valid_token(token)).ok_or_else(bad)?;
-    id.parse::<EndpointId>().map_err(|_| bad())?;
-    idle(core)?;
+    id.parse::<EndpointId>().ok().filter(|id| *id != core.ep.id()).ok_or_else(bad)?;
     let members = vec![core.ep.id().to_string(), id.to_string()];
     let invite = Some((id.to_string(), token.to_string()));
     activate(core, Room { id: format!("pending-{token}"), name: "Joining...".into(), members, invite, ..Default::default() });
@@ -313,27 +317,14 @@ pub fn join_room(core: &Arc<Core>, code: &str) -> Result<(), String> {
 }
 
 pub fn enter_room(core: &Arc<Core>, id: &str) -> Result<(), String> {
-    idle(core)?;
-    {
-        let mut rooms = core.rooms.lock().unwrap();
-        if !rooms.list.iter().any(|r| r.id == id) {
-            return Err("That room is not in your list.".into());
-        }
-        rooms.active = Some(id.to_string());
+    if core.room_id().as_deref() == Some(id) {
+        return Ok(());
     }
-    core.save_rooms();
-    apply_active(core);
+    if !core.rooms.lock().unwrap().list.iter().any(|r| r.id == id) {
+        return Err("That room is not in your list.".into());
+    }
+    open(core, id);
     Ok(())
-}
-
-pub fn close_room(core: &Core, id: &str) {
-    {
-        let mut rooms = core.rooms.lock().unwrap();
-        if rooms.active.as_deref() == Some(id) {
-            rooms.active = None;
-        }
-    }
-    core.save_rooms();
 }
 
 pub fn forget_room(core: &Arc<Core>, id: &str) {
@@ -571,19 +562,17 @@ pub fn adopt_room(core: &Arc<Core>, pending: &str, id: &str, name: &str, members
     }
 }
 
-pub fn begin_set(core: &Arc<Core>, set: &str, by: &str, start_us: i64, voice: bool, of: Option<String>) -> Result<bool, String> {
+pub fn begin_set(core: &Arc<Core>, room: &str, set: &str, by: &str, start_us: i64, voice: bool, of: Option<String>) -> Result<bool, String> {
     ffmpeg::ready()?;
     if core.disk_full() {
         return Err("The disk is almost full.".into());
     }
-    let room = core.active_room_id();
-    let active = ActiveSet { id: set.to_string(), room, by: by.to_string(), start_us, voice, of };
     {
         let mut slot = core.active_set.lock().unwrap();
-        if slot.is_some() {
+        if slot.is_some() || core.room_id().as_deref() != Some(room) {
             return Ok(false);
         }
-        *slot = Some(active);
+        *slot = Some(ActiveSet { id: set.to_string(), room: room.to_string(), by: by.to_string(), start_us, voice, of });
     }
     tracing::info!("{} {set} started by {by}", if voice { "review session" } else { "session" });
     Ok(true)
@@ -628,13 +617,13 @@ pub fn unused_set(logs: &[Log], room_dir: &Path, start_us: i64, tz_offset_s: i64
 
 pub fn start_set(core: &Arc<Core>, debrief: Option<bool>) -> Result<(), String> {
     let start_us = now_us();
-    let room = core.active_room_id();
+    let room = core.active_room().filter(|r| r.invite.is_none()).map(|r| r.id).ok_or("Join a room first.")?;
     let set = unused_set(&logs(core, &room), &core.room_dir(&room), start_us, core.tz_offset_s);
     let by = core.name.lock().unwrap().clone();
     let open = core.party.lock().unwrap().open_set();
     let voice = debrief.unwrap_or(open.is_some());
     let of = open.filter(|_| voice);
-    if !begin_set(core, &set, &by, start_us, voice, of.clone())? {
+    if !begin_set(core, &room, &set, &by, start_us, voice, of.clone())? {
         return Ok(());
     }
     log_set_layout(core);

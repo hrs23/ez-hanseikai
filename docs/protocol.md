@@ -6,7 +6,7 @@ What two members send each other, as much as another program needs to talk to th
 
 iroh QUIC, with the member ID (the public key) as the address. The ALPN is `ez-hanseikai/0`; `ggi-hanseikai/0` is accepted too. Connections are encrypted and authenticated to member IDs.
 
-A connection from a non-member is closed with "not a member" after it has had the chance to send `join`. One connection serves a pair of members in both directions.
+A connection from a non-member is closed with "not a member" after it has had the chance to send `join`. One connection serves a pair of members in both directions. Either member may dial, and when two connections exist the one dialed by the lower ID is kept.
 
 ## Requests
 

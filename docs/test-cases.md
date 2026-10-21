@@ -16,13 +16,13 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - B joins A's room with approval. `e2e` (`live`)
 - C joins late through B's invite while B is cut off, approved on A once B is back. `e2e` (`live`)
 - removing C for the whole room while a recording runs stops it fetching and leaves the others recording. `e2e` (`live`)
-- B leaves the room from its menu, enters it again with its recordings and notes, and deletes it from the list. `e2e` (`live`)
+- B leaves the room from its menu and enters it again with its recordings and notes, A and B leave and enter again at once, a new room moves B out of it, and B deletes it from the list. `e2e` (`live`)
 - C removes the room from this PC while sharing and its folder does not come back. `e2e` (`live`)
 - B leaving ends only its part and rejoins, a crashed C does not keep the stopped set open, and everyone has it. `e2e` (`recover`)
 - the room header menu lists the room commands and a rename in its settings reaches everyone. `e2e` (`library`)
 - each member row says one short state. `e2e` (`library`)
 - A real two-PC test with friends: create a room, invite, join, approve, and see everyone's name, color and state. `manual`
-- Leaving a room and entering it again at once never stays on connecting; so does leaving and entering another room and coming back. `todo`
+- Pasting your own invite code is refused as not valid. `todo`
 - room: joining waits for an answer and ends the invite; the latest remove or admit wins; the latest room name wins on every clock; a rename made here beats a name from a fast clock; invite tokens and room ids cannot leave the rooms folder; a peer can only name a room with an id this app makes; a member is present while connected or seen within a minute; colors are the same everywhere; colors stay when someone joins without a clash; an old debrief links through its first party record; ai del hides ai notes from every log but not human notes; board cards newest event wins and old team card reads. `unit`
 - a member row says one short state. `ui-test`
 
@@ -115,10 +115,10 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - the update channel is kept in the settings. `e2e` (`library`)
 - C kept every file of an older version until Delete old files, which removes exactly those. `e2e` (`library`)
 - The installer run over a running app closes it, installs and starts the new version with the same rooms and recordings. `manual`
-- The in-app update on the stable and the Beta channel installs the right version, and while recording it waits until the recording ends. `manual`
+- The in-app update on the stable and the Beta channel installs the right version, and while recording the app comes back into the recording in a new part. `manual`
 - The old repository address still reaches the update manifest and the installer download. `todo`
 - The installer run over GGI Hanseikai 0.19.4 leaves one app with its shortcuts, moves the data folder with the same ID, and a 0.19.4 peer still connects. `manual`
-- data: one app holds a data folder and a leftover lock is noticed; the data folder moves to its new name once and never while the old app runs, and when both names exist the old folder stays in use and the new one is untouched; a reset keeps only the rooms when asked; a restart removes nothing under recordings and never touches old files; old files are exactly the older shapes; counts come from the files present with their logged size. `unit`
+- data: one app holds a data folder and a leftover lock is noticed; the data folder moves to its new name once and never while the old app runs, and when both names exist the old folder stays in use and the new one is untouched; a reset keeps the logs, and the rooms only when asked; a restart removes nothing under recordings and never touches old files; old files are exactly the older shapes; counts come from the files present with their logged size. `unit`
 - main: settings from older versions fall back to defaults; rooms from older versions keep what still reads. `unit`
 - ops: each update channel reads its own manifest. `unit`
 
@@ -137,7 +137,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - Members on different app versions in one room keep working and ignore what they do not understand. `todo`
 - clock: a request asks as a client and only a server answer to it is read; the offset is how far the server runs ahead in unix time; a clock that moved since the measurement keeps true time and asks again past a step; a dead server fails within one timeout. `unit`
 - ffmpeg: download retries back off up to a limit. `unit`
-- net: a fetched copy is kept only when it matches its record; only a run of failed connects is reported once; a ping reply is eight bytes and an empty one is no answer; a pull holds at least one whole record; own log is restored only when no member holds more; redials back off with jitter up to a limit; one side of each pair dials. `unit`
+- net: a fetched copy is kept only when it matches its record; only a run of failed connects is reported once; a ping reply is eight bytes and an empty one is no answer; a pull holds at least one whole record; own log is restored only when no member holds more; redials back off with jitter up to a limit; the connection dialed by the lower id is kept on both sides. `unit`
 - room: the relay shows by its host name; logs are shared only with members of that room. `unit`
 - the connection badge shows a relay when any member uses one; the diagnostics overview marks problems; each PC lists its hardware and its clock, this PC against true time and members against this PC; dropped frames are a warning; clock differences read in milliseconds or seconds; the clock summary warns about a big spread between members; where data goes says when a relay or a server is involved; the new Diagnostics texts have Japanese translations; a download shows its percent, speed and time left. `ui-test`
 
@@ -146,6 +146,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - a second app on A's data folder exits and leaves A running. `e2e` (`live`)
 - C loses its own log and gets all of it back before writing again. `e2e` (`live`)
 - B crashes mid-recording and recovers its open segment. `e2e` (`recover`)
+- B restarts during the recording as an update does: the recording goes on and B is back in it with its screen in a new part. `e2e` (`recover`)
 - A's encoder is killed and A keeps recording the set in a new part. `e2e` (`recover`)
 - closing the captured window during the recording goes on with the voice, and a new screen adds a part. `e2e` (`recover`)
 - C's disk is full during the recording: its part ends with a notice, the others go on, and C completes its copy once there is room. `e2e` (`recover`)
@@ -153,7 +154,6 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - The first start shows the Windows firewall prompt and the app works after Allow. `manual`
 - The first start downloads ffmpeg, checks it and keeps retrying with no network. `manual`
 - The window, menus, dark theme and Japanese texts look right at normal and high DPI scaling. `manual`
-- A reset of the app data keeps the log files. `todo`
 - check: lines are filled from their arguments and carry no device names. `unit`
 - debug: the ring keeps the newest and counts on; kinds follow live series and init; a piece after a failure is a retry; a hash failure marks the last receipt or adds a row; numbers become ranges; records are counted by kind; jobs are grouped with their latest state; the encoder choice explains each candidate; reports hide addresses ids and names; reports hide a user folder with spaces; a job reads as one line; the page hides addresses but keeps the rest; errors keep the newest warnings; the log tail resumes and restarts after a roll; the flow text names each route and hides hosts; a combined report names each member by short id. `unit`
 - hw: hardware is read from the script output; bad output gives empty hardware; the encoder names its kind and the matching gpu; a shared pc carries only hardware and the recording rate; what members send is cleaned; a healthy recording logs nothing until it ends; an idle screen is not a collapse; a stalled encoder is logged once until it recovers; short or voice only recordings end quietly; slow sends are logged rarely; offsets read as milliseconds or seconds; the report lists hardware and clocks. `unit`

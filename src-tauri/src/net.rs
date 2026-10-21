@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use iroh::endpoint::{Connection, RecvStream, SendStream};
+use iroh::endpoint::{ConnectError, ConnectOptions, Connection, ConnectionError, RecvStream, SendStream, Side};
 use iroh::EndpointId;
 use serde_json::{json, Value};
 use tauri::Emitter;
@@ -27,7 +27,6 @@ const STABLE_FOR: Duration = Duration::from_secs(10);
 const PING_WAIT: Duration = Duration::from_secs(3);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
-const FAREWELL_WAIT: Duration = Duration::from_secs(2);
 const REQUEST_MAX: usize = 1 << 20;
 const RESPONSE_MAX: usize = 32 << 20;
 const PULL_MAX: u64 = 1 << 20;
@@ -353,13 +352,13 @@ fn react_to_set(core: &Arc<Core>, set: &Value) {
         Some(_) => return,
     };
     if !newer {
-        let _ = room::begin_set(core, id, &by, start_us, voice, of);
+        let _ = room::begin_set(core, room, id, &by, start_us, voice, of);
         return;
     }
-    let (core, id) = (core.clone(), id.to_string());
+    let (core, room, id) = (core.clone(), room.to_string(), id.to_string());
     std::thread::spawn(move || {
         room::end_set(&core, false, None);
-        let _ = room::begin_set(&core, &id, &by, start_us, voice, of);
+        let _ = room::begin_set(&core, &room, &id, &by, start_us, voice, of);
     });
 }
 
@@ -483,24 +482,6 @@ pub async fn check_peer(core: &Arc<Core>, id: &str) -> Value {
         None => None,
     };
     reply.and_then(|b| serde_json::from_slice::<Value>(&b).ok()).unwrap_or(Value::Null)
-}
-
-pub fn farewell(core: &Core) -> impl std::future::Future<Output = ()> {
-    let mut message = hello_message(core);
-    message["set"] = Value::Null;
-    let connections = core.connections();
-    async move {
-        let sends: Vec<_> = connections
-            .into_iter()
-            .map(|conn| {
-                let message = message.clone();
-                tokio::spawn(async move { request_within(&conn, &message, FAREWELL_WAIT).await })
-            })
-            .collect();
-        for send in sends {
-            let _ = send.await;
-        }
-    }
 }
 
 pub fn pending_asks(core: &Core) -> Vec<Value> {
@@ -893,7 +874,7 @@ pub fn ping_time(reply: &[u8]) -> Option<i64> {
     Some(i64::from_le_bytes(reply.try_into().ok()?))
 }
 
-async fn measure(core: &Core, id: &EndpointId, conn: &Connection, samples: &mut Vec<(i64, i64)>) -> Result<()> {
+async fn measure(core: &Core, id: &EndpointId, conn: &Connection, room: &str, samples: &mut Vec<(i64, i64)>) -> Result<()> {
     let t0 = now_us();
     let reply = request(conn, &json!({"t": "ping"})).await?;
     let t3 = now_us();
@@ -904,14 +885,13 @@ async fn measure(core: &Core, id: &EndpointId, conn: &Connection, samples: &mut 
     }
     let (rtt, offset) = *samples.iter().min().unwrap();
     core.update_peer(id, |p| p.offset_us = Some(offset));
-    core.append_log(&core.active_room_id(), &json!({"k": "offset", "peer": short(id), "t_us": t3, "rtt_us": rtt, "offset_us": offset}));
+    core.append_log(room, &json!({"k": "offset", "peer": short(id), "t_us": t3, "rtt_us": rtt, "offset_us": offset}));
     Ok(())
 }
 
-async fn hello(core: &Arc<Core>, id: &EndpointId, conn: &Connection) -> bool {
-    let reply = request(conn, &hello_message(core)).await;
-    let Ok(reply) = reply.and_then(|r| Ok(serde_json::from_slice::<Value>(&r)?)) else { return true };
-    learn_hello(core, id, &reply) == PROTOCOL
+async fn hello(core: &Arc<Core>, id: &EndpointId, conn: &Connection) -> Option<u32> {
+    let reply = request(conn, &hello_message(core)).await.ok()?;
+    Some(learn_hello(core, id, &serde_json::from_slice(&reply).ok()?))
 }
 
 async fn present_invite(core: &Arc<Core>, id: &EndpointId, conn: &Connection) -> bool {
@@ -947,7 +927,8 @@ async fn present_invite(core: &Arc<Core>, id: &EndpointId, conn: &Connection) ->
 async fn sync(core: &Arc<Core>, id: &EndpointId, conn: &Connection) -> Result<()> {
     let mut samples = Vec::new();
     let mut tick = 0u32;
-    let mut told: Option<Value> = None;
+    let mut told = Some(holdings(core));
+    let room = core.active_room_id();
     loop {
         if test_flag(&core.dir, "offline") {
             anyhow::bail!("offline");
@@ -958,10 +939,9 @@ async fn sync(core: &Arc<Core>, id: &EndpointId, conn: &Connection) -> Result<()
             told = Some(held);
         }
         if tick < MEASURE_FIRST || tick % MEASURE_EVERY == 0 {
-            measure(core, id, conn, &mut samples).await?;
+            measure(core, id, conn, &room, &mut samples).await?;
         }
         tick += 1;
-        let room = core.active_room_id();
         let via = id.to_string();
         let people: Vec<String> = core.active_room().map(|r| r.people()).unwrap_or_default().into_iter().filter(|p| room::member_id(p)).collect();
         let pulls: Vec<_> = people
@@ -998,8 +978,8 @@ fn jitter() -> f64 {
     iroh::SecretKey::generate().to_bytes()[0] as f64 / 255.0
 }
 
-pub fn dials(me: &EndpointId, peer: &EndpointId, inviter: bool) -> bool {
-    inviter || me < peer
+pub fn preferred(me: &EndpointId, peer: &EndpointId, dialed_by_me: bool) -> bool {
+    dialed_by_me == (me < peer)
 }
 
 fn alive(core: &Core, id: &EndpointId) -> Option<Connection> {
@@ -1008,7 +988,9 @@ fn alive(core: &Core, id: &EndpointId) -> Option<Connection> {
 
 async fn adopt(core: &Core, id: &EndpointId, conn: &Connection) -> bool {
     if let Some(old) = alive(core, id).filter(|c| c.stable_id() != conn.stable_id()) {
-        if request_within(&old, &json!({"t": "ping"}), PING_WAIT).await.is_ok() {
+        let kept = |c: &Connection| preferred(&core.ep.id(), id, c.side() == Side::Client);
+        let wins = kept(conn) && !kept(&old);
+        if !wins && request_within(&old, &json!({"t": "ping"}), PING_WAIT).await.is_ok() {
             return false;
         }
         old.close(0u32.into(), b"replaced");
@@ -1029,17 +1011,25 @@ async fn run(core: &Arc<Core>, id: EndpointId, conn: Connection, outgoing: bool)
     watch_paths(core, &conn, label.clone());
     let serving = tokio::spawn(serve(core.clone(), id, conn.clone()));
     if !outgoing || present_invite(core, &id, &conn).await {
-        if hello(core, &id, &conn).await {
-            if let Err(e) = sync(core, &id, &conn).await {
-                debug::event(core, started, format!("{label}: sync stopped: {e}"));
+        match hello(core, &id, &conn).await {
+            Some(PROTOCOL) => {
+                if let Err(e) = sync(core, &id, &conn).await {
+                    debug::event(core, started, format!("{label}: sync stopped: {e}"));
+                }
             }
-        } else {
-            debug::event(core, started, format!("{label}: protocol differs from ours {PROTOCOL}"));
-            sleep(MISMATCH_WAIT).await;
+            Some(_) => {
+                debug::event(core, started, format!("{label}: protocol differs from ours {PROTOCOL}"));
+                sleep(MISMATCH_WAIT).await;
+            }
+            None => debug::event(core, started, format!("{label}: hello not answered")),
         }
     }
     serving.abort();
     let path = path_name(&conn);
+    let by = match conn.close_reason() {
+        Some(ConnectionError::ApplicationClosed(c)) => format!(" by the other app: {}", String::from_utf8_lossy(&c.reason)),
+        _ => String::new(),
+    };
     conn.close(0u32.into(), b"done");
     let lived = started.elapsed();
     core.update_peer(&id, |p| {
@@ -1050,10 +1040,10 @@ async fn run(core: &Arc<Core>, id: EndpointId, conn: Connection, outgoing: bool)
             if lived >= STABLE_FOR {
                 p.seen_us = Some(now_us());
             }
+            p.failures = if lived < STABLE_FOR { p.failures + 1 } else { 0 };
         }
-        p.failures = if lived < STABLE_FOR { p.failures + 1 } else { 0 };
     });
-    debug::event(core, started, format!("{label}: closed on the {path} path after {:.0} s", lived.as_secs_f64()));
+    debug::event(core, started, format!("{label}: closed{by} on the {path} path after {:.0} s", lived.as_secs_f64()));
 }
 
 fn repeated_failures(failed: u32) -> Option<String> {
@@ -1072,16 +1062,12 @@ pub async fn peer_loop(core: Arc<Core>, id: EndpointId) {
     loop {
         let Some(failures) = core.update_peer(&id, |p| p.failures) else { return };
         sleep(backoff(failures, jitter())).await;
-        if !core.has_peer(&id) {
-            return;
-        }
         if let Some(conn) = alive(&core, &id) {
             reached(&id, &mut failed);
             conn.closed().await;
             continue;
         }
-        let inviter = core.active_room().and_then(|r| r.invite).is_some_and(|(peer, _)| peer == id.to_string());
-        if test_flag(&core.dir, "offline") || !dials(&core.ep.id(), &id, inviter) {
+        if test_flag(&core.dir, "offline") {
             continue;
         }
         let dialing = Instant::now();
@@ -1182,10 +1168,12 @@ mod tests {
     }
 
     #[test]
-    fn one_side_of_each_pair_dials() {
+    fn the_connection_dialed_by_the_lower_id_is_kept_on_both_sides() {
         let (a, b) = (iroh::SecretKey::generate().public(), iroh::SecretKey::generate().public());
-        assert_ne!(dials(&a, &b, false), dials(&b, &a, false));
-        assert!(dials(&a, &b, true) && dials(&b, &a, true));
+        for dialed_by_a in [true, false] {
+            assert_eq!(preferred(&a, &b, dialed_by_a), preferred(&b, &a, !dialed_by_a));
+            assert_eq!(preferred(&a, &b, dialed_by_a), dialed_by_a == (a < b));
+        }
     }
 
     #[test]

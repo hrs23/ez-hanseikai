@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::room::{self, part_of, seg_name, File, Set, INIT, SERIES};
-use crate::{debug, file_len, hex, log, Core};
+use crate::{debug, file_len, hex, log, record, sources, Core};
 
 pub const FULL_SHARE: f64 = 0.01;
 const RATE_SETS: usize = 5;
@@ -19,6 +19,8 @@ const OLD_AFTER: Duration = Duration::from_secs(7 * 86_400);
 const MOVE_WAIT: Duration = Duration::from_secs(5);
 const MOVE_GAP: Duration = Duration::from_millis(200);
 pub const LIVE_KEEP: u32 = 7;
+const RESUME: &str = "resume.json";
+const RESUME_FRESH: Duration = Duration::from_secs(120);
 
 pub type Listing = Arc<HashMap<String, u64>>;
 pub type Files = Mutex<HashMap<PathBuf, Listing>>;
@@ -212,10 +214,36 @@ pub fn open_folder(dir: &Path) {
 pub fn reset(dir: &Path, keep_rooms: bool) {
     let rooms = ["key.bin", "rooms.json", "rooms"];
     for (name, path) in crate::entries(dir) {
-        if name == "EBWebView" || name == LOCK || (keep_rooms && rooms.contains(&name.as_str())) {
+        if ["EBWebView", LOCK, debug::CRASH].contains(&name.as_str()) || debug::LOG_FILES.contains(&name.as_str()) || (keep_rooms && rooms.contains(&name.as_str())) {
             continue;
         }
         let _ = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
+    }
+}
+
+pub fn resume_later(core: &Core) {
+    let resume = json!({"source": *core.engine.source.lock().unwrap(), "muted": core.engine.gain(record::MIC).1});
+    let _ = crate::write_whole(&core.dir.join(RESUME), resume.to_string().as_bytes());
+}
+
+pub fn forget_resume(dir: &Path) {
+    let _ = std::fs::remove_file(dir.join(RESUME));
+}
+
+pub fn resume(core: &Core) {
+    let path = core.dir.join(RESUME);
+    let fresh = std::fs::metadata(&path).and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().is_ok_and(|age| age < RESUME_FRESH));
+    let resume: Value = crate::read_json(&path);
+    forget_resume(&core.dir);
+    if !fresh {
+        return;
+    }
+    tracing::info!("resuming after an update");
+    if sources::valid(&resume["source"]) {
+        *core.engine.source.lock().unwrap() = resume["source"].clone();
+    }
+    if let Some(muted) = resume["muted"].as_bool() {
+        core.engine.mix.lock().unwrap()[record::MIX_KEYS[record::MIC]]["muted"] = json!(muted);
     }
 }
 
@@ -464,13 +492,13 @@ mod tests {
     }
 
     #[test]
-    fn a_reset_keeps_only_the_rooms_when_asked() {
-        let files = ["key.bin", "rooms.json", "rooms/r/logs/a.bin", "settings.json", "ffmpeg.exe", "plugins/x/m.bin", "EBWebView/x", LOCK];
+    fn a_reset_keeps_the_logs_and_the_rooms_only_when_asked() {
+        let files = ["key.bin", "rooms.json", "rooms/r/logs/a.bin", "settings.json", "ffmpeg.exe", "plugins/x/m.bin", "EBWebView/x", LOCK, "log.txt", "log.old.txt", "crash.txt"];
         for keep in [true, false] {
             let dir = temp(if keep { "resetkeep" } else { "resetall" });
             seed(&dir, files);
             reset(&dir, keep);
-            let kept: &[&str] = if keep { &["key.bin", "rooms.json", "rooms/r/logs/a.bin", "EBWebView/x", LOCK] } else { &["EBWebView/x", LOCK] };
+            let kept: &[&str] = if keep { &["key.bin", "rooms.json", "rooms/r/logs/a.bin", "EBWebView/x", LOCK, "log.txt", "log.old.txt", "crash.txt"] } else { &["EBWebView/x", LOCK, "log.txt", "log.old.txt", "crash.txt"] };
             assert_eq!(present(&dir, &files), kept);
             let _ = std::fs::remove_dir_all(dir);
         }

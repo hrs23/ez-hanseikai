@@ -110,20 +110,14 @@ fn enter_room(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     room::enter_room(core, &arg::<String>(&args, "id")?).map(|_| Value::Null)
 }
 
-fn quit_room(core: &Arc<Core>, id: &str) {
-    let farewell = (core.room_id().as_deref() == Some(id)).then(|| net::farewell(core));
-    room::close_room(core, id);
-    if core.active_set.lock().unwrap().as_ref().is_some_and(|s| s.room == id) {
-        room::end_set(core, false, None);
+fn leave_if_open(core: &Arc<Core>, id: &str) {
+    if core.rooms.lock().unwrap().active.as_deref() == Some(id) {
+        room::leave(core);
     }
-    if let Some(farewell) = farewell {
-        tauri::async_runtime::block_on(farewell);
-    }
-    room::apply_active(core);
 }
 
 fn close_room(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    quit_room(core, &arg::<String>(&args, "id")?);
+    leave_if_open(core, &arg::<String>(&args, "id")?);
     Ok(Value::Null)
 }
 
@@ -135,7 +129,7 @@ fn remove_room(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     if core.export.lock().unwrap().as_ref().is_some_and(|e| e.set.0 == id) {
         return Err("This recording is being exported. Cancel the export first.".into());
     }
-    quit_room(core, &id);
+    leave_if_open(core, &id);
     room::forget_room(core, &id);
     jobs::release_room(&id);
     core.removed_rooms.lock().unwrap().insert(id);
@@ -322,9 +316,6 @@ fn set_layout(core: &Arc<Core>, args: Value) -> Result<Value, String> {
 }
 
 fn update_allowed(core: &Core) -> Result<(), String> {
-    if core.active_set.lock().unwrap().is_some() {
-        return Err("Stop recording before updating.".into());
-    }
     if core.export.lock().unwrap().is_some() {
         return Err("Wait for the export to finish before updating.".into());
     }
@@ -354,11 +345,13 @@ fn install_update(core: &Arc<Core>, _: Value) -> Result<Value, String> {
     let bytes = tauri::async_runtime::block_on(update.download(|_, _| {}, || {})).map_err(|e| e.to_string())?;
     update_allowed(core)?;
     tracing::info!("installing version {}", update.version);
+    data::resume_later(core);
     jobs::stop_and_wait(core);
     data::unlock(&core.dir);
     let installed = update.install(bytes).map_err(|e| e.to_string());
     if installed.is_err() {
         let _ = data::lock(&core.dir);
+        data::forget_resume(&core.dir);
     }
     installed.map(|_| Value::Null)
 }
