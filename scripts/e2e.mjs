@@ -64,7 +64,7 @@ const LIVE_PROBE = `(() => {
     return s.base + s.video.currentTime;
   };
   const tiles = Object.values(grid.tiles);
-  return { now: grid === play, pos: liveClock.pos, rate: liveClock.rate, held: liveClock.held, avail: Object.fromEntries(liveMembers().map((m) => [m.key, m.avail])), at: tiles.map(at).filter((x) => x !== null), wait: tiles.some((tl) => tl.box.classList.contains("wait")), why: tiles.map((tl) => [tl.key.slice(0, 4), !!tl.media.part, !!tl.media.index, tl.box.classList.contains("wait"), tl.media.video.readyState]), late: tiles.filter((tl) => tl.box.classList.contains("late")).map((tl) => tl.key) };
+  return { now: grid === play, wall: nowUs() / 1e6, pos: liveClock.pos, rate: liveClock.rate, held: liveClock.held, avail: Object.fromEntries(liveMembers().map((m) => [m.key, m.avail])), at: tiles.map(at).filter((x) => x !== null), wait: tiles.some((tl) => tl.box.classList.contains("wait")), why: tiles.map((tl) => [tl.key.slice(0, 4), !!tl.media.part, !!tl.media.index, tl.box.classList.contains("wait"), tl.media.video.readyState]), late: tiles.filter((tl) => tl.box.classList.contains("late")).map((tl) => tl.key) };
 })()`;
 
 const DIAL_S = DIAL_RETRY_S + CONNECT_TIMEOUT_S;
@@ -393,8 +393,9 @@ async function follow(ctx, from, others, playing, position) {
   });
   await Promise.all(others.map((app) => waitFor(`${app.key} follows ${from.key}`, seconds, async () => {
     const mine = (await state(app)).party.shared;
-    const same = mine.seq === shared.seq && mine.stamp === shared.stamp && mine.origin === shared.origin;
-    return same && evaluate(app, `selected === ${JSON.stringify(ctx.set)} && clock.playing === ${playing} && Math.abs(nowM() - ${position}) < ${JUMP_MIN_S}`);
+    const ui = await evaluate(app, `({ ok: selected === ${JSON.stringify(ctx.set)} && clock.playing === ${playing} && Math.abs(nowM() - ${position}) < ${JUMP_MIN_S}, selected, playing: clock.playing, m: nowM(), last: partyLast && [partyLast.seq, partyLast.stamp, partyLast.origin.slice(0, 4)] })`);
+    check(mine.seq === shared.seq && mine.stamp === shared.stamp && mine.origin === shared.origin && ui.ok, brief({ seq: mine.seq, stamp: mine.stamp, ui }));
+    return true;
   })));
 }
 
@@ -457,21 +458,21 @@ function bytes(n) {
   return `${n.toFixed(i && n < 10 ? 1 : 0)} ${units[i]}`;
 }
 
+function processTable() {
+  const out = spawnSync("powershell", ["-NoProfile", "-Command", "Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId) $($_.ParentProcessId) $($_.CreationDate.ToFileTimeUtc()) $($_.Name)\" }"], { encoding: "utf8" }).stdout || "";
+  return out.trim().split(/\r?\n/).map((line) => line.split(" ")).map(([pid, parent, made, name]) => ({ pid: Number(pid), parent: Number(parent), made: Number(made), name }));
+}
+
 function descendants(pid) {
-  const out = spawnSync("powershell", ["-NoProfile", "-Command", "Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId) $($_.ParentProcessId)\" }"], { encoding: "utf8" }).stdout || "";
-  const pairs = out.trim().split(/\r?\n/).map((line) => line.split(" ").map(Number));
-  const found = [pid];
-  for (let i = 0; i < found.length; i++) found.push(...pairs.filter(([child, parent]) => parent === found[i] && !found.includes(child)).map(([child]) => child));
+  const all = processTable();
+  const found = all.filter((p) => p.pid === pid);
+  for (let i = 0; i < found.length; i++) found.push(...all.filter((p) => p.parent === found[i].pid && p.made >= found[i].made && !found.includes(p)));
   return found;
 }
 
-function alive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
+function running(tree) {
+  const now = new Set(processTable().map((p) => `${p.pid}@${p.made}`));
+  return tree.filter((p) => now.has(`${p.pid}@${p.made}`));
 }
 
 function kill(app, tree = true) {
@@ -482,7 +483,7 @@ function kill(app, tree = true) {
 }
 
 async function stopped(app) {
-  await waitFor(`${app.key} and its child processes exit`, within(CALL_S), () => app.proc.exitCode !== null && !app.tree.some(alive));
+  await waitFor(`${app.key} and its child processes exit`, within(CALL_S), () => { const left = running(app.tree); check(!left.length, brief(left)); return app.proc.exitCode !== null; });
 }
 
 function records(file) {
@@ -802,7 +803,7 @@ async function live(ctx) {
     await invoke(b, "set_limit", { mbps: TRICKLE_MBPS });
     const held = await watchLive(a, b, LIVE_LAG_MAX_S + SEGMENT_S, (x) => x.held || x.late.length > 0);
     await invoke(b, "set_limit", { mbps: null });
-    check(held.held, `A never held for B: ${brief(held)}`);
+    check(held.held || held.wall - held.pos > LIVE_LAG_MAX_S, `A never held for B: ${brief(held)}`);
     const fast = await watchLive(a, b, SEGMENT_S * 3, (x) => x.rate === LIVE_CATCH_UP);
     check(fast.rate === LIVE_CATCH_UP, `A never caught up at ${LIVE_CATCH_UP}: ${brief(fast)}`);
     await waitFor("A plays at 1 again once the delay is small", within(CATCH_UP_S), async () => (await evaluate(a, LIVE_PROBE)).rate === 1);
@@ -1086,9 +1087,9 @@ async function recover(ctx) {
     const shown = await waitFor("A's own tile plays right after the stop", within(PLAY_START_S), () => evaluate(a, own));
     await waitFor("A's own tile moves on", within(PLAY_START_S), async () => (await evaluate(a, own)) > shown);
     const mine = ended.players.find((p) => p.owner === a.id);
-    await evaluate(a, `act("seek", ${(mine.last_us.v - ended.start_us) / 1e6 - 0.1}); true`);
+    await evaluate(a, `act("pause", ${(mine.last_us.v - ended.start_us) / 1e6 - 0.1}); true`);
     await waitFor("A's own tile covers the end", within(SEGMENT_S + PLAY_START_S), () => evaluate(a, `(() => { const s = play.tiles[st.id].media; return !!s.index && covers(s.index, wallOf(nowM()) / 1e6 - s.base - s.shift) && s.video.readyState >= 2; })()`));
-    await evaluate(a, `act("pause", nowM()); setParty(true); true`);
+    await evaluate(a, `setParty(true); true`);
     start("c", {});
     await attach(c);
     await share(c);

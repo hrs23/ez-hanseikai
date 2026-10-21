@@ -265,10 +265,11 @@ pub fn migrate(old: &Path, new: &Path) -> PathBuf {
     if !old.exists() {
         return new.to_path_buf();
     }
-    if new.exists() || open_lock(old, false).is_err_and(|e| e.kind() != std::io::ErrorKind::NotFound) {
+    let used = new.join("key.bin").exists() || !crate::entries(&new.join("rooms")).is_empty();
+    if used || open_lock(old, false).is_err_and(|e| e.kind() != std::io::ErrorKind::NotFound) {
         return old.to_path_buf();
     }
-    let moved = crate::proc::wait_until(MOVE_WAIT, MOVE_GAP, || std::fs::rename(old, new).is_ok());
+    let moved = crate::proc::wait_until(MOVE_WAIT, MOVE_GAP, || (!new.exists() || std::fs::remove_dir_all(new).is_ok()) && std::fs::rename(old, new).is_ok());
     (if moved { new } else { old }).to_path_buf()
 }
 
@@ -485,6 +486,14 @@ mod tests {
             assert_eq!((old.exists(), tree(&new)), (false, before.clone()));
             std::fs::rename(&new, &old).unwrap();
         }
+        seed(&new, ["log.txt", "EBWebView/Default/Cookies"]);
+        std::fs::create_dir(new.join("rooms")).unwrap();
+        assert_eq!(migrate(&old, &new), new);
+        assert_eq!((old.exists(), tree(&new)), (false, before.clone()));
+        std::fs::rename(&new, &old).unwrap();
+        put(&new, "rooms/r/logs/a.bin", b"new");
+        assert_eq!(migrate(&old, &new), old);
+        std::fs::remove_dir_all(&new).unwrap();
         put(&new, "key.bin", b"new");
         assert_eq!(migrate(&old, &new), old);
         assert_eq!((tree(&old), tree(&new).len()), (before, 1));

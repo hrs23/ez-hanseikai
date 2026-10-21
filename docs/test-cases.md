@@ -124,8 +124,8 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - The installer run over a running app closes it, installs and starts the new version with the same rooms and recordings. `manual`
 - The in-app update on the stable and the Beta channel installs the right version, and while recording the app comes back into the recording in a new part. `manual`
 - The old repository address still reaches the update manifest and the installer download. `todo`
-- The installer run over GGI Hanseikai 0.19.4 leaves one app with its shortcuts, moves the data folder with the same ID, and a 0.19.4 peer still connects. `manual`
-- data: one app holds a data folder and a leftover lock is noticed; the data folder moves to its new name once and never while the old app runs, and when both names exist the old folder stays in use and the new one is untouched; a reset keeps the logs, and the rooms only when asked; a restart removes nothing under recordings and never touches old files; old files are exactly the older shapes; counts come from the files present with their logged size. `unit`
+- The installer run over GGI Hanseikai 0.19.4 leaves one app with its shortcuts, moves the data folder with the same ID (also when an empty new data folder exists), removes the old install folder when only ffmpeg.exe is left in it, and a 0.19.4 peer still connects. `manual`
+- data: one app holds a data folder and a leftover lock is noticed; the data folder moves to its new name once and never while the old app runs, and when both names exist the old folder stays in use and the new one is untouched, unless the new one holds no key.bin and no rooms, which is replaced by the old one; a reset keeps the logs, and the rooms only when asked; a restart removes nothing under recordings and never touches old files; old files are exactly the older shapes; counts come from the files present with their logged size. `unit`
 - main: settings from older versions fall back to defaults; rooms from older versions keep what still reads. `unit`
 - ops: each update channel reads its own manifest. `unit`
 
