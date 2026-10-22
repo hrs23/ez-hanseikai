@@ -89,11 +89,16 @@ function presetImage(name) {
   const fade = g.createLinearGradient(0, 0, 0, IMAGE_SIDE);
   fade.addColorStop(0, css.getPropertyValue("--raised-3").trim());
   fade.addColorStop(1, CREST_BOTTOM);
+  const edge = IMAGE_SIDE * 0.22;
+  g.beginPath();
+  g.roundRect(0, 0, IMAGE_SIDE, IMAGE_SIDE, edge);
   g.fillStyle = fade;
-  g.fillRect(0, 0, IMAGE_SIDE, IMAGE_SIDE);
+  g.fill();
   g.strokeStyle = color;
   g.lineWidth = 4;
-  g.strokeRect(2, 2, IMAGE_SIDE - 4, IMAGE_SIDE - 4);
+  g.beginPath();
+  g.roundRect(2, 2, IMAGE_SIDE - 4, IMAGE_SIDE - 4, edge - 2);
+  g.stroke();
   const scale = IMAGE_SIDE * 0.8 / 24;
   g.translate(IMAGE_SIDE * 0.1, IMAGE_SIDE * 0.1);
   g.scale(scale, scale);

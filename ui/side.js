@@ -19,7 +19,7 @@ function renderSide() {
 function renderRoomHead() {
   const name = st.room.name;
   if (!changed("roomhead", [name, stamp(st.room.icon)])) return;
-  $("roomicon").replaceChildren(roomIcon(st.room, "sm"));
+  $("roomicon").replaceChildren(roomIcon(st.room, "lg"));
   $("roomname").querySelector(".nm").textContent = name;
   $("roomname").title = name;
   $("roomname").setAttribute("aria-label", name);

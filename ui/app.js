@@ -7,7 +7,7 @@ const REFRESH_MS = 1000;
 const IDLE_MS = 2000;
 const OSD_MS = 2500;
 const SEEKWHO_MS = 4000;
-const TOAST_MS = 4000;
+const TOAST_MS = 6000;
 const UNDO_MS = 8000;
 const UPDATE_CHECK_DELAY_MS = 4000;
 const UPDATE_EVERY_MS = 4 * 3600 * 1000;
@@ -1151,7 +1151,7 @@ function stageMenu(e, key) {
 function flash(msg, kind = "info", action = null) {
   const text = typeof msg === "object" && msg && msg.code ? codeText(msg) : t(String(msg));
   $("toasttext").textContent = text;
-  $("toast").classList.toggle("error", kind === "error");
+  $("toasticon").replaceChildren(icon({ error: "alert", update: "refresh" }[kind] || "check"));
   $("toastaction").hidden = !action;
   if (action) { $("toastaction").textContent = action.label; $("toastaction").onclick = () => { $("toast").hidden = true; action.run(); }; }
   $("toast").hidden = false;
@@ -1236,7 +1236,7 @@ async function checkUpdate(manual) {
     if (manual) fail(t("Couldn't check for updates"));
     return;
   }
-  if (!available && manual) flash(t("You have the latest version"));
+  if (!available && manual) flash(t("You have the latest version"), "update");
   dismissed.delete("update");
   renderNotices();
 }
