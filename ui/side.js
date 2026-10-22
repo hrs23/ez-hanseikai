@@ -154,7 +154,10 @@ function wpPill(s, here, mine, watching) {
   const join = (e) => { e.stopPropagation(); openSession(s.id); setParty(true); };
   if (!here) return faces ? el("span", { className: "wpn", title }, faces) : null;
   if (faces) return el("button", { className: "sm wpn live", title, onclick: join }, faces, icon("users", "sm"), el("span", { textContent: t("Join") }));
-  return el("button", { className: "sm wpn wt", onclick: join }, icon("users", "sm"), el("span", { textContent: t("Watch Party") }));
+  return null;
+}
+function wtButton(s) {
+  return el("button", { className: "sm wt", onclick: (e) => { e.stopPropagation(); openSession(s.id); setParty(true); } }, icon("users", "sm"), el("span", { textContent: t("Watch Party") }));
 }
 function sessionRow(s) {
   const on = page === "player" && !showingNow() && selected === s.id;
@@ -163,7 +166,7 @@ function sessionRow(s) {
   const watching = st.party.watching[s.id];
   let l2;
   if (state && state.kind === "bar") l2 = el("div", { className: "prog", title: state.title || "" }, el("div", { className: "l2" }, icon(state.icon, "sm"), el("span", { textContent: state.text })), el("div", { className: "bar" }, el("i", { style: `width:${Math.round(state.frac * 100)}%` })));
-  else l2 = el("div", { className: "l2" }, el("span", { textContent: setLength(s) }), s.imported_by ? importedPill(s) : null);
+  else l2 = el("div", { className: "l2" }, el("span", { textContent: setLength(s) }), s.imported_by ? importedPill(s) : null, here && !(watching && watching.length) ? wtButton(s) : null);
   const mine = !!watching && watching.includes(st.id);
   const row = el("div", { className: "srow" + (on ? " on" : "") + (mine ? " wp" : "") + (here ? "" : " gone"), role: "option", tabIndex: 0, ariaSelected: on },
     thumbBox(s, [], false),

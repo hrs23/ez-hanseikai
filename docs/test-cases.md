@@ -100,7 +100,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 ## Watch Party
 
 - the app starts outside Watch Party, and joining is the Join button. `e2e` (`library`)
-- the Watch Party pill sits at the top right of the picture and shows who it is catching up with, and a recording on this PC shows a Watch Party button on hover that opens it and joins; while members watch it the row always shows their small faces in an accent pill with Join, and Watching once this PC is in that party; the name stays readable and the pill moves to a second line when it must. `manual`
+- the Watch Party pill sits at the top right of the picture and shows who it is catching up with, and a recording on this PC shows a Watch Party button on its second line on hover that opens it and joins, with nothing in the row moving when it appears; while members watch it the row always shows their small faces in an accent pill with Join, and Watching once this PC is in that party; the name stays readable and the pill moves to a second line when it must. `manual`
 - Watch Party converges on a seek and a play, and a member who joins midway converges too. `e2e` (`library`)
 - leaving and joining the Watch Party, going to Live and back, and the starter leaving keep everyone's place: leaving keeps the position, playing and layout; coming back opens the recording where it was left; a late joiner follows the party and moves nobody; the party goes on without the one who started it. `e2e` (`library`)
 - a party state is applied once, whatever its count compared with one from another recording; joining moves the player quietly; a peer's play, pause or far seek is announced and a small drift is corrected silently. `ui-test`
