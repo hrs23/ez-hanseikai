@@ -39,7 +39,7 @@ pub const OPS: &[(&str, Op)] = &[
     ("set_name", set_name),
     ("set_profile", set_profile),
     ("set_language", set_language),
-    ("set_hotkey", |c, a| null(shell::set_hotkey(c, &arg::<String>(&a, "keys")?))),
+    ("set_hotkey", |c, a| null(shell::set_hotkey(c, &arg::<String>(&a, "action")?, &arg::<String>(&a, "keys")?))),
     ("set_layout", set_layout),
     ("check_update", |c, _| Ok(json!(find_update(c)?.map(|u| u.version)))),
     ("install_update", install_update),
@@ -198,7 +198,10 @@ fn set_source(core: &Arc<Core>, args: Value) -> Result<Value, String> {
         return Err("That capture source is not available.".into());
     }
     tracing::info!("capture source chosen: {}", if source.is_null() { "none" } else { source["kind"].as_str().unwrap_or_default() });
-    *core.engine.source.lock().unwrap() = source;
+    let old = std::mem::replace(&mut *core.engine.source.lock().unwrap(), source);
+    if !old.is_null() {
+        *core.engine.last_source.lock().unwrap() = old;
+    }
     Ok(Value::Null)
 }
 

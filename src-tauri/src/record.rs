@@ -234,6 +234,7 @@ pub fn live_step(recent: &[(u32, Option<String>)], wanted: Option<&str>, n: u32)
 
 pub struct Engine {
     pub source: Mutex<Value>,
+    pub last_source: Mutex<Value>,
     pub mic: Mutex<String>,
     pub mix: Mutex<Value>,
     pub quality: Mutex<String>,
@@ -259,6 +260,7 @@ impl Engine {
     pub fn new(settings: &Value) -> Self {
         Self {
             source: Mutex::new(Value::Null),
+            last_source: Mutex::new(Value::Null),
             mic: Mutex::new(settings["mic"].as_str().unwrap_or_default().to_string()),
             mix: Mutex::new(starting_mix(&settings["mix"])),
             quality: Mutex::new(settings["quality"].as_str().unwrap_or(QUALITIES[1].0).to_string()),

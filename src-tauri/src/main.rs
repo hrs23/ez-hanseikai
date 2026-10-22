@@ -247,7 +247,7 @@ pub struct Core {
     pub asks: Mutex<Vec<room::Ask>>,
     pub party: Mutex<party::Party>,
     pub language: Mutex<String>,
-    pub hotkey: Mutex<String>,
+    pub hotkeys: Mutex<shell::Hotkeys>,
     pub api_on: Mutex<bool>,
     pub api_token: Mutex<String>,
     pub api_error: Mutex<String>,
@@ -336,7 +336,7 @@ impl Core {
             "quality": self.engine.quality.lock().unwrap().clone(),
             "language": *self.language.lock().unwrap(),
             "layout": *self.layout.lock().unwrap(),
-            "hotkey": *self.hotkey.lock().unwrap(),
+            "hotkeys": shell::HOTKEYS.iter().zip(self.hotkeys.lock().unwrap().iter()).map(|((id, _, _), keys)| (id.to_string(), json!(keys))).collect::<serde_json::Map<_, _>>(),
             "api": *self.api_on.lock().unwrap(),
             "api_token": *self.api_token.lock().unwrap(),
             "relays": self.relays.lock().unwrap().iter().map(|u| u.to_string()).collect::<Vec<_>>(),
@@ -496,7 +496,7 @@ async fn init(app: AppHandle, dir: PathBuf, left_lock: bool) -> Result<Arc<Core>
         asks: Mutex::new(Vec::new()),
         party: Mutex::new(party::Party::default()),
         language: Mutex::new(settings["language"].as_str().unwrap_or_default().to_string()),
-        hotkey: Mutex::new(settings["hotkey"].as_str().filter(|h| shell::hotkey(h).is_some()).unwrap_or(shell::DEFAULT_HOTKEY).to_string()),
+        hotkeys: Mutex::new(shell::load_hotkeys(&settings)),
         api_on: Mutex::new(settings["api"] == true),
         api_token: Mutex::new(settings["api_token"].as_str().filter(|t| api::token_valid(t)).unwrap_or_default().to_string()),
         api_error: Mutex::new(String::new()),
@@ -547,10 +547,10 @@ fn main() {
         .plugin(tauri_plugin_notification::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _, event| {
+                .with_handler(|app, shortcut, event| {
                     if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
                         if let Some(core) = app.try_state::<Arc<Core>>() {
-                            shell::marked(core.inner());
+                            shell::pressed(core.inner(), shortcut);
                         }
                     }
                 })

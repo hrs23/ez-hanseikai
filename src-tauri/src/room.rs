@@ -1523,7 +1523,7 @@ pub fn state_json(core: &Core) -> Value {
         "room": active.map(|r| json!({"id": r.id, "name": r.name, "icon": r.icon, "pending": r.invite.is_some(), "waiting": r.waiting})),
         "rooms": room_list,
         "layout": core.layout.lock().unwrap().clone(),
-        "hotkey": core.hotkey.lock().unwrap().clone(),
+        "hotkeys": crate::shell::hotkeys_json(&core.hotkeys.lock().unwrap()),
         "api": {"on": *core.api_on.lock().unwrap(), "address": crate::api::address(), "error": core.api_error.lock().unwrap().clone()},
         "sets": sets,
         "peers": peers,

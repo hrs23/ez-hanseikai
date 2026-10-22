@@ -192,8 +192,7 @@ function openSettings(pane) {
   $("language").value = st.language;
   $("sessionsound").checked = sessionSound;
   $("relays").value = st.relays.join("\n");
-  $("hotkey").textContent = st.hotkey;
-  $("hotkeyerr").hidden = true;
+  renderHotkeys();
   $("myid").textContent = longId(st.id, 4);
   $("myid").title = st.id;
   invoke("data_info").then((info) => { $("datadir").textContent = info.dir; }).catch(warn);
@@ -210,6 +209,30 @@ function showPane() {
 }
 function renderKeys() {
   $("keylist").replaceChildren(...SHORTCUTS.flatMap(([label, keys]) => [el("dt", { textContent: t(label) }), el("dd", {}, ...keys.map((k) => el("kbd", { textContent: k })))]));
+}
+function renderHotkeys() {
+  $("hotkeys").replaceChildren(...hotkeyRows(st.hotkeys).map((h) => {
+    const keys = el("button", { className: "keys w240", textContent: h.keys });
+    const reset = el("button", { className: "icon sm", title: t("Reset to default"), ariaLabel: t("Reset to default"), disabled: !h.changed }, icon("rotate-ccw", "sm"));
+    const err = el("span", { className: "err", hidden: true });
+    const save = (value) => invoke("set_hotkey", { action: h.action, keys: value }).then(refresh).then(renderHotkeys).catch((e) => { keys.textContent = h.keys; err.textContent = t(String(e)); err.hidden = false; });
+    keys.onclick = () => { listening = true; keys.classList.add("listening"); keys.textContent = t("Press the keys…"); };
+    keys.onblur = () => { if (listening) { listening = false; keys.classList.remove("listening"); keys.textContent = h.keys; } };
+    keys.onkeydown = (e) => {
+      if (!listening) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Escape") { keys.blur(); return; }
+      const k = keysOf(e);
+      if (!k) return;
+      listening = false;
+      keys.classList.remove("listening");
+      keys.textContent = k;
+      save(k);
+    };
+    reset.onclick = () => save(h.default);
+    return el("div", { className: "srow2" }, el("span", { className: "lab", textContent: t(h.label) }), keys, reset, err);
+  }));
 }
 function renderSettings() {
   if (!$("settings").open) return;
@@ -410,24 +433,6 @@ $("resetyes").onclick = () => {
   $("resetdlg").close();
   const keepRooms = $("keeprooms").checked;
   run("reset", { keep_rooms: keepRooms }, null);
-};
-$("hotkey").onclick = () => {
-  listening = true;
-  $("hotkey").classList.add("listening");
-  $("hotkey").textContent = t("Press the keys…");
-};
-$("hotkey").onblur = () => { if (listening) { listening = false; $("hotkey").classList.remove("listening"); $("hotkey").textContent = st.hotkey; } };
-$("hotkey").onkeydown = (e) => {
-  if (!listening) return;
-  e.preventDefault();
-  e.stopPropagation();
-  if (e.key === "Escape") { $("hotkey").blur(); return; }
-  const keys = keysOf(e);
-  if (!keys) return;
-  listening = false;
-  $("hotkey").classList.remove("listening");
-  $("hotkey").textContent = keys;
-  invoke("set_hotkey", { keys }).then(() => { $("hotkeyerr").hidden = true; refresh(); }).catch((err) => { $("hotkeyerr").textContent = t(String(err)); $("hotkeyerr").hidden = false; $("hotkey").textContent = st.hotkey; });
 };
 $("rfolder").onclick = () => dialog("open_data_folder").catch(fail);
 $("rreport").onclick = () => run("debug_report", { save: true }, (p) => { $("rinfo").textContent = p; });

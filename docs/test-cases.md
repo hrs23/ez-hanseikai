@@ -43,11 +43,11 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - the set stops and everyone has it. `e2e` (`live`)
 - A, B and C record a short set, C joining late and recording long enough that every tile has video at the far seek. `e2e` (`library`)
 - Start pressed on A and B together makes one recording on every PC. `e2e` (`library`)
-- the microphone, the mix and the hotkey are kept in the settings. `e2e` (`library`)
+- the microphone, the mix and the hotkeys are kept in the settings. `e2e` (`library`)
 - A real two-PC recording of a real game with game sound and the microphone, lined up in playback. `manual`
 - A long recording of an hour or more with three members runs without a stall, a growing delay or a lost part (soak test). `manual`
 - The hardware encoders (NVENC, AMF, QSV) record on each GPU kind, and the fallback to the software encoder works. `manual`
-- The global hotkey starts and stops a recording while a game has the focus. `manual`
+- While recording with a game in focus, the global shortcuts mark the moment, turn the microphone and the screen off and on with the dock buttons following, and a notification says each change; reset puts a changed shortcut back to its default. `manual`
 - Closing the captured window while on standby shows that the source closed and lets the screen be chosen again, with no stuck encoder. `todo`
 - capture: a picture fits inside with even bars; colors become studio range bt709; a narrow picture gets black bars on the sides. `unit`
 - data: the standby ring keeps the newest segments and only standby is trimmed. `unit`
@@ -194,9 +194,9 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - check: a line starts with its level. `unit`
 - debug: the transfer list keeps the newest; kinds follow live series and init; a piece after a failure is a retry; a hash failure marks the last receipt or adds a row; jobs are grouped with their latest state; reports hide addresses ids and names; reports hide a user folder with spaces; a job reads as one line; addresses are hidden and the rest kept; errors keep the newest warnings; the tail starts at a whole line; the flow text names each route and hides hosts; a combined report names each member by short id. `unit`
 - hw: hardware is read from the script output; bad output gives empty hardware; the encoder names its kind and the matching gpu; the report line names the hardware encoder and capture rate; a healthy recording logs nothing until it ends; an idle screen is not a collapse; a stalled encoder is logged once until it recovers; short or voice only recordings end quietly; slow sends are logged rarely. `unit`
-- shell: colors are written blue first for windows; translations are unique and fall back to english; the start command says what it records; only plain web links open; the hotkey needs ctrl or alt; closing asks only while work would be lost; clocks read like the player. `unit`
+- shell: colors are written blue first for windows; translations are unique and fall back to english; the start command says what it records; only plain web links open; hotkeys need ctrl or alt and differ; saved hotkeys load from the old setting and never repeat; closing asks only while work would be lost; clocks read like the player. `unit`
 - sources: a closed window is never replaced by another window of the same program. `unit`
-- days read as today, yesterday or a date; shortcuts need Ctrl or Alt and read like the native menu; the pages call a recording a recording, never a session; every English phrase and fixed message has a Japanese one and every Japanese entry is used; every end-to-end step is named in docs/test-cases.md. `ui-test`
+- days read as today, yesterday or a date; shortcuts need Ctrl or Alt and read like the native menu; each global shortcut row is named and can be reset only when it differs from its default; the pages call a recording a recording, never a session; every English phrase and fixed message has a Japanese one and every Japanese entry is used; every end-to-end step is named in docs/test-cases.md. `ui-test`
 - start page: an update or video-tools notice shows before any room is open; the two main actions read Join a room and Create a room. `manual` (UI walkthrough harness)
 - notes: #tags and @member names show as chips; a chip filters the recording's timeline and a second tap or the × clears it; typing # or @ suggests tags or names and Enter, Tab or a click inserts the pick; a name matches longest first, with spaces, Japanese and emoji, and never inside a word; a stored mention follows a renamed member (chip shows the current name) and filters by id, an old note without ids filters by name. `ui-test`
 - interface text (labels, buttons, menus) cannot be selected, while notes, events, cards, tables, fields and code can; the browser menu never shows and right-click offers Copy, Cut and Paste only where text is selected or editable. `manual` (UI walkthrough harness)

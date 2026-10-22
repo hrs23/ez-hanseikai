@@ -4,7 +4,7 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use serde_json::Value;
+use serde_json::{json, Value};
 use tauri::menu::{Menu, MenuBuilder, MenuItem, MenuItemBuilder, SubmenuBuilder};
 use tauri::{AppHandle, Emitter, Manager, Wry};
 use tauri_plugin_dialog::{DialogExt, FileDialogBuilder, MessageDialogButtons, MessageDialogKind};
@@ -13,10 +13,12 @@ use tauri_plugin_notification::NotificationExt;
 
 use crate::{language, Core, REPO, VERSION};
 
-pub const DEFAULT_HOTKEY: &str = "Ctrl+Alt+M";
+type Action = fn(&Arc<Core>) -> Option<&'static str>;
+pub const HOTKEYS: [(&str, &str, Action); 3] = [("mark", "Ctrl+Alt+M", mark), ("mic", "Ctrl+Alt+N", toggle_mic), ("screen", "Ctrl+Alt+V", toggle_screen)];
+pub type Hotkeys = [String; 3];
 const BOARD: &str = "board";
 const STATUS_POLL: Duration = Duration::from_secs(1);
-const JA: [(&str, &str); 40] = [
+const JA: [(&str, &str); 44] = [
     ("Already running with this data folder.", "このデータフォルダですでに動いています。"),
     ("EZ Hanseikai", "EZ反省会"),
     ("File", "ファイル"),
@@ -56,6 +58,10 @@ const JA: [(&str, &str); 40] = [
     ("Cancel", "キャンセル"),
     ("Version", "バージョン"),
     ("Moment marked", "マークしました"),
+    ("Microphone on", "マイクオン"),
+    ("Microphone off", "マイクオフ"),
+    ("Screen on", "画面オン"),
+    ("Screen off", "画面オフ"),
     ("{name} wants to join", "{name} が参加を希望しています"),
 ];
 
@@ -167,6 +173,10 @@ pub fn show_window(app: &AppHandle) {
 
 fn window_shown(app: &AppHandle) -> bool {
     app.get_webview_window("main").is_some_and(|w| w.is_visible().unwrap_or(false) && !w.is_minimized().unwrap_or(false))
+}
+
+fn window_watched(app: &AppHandle) -> bool {
+    window_shown(app) && app.get_webview_window("main").is_some_and(|w| w.is_focused().unwrap_or(false))
 }
 
 const CAPTION: u32 = 0x0f1115;
@@ -341,30 +351,84 @@ pub fn hotkey(text: &str) -> Option<Shortcut> {
     shortcut.mods.intersects(Modifiers::CONTROL | Modifiers::ALT | Modifiers::SUPER).then_some(shortcut)
 }
 
-fn arm_hotkey(app: &AppHandle, text: &str, on: bool) -> bool {
-    let shortcuts = app.global_shortcut();
-    let _ = shortcuts.unregister_all();
-    !on || hotkey(text).is_some_and(|s| shortcuts.register(s).is_ok())
+fn check_hotkey(keys: &Hotkeys, index: usize, text: &str) -> Result<Shortcut, &'static str> {
+    let shortcut = hotkey(text).ok_or("Use Ctrl or Alt with a key.")?;
+    if keys.iter().enumerate().any(|(i, k)| i != index && hotkey(k) == Some(shortcut)) {
+        return Err("Another action uses that shortcut.");
+    }
+    Ok(shortcut)
 }
 
-pub fn set_hotkey(core: &Core, text: &str) -> Result<(), String> {
-    hotkey(text).ok_or("Use Ctrl or Alt with a key.")?;
-    let recording = core.any_recording();
-    if !arm_hotkey(&core.app, text, true) {
-        let old = core.hotkey.lock().unwrap().clone();
-        arm_hotkey(&core.app, &old, recording);
+pub fn load_hotkeys(settings: &Value) -> Hotkeys {
+    let mut keys = Hotkeys::default();
+    for (i, (id, default, _)) in HOTKEYS.iter().enumerate() {
+        let saved = settings["hotkeys"][id].as_str().or(if i == 0 { settings["hotkey"].as_str() } else { None });
+        keys[i] = [saved, Some(*default)].into_iter().flatten().find(|k| check_hotkey(&keys, i, k).is_ok()).unwrap_or_default().to_string();
+    }
+    keys
+}
+
+pub fn hotkeys_json(keys: &Hotkeys) -> Value {
+    json!(HOTKEYS.iter().zip(keys).map(|((id, default, _), keys)| json!({"action": id, "keys": keys, "default": default})).collect::<Vec<_>>())
+}
+
+fn arm_hotkeys<S: AsRef<str>>(app: &AppHandle, keys: &[S], on: bool) -> bool {
+    let shortcuts = app.global_shortcut();
+    let _ = shortcuts.unregister_all();
+    !on || keys.iter().filter_map(|k| hotkey(k.as_ref())).fold(true, |ok, s| shortcuts.register(s).is_ok() && ok)
+}
+
+pub fn set_hotkey(core: &Core, action: &str, text: &str) -> Result<(), String> {
+    let index = HOTKEYS.iter().position(|(id, _, _)| *id == action).ok_or("Unknown shortcut.")?;
+    let mut keys = core.hotkeys.lock().unwrap().clone();
+    check_hotkey(&keys, index, text)?;
+    let free = arm_hotkeys(&core.app, &[text], true);
+    if free {
+        keys[index] = text.to_string();
+    }
+    arm_hotkeys(&core.app, &keys, core.any_recording());
+    if !free {
         return Err("Another app uses that shortcut.".into());
     }
-    arm_hotkey(&core.app, text, recording);
-    *core.hotkey.lock().unwrap() = text.to_string();
+    *core.hotkeys.lock().unwrap() = keys;
     core.save_settings();
     let _ = install_menus(&core.app, core);
     Ok(())
 }
 
-pub fn marked(core: &Arc<Core>) {
-    if crate::ops::mark(core, Value::Null).is_ok() && !window_shown(&core.app) {
-        notify(&core.app, tr(&language(core), "Moment marked"), "");
+fn mark(core: &Arc<Core>) -> Option<&'static str> {
+    crate::ops::mark(core, Value::Null).ok().map(|_| "Moment marked")
+}
+
+fn toggle_mic(core: &Arc<Core>) -> Option<&'static str> {
+    let mic = core.engine.mix.lock().unwrap()["mic"].clone();
+    let muted = mic["muted"] != true;
+    crate::ops::find("set_mix")?(core, json!({"kind": "mic", "volume": mic["volume"], "muted": muted})).ok()?;
+    Some(if muted { "Microphone off" } else { "Microphone on" })
+}
+
+fn toggle_screen(core: &Arc<Core>) -> Option<&'static str> {
+    let on = !core.engine.source.lock().unwrap().is_null();
+    let next = if on { Value::Null } else { core.engine.last_source.lock().unwrap().clone() };
+    if !on && next.is_null() {
+        return None;
+    }
+    crate::ops::find("set_source")?(core, json!({"source": next})).ok()?;
+    Some(if on { "Screen off" } else { "Screen on" })
+}
+
+pub fn run_hotkey(core: &Arc<Core>, index: usize) {
+    if let Some(done) = HOTKEYS[index].2(core) {
+        if !window_watched(&core.app) {
+            notify(&core.app, tr(&language(core), done), "");
+        }
+    }
+}
+
+pub fn pressed(core: &Arc<Core>, shortcut: &Shortcut) {
+    let index = core.hotkeys.lock().unwrap().iter().position(|k| hotkey(k).as_ref() == Some(shortcut));
+    if let Some(index) = index {
+        run_hotkey(core, index);
     }
 }
 
@@ -437,7 +501,7 @@ pub fn install_menus(app: &AppHandle, core: &Core) -> tauri::Result<()> {
     let lang = language(core);
     let recording = core.any_recording();
     let text = toggle_text(recording, core.party.lock().unwrap().reviewing());
-    let keys = core.hotkey.lock().unwrap().clone();
+    let keys = core.hotkeys.lock().unwrap()[0].clone();
     let toggle = item(app, &lang, "toggle-recording", text, None)?;
     let mark = item(app, &lang, "mark", "Mark this moment", hotkey(&keys).map(|_| keys.as_str()))?;
     mark.set_enabled(recording)?;
@@ -495,7 +559,7 @@ pub fn setup(app: &tauri::App, core: Arc<Core>) -> tauri::Result<()> {
         match event.id().as_ref() {
             "open-folder" => crate::data::open_folder(&core.dir),
             "exit" => dialog(exit_app),
-            "mark" => marked(core),
+            "mark" => run_hotkey(core, 0),
             "issues" => open_link(&format!("{REPO}/issues/new")),
             "releases" => open_link(&format!("{REPO}/releases")),
             "about" => dialog(|app, core| { let lang = language(core); tell(app, &lang, &format!("{} {VERSION}\nMIT or Apache-2.0\n{REPO}", tr(&lang, "Version"))) }),
@@ -514,10 +578,10 @@ pub fn setup(app: &tauri::App, core: Arc<Core>) -> tauri::Result<()> {
             let recording = core.any_recording();
             let reviewing = core.party.lock().unwrap().reviewing();
             let lang = language(&core);
-            let hotkey = core.hotkey.lock().unwrap().clone();
-            if last.as_ref() != Some(&(recording, reviewing, lang.clone(), hotkey.clone())) {
-                last = Some((recording, reviewing, lang.clone(), hotkey.clone()));
-                arm_hotkey(&app, &hotkey, recording);
+            let hotkeys = core.hotkeys.lock().unwrap().clone();
+            if last.as_ref() != Some(&(recording, reviewing, lang.clone(), hotkeys.clone())) {
+                last = Some((recording, reviewing, lang.clone(), hotkeys.clone()));
+                arm_hotkeys(&app, &hotkeys, recording);
                 let items = ITEMS.lock().unwrap();
                 if let Some(toggle) = &items.toggle {
                     let _ = toggle.set_text(tr(&lang, toggle_text(recording, reviewing)));
@@ -585,13 +649,29 @@ mod tests {
     }
 
     #[test]
-    fn the_hotkey_needs_ctrl_or_alt() {
-        assert!(hotkey(DEFAULT_HOTKEY).is_some());
+    fn hotkeys_need_ctrl_or_alt_and_differ() {
+        for (_, default, _) in HOTKEYS {
+            assert!(hotkey(default).is_some());
+        }
         assert!(hotkey("Alt+F9").is_some());
         assert!(hotkey("M").is_none());
         assert!(hotkey("Shift+M").is_none());
         assert!(hotkey("Ctrl+").is_none());
         assert!(hotkey("Ctrl+Nonsense").is_none());
+        let keys = load_hotkeys(&Value::Null);
+        assert_eq!(keys, HOTKEYS.map(|(_, default, _)| default.to_string()));
+        assert_eq!(check_hotkey(&keys, 1, "ctrl+alt+m"), Err("Another action uses that shortcut."));
+        assert_eq!(check_hotkey(&keys, 1, "Shift+M"), Err("Use Ctrl or Alt with a key."));
+        assert!(check_hotkey(&keys, 0, "Ctrl+Alt+M").is_ok());
+        assert!(check_hotkey(&keys, 2, "Super+F9").is_ok());
+    }
+
+    #[test]
+    fn saved_hotkeys_load_from_the_old_setting_and_never_repeat() {
+        let keys = load_hotkeys(&json!({"hotkey": "Alt+F9", "hotkeys": {"screen": "Alt+F9"}}));
+        assert_eq!(keys, ["Alt+F9", "Ctrl+Alt+N", "Ctrl+Alt+V"]);
+        let keys = load_hotkeys(&json!({"hotkey": "Alt+F9", "hotkeys": {"mark": "Ctrl+Alt+N", "mic": "M"}}));
+        assert_eq!(keys, ["Ctrl+Alt+N", "", "Ctrl+Alt+V"]);
     }
 
     #[test]
