@@ -31,7 +31,8 @@ function rowSignature(r) {
 
 function whereLine(s) {
   const here = onThisPc(s);
-  return el("div", { className: "l2 where" }, el("span", { textContent: t(here ? "On this PC" : "Not on this PC") }), el("span", { textContent: bytes(sizeOf(s)) }));
+  const fetch = here || s.wanted ? null : el("button", { className: "sm", textContent: t("Download"), onclick: (e) => { e.stopPropagation(); run("download_set", { room: s.room, set: s.id }); } });
+  return el("div", { className: "l2 where" }, el("span", { textContent: t(here ? "On this PC" : "Not on this PC") }), el("span", { textContent: bytes(sizeOf(s)) }), fetch);
 }
 
 const KEEP_NEWEST = 3;
