@@ -117,7 +117,7 @@ Members get the view like any other: a removed member's log is pulled and shared
 
 The app starts and works with files of older versions present, and reads none of them. These shapes are old, judged by the name at each depth:
 
-- In the data folder: `log.bin`, `peer/`, `peer.txt`, `peers.txt`, `running.marker`, `plugins/` (the transcription tool and models), and `rec-<digits>.mp4`.
+- In the data folder: `log.bin`, `peer/`, `peer.txt`, `peers.txt`, `running.marker`, `plugins/` (tools and models of older versions), and `rec-<digits>.mp4`.
 - In `rooms/<room>/`: a folder named by a member ID, `sets/` and `live/`.
 - In `logs/`: `<name>.bin` where the name is not a member ID.
 - In a capture folder `recordings/<set>/<member id>/<capture id>/`: `verified.json` and `cap.json`.

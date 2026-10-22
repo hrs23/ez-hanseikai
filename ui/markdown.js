@@ -152,19 +152,25 @@ function mdParse(text) {
 
 const mdText = (nodes) => nodes.map((n) => n.text ?? n.code ?? mdText(n.strong || n.em || n.strike || n.mark || n.children || [])).join("");
 
+function chipEl(kind, value, label, hooks) {
+  if (!hooks.onChip) return el("span", { className: "tag", textContent: label });
+  const on = hooks.chip && hooks.chip.kind === kind && hooks.chip.value.toLowerCase() === value.toLowerCase();
+  return el("button", { type: "button", className: "tag" + (on ? " on" : ""), textContent: label, onclick: (e) => { e.stopPropagation(); hooks.onChip(kind, value); } });
+}
+
 function mdSpans(nodes, hooks) {
   const wrap = (tag, children, props = {}) => el(tag, props, ...mdSpans(children, hooks));
   return nodes.flatMap((n) => {
     if (n.text !== undefined) {
       const parts = n.text.split("\n");
-      return parts.flatMap((p, k) => (k ? [el("br"), p] : [p]));
+      return parts.flatMap((p, k) => (k ? [el("br"), p] : [p])).flatMap((p) => (typeof p === "string" && hooks.names ? mentionParts(p, hooks.names).map((q) => (q.mention ? chipEl("mention", q.mention, "@" + q.mention, hooks) : q)) : [p]));
     }
     if (n.code !== undefined) return [el("code", { textContent: n.code })];
     if (n.strong) return [wrap("strong", n.strong)];
     if (n.em) return [wrap("em", n.em)];
     if (n.strike) return [wrap("del", n.strike)];
     if (n.mark) return [wrap("mark", n.mark)];
-    if (n.tag !== undefined) return [el("span", { className: "tag", textContent: tagName(n.tag) })];
+    if (n.tag !== undefined) return [chipEl("tag", n.tag, tagName(n.tag), hooks)];
     if (n.link.kind === "moment") {
       const label = mdText(n.children) || t("Moment");
       return [el("button", { className: "link", onclick: (e) => { e.stopPropagation(); hooks.onLink(n.link.link); } }, icon("play", "sm"), `${label} ${fmt(n.link.link.m)}`)];

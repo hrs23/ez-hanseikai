@@ -1,4 +1,5 @@
 const NOTE_SHOW_S = 8;
+const MENTION_QUERY_MAX = 40;
 const OVERLAY_MAX = 4;
 
 function role(e) {
@@ -35,8 +36,54 @@ function parseLink(text) {
   return { set, m, view: parts[2] && parts[2] !== "all" ? parts[2] : null };
 }
 
-function inline(text) {
-  return mdSpans(mdInline(text), mdHooks());
+function inline(text, over) {
+  return mdSpans(mdInline(text), mdHooks({ names: memberNames(), ...over }));
+}
+
+function memberNames() {
+  const all = [...Object.values((st && st.names) || {}), st && st.name].filter((n) => typeof n === "string" && n.trim());
+  return [...new Set(all)].sort((a, b) => b.length - a.length);
+}
+
+function mentionParts(text, names) {
+  const out = [];
+  let last = 0;
+  for (let i = text.indexOf("@"); i >= 0; i = text.indexOf("@", i + 1)) {
+    if (i > 0 && /[\p{L}\p{N}_]/u.test(text[i - 1])) continue;
+    const rest = text.slice(i + 1).toLowerCase();
+    const name = names.find((n) => rest.startsWith(n.toLowerCase()) && !(/\w$/.test(n) && /\w/.test(text[i + 1 + n.length] || "")));
+    if (!name) continue;
+    if (i > last) out.push(text.slice(last, i));
+    out.push({ mention: text.slice(i + 1, i + 1 + name.length) });
+    last = i + 1 + name.length;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+
+function chipMatches(n, chip) {
+  if (!chip) return true;
+  const want = chip.value.toLowerCase();
+  if (chip.kind === "tag") return (n.tags || []).some((t) => t.toLowerCase() === want);
+  return mentionParts(n.body || n.text || "", memberNames()).some((p) => p.mention && p.mention.toLowerCase() === want);
+}
+
+function hintAt(text, caret, tags, names, limit) {
+  const before = text.slice(0, caret);
+  const tag = before.match(/#([\p{L}\p{N}_-]*)$/u);
+  if (tag) {
+    const q = tag[1].toLowerCase();
+    return { trigger: "#", start: caret - tag[0].length, items: tags.filter((x) => x.toLowerCase().startsWith(q) && x.toLowerCase() !== q).slice(0, limit) };
+  }
+  const at = before.lastIndexOf("@");
+  const q = before.slice(at + 1).toLowerCase();
+  if (at < 0 || (at > 0 && /[\p{L}\p{N}_]/u.test(before[at - 1])) || /[#@\n]/.test(q) || q.length > MENTION_QUERY_MAX) return { trigger: "", start: caret, items: [] };
+  return { trigger: "@", start: at, items: names.filter((x) => x.toLowerCase().startsWith(q) && x.toLowerCase() !== q).slice(0, limit) };
+}
+
+function applyHint(text, caret, hint, value) {
+  const head = text.slice(0, hint.start) + hint.trigger + value + " ";
+  return { text: head + text.slice(caret), caret: head.length };
 }
 
 function tagName(tag) {

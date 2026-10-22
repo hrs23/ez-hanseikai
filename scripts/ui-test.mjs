@@ -11,7 +11,7 @@ const source = ["util.js", "i18n.js", "live.js", "media.js", "layout.js", "dock.
 const memory = new Map();
 const localStorage = { getItem: (k) => memory.get(k) ?? null, setItem: (k, v) => memory.set(k, v) };
 const context = vm.createContext({ localStorage, window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id, location: { search: "" } });
-const ui$ = vm.runInContext(`${source}\n({ matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, memberStatus, sendsPicture, viewLine, tileProblem, livePlayers, ordered, extensionLine, analysisReason, recordingAnalysis, analysisState, cardParts, dropPos, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, talking, stillTalking, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, memberStatus, sendsPicture, viewLine, tileProblem, livePlayers, ordered, extensionLine, analysisReason, recordingAnalysis, analysisState, cardParts, dropPos, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, talking, stillTalking, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 const plain = (v) => JSON.parse(JSON.stringify(v));
 
 const moment = (m, extra = {}) => ({ role: "moment", m, plugin: { id: "apex-matches" }, tags: ["match"], ...extra });
@@ -724,4 +724,38 @@ test("every end-to-end step is named in docs/test-cases.md", () => {
   const cases = fs.readFileSync(path.join(ui, "..", "docs", "test-cases.md"), "utf8");
   const steps = [...fs.readFileSync(path.join(ui, "..", "scripts", "e2e.mjs"), "utf8").matchAll(/await step\("((?:[^"\\]|\\.)*)"/g)].map((m) => JSON.parse(`"${m[1]}"`));
   assert.deepEqual(steps.filter((s) => !cases.includes(s)), []);
+});
+
+test("mentions match member names, longest first, with spaces and Japanese, and not inside words", () => {
+  const names = ["Jo Smith", "Jo", "たろう", "😀 Ace"];
+  const parts = (text) => plain(ui$.mentionParts(text, names));
+  assert.deepEqual(parts("hi @Jo Smith and @jo!"), ["hi ", { mention: "Jo Smith" }, " and ", { mention: "jo" }, "!"]);
+  assert.deepEqual(parts("@たろう、@😀 Ace"), [{ mention: "たろう" }, "、", { mention: "😀 Ace" }]);
+  assert.deepEqual(parts("mail a@Jo.com @Joe @"), ["mail a@Jo.com @Joe @"]);
+  assert.deepEqual(parts(""), []);
+});
+
+test("a filter chip keeps notes with that tag or mention", () => {
+  ui$.setStorage({ names: { a: "Jo" }, name: "Me" });
+  const note = { body: "go @Jo #Rotate", tags: ["Rotate"] };
+  assert.equal(ui$.chipMatches(note, null), true);
+  assert.equal(ui$.chipMatches(note, { kind: "tag", value: "rotate" }), true);
+  assert.equal(ui$.chipMatches(note, { kind: "tag", value: "push" }), false);
+  assert.equal(ui$.chipMatches(note, { kind: "mention", value: "jo" }), true);
+  assert.equal(ui$.chipMatches({ body: "plain", tags: [] }, { kind: "mention", value: "Jo" }), false);
+  assert.deepEqual([...ui$.memberNames()], ["Jo", "Me"]);
+});
+
+test("typing # or @ suggests known tags or member names and inserts the pick", () => {
+  const tags = ["Rotate", "push"];
+  const names = ["Jo Smith", "Jon", "たろう"];
+  assert.deepEqual(plain(ui$.hintAt("go #ro", 6, tags, names, 5)).items, ["Rotate"]);
+  assert.deepEqual(plain(ui$.hintAt("go #Rotate", 10, tags, names, 5)).items, []);
+  assert.deepEqual(plain(ui$.hintAt("hi @jo", 6, tags, names, 5)).items, ["Jo Smith", "Jon"]);
+  assert.deepEqual(plain(ui$.hintAt("hi @Jo S", 8, tags, names, 5)).items, ["Jo Smith"]);
+  assert.deepEqual(plain(ui$.hintAt("hi @", 4, tags, names, 2)).items, ["Jo Smith", "Jon"]);
+  assert.deepEqual(plain(ui$.hintAt("a@jo", 4, tags, names, 5)).items, []);
+  assert.deepEqual(plain(ui$.hintAt("", 0, tags, names, 5)).items, []);
+  const h = ui$.hintAt("hi @jo tail", 6, tags, names, 5);
+  assert.deepEqual(plain(ui$.applyHint("hi @jo tail", 6, h, "Jo Smith")), { text: "hi @Jo Smith  tail", caret: 13 });
 });

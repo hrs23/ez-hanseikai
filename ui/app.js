@@ -841,11 +841,14 @@ function renderTimeline(tot) {
 function renderReview(shown) {
   const set = playSet();
   if (!set || $("reviewlist").querySelector("input")) return;
-  const list = matchChapters(matchEnds(items), total(), !!set.live);
-  if (!changed("review", [shown, list, lang, selected, st.colors, st.names, plugins.map((p) => p.name)])) return;
+  if (chip && chip.set !== selected) chip = null;
+  const list = chip ? [] : matchChapters(matchEnds(items), total(), !!set.live);
+  if (!changed("review", [shown, list, lang, selected, st.colors, st.names, plugins.map((p) => p.name), chip])) return;
+  shown = shown.filter((n) => chipMatches(n, chip));
   const starts = list.map((c) => ({ m: c.m, row: el("div", { className: "ev sys" }, el("button", { className: "at", textContent: fmt(c.m), onclick: () => seekTo(c.m) }), el("span", { className: "tx" }, icon("flag", "sm"), t("Match {n}", { n: c.n }))) }));
   const rows = [...shown.map((n) => ({ m: n.m ?? -1, row: eventRow(n) })), ...starts].sort((a, b) => a.m - b.m).map((r) => r.row);
-  $("reviewlist").replaceChildren(...(rows.length ? rows : [el("div", { className: "none", textContent: t("No notes yet") })]));
+  const bar = chip ? [el("div", { className: "chipbar" }, el("button", { type: "button", className: "tag on", textContent: (chip.kind === "tag" ? tagName(chip.value) : "@" + chip.value) + " ×", onclick: () => pickChip(chip.kind, chip.value) }))] : [];
+  $("reviewlist").replaceChildren(...bar, ...(rows.length ? rows : [el("div", { className: "none", textContent: t("No notes yet") })]));
 }
 function renderAnalysis(set) {
   const list = set ? set.analysis || [] : [];
@@ -874,11 +877,16 @@ function goTo(n) {
   if (n.setId !== selected) { openSession(n.setId); openSet(n.setId, n.m); }
   else seekTo(n.m);
 }
+let chip = null;
+function pickChip(kind, value) {
+  chip = chip && chip.kind === kind && chip.value.toLowerCase() === value.toLowerCase() ? null : { kind, value, set: selected };
+  renderEvents();
+}
 function eventRow(n) {
   const at = el("button", { className: "at", textContent: timeText(n), disabled: !n.seekable || n.m === null });
   at.onclick = () => goTo(n);
   const sys = !!n.plugin || n.kind === "mark";
-  const body = n.role === "drawing" ? [t("Drawing") + (n.count > 1 ? ` ×${n.count}` : "")] : inline(n.body);
+  const body = n.role === "drawing" ? [t("Drawing") + (n.count > 1 ? ` ×${n.count}` : "")] : inline(n.body, { onChip: pickChip, chip });
   const tags = n.kind === "note" ? [] : (n.tags || []).map((tg) => el("span", { className: "tag", textContent: tagName(tg) }));
   const tx = el("span", { className: "tx" }, sys ? icon("flag", "sm") : null, ...body, n.source === "ai" ? el("span", { className: "aimark", textContent: t("AI") }) : null, ...tags);
   const by = el("span", { className: "by", title: n.who }, n.plugin ? el("i", { className: "dt", style: "background:var(--muted)" }) : dot(n.author));
@@ -996,19 +1004,20 @@ function openQuick() {
 }
 function renderQuick() {
   $("quicktime").textContent = quick.timed ? fmt(quick.m) : t("Whole recording");
-  const word = ($("quicktext").value.slice(0, $("quicktext").selectionStart).match(/#([\p{L}\p{N}_-]*)$/u) || [])[1];
-  const known = [...new Set(st.events.flatMap((e) => e.tags || []))];
-  const hints = word === undefined ? [] : known.filter((tg) => tg.toLowerCase().startsWith(word.toLowerCase()) && tg.toLowerCase() !== word.toLowerCase()).slice(0, TAG_HINTS);
-  $("taghints").replaceChildren(...hints.map((tg, i) => el("button", { type: "button", className: "tag" + (i ? "" : " on"), textContent: "#" + tg, onmousedown: (e) => e.preventDefault(), onclick: () => pickTag(tg) })));
-  $("taghints").hidden = !hints.length;
-  return hints;
-}
-function pickTag(tag) {
   const box = $("quicktext");
-  const at = box.selectionStart;
-  const before = box.value.slice(0, at).replace(/#[\p{L}\p{N}_-]*$/u, "#" + tag + " ");
-  box.value = before + box.value.slice(at);
-  box.setSelectionRange(before.length, before.length);
+  const hint = hintAt(box.value, box.selectionStart, [...new Set(st.events.flatMap((e) => e.tags || []))], memberNames(), TAG_HINTS);
+  hintIndex = Math.min(hintIndex, Math.max(0, hint.items.length - 1));
+  $("taghints").replaceChildren(...hint.items.map((v, i) => el("button", { type: "button", className: "tag" + (i === hintIndex ? " on" : ""), textContent: hint.trigger + v, title: hint.trigger + v, onmousedown: (e) => e.preventDefault(), onclick: () => pickHint(hint, v) })));
+  $("taghints").hidden = !hint.items.length;
+  return hint;
+}
+let hintIndex = 0;
+function pickHint(hint, value) {
+  const box = $("quicktext");
+  const r = applyHint(box.value, box.selectionStart, hint, value);
+  box.value = r.text;
+  box.setSelectionRange(r.caret, r.caret);
+  hintIndex = 0;
   renderQuick();
 }
 function closeQuick(resume) {
@@ -1027,17 +1036,27 @@ function submitQuick() {
   closeQuick(true);
   run("add_event", { kind: "note", text, target: q.timed ? { t_us: q.wall } : { set: q.set }, values: null }, () => { osd(q.timed ? t("Note added at {time}", { time: fmt(q.m) }) : t("Note added")); refresh(); });
 }
-$("quicktext").oninput = renderQuick;
+$("quicktext").oninput = () => { hintIndex = 0; renderQuick(); };
 $("quicktext").onkeydown = (e) => {
   e.stopPropagation();
   if (composing(e)) return;
   if (e.key === "Escape") { e.preventDefault(); $("quicktext").value = ""; closeQuick(true); }
   else if (e.key === "Tab") {
     e.preventDefault();
-    const hints = renderQuick();
-    if (hints.length) pickTag(hints[0]);
+    const hint = renderQuick();
+    if (hint.items.length) pickHint(hint, hint.items[hintIndex]);
     else { quick.timed = !quick.timed; renderQuick(); }
-  } else if (e.key === "Enter") { e.preventDefault(); submitQuick(); }
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    const hint = renderQuick();
+    if (hint.items.length) pickHint(hint, hint.items[hintIndex]);
+    else submitQuick();
+  } else if ((e.key === "ArrowDown" || e.key === "ArrowUp") && !$("taghints").hidden) {
+    e.preventDefault();
+    const n = $("taghints").children.length;
+    hintIndex = (hintIndex + (e.key === "ArrowDown" ? 1 : n - 1)) % n;
+    renderQuick();
+  }
 };
 $("quicktime").onclick = () => { quick.timed = !quick.timed; renderQuick(); $("quicktext").focus(); };
 $("quicktext").onblur = () => setTimeout(() => { if (quick && document.activeElement !== $("quicktext") && !$("quicktext").value.trim()) closeQuick(false); }, DOUBLE_CLICK_MS);

@@ -494,6 +494,9 @@ body.nopanel .panel { display: none; }
 .drow svg { color: var(--muted); flex: none; }
 .drow.warn, .drow.warn svg { color: var(--warn); }
 .list { flex: 1; overflow-y: auto; padding: 8px 10px 12px; min-height: 0; }
+.tag.on { background: var(--accent); color: var(--on-accent); }
+.quick .hints .tag { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; }
+.chipbar { padding: 0 var(--s2) var(--s1) 12px; }
 .ev { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; gap: 0 var(--s2); padding: 4px var(--s2) 4px 12px; border-radius: var(--r-sm); position: relative; align-items: start; }
 .ev:hover, .ev:focus-within { background: var(--hover-bg); }
 .ev.cur { background: var(--raised-2); }
