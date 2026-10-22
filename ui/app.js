@@ -620,6 +620,10 @@ function renderViews() {
   layout.onclick = () => pickLayout(play, layout);
   $("views").replaceChildren(button(0, t("All")), ...names.map((n, i) => button(i + 1, n)), layout);
 }
+function selectTool(tool) {
+  ink.tool = ink.tool === tool ? null : tool;
+  renderTools();
+}
 function renderTools() {
   for (const b of $("tools").querySelectorAll("[data-tool]")) press(b, ink.tool === b.dataset.tool);
 }
@@ -1509,7 +1513,7 @@ $("mute").onclick = toggleMute;
 $("panelbtn").onclick = togglePanel;
 $("full").onclick = toggleFull;
 $("exitfull").onclick = toggleFull;
-for (const b of $("tools").querySelectorAll("[data-tool]")) b.onclick = () => { ink.tool = b.dataset.tool; renderTools(); };
+for (const b of $("tools").querySelectorAll("[data-tool]")) b.onclick = () => { selectTool(b.dataset.tool); };
 $("clearink").onclick = () => clearInk(false);
 $("toast").onmouseenter = () => clearTimeout($("toast").hideTimer);
 $("toast").onmouseleave = () => hideAfter($("toast"), TOAST_MS);
@@ -1577,6 +1581,9 @@ const PLAYER_KEYS = {
   e: () => stepNote(1),
   a: () => stepMatch(-1),
   d: () => stepMatch(1),
+  p: () => selectTool("pen"),
+  r: () => selectTool("arrow"),
+  t: () => selectTool("laser"),
   x: () => clearInk(false),
   "Shift+p": () => stepSet(-1),
   "Shift+n": () => stepSet(1),

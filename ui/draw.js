@@ -107,7 +107,7 @@ function clearInk(remote) {
 }
 
 function inkDown(tl, e) {
-  if (e.button !== 0 || e.target.closest(".nl")) return;
+  if (!ink.tool || e.button !== 0 || e.target.closest(".nl")) return;
   ink.press = { tl, x: e.clientX, y: e.clientY, id: e.pointerId, stroke: null, last: null };
 }
 

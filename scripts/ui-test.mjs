@@ -1019,3 +1019,22 @@ test("Esc closes a menu or dialog first, then a popup, then leaves a text field,
   assert.equal(step({ window: true }), "close");
   assert.equal(step({}), "none");
 });
+
+test("every drawing tool has a tooltip with its key in both languages, and the player keys have no duplicates", () => {
+  const html = read("index.html");
+  const app = read("app.js");
+  const body = app.match(/const PLAYER_KEYS = \{([\s\S]*?)\n\};/)[1];
+  const keys = [...body.matchAll(/^  ("?[^\s":]+"?|" "):/gm)].map((m) => m[1].replaceAll('"', "").toLowerCase());
+  assert.equal(new Set(keys).size, keys.length);
+  const tools = { pen: "p", arrow: "r", laser: "t" };
+  for (const [tool, key] of Object.entries(tools)) {
+    assert.ok(keys.includes(key));
+    assert.ok(app.includes(`${key}: () => selectTool("${tool}")`));
+    const title = html.match(new RegExp(`data-tool="${tool}"[^>]*data-t-title="([^"]*)"`))[1];
+    assert.ok(title.includes(`(${key.toUpperCase()}):`));
+    assert.ok(read("i18n.js").includes(`"${title}":`));
+  }
+  const clear = html.match(/id="clearink"[^>]*data-t-title="([^"]*)"/)[1];
+  assert.ok(clear.includes("(X)") && keys.includes("x") && read("i18n.js").includes(`"${clear}":`));
+  assert.match(read("pages.js"), /\["P", "R", "T", "X"\]/);
+});
