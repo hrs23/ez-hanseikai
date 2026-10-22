@@ -18,22 +18,22 @@ const FACES = {
 };
 const PRESETS = Object.keys(FACES);
 const ROOM_FACES = {
-  flame: "M12 1C13 5 19 8 19 14.5A7 7 0 0 1 5 14.5C5 11 7 9.5 8 7.5C8.5 9 9.5 10 10.5 10C10 6 10.5 3 12 1zM12 21a3.2 3.2 0 0 0 3.2-3.2C15.2 15.5 13.5 14.5 12 12.5C10.5 14.5 8.8 15.5 8.8 17.8A3.2 3.2 0 0 0 12 21z",
-  bolt: "M14 1L4 13.5h6.5L9 23l11-13.5h-6.8z",
-  crown: "M2 8l5 4 5-8 5 8 5-4-2 13H4zM5.6 17h12.8v2H5.6z",
-  skull: "M12 1.5C6.5 1.5 3.5 5.5 3.5 10c0 3 1.3 4.8 3 5.8V20h3v-2h1.5v2h2v-2h1.5v2h3v-4.2c1.7-1 3-2.8 3-5.8 0-4.5-3-8.5-8.5-8.5zM8.5 8.5a2.3 2.3 0 1 0 0 4.6a2.3 2.3 0 1 0 0-4.6zM15.5 8.5a2.3 2.3 0 1 0 0 4.6a2.3 2.3 0 1 0 0-4.6zM12 13l-1.3 2.5h2.6z",
-  swords: "M20.13 3.87L19.35 6.63L10.87 15.11L8.89 13.13L17.37 4.65zM6.34 10.59L13.41 17.66L12.14 18.93L5.07 11.86zM7.97 14.76L9.24 16.03L6.77 18.51L5.49 17.23zM5 16.74L7.26 19L5.71 20.56L3.44 18.29zM3.87 3.87L6.63 4.65L15.11 13.13L13.13 15.11L4.65 6.63zM10.59 17.66L17.66 10.59L18.93 11.86L11.86 18.93zM14.76 16.03L16.03 14.76L18.51 17.23L17.23 18.51zM16.74 19L19 16.74L20.56 18.29L18.29 20.56z",
-  shield: "M12 1.5l9 3v7c0 5.5-3.8 9.5-9 11.5C6.8 21 3 17 3 11.5v-7zM12 5L6 7v4.5c0 3.6 2.3 6.3 6 8 3.7-1.7 6-4.4 6-8V7zM12 8.5l1.4 3 3.2.4-2.4 2.2.7 3.2L12 15.7l-2.9 1.6.7-3.2-2.4-2.2 3.2-.4z",
-  crosshair: "M12 3.5a8.5 8.5 0 1 0 0 17a8.5 8.5 0 1 0 0-17zM12 5.5a6.5 6.5 0 1 1 0 13a6.5 6.5 0 1 1 0-13zM11 0.5h2v8h-2zM11 15.5h2v8h-2zM0.5 11h8v2h-8zM15.5 11h8v2h-8zM12 10.3a1.7 1.7 0 1 0 0 3.4a1.7 1.7 0 1 0 0-3.4z",
-  rocket: "M12 1c4 3 5.5 7 5 12l-2 3H9l-2-3C6.5 8 8 4 12 1zM12 7.5a2 2 0 1 0 0 4a2 2 0 1 0 0-4zM7 13l-3.5 4.5V21L8 18.5zM17 13l3.5 4.5V21L16 18.5zM10 17.5h4L12 23z",
-  wings: "M11 19L11 8L8 4L3 1.5L5 5.5L0.8 6L4.5 9L1 12L5.2 13L2.5 17L7.5 16.5L6.5 20zM13 19L13 8L16 4L21 1.5L19 5.5L23.2 6L19.5 9L23 12L18.8 13L21.5 17L16.5 16.5L17.5 20z",
-  trophy: "M6 2h12v6c0 3.5-2.5 6-6 6S6 11.5 6 8zM6 4H2v3c0 2.5 2 4 4.4 4.4l.3-1.8C5.3 9.3 4.2 8.4 4.2 7V6.2H6zM18 4h4v3c0 2.5-2 4-4.4 4.4l-.3-1.8c1.4-.3 2.5-1.2 2.5-2.6V6.2H18zM10.8 14h2.4v4h-2.4zM7 19h10v3H7z",
-  gem: "M6 3h12l4 6-10 13L2 9zM8.2 9L12 16.8 15.8 9z",
-  comet: "M16.5 12a4.5 4.5 0 1 0 0 9a4.5 4.5 0 1 0 0-9zM2 2L16.3 12.1L12.1 16.3zM2 10L7 15L8.5 17.5zM10 2L15 7L17.5 8.5z",
-  peak: "M1 21L9 5l4.5 8 2.5-4L23 21zM9 5l-2.6 4.8 2-1.3 1.3 1.6 1.3-1.6 2 1.3z",
-  mask: "M3 4h18v7c0 6-4 10-9 10S3 17 3 11zM5.5 9l5 2.5-1 1.5-4.5-1zM18.5 9l-5 2.5 1 1.5 4.5-1zM9.5 16.5h5v1.5h-5z",
-  star: "M12 1l3.1 7 7.4.7-5.6 5 1.7 7.3L12 17l-6.6 4 1.7-7.3-5.6-5 7.4-.7z",
-  chevrons: "M12 2l9 8-2.3 2.6L12 6.7 5.3 12.6 3 10zM12 9.5l9 8-2.3 2.6L12 14.2 5.3 20.1 3 17.5z",
+  flame: "M13 1.5 L14 6 L17 9 L18 5.5 L21 10.5 L22 14.5 L21 18.5 L17.5 21.5 L12 22.5 L6.5 21 L3 17.5 L2 13.5 L3.5 8 L6 10.5 L7 6.5 L10 3.5 Z M11.5 10 L8 14.5 L8 17 L10 19 L13 19.5 L16 17.5 L16 15 L13.5 12 L13 15 L11.5 16 L10.5 15 Z",
+  bolt: "M11 1.5 L21 1.5 L15 9 L21.5 9 L8.5 22.5 L11 13.5 L2.5 13.5 Z M11 5 L8 10.5 L9.8 10.5 L12.8 5 Z",
+  crown: "M2 5 L7.5 9 L12 2 L16.5 9 L22 5 L19.5 20.5 L4.5 20.5 Z M6.7 17.5 L17.3 17.5 L17.5 15.5 L6.5 15.5 Z",
+  skull: "M7 2 L17 2 L21 6 L22 13 L18.5 16 L18.5 20 L16 22 L13 22 L13 19.5 L11 19.5 L11 22 L8 22 L5.5 20 L5.5 16 L2 13 L3 6 Z M5.5 11 L6.5 12.5 L10 12.5 L10.5 9 L5.5 8 Z M13.5 9 L14 12.5 L17.5 12.5 L18.5 11 L18.5 8 Z M10 16.5 L14 16.5 L12.7 14 L11.3 14 Z",
+  swords: "M19.161 4.321 L18.553 7.172 L11.733 14.486 L13.561 16.191 L12.197 17.653 L10.15 15.744 L7.763 18.304 L8.007 19.215 L6.643 20.678 L3.717 17.95 L5.081 16.487 L6.007 16.667 L8.394 14.107 L6.347 12.197 L7.711 10.735 L9.539 12.44 L16.359 5.126 Z M4.839 4.321 L7.641 5.126 L14.461 12.44 L16.289 10.735 L17.653 12.197 L15.606 14.107 L17.993 16.667 L18.919 16.487 L20.283 17.95 L17.357 20.678 L15.993 19.215 L16.237 18.304 L13.85 15.744 L11.803 17.653 L10.439 16.191 L12.267 14.486 L5.447 7.172 Z",
+  shield: "M12 1.5 L21.5 5 L20.5 15.5 L17 19.5 L12 22.5 L7 19.5 L3.5 15.5 L2.5 5 Z M12 5 L6 7 L6.8 14 L9 16.8 L12 18.7 L15 16.8 L17.2 14 L18 7 Z M8.5 9 L12 11 L15.5 9 L15 12 L12 14 L9 12 Z",
+  crosshair: "M8.85 4.5 L15.15 4.5 L19.5 8.85 L19.5 15.15 L15.15 19.5 L8.85 19.5 L4.5 15.15 L4.5 8.85 Z M10.5 1.5 L13.5 1.5 L13.5 7 L10.5 7 Z M10.5 17 L13.5 17 L13.5 22.5 L10.5 22.5 Z M1.5 10.5 L7 10.5 L7 13.5 L1.5 13.5 Z M17 10.5 L22.5 10.5 L22.5 13.5 L17 13.5 Z M7.5 10.11 L7.5 13.89 L10.11 16.5 L13.89 16.5 L16.5 13.89 L16.5 10.11 L13.89 7.5 L10.11 7.5 Z M12 10 L14 12 L12 14 L10 12 Z",
+  rocket: "M12 1.5 L16 6 L16 11.5 L20 16 L20 19.5 L15.5 17.5 L15.5 16 L8.5 16 L8.5 17.5 L4 19.5 L4 16 L8 11.5 L8 6 Z M9.5 18 L14.5 18 L13.7 20.5 L12 22.5 L10.3 20.5 Z M10 8 L10 10 L12 11.5 L14 10 L14 8 L12 6 Z",
+  wings: "M1.5 3 L8 6 L12 13 L16 6 L22.5 3 L21.5 8 L17.5 10.5 L21 9.5 L19.5 13 L15.5 15.5 L18.5 14.5 L16 18 L12 21 L8 18 L5.5 14.5 L8.5 15.5 L4.5 13 L3 9.5 L6.5 10.5 L2.5 8 Z",
+  trophy: "M6 2.5 L18 2.5 L18 5 L22 5 L22 10 L19 13 L16.5 13 L14 15 L14 18 L18 18 L19 21.5 L5 21.5 L6 18 L10 18 L10 15 L7.5 13 L5 13 L2 10 L2 5 L6 5 Z M9.5 9.5 L12 11.5 L14.5 9.5 L15.5 5 L8.5 5 Z M4 9.2 L5.4 10.5 L6.7 10.5 L6 7 L4 7 Z M18 7 L17.3 10.5 L18.6 10.5 L20 9.2 L20 7 Z",
+  gem: "M6 2.5 L18 2.5 L22.5 9 L12 22 L1.5 9 Z M7 7.5 L17 7.5 L15.5 5 L8.5 5 Z M11.3 17 L12.7 17 L15.5 10 L8.5 10 Z",
+  comet: "M1.5 1.5 L16 5.5 L20 7.5 L22 11 L22.5 15 L20.5 19.5 L17 22 L12 22 L8 19.5 L6 16 L3 7.5 L8.5 11 L2.5 4.5 L13 8.5 Z M11.5 11.5 L10 14.5 L11.5 17.5 L14.5 19 L17.5 17.5 L19 14.5 L18 11.5 L15 10 Z",
+  peak: "M1.5 21 L8 9 L10 12 L15 2 L22.5 21 Z M12 15.5 L15 13.5 L18.1 15.5 L15 8 Z",
+  mask: "M1.5 4 L7 5.5 L12 4 L17 5.5 L22.5 4 L21 14 L17.5 19 L12 22 L6.5 19 L3 14 Z M5 11 L6 12 L9 13 L10 10 L5 8.5 Z M14 10 L15 13 L18 12 L19 11 L19 8.5 Z M9 17 L12 18.5 L15 17 L13 15.5 L11 15.5 Z",
+  star: "M12 1.5 L15.2 8.2 L22.5 9.1 L17.2 14.3 L18.6 21.8 L12 18.2 L5.4 21.8 L6.8 14.3 L1.5 9.1 L8.8 8.2 Z M9.5 12 L12 14.5 L14.5 12 L12 9.5 Z",
+  chevrons: "M2 2.5 L12 7.5 L22 2.5 L22 8 L12 13 L2 8 Z M2 12 L12 17 L22 12 L22 17.5 L12 22.5 L2 17.5 Z",
 };
 const ROOM_PRESETS = Object.keys(ROOM_FACES);
 const IMAGE_SIDE = 96;
@@ -43,9 +43,13 @@ function initial(name) {
   return ([...String(name || "?").trim()][0] || "?").toUpperCase();
 }
 
+const IMAGE_URL = /^data:image\/(png|jpeg|webp);base64,/;
+const own = (table, name) => typeof name === "string" && Object.hasOwn(table, name);
+const knownIcon = (icon) => IMAGE_URL.test(icon) || own(ROOM_FACES, icon) || own(FACES, icon);
+
 function picture(label, color, image, size, shape) {
-  const glyph = (shape === "room" && ROOM_FACES[image]) || FACES[image];
-  const shown = /^data:image\/(png|jpeg|webp);base64,/.test(image) ? el("img", { src: image, alt: "" }) : glyph ? svg("svg", { viewBox: "0 0 24 24", "aria-hidden": "true" }, svg("path", { d: glyph })) : null;
+  const glyph = (shape === "room" && own(ROOM_FACES, image) && ROOM_FACES[image]) || (own(FACES, image) && FACES[image]);
+  const shown = IMAGE_URL.test(image) ? el("img", { src: image, alt: "" }) : glyph ? svg("svg", { viewBox: "0 0 24 24", "aria-hidden": "true" }, svg("path", { d: glyph })) : null;
   const a = el("span", { className: ["av", size, shape].filter(Boolean).join(" "), title: label }, shown || initial(label));
   a.style.background = color || "var(--muted)";
   return a;
@@ -89,7 +93,7 @@ const presetTile = (name, size) => {
 const defaultPreset = (id) => ROOM_PRESETS[[...id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % ROOM_PRESETS.length];
 
 function roomIcon(room, size) {
-  return room.icon || !room.id ? picture(room.name, "var(--raised-3)", room.icon, size, "room") : presetTile(defaultPreset(room.id), size);
+  return knownIcon(room.icon) || !room.id ? picture(room.name, "var(--raised-3)", room.icon, size, "room") : presetTile(defaultPreset(room.id), size);
 }
 
 function presetImage(name) {
@@ -117,7 +121,7 @@ function presetImage(name) {
   g.lineWidth = 0.5;
   g.lineJoin = "round";
   const path = new Path2D(ROOM_FACES[name]);
-  g.fill(path, "evenodd");
+  g.fill(path);
   g.stroke(path);
   return canvas.toDataURL("image/png");
 }

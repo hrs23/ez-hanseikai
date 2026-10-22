@@ -266,7 +266,7 @@ function renderProfile() {
     press(b, i === mine);
     return b;
   }));
-  const own = image && !FACES[image] ? [press(el("button", { className: "facebtn", ariaLabel: t("Avatar") }, picture("", colorOf(mine), image, "lg")), true)] : [];
+  const own = IMAGE_URL.test(image) ? [press(el("button", { className: "facebtn", ariaLabel: t("Avatar") }, picture("", colorOf(mine), image, "lg")), true)] : [];
   $("facegrid").replaceChildren(...own, ...PRESETS.map((name, i) => {
     const b = el("button", { className: "facebtn", ariaLabel: `${t("Avatar")} ${i + 1}`, onclick: () => run("set_profile", { avatar: name }) }, picture("", colorOf(mine), name, "lg"));
     press(b, image === name);
