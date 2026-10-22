@@ -921,8 +921,7 @@ function renderDebriefs(set) {
   $("debriefs").hidden = !list.length;
   if (!changed("debriefs", [list.map((d) => [d.id, d.end_us, onThisPc(d)]), lang])) return;
   $("debriefs").replaceChildren(el("div", { className: "h3", textContent: t("Debrief recordings") }), ...list.map((d) => el("div", { className: "drow" },
-    icon("mic", "sm"), el("span", { textContent: sessionClock(d.id) }), el("span", { className: "sp" }),
-    el("span", { className: "muted", textContent: t("{m} min", { m: Math.max(1, Math.round(((d.end_us || nowUs()) - d.start_us) / 6e7)) }) }),
+    icon("mic", "sm"), el("span", { textContent: t("{m} min", { m: Math.max(1, Math.round(((d.end_us || nowUs()) - d.start_us) / 6e7)) }) }), el("span", { className: "muted", textContent: `· ${sessionWhen(d.id)}`, title: fullWhen(sessionStart(d.id)) }), el("span", { className: "sp" }),
     downloadButton(d) || el("button", { className: "sm", textContent: t("Save"), onclick: () => exportFolder(d) }))));
 }
 function timeText(n) {

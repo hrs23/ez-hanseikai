@@ -78,20 +78,23 @@ const longId = (id, groups = 3) => (String(id).match(/.{1,4}/g) || []).slice(0, 
 const warn = (e) => console.warn(e);
 const playFailed = (e) => { if (e.name !== "AbortError" && e.name !== "NotAllowedError") warn(e); };
 const sessionDay = (id) => id.slice(0, 10);
-const sessionClock = (id) => (id.split(" ")[1] || "").replaceAll("-", ":").slice(0, 5);
-function dayOf(date) {
-  const p = (n) => String(n).padStart(2, "0");
-  return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())}`;
+const clockOf = (date) => `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+function formatWhen(date, now = new Date(), lang = language) {
+  const sameYear = date.getFullYear() === now.getFullYear();
+  const day = lang === "ja"
+    ? `${sameYear ? "" : `${date.getFullYear()}/`}${date.getMonth() + 1}/${date.getDate()}`
+    : new Intl.DateTimeFormat("en-US", sameYear ? { month: "short", day: "numeric" } : { year: "numeric", month: "short", day: "numeric" }).format(date);
+  return `${day} ${clockOf(date)}`;
 }
-function dayLabel(day, now, lang) {
-  if (day === dayOf(now)) return t("Today");
-  if (day === dayOf(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1))) return t("Yesterday");
-  const [y, m, d] = day.split("-").map(Number);
-  const options = y === now.getFullYear() ? { month: "short", day: "numeric" } : { year: "numeric", month: "short", day: "numeric" };
-  return new Intl.DateTimeFormat(lang === "ja" ? "ja-JP" : "en-US", options).format(new Date(y, m - 1, d));
-}
+const fullWhen = (date, lang = language) => new Intl.DateTimeFormat(lang === "ja" ? "ja-JP" : "en-US", { dateStyle: "full", timeStyle: "medium", hour12: false }).format(date);
+const sessionStart = (id) => {
+  const [y, m, d] = sessionDay(id).split("-").map(Number);
+  const [h, mi, sec] = (id.split(" ")[1] || "").split("-").map(Number);
+  return new Date(y, m - 1, d, h || 0, mi || 0, sec || 0);
+};
 let titles = {};
-const sessionName = (id, now = new Date()) => titles[id] || `${dayLabel(sessionDay(id), now, language)} ${sessionClock(id)}`;
+const sessionWhen = (id, now = new Date()) => formatWhen(sessionStart(id), now, language);
+const sessionName = (id, now = new Date()) => titles[id] || sessionWhen(id, now);
 const HOTKEY_LABELS = { mark: "Mark this moment" };
 const hotkeyRows = (hotkeys) => hotkeys.map((h) => ({ ...h, label: HOTKEY_LABELS[h.action] || h.action, changed: h.keys !== h.default, warning: h.taken ? "In use by another app" : "" }));
 function keysOf(e) {

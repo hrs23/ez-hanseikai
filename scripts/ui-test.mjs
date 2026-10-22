@@ -11,7 +11,7 @@ const source = ["util.js", "i18n.js", "live.js", "media.js", "layout.js", "dock.
 const memory = new Map();
 const localStorage = { getItem: (k) => memory.get(k) ?? null, setItem: (k, v) => memory.set(k, v) };
 const context = vm.createContext({ localStorage, window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id, location: { search: "" } });
-const ui$ = vm.runInContext(`${source}\n({ LIMITS, escapeStep, cleanText, single, changed, matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, hotkeyRows, memberStatus, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, cardParts, dropPos, dropSlot, boardSpan, boardFont, cellSpan, fitFont, deletePreview, cleanupAsk, cleanupDone, exportChoice, exportArgs, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, voiceTone, known, VOICE_SIDES, VOICE_TONES, VOICE_SIDE_DEFAULT, VOICE_TONE_DEFAULT, minimapRect, talking, stillTalking, markSpeak, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, nextChip, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ LIMITS, escapeStep, cleanText, single, changed, matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, groupDrawings, formatWhen, fullWhen, sessionWhen, keysOf, hotkeyRows, memberStatus, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, cardParts, dropPos, dropSlot, boardSpan, boardFont, cellSpan, fitFont, deletePreview, cleanupAsk, cleanupDone, exportChoice, exportArgs, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, voiceTone, known, VOICE_SIDES, VOICE_TONES, VOICE_SIDE_DEFAULT, VOICE_TONE_DEFAULT, minimapRect, talking, stillTalking, markSpeak, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, nextChip, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 test("a changed() check against a tile's own store reports again on a rebuilt tile", () => {
   const first = {};
   assert.equal(ui$.changed("what", [1], first), true);
@@ -111,16 +111,18 @@ test("strokes drawn at one moment by one person are one row", () => {
   assert.deepEqual([...rows.map((r) => r.count ?? 0)], [2, 1, 0, 1]);
 });
 
-test("days read as today, yesterday or a date", () => {
-  const now = new Date(2026, 9, 18, 21, 0);
-  ui$.setLanguage("en");
-  assert.equal(ui$.dayLabel("2026-10-18", now, "en"), "Today");
-  assert.equal(ui$.dayLabel("2026-10-17", now, "en"), "Yesterday");
-  assert.equal(ui$.dayLabel("2026-10-15", now, "en"), "Oct 15");
-  assert.equal(ui$.dayLabel("2025-12-31", now, "en"), "Dec 31, 2025");
+test("a time is shown with its date, never with relative words", () => {
+  const now = new Date(2026, 9, 23, 0, 30);
+  assert.equal(ui$.formatWhen(new Date(2026, 9, 23, 0, 1), now, "en"), "Oct 23 00:01");
+  assert.equal(ui$.formatWhen(new Date(2026, 9, 22, 23, 59), now, "en"), "Oct 22 23:59");
+  assert.equal(ui$.formatWhen(new Date(2026, 8, 30, 18, 8), now, "en"), "Sep 30 18:08");
+  assert.equal(ui$.formatWhen(new Date(2025, 11, 31, 23, 59), now, "en"), "Dec 31, 2025 23:59");
+  assert.equal(ui$.formatWhen(new Date(2026, 9, 23, 0, 1), now, "ja"), "10/23 00:01");
+  assert.equal(ui$.formatWhen(new Date(2026, 9, 22, 23, 59), now, "ja"), "10/22 23:59");
+  assert.equal(ui$.formatWhen(new Date(2025, 11, 31, 23, 59), now, "ja"), "2025/12/31 23:59");
+  assert.match(ui$.fullWhen(new Date(2026, 9, 23, 0, 1, 7), "en"), /00:01:07/);
   ui$.setLanguage("ja");
-  assert.equal(ui$.dayLabel("2026-10-17", now, "ja"), "昨日");
-  assert.equal(ui$.dayLabel("2026-10-15", now, "ja"), "10月15日");
+  assert.equal(ui$.sessionWhen("2026-10-19 13-00-00", now), "10/19 13:00");
   ui$.setLanguage("en");
 });
 
@@ -546,7 +548,7 @@ test("an imported recording is named by its title and the others by their time",
   ui$.setLanguage("en");
   ui$.setTitles({ "2026-10-19 12-30-00": "Scrim vs Team B" });
   assert.equal(ui$.sessionName("2026-10-19 12-30-00"), "Scrim vs Team B");
-  assert.match(ui$.sessionName("2026-10-19 13-00-00", new Date(2026, 9, 19)), /^Today 13:00$/);
+  assert.match(ui$.sessionName("2026-10-19 13-00-00", new Date(2026, 9, 19)), /^Oct 19 13:00$/);
   ui$.setTitles({});
 });
 
@@ -559,7 +561,7 @@ test("a member row says one short state", () => {
   assert.equal(say({ sharing: true, relayed: true }), "No picture via relay");
   assert.equal(say({ relayed: true }), "Not sharing");
   assert.equal(say({ connected: false }), "Offline");
-  assert.equal(say({ connected: false, seen_us: new Date(2026, 9, 19, 9, 5).getTime() * 1000 }), "Offline · last seen Today 09:05");
+  assert.equal(say({ connected: false, seen_us: new Date(2026, 9, 19, 9, 5).getTime() * 1000 }), "Offline · last seen Oct 19 09:05");
   ui$.setLanguage("ja");
   assert.equal(say({}), "共有していません");
   assert.equal(say({ sharing: true }), "待機中");

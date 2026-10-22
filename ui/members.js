@@ -9,10 +9,7 @@ function memberStatus(m, now) {
 
 const sendsPicture = (p) => !!p && p.connected && p.path !== "relay";
 
-function seenLabel(us, now) {
-  const at = new Date(us / 1000);
-  return `${dayLabel(dayOf(at), now, language)} ${at.toTimeString().slice(0, 5)}`;
-}
+const seenLabel = (us, now) => formatWhen(new Date(us / 1000), now, language);
 
 const noScreen = (p) => (p.parts || []).length > 0 && p.parts.every((part) => !part.v);
 
