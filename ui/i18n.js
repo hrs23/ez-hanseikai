@@ -413,6 +413,8 @@ const JA = {
   "{n} selected · {size}": "{n} 件を選択 · {size}",
   "Record the debrief for everyone?": "全員で反省会を録音しますか？",
   "Record debrief": "反省会を録音",
+  "Stop debrief": "反省会の録音を終了",
+  "Stop the debrief recording?": "反省会の録音を終了しますか?",
   "Offline · last seen {time}": "オフライン · 最終 {time}",
   "Room name": "ルーム名",
   "Room icon": "ルームのアイコン",

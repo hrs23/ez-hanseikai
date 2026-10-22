@@ -1524,12 +1524,13 @@ async function library(ctx) {
     await waitFor("B is told who started", within(LOG_SYNC_S * 2), () => evaluate(b, `e2eNotes.includes(${JSON.stringify(a.name + " started recording")})`));
     ctx.review = (await state(a)).active_set.id;
     await allSee(all, "recording the review voice only", within(LOG_SYNC_S * 2), (st) => st.active_set?.id === ctx.review && st.active_set.voice === true);
+    check(await evaluate(a, `$("startbtn").textContent.includes(t("Stop debrief"))`), "A's start button does not say Stop debrief");
     await waitFor(`A logs ${SEGMENTS_AFTER_RESTART} voice segments of the review`, within(SEGMENT_S * (SEGMENTS_AFTER_RESTART + 2)), () => segsOf(logOf(a, ctx.room, a.id), ctx.review, "m").length >= SEGMENTS_AFTER_RESTART);
     await evaluate(c, `act("seek", ${SEEK_TO_S * 2}); true`);
     await waitFor("C logs its seek as a party record", within(LOG_SYNC_S * 2), () => logOf(c, ctx.room, c.id).some((r) => r.k === "party" && r.set === ctx.review && r.shared.set === ctx.set));
     await evaluate(c, `openLive(); selectSet(null); true`);
     const ending = await pressAndConfirm(a, "toggleRecording()");
-    check(ending === "Stop recording for everyone?", `A was asked "${ending}"`);
+    check(ending === "Stop the debrief recording?", `A was asked "${ending}"`);
     await waitFor("B is told who ended", within(LOG_SYNC_S * 2), () => evaluate(b, `e2eNotes.includes(${JSON.stringify(a.name + " stopped recording")})`));
     await allSee(all, "the review ended", within(LOG_SYNC_S * 2), (st) => !st.active_set && setOf(st, ctx.review) && !setOf(st, ctx.review).live);
     await waitFor("C is told who ended", within(LOG_SYNC_S * 2), () => evaluate(c, `e2eNotes.includes(${JSON.stringify(a.name + " stopped recording")})`));

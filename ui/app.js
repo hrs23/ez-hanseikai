@@ -1469,8 +1469,9 @@ async function toggleRecording() {
   if (!st) return;
   const ending = !!st.active_set;
   const debrief = !ending && reviewing();
-  const title = ending ? t("Stop recording for everyone?") : debrief ? t("Record the debrief for everyone?") : t("Start recording for everyone?");
-  const action = ending ? t("Stop recording") : debrief ? t("Record debrief") : t("Start recording");
+  const voice = ending && st.active_set.voice;
+  const title = voice ? t("Stop the debrief recording?") : ending ? t("Stop recording for everyone?") : debrief ? t("Record the debrief for everyone?") : t("Start recording for everyone?");
+  const action = voice ? t("Stop debrief") : ending ? t("Stop recording") : debrief ? t("Record debrief") : t("Start recording");
   if (!(await ask(title, action, ending))) return;
   run(ending ? "stop_recording" : "start_recording");
 }

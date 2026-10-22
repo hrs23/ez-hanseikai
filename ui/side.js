@@ -106,10 +106,11 @@ function renderFaces() {
 
 function renderStartButton() {
   const state = st.active_set ? "end" : reviewing() ? "debrief" : "start";
-  if (!changed("startbtn", [state, lang])) return;
+  const voice = !!(st.active_set && st.active_set.voice);
+  if (!changed("startbtn", [state, voice, lang])) return;
   const b = $("startbtn");
   b.className = "startbtn";
-  if (state === "end") b.replaceChildren(el("i", { className: "recdot" }), el("span", { textContent: t("Stop recording") }), el("span", { className: "timer", id: "livetimer", textContent: fmt((nowUs() - st.active_set.start_us) / 1e6) }));
+  if (state === "end") b.replaceChildren(el("i", { className: "recdot" }), el("span", { textContent: t(voice ? "Stop debrief" : "Stop recording") }), el("span", { className: "timer", id: "livetimer", textContent: fmt((nowUs() - st.active_set.start_us) / 1e6) }));
   else b.replaceChildren(el("i", { className: "rd" }), el("span", { textContent: state === "debrief" ? t("Record debrief") : t("Start recording") }));
 }
 
