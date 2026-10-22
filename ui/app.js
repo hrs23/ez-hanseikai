@@ -871,7 +871,7 @@ function setItems(set) {
   }
   return idx.items.get(set.id);
 }
-const listed = (r) => r === "moment" || r === "chapter" || r === "drawing";
+const listed = (r) => r === "moment" || r === "chapter";
 function chapters(tot) {
   const set = playSet();
   const matchList = matchChapters(matchEnds(items), tot, !!(set && set.live)).map((c) => ({ key: "match" + c.n, m: c.m, end: c.end, body: t("Match {n}", { n: c.n }), match: true, n: c.n }));
@@ -885,7 +885,7 @@ function renderEvents() {
   const set = playSet();
   items = setItems(set);
   renderTimeline(Math.round(total()));
-  renderReview(groupDrawings(items.filter((n) => listed(n.role)).sort((x, y) => (x.m ?? -1) - (y.m ?? -1))));
+  renderReview(items.filter((n) => listed(n.role)).sort((x, y) => (x.m ?? -1) - (y.m ?? -1)));
   renderAnalysis(set);
   renderDebriefs(set);
 }
@@ -901,7 +901,7 @@ function renderReview(shown) {
   const list = chip ? [] : matchChapters(matchEnds(items), total(), !!set.live);
   if (!changed("review", [shown, list, lang, selected, st.colors, st.names, plugins.map((p) => p.name), chip])) return;
   shown = shown.filter((n) => chipMatches(n, chip));
-  const starts = list.map((c) => ({ m: c.m, row: el("div", { className: "ev sys" }, el("button", { className: "at", textContent: fmt(c.m), onclick: () => seekTo(c.m) }), el("span", { className: "tx" }, icon("flag", "sm"), t("Match {n}", { n: c.n }))) }));
+  const starts = list.map((c) => ({ m: c.m, row: clickable(el("div", { className: "ev sys" }, el("button", { className: "at", textContent: fmt(c.m), onclick: () => seekTo(c.m) }), el("span", { className: "tx" }, icon("flag", "sm"), t("Match {n}", { n: c.n }))), () => seekTo(c.m)) }));
   const rows = [...shown.map((n) => ({ m: n.m ?? -1, row: eventRow(n) })), ...starts].sort((a, b) => a.m - b.m).map((r) => r.row);
   const bar = chip ? [el("div", { className: "chipbar" }, el("button", { type: "button", className: "tag on", textContent: (chip.kind === "tag" ? tagName(chip.value) : "@" + chip.value) + " ×", onclick: () => pickChip(chip.kind, chip.value, chip.ids) }))] : [];
   $("reviewlist").replaceChildren(...bar, ...(rows.length ? rows : [el("div", { className: "none", textContent: t("No notes yet") })]));
@@ -950,15 +950,14 @@ function eventRow(n) {
   const at = el("button", { className: "at", textContent: timeText(n), disabled: !n.seekable || n.m === null });
   at.onclick = () => goTo(n);
   const sys = !!n.plugin || n.kind === "mark";
-  const body = n.role === "drawing" ? [t("Drawing") + (n.count > 1 ? ` ×${n.count}` : "")] : inline(n.body, n.mentions);
   const tags = n.kind === "note" ? [] : (n.tags || []).map((tg) => chipEl("tag", tg, tagName(tg)));
-  const tx = el("span", { className: "tx" }, sys ? icon("flag", "sm") : null, ...body, n.source === "ai" ? el("span", { className: "aimark", textContent: t("AI") }) : null, ...tags);
+  const tx = el("span", { className: "tx" }, sys ? icon("flag", "sm") : null, ...inline(n.body, n.mentions), n.source === "ai" ? el("span", { className: "aimark", textContent: t("AI") }) : null, ...tags);
   const by = el("span", { className: "by", title: n.who }, n.plugin ? el("i", { className: "dt", style: "background:var(--muted)" }) : dot(n.author));
   const row = el("div", { className: "ev" + (sys ? " sys" : "") + (n.role === "chapter" ? " chapter" : "") }, at, tx, by);
+  if (n.seekable && n.m !== null) clickable(row, () => goTo(n));
   if (n.mine && n.kind !== "mark") {
     const acts = el("span", { className: "acts" });
-    if (n.role !== "drawing") acts.append(iconButton("edit", t("Edit"), () => editNote(n, row)));
-    if (n.role !== "drawing" || n.count === 1) acts.append(iconButton("trash", t("Delete"), () => deleteNote(n)));
+    acts.append(iconButton("edit", t("Edit"), () => editNote(n, row)), iconButton("trash", t("Delete"), () => deleteNote(n)));
     row.append(acts);
   }
   return row;

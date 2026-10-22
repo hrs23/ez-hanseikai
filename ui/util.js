@@ -49,6 +49,23 @@ function changed(name, value, store = sigs) {
   store[name] = sig;
   return true;
 }
+const rowHit = (target, selected, moved) => !moved && !selected && !target.closest("button, a, input, textarea");
+function clickable(node, fn) {
+  let from = null;
+  node.tabIndex = 0;
+  node.setAttribute("role", "button");
+  node.classList.add("clickable");
+  node.addEventListener("pointerdown", (e) => { from = [e.clientX, e.clientY]; });
+  node.addEventListener("click", (e) => {
+    const moved = from && Math.hypot(e.clientX - from[0], e.clientY - from[1]) > 4;
+    from = null;
+    if (rowHit(e.target, String(window.getSelection()).length > 0, moved)) fn();
+  });
+  node.addEventListener("keydown", (e) => {
+    if (e.target === node && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); fn(); }
+  });
+  return node;
+}
 function press(e, on) {
   e.classList.toggle("on", on);
   e.setAttribute("aria-pressed", on);

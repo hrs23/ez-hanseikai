@@ -19,7 +19,6 @@ function scalars(values) {
 }
 
 function eventText(e) {
-  if (role(e) === "drawing") return t("Drawing");
   return [e.text, scalars(e.values)].filter(Boolean).join(" ") || kindLabel(e.kind);
 }
 
@@ -120,7 +119,6 @@ function activeAt(list, m) {
 
 const MATCH_TAG = "match";
 const MATCH_LEAD_S = 60;
-const DRAWING_GROUP_S = 1;
 
 function matchEnds(list) {
   return list.filter((n) => n.role === "moment" && n.plugin && n.m !== null && (n.tags || []).includes(MATCH_TAG)).map((n) => n.m).sort((a, b) => a - b);
@@ -142,14 +140,4 @@ function stepTarget(times, m, dir, gap) {
 }
 
 const matchTargets = (ends) => ends.map((e) => Math.max(0, e - MATCH_LEAD_S));
-
-function groupDrawings(list) {
-  const out = [];
-  for (const n of list) {
-    const last = out[out.length - 1];
-    if (n.role === "drawing" && last && last.role === "drawing" && last.author === n.author && last.setId === n.setId && Math.abs((n.m ?? 0) - (last.m ?? 0)) <= DRAWING_GROUP_S) last.count += 1;
-    else out.push(n.role === "drawing" ? { ...n, count: 1 } : n);
-  }
-  return out;
-}
 
