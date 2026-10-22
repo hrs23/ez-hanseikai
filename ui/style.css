@@ -679,6 +679,9 @@ body.full .side, body.full .splitter, body.full .notices { display: none !import
 @media (max-width: 1240px) {
   body.panelopen .corner .wpbar > span:not(.pill), body.panelopen .corner .wpoff > span:not(.join), body.panelopen .corner .avs { display: none; }
   body.panelopen .toolsov { padding-right: calc(var(--panel) + var(--s2)); }
+  body.panelopen #tools { display: none; }
+  body.panelopen #views { flex: 0 1 auto; overflow: hidden; }
+  body.panelopen #views > button.ic { flex: none; }
   .panel { position: absolute; right: 0; top: 56px; bottom: 0; z-index: 12; box-shadow: -8px 0 24px var(--scrim); }
   body:not(.panelopen) .panel { display: none; }
   .drawer { width: 300px; }
