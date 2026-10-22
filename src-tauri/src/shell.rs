@@ -176,8 +176,8 @@ fn colorref(rgb: u32) -> u32 {
     ((rgb & 0xff) << 16) | (rgb & 0xff00) | (rgb >> 16)
 }
 
-const MENU_HOT: u32 = 0x22262f;
-const MENU_DIM: u32 = 0x788091;
+const MENU_HOT: u32 = 0x262b35;
+const MENU_DIM: u32 = 0x8a92a3;
 const MENU_SUBCLASS: usize = 0x4747;
 
 fn fill(hdc: ::windows::Win32::Graphics::Gdi::HDC, rect: &::windows::Win32::Foundation::RECT, rgb: u32) {
