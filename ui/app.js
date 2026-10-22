@@ -379,7 +379,7 @@ function tickLive() {
 }
 function liveWhat(p) {
   const problem = p.me && captureProblem(st.capture);
-  if (problem) return [el("button", { className: "pick", onclick: (e) => { e.stopPropagation(); openSource($("screenmore")); } }, icon("monitor"), problem)];
+  if (problem) return [el("button", { className: "pick", onclick: (e) => { e.stopPropagation(); openSource(e.currentTarget); } }, icon("monitor"), problem)];
   return [el("span", { textContent: p.relayed ? t("No picture via relay") : t("Starting…") })];
 }
 function renderLive() {
@@ -525,11 +525,7 @@ function showPop(children, anchor, above, cls = "") {
   if (pop.hidden) popReturn = document.activeElement;
   pop.className = "pop " + cls;
   pop.replaceChildren(...children);
-  pop.hidden = false;
-  const r = anchor.getBoundingClientRect();
-  pop.style.left = Math.max(8, Math.min(r.left, innerWidth - pop.offsetWidth - 8)) + "px";
-  const top = above ? r.top - pop.offsetHeight - 6 : r.bottom + 6;
-  pop.style.top = Math.max(4, Math.min(top, innerHeight - pop.offsetHeight - 4)) + "px";
+  openPopup(pop, anchor, above);
 }
 
 function renderPlayer() {
@@ -1229,10 +1225,10 @@ function pickLayout(s, anchor) {
 
 function openMenu(list, at, keepFocus) {
   const m = $("menu");
+  const target = at instanceof Event ? at.currentTarget || at.target : at;
   if (!keepFocus || m.hidden) {
     menuReturn = document.activeElement;
-    const t = at instanceof Event ? at.currentTarget : at;
-    anchorMenu(t instanceof Element && t.hasAttribute("aria-haspopup") ? t : null);
+    anchorMenu(target.hasAttribute("aria-haspopup") ? target : null);
   }
   m.replaceChildren(...list.map((it) => {
     if (it.separator) return el("hr");
@@ -1240,14 +1236,11 @@ function openMenu(list, at, keepFocus) {
     if (it.element) return it.element;
     const lead = it.check !== undefined ? el("span", { className: "ck" }, it.check ? icon("check", "sm") : null) : it.icon ? icon(it.icon, "sm") : null;
     const b = el("button", { role: "menuitem", disabled: !it.run || !!it.disabled, className: it.danger ? "danger" : "" }, lead, el("span", { className: "label", textContent: it.label }), it.right !== undefined ? el("span", { className: "right", textContent: it.right }) : null);
-    b.onclick = (e) => { closeMenu(); it.run(e); };
+    b.onclick = () => { closeMenu(); it.run(); };
     return b;
   }));
-  m.hidden = false;
-  const r = at instanceof Event && at.clientX ? { left: at.clientX, bottom: at.clientY, top: at.clientY, right: at.clientX } : (at instanceof Event ? at.currentTarget || at.target : at).getBoundingClientRect();
-  m.style.left = Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8)) + "px";
-  const below = r.bottom + 4;
-  m.style.top = (below + m.offsetHeight > innerHeight - 4 ? Math.max(4, r.top - m.offsetHeight - 4) : below) + "px";
+  const point = at instanceof Event && at.type === "contextmenu" && (at.clientX || at.clientY);
+  openPopup(m, point ? { left: at.clientX, right: at.clientX, top: at.clientY, bottom: at.clientY } : target, false);
   const first = m.querySelector("button:not(:disabled)");
   if (first && !keepFocus) first.focus();
 }

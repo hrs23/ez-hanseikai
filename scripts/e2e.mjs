@@ -1502,6 +1502,26 @@ async function library(ctx) {
     await waitFor("the right arrow moves 5 s", within(UI_REFRESH_S * 3), async () => Math.abs((await evaluate(a, `nowM()`)) - before - 5) < 0.5);
   });
 
+  await step("every menu and popup opens against the edge of what was clicked and stays inside the window", async () => {
+    await openTiles(a);
+    const triggers = [["$(\"roomname\")", "menu"], ["$(\"aibtn\")", "menu"], ["$(\"micmore\")", "pop"], ["$(\"screenmore\")", "pop"], ["$(\"views\").lastElementChild", "menu"], ["$(\"rate\")", "menu"], ["$(\"gamesound\")", "pop"], ["play.tiles[play.keys[0]].box", "menu", true], ["$(\"sessions\").querySelector(\".srow:not(.liverow)\")", "menu", true]];
+    for (const [trigger, id, right] of triggers) {
+      if (right) await evaluate(a, `(() => { const r = ${trigger}.getBoundingClientRect(); ${trigger}.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 })); return true; })()`);
+      else await clickAt(a, trigger);
+      await waitFor(`${trigger} opens its ${id}`, within(UI_REFRESH_S * 5), () => evaluate(a, `!$("${id}").hidden`));
+      const wrong = await evaluate(a, `(() => {
+        const t = ${trigger}.getBoundingClientRect(), r = $("${id}").getBoundingClientRect();
+        const at = ${right ? "{ left: t.left + t.width / 2, right: t.left + t.width / 2, top: t.top + t.height / 2, bottom: t.top + t.height / 2 }" : "t"};
+        const inside = r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight;
+        const across = r.right >= at.left - 1 && r.left <= at.right + 1;
+        const touching = Math.min(Math.abs(r.top - at.bottom), Math.abs(at.top - r.bottom)) <= POP_GAP + 1;
+        return inside && across && touching ? "" : JSON.stringify({ trigger: [t.left, t.top, t.right, t.bottom].map(Math.round), popup: [r.left, r.top, r.right, r.bottom].map(Math.round), window: [innerWidth, innerHeight] });
+      })()`);
+      check(!wrong, `the ${id} of ${trigger} is not next to it: ${wrong}`);
+      await evaluate(a, `closeMenu(); closePop(); true`);
+    }
+  });
+
   await step("dragging a name label swaps two tiles", async () => {
     await openTiles(a);
     const before = await evaluate(a, `play.keys.join()`);

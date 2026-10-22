@@ -11,7 +11,7 @@ const source = ["util.js", "i18n.js", "live.js", "media.js", "layout.js", "dock.
 const memory = new Map();
 const localStorage = { getItem: (k) => memory.get(k) ?? null, setItem: (k, v) => memory.set(k, v) };
 const context = vm.createContext({ localStorage, window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id, location: { search: "" } });
-const ui$ = vm.runInContext(`${source}\n({ INK_TOOLS, INK_TOOL_TITLE, nextInkTool, LIMITS, escapeStep, editKey, cleanText, single, changed, matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, rowHit, rowActions, noteCount, matchCount, formatWhen, fullWhen, sessionWhen, keysOf, hotkeyRows, memberStatus, windowTitle, longId, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, analysisPill, analysisSub, analysisActions, analysisDetails, analysisDetailText, runningMark, cardParts, dropPos, dropSlot, boardSpan, boardFont, cellSpan, fitFont, deletePreview, cleanupPicked, cleanupTotal, cleanupHead, cleanupDone, exportChoice, exportArgs, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, voiceTone, known, VOICE_SIDES, VOICE_TONES, VOICE_SIDE_DEFAULT, VOICE_TONE_DEFAULT, minimapRect, talking, stillTalking, markSpeak, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, nextChip, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ INK_TOOLS, INK_TOOL_TITLE, nextInkTool, LIMITS, escapeStep, editKey, cleanText, single, changed, matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, rowHit, rowActions, noteCount, matchCount, formatWhen, fullWhen, sessionWhen, keysOf, hotkeyRows, memberStatus, windowTitle, longId, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, analysisPill, analysisSub, analysisActions, analysisDetails, analysisDetailText, runningMark, cardParts, dropPos, dropSlot, boardSpan, boardFont, cellSpan, fitFont, deletePreview, cleanupPicked, cleanupTotal, cleanupHead, cleanupDone, exportChoice, exportArgs, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, voiceTone, known, VOICE_SIDES, VOICE_TONES, VOICE_SIDE_DEFAULT, VOICE_TONE_DEFAULT, minimapRect, talking, stillTalking, markSpeak, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, nextChip, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, popupSpot, POP_GAP, POP_EDGE, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 test("a changed() check against a tile's own store reports again on a rebuilt tile", () => {
   const first = {};
   assert.equal(ui$.changed("what", [1], first), true);
@@ -57,6 +57,33 @@ test("a speaking id marks every element that carries it and not the others, and 
   ui$.markSpeak(nodes, new Set(), "me", false);
   assert.deepEqual(lit(), [false, false, false, false]);
 });
+
+test("a menu or popup touches the edge of what opened it on the asked side, flips when that side is short, and stays inside the window", () => {
+  const { popupSpot, POP_GAP: g, POP_EDGE: e } = ui$;
+  const at = (left, top, right, bottom) => ({ left, top, right, bottom });
+  const spot = (...a) => plain(popupSpot(...a));
+  assert.deepEqual(spot(at(8, 12, 255, 52), 220, 110, 1280, 720, false), { left: 8, top: 52 + g });
+  assert.deepEqual(spot(at(197, 686, 221, 710), 220, 40, 1280, 720, false), { left: 197, top: 686 - g - 40 });
+  assert.deepEqual(spot(at(228, 628, 254, 672), 340, 116, 1280, 720, true), { left: 228, top: 628 - g - 116 });
+  assert.deepEqual(spot(at(10, 20, 40, 50), 300, 200, 1280, 720, true), { left: 10, top: 50 + g });
+  assert.deepEqual(spot(at(1236, 10, 1264, 38), 220, 70, 1280, 720, false), { left: 1264 - 220, top: 38 + g });
+  assert.deepEqual(spot(at(600, 300, 600, 300), 220, 100, 1280, 720, false), { left: 600, top: 300 + g });
+  assert.deepEqual(spot(at(600, 700, 600, 700), 220, 100, 1280, 720, false), { left: 600, top: 700 - g - 100 });
+  for (let i = 0; i < 2000; i++) {
+    const [vw, vh] = [400 + (i % 7) * 230, 300 + (i % 5) * 170];
+    const left = e + ((i * 37) % (vw - 2 * e)), top = e + ((i * 53) % (vh - 2 * e)), a = at(left, top, Math.min(vw - e, left + (i % 4) * 30), Math.min(vh - e, top + (i % 3) * 20));
+    const [w, h] = [Math.min(vw - 2 * e, 120 + (i % 9) * 40), Math.min(vh - 2 * e, 30 + (i % 11) * 60)];
+    const p = popupSpot(a, w, h, vw, vh, i % 2 === 0);
+    assert.ok(p.left >= e && p.top >= e && p.left + w <= vw - e && p.top + h <= vh - e, `outside ${JSON.stringify([a, w, h, vw, vh])}`);
+    const fits = a.top - g - e >= h || vh - e - g - a.bottom >= h;
+    const across = a.left + w <= vw - e || a.right - w >= e;
+    if (fits && across) assert.ok((p.top === a.bottom + g || p.top + h === a.top - g) && p.left <= a.right && p.left + w >= a.left, `apart ${JSON.stringify([a, w, h, vw, vh, p])}`);
+  }
+  const app = read("app.js");
+  for (const name of ["openMenu", "showPop"]) assert.match(app.match(new RegExp(`function ${name}\\([^]*?\\n}`))[0], /openPopup\(/);
+  assert.match(read("style.css"), /\[popover\] \{ inset: auto; margin: 0;/);
+});
+
 
 const MINIMAP_SIZES = [[1280, 720], [1366, 768], [1600, 900], [1920, 1080], [1920, 1200], [2560, 1080], [2560, 1440], [3440, 1440], [3840, 1600], [3840, 2160], [5120, 1440], [1440, 1080], [1024, 768], [1280, 960], [720, 1280], [1000, 1000], [1280, 536], [1280, 360], [960, 540], [960, 270]];
 

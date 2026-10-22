@@ -204,6 +204,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - The first start shows the Windows firewall prompt and the app works after Allow. `manual`
 - The first start downloads ffmpeg, checks it and keeps retrying with no network. `manual`
 - The window, menus, dark theme and Japanese texts look right at normal and high DPI scaling. `manual`
+- every menu and popup opens against the edge of what was clicked and stays inside the window: the room menu, the AI menu, the microphone and screen carets, the Layout and speed menus and the app sound popup touch their button on the side asked for and flip when that side is short, and right-click menus on a tile or a recording row open at the pointer. `e2e` (`library`); the placement for any button, window size and popup size. `ui-test`
 - the menu bar, with the line under it, is the same near-black as the title bar and the app on a fresh start, after a language or shortcut change (the menu is rebuilt) and after full screen (also on a PC set to the light theme), its drop-down menus are dark, and the menu bar is hidden while the player or the board is full screen and back after. `manual`
 - three members record for an hour with Live open: the app's private memory and CPU stay flat after the first minutes and the heap keeps no growing free space (Windows segment heap). `manual`
 - an hour-long recording is counted, checked for missing pieces and sized with one listing per folder, not work per segment, so a long session does not slow the app or grow its memory. `unit`

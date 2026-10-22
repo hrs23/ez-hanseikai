@@ -168,3 +168,29 @@ const INK_TOOL_TITLE = {
   off: "Drawing off (P): press to draw with the Pen",
 };
 const nextInkTool = (tool) => INK_TOOLS[(INK_TOOLS.indexOf(tool) + 1) % INK_TOOLS.length];
+const POP_GAP = 4;
+const POP_EDGE = 8;
+function popupSpot(at, w, h, vw, vh, above) {
+  const room = { up: at.top - POP_GAP - POP_EDGE, down: vh - POP_EDGE - POP_GAP - at.bottom };
+  const [want, other] = above ? ["up", "down"] : ["down", "up"];
+  const up = (room[want] >= h || room[want] >= room[other]) === above;
+  const fit = (v, size, max) => Math.max(POP_EDGE, Math.min(v, max - POP_EDGE - size));
+  return { left: fit(at.left + w <= vw - POP_EDGE ? at.left : at.right - w, w, vw), top: fit(up ? at.top - POP_GAP - h : at.bottom + POP_GAP, h, vh) };
+}
+function openPopup(box, at, above) {
+  box.anchor = { at, above };
+  box.hidden = at instanceof Element && !at.getClientRects().length;
+  placePopup(box);
+}
+function placePopup(box) {
+  const { at, above } = box.anchor;
+  if (box.hidden || (at instanceof Element && !at.getClientRects().length)) return;
+  const p = popupSpot(at instanceof Element ? at.getBoundingClientRect() : at, box.offsetWidth, box.offsetHeight, innerWidth, innerHeight, above);
+  box.style.left = p.left + "px";
+  box.style.top = p.top + "px";
+}
+if (typeof addEventListener !== "undefined") {
+  const placeOpen = () => document.querySelectorAll("[popover]:not([hidden])").forEach((box) => box.anchor && placePopup(box));
+  addEventListener("resize", placeOpen);
+  addEventListener("scroll", placeOpen, true);
+}
