@@ -98,3 +98,12 @@ function sessionNotice(action, by) {
   if (action === "start") return by ? t("{by} started recording", { by }) : t("Recording started");
   return by ? t("{by} stopped recording", { by }) : t("Recording stopped");
 }
+
+function raise(box) {
+  if (box.matches(":popover-open")) box.hidePopover();
+  if (!box.hidden) box.showPopover();
+}
+const raiseObserver = new MutationObserver((list) => list.forEach((m) => raise(m.target)));
+document.querySelectorAll("[popover]").forEach((box) => raiseObserver.observe(box, { attributes: true, attributeFilter: ["hidden"] }));
+const showModalDialog = HTMLDialogElement.prototype.showModal;
+HTMLDialogElement.prototype.showModal = function () { showModalDialog.call(this); document.querySelectorAll("[popover]:not([hidden])").forEach(raise); };

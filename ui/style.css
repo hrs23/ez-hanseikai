@@ -527,6 +527,7 @@ body.nopanel .panel { display: none; }
 .ev:hover .acts, .ev:focus-within .acts { visibility: visible; }
 .ev input { grid-column: 1 / 4; }
 
+[popover] { inset: auto; margin: 0; border: 0; overflow: visible; color: inherit; }
 .toast { position: fixed; z-index: 45; left: 50%; bottom: var(--s5); transform: translateX(-50%); background: var(--accent); color: var(--on-accent); border: 1px solid var(--accent-hover); box-shadow: var(--shadow-pop); border-radius: var(--r-md); padding: var(--s3) var(--s3) var(--s3) var(--s4); display: flex; align-items: center; gap: var(--s3); min-height: 48px; max-width: 80%; font-size: var(--t-lg); font-weight: var(--w-semibold); }
 .toast #toasticon { display: flex; flex: none; }
 .toast svg.i { width: 20px; height: 20px; }
