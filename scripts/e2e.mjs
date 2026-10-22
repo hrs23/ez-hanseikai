@@ -1283,6 +1283,8 @@ async function library(ctx) {
     const panelWas = await evaluate(a, `panelShown()`);
     await evaluate(a, `$("canvas").querySelector(".bcard.team .tag[data-kind=tag]").click(); true`);
     await waitFor("a tag chip on a board card opens a recording with its timeline filtered by that tag", within(UI_REFRESH_S * 5), () => evaluate(a, `page === "player" && !!playSet() && chip?.kind === "tag" && chip.value === "drops" && chip.set === selected && panelShown() && $("reviewlist").querySelector(".chipbar .tag.on")?.textContent.startsWith("#drops")`));
+    await evaluate(a, `$("reviewlist").querySelector(".chipbar .tag.on").click(); true`);
+    check(await evaluate(a, `chip === null && !$("reviewlist").querySelector(".chipbar")`), "the chip's × keeps the timeline filtered");
     await evaluate(a, `showPanel(${panelWas}); showRoomTab("board"); true`);
     const id = await invoke(b, "put_board_card", { room: ctx.room, card: "", title: "Drops", text: "north" });
     for (const app of [a, b, c]) await waitFor(`${app.key} sees the new card after the member cards`, within(LOG_SYNC_S * 2), async () => { const x = await card(app, id); return x?.title === "Drops" && x.text === "north" && (await state(app)).board.at(-1).card === id; });
