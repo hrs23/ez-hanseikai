@@ -737,7 +737,7 @@ function page(files, globals = {}) {
   return { ctx, boxes };
 }
 
-test("an avatar shows the image, a built-in shape or the initial; an unknown shape shows the initial; a room without an icon shows a preset picked from its id, and a room with no id its initial", () => {
+test("an avatar shows the image, a built-in shape or the initial; an unknown shape or none shows the plain person; a room without an icon shows a preset picked from its id, and a room with no id its initial", () => {
   const image = "data:image/webp;base64,AAAA";
   const state = { id: "me", name: "Aki", names: { ren: "Ren", koya: "Koya", mia: "Mia" }, colors: { me: 1, ren: 2, koya: 3, mia: 4 }, capture: { mix: { mic: { muted: false } } }, avatars: { me: "tiger", ren: image, koya: "gone", mia: "data:image/svg+xml;base64,AAAA" } };
   const { ctx } = page(["util.js", "faces.js", "live.js"], { speaking: new Set(), st: state, nameOf: (id) => id, colorIndex: (id) => state.colors[id] || 0 });
@@ -746,7 +746,11 @@ test("an avatar shows the image, a built-in shape or the initial; an unknown sha
   assert.deepEqual([tiger.find("path").length, tiger.textContent, tiger.style.background], [1, "", "var(--member-sky)"]);
   assert.equal(draw(`avatar("me", "sm")`).find("path")[0].attributes.d, draw(`FACES.tiger`));
   assert.equal(draw(`avatar("ren")`).find("img")[0].src, image);
-  for (const id of ["koya", "mia"]) assert.deepEqual([draw(`avatar("${id}")`).textContent, draw(`avatar("${id}")`).find("img").length], [id === "koya" ? "K" : "M", 0]);
+  for (const id of ["koya", "mia", "nobody"]) {
+    const a = draw(`avatar("${id}")`);
+    assert.deepEqual([a.textContent, a.find("img").length, a.find("path")[0].attributes.d, a.className.includes("person")], ["", 0, draw(`PERSON_GLYPH`), true]);
+  }
+  assert.equal(draw(`avatar("me", "sm")`).className.includes("person"), false);
   const room = draw(`roomIcon({ name: "Practice", icon: "" }, "sm")`);
   assert.deepEqual([room.textContent, room.className], ["P", "av sm room"]);
   const preset = draw(`roomIcon({ id: "ab12", name: "Practice", icon: "" }, "sm")`);
@@ -764,7 +768,7 @@ test("an avatar shows the image, a built-in shape or the initial; an unknown sha
   Object.assign(state.avatars, { n1: "", n2: "constructor", n3: "__proto__", n4: "toString", n5: "a b'\"<>&\u3042", n6: null });
   for (const id of ["n1", "n2", "n3", "n4", "n5", "n6", "n7"]) {
     const face = draw(`avatar("${id}", "sm")`);
-    assert.deepEqual([face.find("path").length, face.find("img").length, face.textContent], [0, 0, state.names[id][0].toUpperCase()]);
+    assert.deepEqual([face.find("path").length, face.find("img").length, face.textContent], [1, 0, ""]);
   }
   assert.ok(draw(`ROOM_PRESETS`).includes(draw(`defaultPreset("ab12")`)));
   assert.equal(draw(`roomIcon({ id: "ab12", name: "Other", icon: "" }, "sm")`).style.background, preset.style.background);

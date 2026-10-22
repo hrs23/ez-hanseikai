@@ -16,6 +16,8 @@ const FACES = {
   whale: "M1 11 C1 6 5 3 10 3 C15 3 18 7 18 12 Q20 12 20 9 L17 6 H21 L23 3 V12 Q23 18 17 20 C13 23 6 22 3 18 Q1 15 1 11 Z M7.5 10 A1.5 1.5 0 1 0 4.5 10 A1.5 1.5 0 1 0 7.5 10 Z",
   crab: "M7 11 L4 9 H1 V3 L3 1 V5 H5 V1 L7 3 V7 L9 10 H15 L17 7 V3 L19 1 V5 H21 V1 L23 3 V9 H20 L17 11 L20 13 L23 12 V15 L20 16 L23 19 V22 L18 19 Q12 23 6 19 L1 22 V19 L4 16 L1 15 V12 L4 13 Z M9 13 H15 V16 H9 Z",
 };
+const PERSON = "person";
+const PERSON_GLYPH = "M12 4.5a5 5 0 1 0 0 10a5 5 0 1 0 0-10zM-1 25c0-6 5-9.5 13-9.5s13 3.5 13 9.5z";
 const PRESETS = Object.keys(FACES);
 const ROOM_FACES = {
   flame: "M13 1.5 L14 6 L17 9 L18 5.5 L21 10.5 L22 14.5 L21 18.5 L17.5 21.5 L12 22.5 L6.5 21 L3 17.5 L2 13.5 L3.5 8 L6 10.5 L7 6.5 L10 3.5 Z M11.5 10 L8 14.5 L8 17 L10 19 L13 19.5 L16 17.5 L16 15 L13.5 12 L13 15 L11.5 16 L10.5 15 Z",
@@ -48,10 +50,14 @@ const own = (table, name) => typeof name === "string" && Object.hasOwn(table, na
 const knownIcon = (icon) => IMAGE_URL.test(icon) || own(ROOM_FACES, icon) || own(FACES, icon);
 
 function picture(label, color, image, size, shape) {
-  const glyph = (shape === "room" && own(ROOM_FACES, image) && ROOM_FACES[image]) || (own(FACES, image) && FACES[image]);
-  const shown = IMAGE_URL.test(image) ? el("img", { src: image, alt: "" }) : glyph ? svg("svg", { viewBox: "0 0 24 24", "aria-hidden": "true" }, svg("path", { d: glyph })) : null;
-  const a = el("span", { className: ["av", size, shape].filter(Boolean).join(" "), title: label }, shown || initial(label));
-  a.style.background = color || "var(--muted)";
+  const room = shape === "room";
+  const photo = IMAGE_URL.test(image);
+  const glyph = (room && own(ROOM_FACES, image) && ROOM_FACES[image]) || (own(FACES, image) && FACES[image]) || (!room && !photo && PERSON_GLYPH);
+  const shown = photo ? el("img", { src: image, alt: "" }) : glyph ? svg("svg", { viewBox: "0 0 24 24", "aria-hidden": "true" }, svg("path", { d: glyph })) : null;
+  const a = el("span", { className: ["av", size, shape, glyph === PERSON_GLYPH && "person"].filter(Boolean).join(" "), title: label }, shown || initial(label));
+  const base = color || "var(--muted)";
+  a.style.background = glyph === PERSON_GLYPH ? `color-mix(in srgb, ${base} 35%, var(--raised-3))` : base;
+  if (glyph === PERSON_GLYPH) a.style.color = base;
   return a;
 }
 

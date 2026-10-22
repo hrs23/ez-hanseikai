@@ -267,12 +267,11 @@ function renderProfile() {
     return b;
   }));
   const own = IMAGE_URL.test(image) ? [press(el("button", { className: "facebtn", ariaLabel: t("Avatar") }, picture("", colorOf(mine), image, "lg")), true)] : [];
-  $("facegrid").replaceChildren(...own, ...PRESETS.map((name, i) => {
-    const b = el("button", { className: "facebtn", ariaLabel: `${t("Avatar")} ${i + 1}`, onclick: () => run("set_profile", { avatar: name }) }, picture("", colorOf(mine), name, "lg"));
-    press(b, image === name);
+  $("facegrid").replaceChildren(...own, ...[PERSON, ...PRESETS].map((name, i) => {
+    const b = el("button", { className: "facebtn", ariaLabel: `${t("Avatar")} ${i + 1}`, onclick: () => run("set_profile", { avatar: name === PERSON ? "" : name }) }, picture("", colorOf(mine), name, "lg"));
+    press(b, name === PERSON ? !image : image === name);
     return b;
   }));
-  $("avatarclear").hidden = !image;
 }
 function renderApiReference() {
   if ($("apiref").children.length) return;
@@ -416,7 +415,6 @@ $("apinew").onclick = async () => {
 };
 $("name").onchange = () => { const name = cleanText($("name").value, LIMITS.name); run("set_name", { name: name || st.name }); };
 $("avatarimage").onclick = () => pickImage((image) => run("set_profile", { avatar: image }));
-$("avatarclear").onclick = () => run("set_profile", { avatar: "" });
 $("language").onchange = () => run("set_language", { language: $("language").value });
 function pressVoice() {
   pick($("voiceside"), voiceSide, (v) => { voiceSide = v; store("voiceSide", voiceSide); pressVoice(); applyAudio(); });
