@@ -232,8 +232,9 @@
 </dialog>
 <dialog id="promptdlg" class="wide">
   <div class="dlghead"><h2 id="prompttitle"></h2><button class="icon close" data-icon="x" data-t-label="Close"></button></div>
+  <textarea id="prompttask" class="prompttext task" spellcheck="false" data-t-label="Prompt"></textarea>
   <textarea id="prompttext" class="prompttext" readonly spellcheck="false" data-t-label="Prompt"></textarea>
-  <div class="row end"><button id="promptcopy" class="primary"><span data-icon="copy" data-icon-class="sm"></span><span data-t="Copy prompt">Copy prompt</span></button></div>
+  <div class="row end"><button id="promptreset"><span data-t="Reset to default">Reset to default</span></button><button id="promptcopy" class="primary"><span data-icon="copy" data-icon-class="sm"></span><span data-t="Copy prompt">Copy prompt</span></button></div>
 </dialog>
 <dialog id="confirm">
   <h2 id="confirmtitle"></h2>

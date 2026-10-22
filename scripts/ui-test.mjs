@@ -8,8 +8,10 @@ import { fileURLToPath } from "node:url";
 const ui = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "ui");
 const read = (f) => fs.readFileSync(path.join(ui, f), "utf8");
 const source = ["util.js", "i18n.js", "live.js", "media.js", "layout.js", "dock.js", "events.js", "markdown.js", "members.js", "recordings.js", "extensions.js", "ai.js", "diag.js"].map(read).join("\n");
-const context = vm.createContext({ window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id, location: { search: "" } });
-const ui$ = vm.runInContext(`${source}\n({ matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, memberStatus, sendsPicture, viewLine, viewText, tileProblem, livePlayers, ordered, extensionLine, analysisReason, recordingAnalysis, cardParts, dropPos, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, talking, stillTalking, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiMenuItems, aiPreview, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, plan, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const memory = new Map();
+const localStorage = { getItem: (k) => memory.get(k) ?? null, setItem: (k, v) => memory.set(k, v) };
+const context = vm.createContext({ localStorage, window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id, location: { search: "" } });
+const ui$ = vm.runInContext(`${source}\n({ matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, memberStatus, sendsPicture, viewLine, viewText, tileProblem, livePlayers, ordered, extensionLine, analysisReason, recordingAnalysis, cardParts, dropPos, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, talking, stillTalking, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, plan, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 const plain = (v) => JSON.parse(JSON.stringify(v));
 
 const moment = (m, extra = {}) => ({ role: "moment", m, plugin: { id: "apex-matches" }, tags: ["match"], ...extra });
@@ -356,17 +358,16 @@ const room = { id: "ab12", name: "Practice" };
 test("the AI menu offers a few prompts, or the switch when the API is off", () => {
   ui$.setLanguage("en");
   const calls = [];
-  const actions = { enable: () => calls.push("enable"), show: (title, text, token) => calls.push({ title, text, token }) };
+  const actions = { enable: () => calls.push("enable"), show: (purpose, text, token) => calls.push({ title: purpose.label, text, token }) };
   const items = ui$.aiMenuItems(info, room, "2026-10-19 21-30-00", actions);
   assert.deepEqual(plain(items.map((i) => i.label)), ["Write notes from the voices", "Summarize a recording into the game plan", "Find the mistakes in a match"]);
   assert.ok(items.length >= 3 && items.length <= 4);
   items[0].run();
   assert.equal(calls.length, 1);
   assert.equal(calls[0].title, items[0].label);
-  assert.match(calls[0].text, /Authorization: Bearer/);
   assert.ok(calls[0].text.includes(info.token));
   const preview = ui$.aiPreview(calls[0].text, calls[0].token);
-  assert.ok(!preview.includes(info.token) && preview.includes("••••••••") && preview.includes("Authorization: Bearer"));
+  assert.ok(!preview.includes(info.token) && preview.includes("••••••••") && preview.includes("llms.txt"));
   const off = ui$.aiMenuItems({ ...info, on: false, token: "" }, room, null, actions);
   assert.deepEqual(plain(off.map((i) => i.label)), ["Turn on the local API"]);
   off[0].run();
@@ -378,18 +379,29 @@ test("a prompt names the API address, the token, llms.txt, the room and the reco
   ui$.setLanguage("en");
   const [notes, plan, mistakes] = ui$.aiPurposes();
   const text = ui$.aiPrompt(notes, info, room, "2026-10-19 21-30-00");
-  for (const part of ["http://127.0.0.1:47625/llms.txt", "http://127.0.0.1:47625", info.token, "ab12", "Practice", "2026-10-19 21-30-00", "voices endpoint and transcribe"]) assert.ok(text.includes(part), part);
-  for (const p of [plan, mistakes, ui$.aiDebrief()]) assert.ok(ui$.aiPrompt(p, info, room, "x").includes("voices endpoint") && !ui$.aiPrompt(p, info, room, "x").includes("transcript"));
-  assert.ok(ui$.aiPrompt(plan, info, room, null).includes("newest one in the room"));
+  for (const part of ["http://127.0.0.1:47625/llms.txt", "http://127.0.0.1:47625", info.token, "ab12", "Practice", "2026-10-19 21-30-00", "Transcribe the voices"]) assert.ok(text.includes(part), part);
+  for (const p of [plan, mistakes, ui$.aiDebrief()]) assert.ok(ui$.aiPrompt(p, info, room, "x").includes(p.task));
+  assert.ok(ui$.aiPrompt(plan, info, room, null).includes("the newest one"));
   assert.ok(ui$.aiPrompt(mistakes, info, room, "x").includes("#mistake"));
   ui$.setLanguage("ja");
   const ja = ui$.aiPrompt(ui$.aiPurposes()[0], info, room, "2026-10-19 21-30-00");
   assert.ok(ja.includes(info.token) && ja.includes("http://127.0.0.1:47625/llms.txt") && ja.includes("ab12"));
-  assert.match(ja, /文字に起こして/);
-  assert.doesNotMatch(ja, /Task:|Help my team/);
+  assert.match(ja, /文字に起こし/);
+  assert.doesNotMatch(ja, /Transcribe|API: .*\n.*Token:/);
   assert.deepEqual(plain(ui$.aiPurposes().map((p) => p.label)), ["声からメモを書く", "録画を作戦ボードにまとめる", "試合のミスを探す"]);
   ui$.setLanguage("en");
   assert.equal(ui$.apiUrl("127.0.0.1:1"), "http://127.0.0.1:1");
+});
+
+test("an edited task is used for its purpose and the default comes back when it is cleared", () => {
+  ui$.setLanguage("en");
+  const [notes, plan] = ui$.aiPurposes();
+  assert.equal(ui$.aiTask(notes), notes.task);
+  memory.set(ui$.aiTaskKey(notes), JSON.stringify("Only list the callouts."));
+  assert.equal(ui$.aiTask(notes), "Only list the callouts.");
+  assert.equal(ui$.aiTask(plan), plan.task);
+  memory.set(ui$.aiTaskKey(notes), "null");
+  assert.equal(ui$.aiTask(notes), notes.task);
 });
 
 

@@ -12,34 +12,33 @@ function apiReferenceBlocks(lines) {
 
 function aiPurposes() {
   return [
-    { id: "notes", icon: "note", label: t("Write notes from the voices"), task: t("Task: read the voices, chapters and events of the recording. Then add a short note, with a tag such as #callout or #mistake, at each moment that matters: a decision, a good call or a mistake. Do not repeat notes that already exist.") },
-    { id: "plan", icon: "board", label: t("Summarize a recording into the game plan"), task: t("Task: read the events, chapters and voices of the recording and the current game plan. Then replace the game plan with a short, clear one: a bold first line with the goal and a few bullet points of what to do in the next match. Keep what the team already wrote that still applies.") },
-    { id: "mistakes", icon: "flag", label: t("Find the mistakes in a match"), task: t("Task: go through the matches of the recording one by one. Read the voices and events of each match, find the mistakes the team made, and add a note with the tag #mistake at the moment of each, saying what went wrong and what to do instead.") },
+    { id: "notes", icon: "note", label: t("Write notes from the voices"), task: t("Transcribe the voices and read the chapters and events of the recording, then add short tagged notes (#callout, #mistake) at the key moments. Skip notes that already exist.") },
+    { id: "plan", icon: "board", label: t("Summarize a recording into the game plan"), task: t("Read the recording and the game plan, then rewrite the game plan: a bold goal, then a few bullets for the next match.") },
+    { id: "mistakes", icon: "flag", label: t("Find the mistakes in a match"), task: t("Go through the matches of the recording and add a #mistake note at each team mistake: what went wrong and what to do instead.") },
   ];
 }
 
-function aiPrompt(purpose, info, room, recording) {
-  const address = apiUrl(info.address);
+const aiTaskKey = (p) => `aiTask/${p.id}`;
+const aiTask = (p) => stored(aiTaskKey(p), null) || p.task;
+
+function aiFacts(info, room, recording) {
   return [
-    t("Help my team review its game using this app's local API."),
-    t("First read {address}/llms.txt: it explains the API.", { address }),
-    t("Address: {address}", { address }),
-    t("Token (send it as: Authorization: Bearer <token>): {token}", { token: info.token }),
+    t("API: {address}/llms.txt", { address: apiUrl(info.address) }),
+    t("Token: {token}", { token: info.token }),
     t("Room: {id} ({name})", { id: room.id, name: room.name }),
-    recording ? t("Recording: {id} (in a URL, write spaces as %20)", { id: recording }) : t("Recording: the newest one in the room (list the recordings to find it)"),
-    "",
-    t("Read each member's voice at the voices endpoint and transcribe it."),
-    purpose.task,
-    t("Keep the token secret: never write it into a note or the game plan."),
+    recording ? t("Recording: {id}", { id: recording }) : t("Recording: the newest one"),
+    t("Keep the token out of notes."),
   ].join("\n");
 }
+
+const aiPrompt = (purpose, info, room, recording) => `${purpose.task}\n\n${aiFacts(info, room, recording)}`;
 
 const AI_MASK = "••••••••";
 const aiPreview = (text, token) => (token ? text.replaceAll(token, AI_MASK) : text);
 
 function aiMenuItems(info, room, recording, actions) {
   if (!info.on) return [{ label: t("Turn on the local API"), icon: "terminal", run: actions.enable }];
-  return aiPurposes().map((p) => ({ label: p.label, icon: p.icon, run: () => actions.show(p.label, aiPrompt(p, info, room, recording), info.token) }));
+  return aiPurposes().map((p) => ({ label: p.label, icon: p.icon, run: () => actions.show(p, aiFacts(info, room, recording), info.token) }));
 }
 
 async function openAiMenu(anchor, recording) {
@@ -52,16 +51,27 @@ async function openAiMenu(anchor, recording) {
   openMenu(aiMenuItems(info, st.room, recording, actions), anchor);
 }
 
-let promptFull = "";
-function showPrompt(title, text, token) {
-  promptFull = text;
-  $("prompttitle").textContent = title;
-  $("prompttext").value = aiPreview(text, token);
+let promptPurpose = null;
+let promptFacts = "";
+const promptText = () => `${$("prompttask").value.trim() || promptPurpose.task}\n\n${promptFacts}`;
+function promptReset() { $("promptreset").disabled = $("prompttask").value === promptPurpose.task; }
+function showPrompt(purpose, facts, token) {
+  promptPurpose = purpose;
+  promptFacts = facts;
+  $("prompttitle").textContent = purpose.label;
+  $("prompttask").value = aiTask(purpose);
+  $("prompttext").value = aiPreview(facts, token);
+  promptReset();
   $("promptdlg").showModal();
   $("promptcopy").focus();
 }
+function editPrompt(reset) {
+  if (reset) $("prompttask").value = promptPurpose.task;
+  store(aiTaskKey(promptPurpose), $("prompttask").value.trim() === promptPurpose.task ? null : $("prompttask").value);
+  promptReset();
+}
 
-const aiDebrief = () => ({ task: t("Task: this is a debrief the team recorded while watching another recording. Read its JSON: of is the recording it is about and watch is what was on screen and when. Then add short notes with a tag such as #callout or #mistake to the recording it is about, at the moments that were discussed. Do not repeat notes that already exist.") });
+const aiDebrief = () => ({ task: t("This recording is a debrief of another one (of is that recording, watch is what was on screen). Add short tagged notes (#callout, #mistake) to that recording at the moments discussed. Skip notes that already exist.") });
 
 async function summarizeDebrief(id) {
   const info = await invoke("api_info").catch(fail);

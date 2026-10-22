@@ -1572,7 +1572,7 @@ async function library(ctx) {
     await waitFor("A opens the AI menu", within(UI_REFRESH_S * 5), () => evaluate(a, `!$("menu").hidden && $("menu").querySelectorAll("button").length === 3`));
     await evaluate(a, `$("menu").querySelector("button").click(); true`);
     await waitFor("A shows the prompt before copying", within(UI_REFRESH_S * 5), () => evaluate(a, `$("promptdlg").open && $("prompttext").readOnly && $("prompttext").value.includes("llms.txt")`));
-    check(await evaluate(a, `!$("prompttext").value.includes(promptFull.match(/Bearer <token>\\): (\\S+)/)[1]) && promptFull.includes("Bearer")`), "the prompt preview shows the token");
+    check(await evaluate(a, `!$("prompttext").value.includes(promptText().match(/Token: (\\S+)/)[1]) && promptText().includes("Token: ")`), "the prompt preview shows the token");
     await screenshot(a, "ai-prompt");
     await evaluate(a, `$("promptdlg").close(); true`);
     const prompt = await evaluate(a, `closeMenu(), invoke("api_info").then((i) => aiPrompt(aiPurposes()[0], i, st.room, newestRecording()))`);
