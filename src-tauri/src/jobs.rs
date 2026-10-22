@@ -1310,7 +1310,7 @@ mod tests {
         assert_eq!(target(&at, &i, 9_000_000), json!({"t_us": 11_500_000, "set": "s1", "file": "b"}));
         assert_eq!(target(&Found::default(), &i, i.start_us), json!({"set": "s1", "file": "b"}));
         let r = event_record(plugins::find(APEX).unwrap(), "k", 7, &i, i.start_us, &at, 42);
-        assert_eq!((r["k"].clone(), r["run"].clone(), r["plugin"]["name"].clone()), (json!("event"), json!(7), json!("Apex matches")));
+        assert_eq!((r["k"].clone(), r["run"].clone(), r["plugin"]["name"].clone()), (json!("event"), json!(7), json!("Apex match detection")));
     }
 
     #[test]

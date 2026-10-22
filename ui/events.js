@@ -133,8 +133,22 @@ function activeAt(list, m) {
 const MATCH_TAG = "match";
 const MATCH_LEAD_S = 60;
 
+const isMatchEnd = (n) => n.role === "moment" && !!n.plugin && n.m !== null && (n.tags || []).includes(MATCH_TAG);
+const matchLabel = (n) => t("Match {n}", { n });
+const shownTags = (n) => (n.tags || []).filter((tg) => !(n.plugin && tg === MATCH_TAG));
+
 function matchEnds(list) {
-  return list.filter((n) => n.role === "moment" && n.plugin && n.m !== null && (n.tags || []).includes(MATCH_TAG)).map((n) => n.m).sort((a, b) => a - b);
+  return list.filter(isMatchEnd).map((n) => n.m).sort((a, b) => a - b);
+}
+
+function labelMatchEnds(list) {
+  const order = list.filter(isMatchEnd).sort((a, b) => a.m - b.m);
+  return list.map((n) => {
+    const i = order.indexOf(n);
+    if (i < 0) return n;
+    const text = t("Match {n} end", { n: i + 1 });
+    return { ...n, body: text, text };
+  });
 }
 
 const noteMoments = (list) => list.filter((n) => (n.kind === "note" || n.kind === "mark") && n.role === "moment" && n.m !== null).sort((a, b) => a.m - b.m);

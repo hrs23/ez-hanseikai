@@ -1788,7 +1788,7 @@ pub mod tests {
             json!({"k": "event", "id": 3, "kind": "marker", "target": {"from_us": 100, "to_us": 200}, "text": ""}),
             json!({"k": "seg", "series": "v", "set": "s1", "n": 1, "capture": "1"}),
             json!({"k": "plugin", "plugin": "apex-matches", "on": true, "version": "1", "t_us": 1}),
-            json!({"k": "event", "id": 4, "kind": "round", "plugin": {"name": "Apex matches", "version": "1"}, "target": {"set": "s1"}, "values": {"n": 2}, "tags": ["p"], "run": 5}),
+            json!({"k": "event", "id": 4, "kind": "round", "plugin": {"name": "Apex match detection", "version": "1"}, "target": {"set": "s1"}, "values": {"n": 2}, "tags": ["p"], "run": 5}),
             json!({"k": "job", "state": "done", "job": "apex-matches@1/44136fa355b3/s1/a", "run": 5}),
             json!({"k": "event_edit", "id": 4, "text": "hijack"}),
             json!({"k": "event_del", "id": 9}),
@@ -1804,7 +1804,7 @@ pub mod tests {
         let plugin = all.iter().find(|e| e["id"] == 4).unwrap();
         assert_eq!(plugin["text"], "");
         assert_eq!(plugin["set"], "s1");
-        assert_eq!(plugin["plugin"]["name"], "Apex matches");
+        assert_eq!(plugin["plugin"]["name"], "Apex match detection");
     }
 
     #[test]

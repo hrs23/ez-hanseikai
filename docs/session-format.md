@@ -126,5 +126,5 @@ Three options come first and are remembered on this PC:
 - `<name>.mp4`: a member's picture and app sound. A member who has only voice gets `<name>.m4a`. `<name>` is the member's name made safe for file names and unique.
 - `<name> voice.m4a`: that member's voice, when there is also a picture.
 - `notes.csv`: notes and marks, one row each, with the columns `seconds,kind,text,tags` (seconds from the recording's start, also per match; `kind` is `note` or `mark`; `tags` are separated by spaces). Written only when there are any.
-- `chapters.vtt`: chapters as WebVTT cues (chapters people made, and the matches that the Apex matches plugin found). Written only when there are any.
+- `chapters.vtt`: chapters as WebVTT cues (chapters people made, and the matches that the Apex match detection plugin found). Written only when there are any.
 - `watch.json`: for a debrief, its `party` records as `[{"t_us", "by", "set", "at_us", "playing", "rate"}]`, in microseconds on the exporting PC's clock.

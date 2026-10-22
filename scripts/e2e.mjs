@@ -1187,7 +1187,7 @@ async function library(ctx) {
     await screenshot(a, "room-members");
   });
 
-  await step("an Apex matches job for the set is claimed once and finished", async () => {
+  await step("an Apex match detection job for the set is claimed once and finished", async () => {
     const all = [a, b, c];
     const sizes = Object.fromEntries(all.map((owner) => [owner.key, fileSize(logFile(owner, ctx.room, owner.id))]));
     await waitFor("every member pulls every log again", within(REQUEST_TIMEOUT_S + DIAL_S + LOG_SYNC_S), () => all.every((holder) => all.every((owner) => fileSize(logFile(holder, ctx.room, owner.id)) >= sizes[owner.key])));
@@ -1226,7 +1226,7 @@ async function library(ctx) {
 
   await step("the runner of an extension is chosen from the members in its row", async () => {
     await evaluate(b, `openExtensions.add(${JSON.stringify(PLUGIN)}); roomTab = "extensions"; go("room"); pollPlugins(); true`);
-    const runner = `[...$("roomtab").querySelectorAll(".plug")].find((p) => p.querySelector(".pt b").textContent === t("Apex matches"))?.querySelector("select[aria-label='" + t("Runner") + "']")`;
+    const runner = `[...$("roomtab").querySelectorAll(".plug")].find((p) => p.querySelector(".pt b").textContent === t("Apex match detection"))?.querySelector("select[aria-label='" + t("Runner") + "']")`;
     await waitFor("B shows the runner choice", within(UI_REFRESH_S * 5), () => evaluate(b, `!!${runner}`));
     const choices = await evaluate(b, `[...${runner}.options].map((o) => o.textContent).join()`);
     check(choices.split(",").sort().join() === [a.name, b.name, c.name].sort().join(), `the runner choices are ${choices}`);

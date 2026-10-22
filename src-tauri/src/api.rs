@@ -365,7 +365,7 @@ fn event_json(l: &Loaded, set: &Set, e: &Value) -> Value {
     let member = e["file"].as_str();
     json!({
         "key": e["key"], "id": e["id"], "author": e["author"], "author_name": l.name(e["author"].as_str().unwrap_or_default()),
-        "plugin": e["plugin"]["name"], "kind": e["kind"], "at_s": seconds(set, e["local_us"].as_i64()), "to_s": seconds(set, e["end_us"].as_i64()),
+        "plugin": e["plugin"]["id"].as_str().and_then(crate::plugins::find).map_or_else(|| e["plugin"]["name"].clone(), |p| json!(p.name)), "kind": e["kind"], "at_s": seconds(set, e["local_us"].as_i64()), "to_s": seconds(set, e["end_us"].as_i64()),
         "member": member, "member_name": member.map(|m| l.name(m)), "text": e["text"], "tags": e["tags"], "mentions": e["mentions"], "values": e["values"],
     })
 }
@@ -859,7 +859,7 @@ mod tests {
             self.logs.lock().unwrap().iter().map(|l| Log { owner: l.owner.clone(), offset_us: l.offset_us, records: l.records.clone() }).collect()
         }
         fn plugins(&self, _: &str) -> Vec<Value> {
-            vec![json!({"id": "apex-matches", "name": "Apex matches", "summary": "x", "version": "1", "on": true, "ready": true, "runner": "a", "left": 1, "failed": 0, "waiting_for": "b"})]
+            vec![json!({"id": "apex-matches", "name": "Apex match detection", "summary": "x", "version": "1", "on": true, "ready": true, "runner": "a", "left": 1, "failed": 0, "waiting_for": "b"})]
         }
         fn analysis(&self, _: &str) -> HashMap<String, Vec<Value>> {
             HashMap::from([("s1".to_string(), vec![json!({"plugin": "apex-matches", "state": "left", "reason": "waiting", "waiting_for": "b"})])])
@@ -1062,7 +1062,7 @@ mod tests {
         let note = list.iter().find(|e| e["text"] == "Late rotate #rotate").unwrap();
         assert_eq!((note["tags"].clone(), note["author"].as_str(), note["author_name"].as_str(), note["plugin"].clone()), (json!(["rotate"]), Some("a"), Some("Ann"), Value::Null));
         let apex = list.iter().find(|e| e["kind"] == "match_end").unwrap();
-        assert_eq!((apex["plugin"].as_str(), apex["tags"].clone(), apex["member"].as_str()), (Some("Apex matches"), json!(["match"]), Some("a")));
+        assert_eq!((apex["plugin"].as_str(), apex["tags"].clone(), apex["member"].as_str()), (Some("Apex match detection"), json!(["match"]), Some("a")));
         let (_, tagged) = get(&fake, "/v1/rooms/r1/recordings/s1/events?tag=%23ROTATE");
         assert_eq!(tagged["events"].as_array().unwrap().len(), 1);
         let (_, marks) = get(&fake, "/v1/rooms/r1/recordings/s1/events?kind=mark");

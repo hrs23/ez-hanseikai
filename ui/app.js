@@ -883,30 +883,30 @@ function indexOf(state) {
 }
 const setOf = (e) => idx.setOfKey.get(e.key) || null;
 const setLength = (s) => fmt(((s.end_us || nowUs()) - s.start_us) / 1e6);
-const pluginName = (id) => t((plugins.find((p) => p.id === id) || {}).name || id);
+const pluginName = (id, stored) => t((plugins.find((p) => p.id === id) || {}).name || stored || id);
 const viewContext = () => ({ me: st.id, name: nameOf, online: (id) => id === st.id || sendsPicture(peerOf(id)) });
 function itemOf(e, set) {
   const r = role(e);
   const at = (us) => (us === null || us === undefined || !set ? null : (us - set.start_us) / 1e6);
-  return { ...e, role: r, setId: set ? set.id : null, m: at(e.local_us), end: at(e.end_us), who: e.plugin ? (e.plugin.name ? t(e.plugin.name) : pluginName(e.plugin.id)) : nameOf(e.author), body: e.kind === "mark" ? t("Marked") : eventText(e), speaker: e.file ? nameOf(e.file) : nameOf(e.author) };
+  return { ...e, role: r, setId: set ? set.id : null, m: at(e.local_us), end: at(e.end_us), who: e.plugin ? pluginName(e.plugin.id, e.plugin.name) : nameOf(e.author), body: e.kind === "mark" ? t("Marked") : eventText(e), speaker: e.file ? nameOf(e.file) : nameOf(e.author) };
 }
 function setItems(set) {
   if (!set) return [];
   if (!idx.items.has(set.id)) {
     const keys = new Set(set.events);
-    idx.items.set(set.id, st.events.filter((e) => keys.has(e.key)).map((e) => itemOf(e, set)));
+    idx.items.set(set.id, labelMatchEnds(st.events.filter((e) => keys.has(e.key)).map((e) => itemOf(e, set))));
   }
   return idx.items.get(set.id);
 }
 const listed = (r) => r === "moment" || r === "chapter";
 function chapters(tot) {
   const set = playSet();
-  const matchList = matchChapters(matchEnds(items), tot, !!(set && set.live)).map((c) => ({ key: "match" + c.n, m: c.m, end: c.end, body: t("Match {n}", { n: c.n }), match: true, n: c.n }));
+  const matchList = matchChapters(matchEnds(items), tot, !!(set && set.live)).map((c) => ({ key: "match" + c.n, m: c.m, end: c.end, body: matchLabel(c.n), match: true, n: c.n }));
   return [...matchList, ...chaptersOf(items)].sort((a, b) => a.m - b.m);
 }
 function matchNow(m) {
   const c = matchChapters(matchEnds(items), total(), !!(playSet() && playSet().live)).find((x) => x.m <= m && m < x.end);
-  return c ? t("Match {n}", { n: c.n }) : "";
+  return c ? matchLabel(c.n) : "";
 }
 function renderEvents() {
   const set = playSet();
@@ -928,7 +928,7 @@ function renderReview(shown) {
   const list = chip ? [] : matchChapters(matchEnds(items), total(), !!set.live);
   if (!changed("review", [shown, list, lang, selected, st.colors, st.names, plugins.map((p) => p.name), chip])) return;
   shown = shown.filter((n) => chipMatches(n, chip));
-  const starts = list.map((c) => ({ m: c.m, row: clickable(el("div", { className: "ev sys" }, el("button", { className: "at", textContent: fmt(c.m), onclick: () => seekTo(c.m) }), el("span", { className: "tx" }, icon("flag", "sm"), t("Match {n}", { n: c.n }))), () => seekTo(c.m)) }));
+  const starts = list.map((c) => ({ m: c.m, row: clickable(el("div", { className: "ev sys" }, el("button", { className: "at", textContent: fmt(c.m), onclick: () => seekTo(c.m) }), el("span", { className: "tx" }, icon("flag", "sm"), matchLabel(c.n))), () => seekTo(c.m)) }));
   const rows = [...shown.map((n) => ({ m: n.m ?? -1, row: eventRow(n) })), ...starts].sort((a, b) => a.m - b.m).map((r) => r.row);
   const bar = chip ? [el("div", { className: "chipbar" }, el("button", { type: "button", className: "tag on", textContent: (chip.kind === "tag" ? tagName(chip.value) : "@" + chip.value) + " ×", onclick: () => pickChip(chip.kind, chip.value, chip.ids) }))] : [];
   $("reviewlist").replaceChildren(...bar, ...(rows.length ? rows : [el("div", { className: "none", textContent: t("No notes yet") })]));
@@ -1004,7 +1004,7 @@ function eventRow(n) {
   const at = el("button", { className: "at", textContent: timeText(n), disabled: !n.seekable || n.m === null });
   at.onclick = () => goTo(n);
   const sys = !!n.plugin || n.kind === "mark";
-  const tags = n.kind === "note" ? [] : (n.tags || []).map((tg) => chipEl("tag", tg, tagName(tg)));
+  const tags = n.kind === "note" ? [] : shownTags(n).map((tg) => chipEl("tag", tg, tagName(tg)));
   const tx = el("span", { className: "tx" }, sys ? icon("flag", "sm") : null, ...inline(n.body, n.mentions), n.source === "ai" ? el("span", { className: "aimark", textContent: t("AI") }) : null, ...tags);
   const by = el("span", { className: "by", title: n.who }, n.plugin ? el("i", { className: "dt", style: "background:var(--muted)" }) : dot(n.author));
   const row = el("div", { className: "ev" + (sys ? " sys" : "") + (n.role === "chapter" ? " chapter" : "") }, at, tx, by);
