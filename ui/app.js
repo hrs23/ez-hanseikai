@@ -866,9 +866,6 @@ function renderPanelTabs(shown, speech) {
     b.onclick = () => { side = k; renderEvents(); };
     return b;
   }));
-  const hint = side === "review" ? [el("kbd", { textContent: "A" }), el("kbd", { textContent: "D" }), el("span", { textContent: t("Match") }), el("kbd", { textContent: "Q" }), el("kbd", { textContent: "E" }), el("span", { textContent: t("Note") })] : [];
-  if (changed("panelhint", [side, lang])) $("panelhint").replaceChildren(...hint);
-  $("panelhint").hidden = !hint.length;
   $("reviewlist").hidden = side !== "review";
   $("filterrow").hidden = side !== "review";
   $("convolist").hidden = side !== "talk";
@@ -891,24 +888,16 @@ function renderConvo(speech) {
 function renderReview(shown, words) {
   const set = playSet();
   if (side !== "review" || !set || $("reviewlist").querySelector("input")) return;
-  const tot = total();
   const grouped = scope !== "all" && !words.length;
-  const list = matchChapters(matchEnds(items), tot, !!set.live);
-  const ends = items.filter((n) => n.plugin && (n.tags || []).includes(MATCH_TAG) && n.m !== null);
+  const list = matchChapters(matchEnds(items), total(), !!set.live);
   const pending = (set.analysis || []).filter((a) => a.state !== "done");
-  const now = nowM();
-  const cur = list.find((c) => c.m <= now && now < c.end);
-  if (!changed("review", [shown, list, pending, cur && cur.n, grouped, lang, selected, st.colors, st.names, plugins.map((p) => p.name), scope])) return;
+  if (!changed("review", [shown, list, pending, grouped, lang, selected, st.colors, st.names, plugins.map((p) => p.name), scope])) return;
   const out = pending.map((a) => el("div", { className: "ev sys analysis" }, icon(a.state === "failed" ? "alert" : "cpu", "sm"), el("span", { className: "tx " + (a.state === "failed" ? "warn" : "muted") }, `${t(pluginName(a.plugin))} · ${analysisReason(a, nameOf)}`, a.state === "failed" ? el("button", { className: "sm", textContent: t("Retry"), onclick: () => retryAnalysis(set, a.plugin) }) : null)));
   if (grouped) {
-    const inside = (n, c) => n.m !== null && n.m >= c.m && n.m < c.end;
-    const groups = list.map((c) => ({ title: t("Match {n}", { n: c.n }), range: `${fmt(c.m)}–${fmt(c.end)}`, m: c.m, cur: cur === c, rows: [...shown.filter((n) => inside(n, c)).map(eventRow), ...ends.filter((e) => Math.abs(e.m - c.end) < JUMP_MIN).map((e) => el("div", { className: "ev sys" }, el("button", { className: "at", textContent: fmt(e.m), onclick: () => seekTo(e.m) }), el("span", { className: "tx" }, icon("flag", "sm"), t("Match end"))))] }));
-    const rest = shown.filter((n) => !list.some((c) => inside(n, c)));
-    if (rest.length || !list.length) groups.push({ title: t("Whole recording"), range: fmt(tot), m: 0, cur: !list.length, rows: rest.map(eventRow) });
-    out.push(...groups.map((g) => el("div", { className: "match" + (g.cur ? " cur" : "") },
-      el("div", { className: "mh" }, el("b", { textContent: g.title }), el("small", { textContent: g.range }), el("button", { className: "sm", onclick: () => { seekTo(g.m); if (!clock.playing) act("play", g.m); } }, icon("play", "sm"), t("Watch"))),
-      ...g.rows)));
-    out.push(el("button", { className: "tolink", onclick: editTeam }, icon("board", "sm"), t("Write to the game plan")));
+    const starts = list.map((c) => ({ m: c.m, row: el("div", { className: "ev sys" }, el("button", { className: "at", textContent: fmt(c.m), onclick: () => seekTo(c.m) }), el("span", { className: "tx" }, icon("flag", "sm"), t("Match {n}", { n: c.n }))) }));
+    const rows = [...shown.map((n) => ({ m: n.m ?? -1, row: eventRow(n) })), ...starts].sort((a, b) => a.m - b.m);
+    out.push(...rows.map((r) => r.row));
+    if (!rows.length) out.push(el("div", { className: "none", textContent: t("No notes yet") }));
   } else if (!shown.length) out.push(el("div", { className: "none", textContent: words.length ? t("Nothing found") : t("No notes yet") }));
   else {
     let group = set.id;
@@ -917,7 +906,6 @@ function renderReview(shown, words) {
       out.push(eventRow(n));
     }
   }
-  $("reviewlist").className = "list" + (grouped ? " review" : "");
   $("reviewlist").replaceChildren(...out);
 }
 function timeText(n) {

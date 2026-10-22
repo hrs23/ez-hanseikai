@@ -15,11 +15,6 @@ function editCard(c) {
   const box = $("canvas").querySelector("textarea");
   if (box) box.focus();
 }
-function editTeam() {
-  showRoomTab("board");
-  const team = st.board.find((c) => c.card === "team");
-  if (team) editCard(team);
-}
 function stopEditing() {
   editing = null;
   renderBoard();
