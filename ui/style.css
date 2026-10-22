@@ -213,10 +213,8 @@ body.noside .side, body.boardfull .side, body.noside .splitter, body.boardfull .
 .thumb { position: relative; aspect-ratio: 16 / 9; background: var(--raised); border-radius: var(--r-sm); display: grid; place-items: center; color: var(--faint); flex: none; }
 .thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: inherit; display: block; }
 .thumb.live { outline: 2px solid var(--rec); outline-offset: -2px; color: var(--rec); }
-.thumbfaces { position: absolute; right: -6px; bottom: -6px; display: flex; }
-.thumbfaces .avs .av { box-shadow: 0 0 0 2px var(--ring, var(--surface)); }
-.srow.on .thumbfaces .avs .av, .srow.on .wpn .av { box-shadow: 0 0 0 2px var(--raised-2); }
-.srow:hover:not(.on) .thumbfaces .avs .av, .srow:hover:not(.on) .wpn .av { box-shadow: 0 0 0 2px var(--raised); }
+.srow.on .wpn .av { box-shadow: 0 0 0 2px var(--raised-2); }
+.srow:hover:not(.on) .wpn .av { box-shadow: 0 0 0 2px var(--raised); }
 .recdot { width: 8px; height: 8px; border-radius: 50%; background: var(--rec); flex: none; display: inline-block; animation: pulse var(--pulse) infinite; }
 .srow .l1 { flex-wrap: wrap; row-gap: var(--s1); }
 .srow .l1 b { max-width: 100%; }

@@ -137,12 +137,12 @@ function sessionState(s) {
 }
 function liveRow() {
   const a = st.active_set;
-  const who = liveSet() ? liveSet().players.map((p) => p.owner) : [];
+  const watching = st.party.watching[a.id];
   const on = page === "player" && nowView;
   const detail = a.voice ? null : matchNow(nowM()) || t("by {name}", { name: a.by || "" });
   const row = el("div", { className: "srow liverow" + (on ? " on" : ""), role: "option", tabIndex: 0, ariaSelected: on },
-    thumbBox(null, who, true),
-    el("div", { className: "txt" }, el("div", { className: "l1" }, icon("rec", "sm"), el("b", { textContent: t(a.voice ? "Recording audio" : "Recording") })), el("div", { className: "l2" }, a.voice ? pill("gray", "mic", t("Debrief")) : null, detail ? el("span", { textContent: detail }) : null)));
+    thumbBox(null, true),
+    el("div", { className: "txt" }, el("div", { className: "l1" }, icon("rec", "sm"), el("b", { textContent: t(a.voice ? "Recording audio" : "Recording") }), watching && watching.length ? el("span", { className: "wpn", title: watching.map(nameOf).join(", ") }, avatars(watching.slice(0, 2), "xs")) : null), el("div", { className: "l2" }, a.voice ? pill("gray", "mic", t("Debrief")) : null, detail ? el("span", { textContent: detail }) : null)));
   row.onclick = openNow;
   row.onkeydown = (e) => { if (e.key === "Enter") openNow(); };
   return row;
@@ -169,7 +169,7 @@ function sessionRow(s) {
   else l2 = el("div", { className: "l2" }, el("span", { textContent: setLength(s) }), s.imported_by ? importedPill(s) : null, here && !(watching && watching.length) ? wtButton(s) : null);
   const mine = !!watching && watching.includes(st.id);
   const row = el("div", { className: "srow" + (on ? " on" : "") + (mine ? " wp" : "") + (here ? "" : " gone"), role: "option", tabIndex: 0, ariaSelected: on },
-    thumbBox(s, [], false),
+    thumbBox(s, false),
     el("div", { className: "txt" }, el("div", { className: "l1" }, el("b", { textContent: sessionName(s.id) }), wpPill(s, here, mine, watching), partyFrom === s.id && watching && watching.length ? el("button", { className: "sm", textContent: t("Back"), onclick: (e) => { e.stopPropagation(); openSession(s.id); } }) : null), l2, whereLine(s)));
   row.onclick = () => { if (onThisPc(s)) openSession(s.id); };
   row.onkeydown = (e) => { if (e.key === "Enter" && onThisPc(s)) openSession(s.id); };
@@ -179,7 +179,7 @@ function sessionRow(s) {
 function renderSessions() {
   if (!inRoom()) return;
   const rows = recordingRows();
-  const sig = [rows.map(rowSignature), page, nowView, selected, partyFrom, st.active_set, st.peers.map((p) => p.connected), lang, looks(), st.names, dayOf(new Date())];
+  const sig = [rows.map(rowSignature), page, nowView, selected, partyFrom, st.active_set, st.active_set && st.party.watching[st.active_set.id], st.peers.map((p) => p.connected), lang, looks(), st.names, dayOf(new Date())];
   if (!changed("sessions", sig)) return;
   $("sessions").replaceChildren(...(st.active_set ? [liveRow()] : []), ...rows.map((r) => sessionRow(r.s)), rows.length || st.active_set ? "" : el("div", { className: "none", textContent: t("No recordings yet") }));
 }

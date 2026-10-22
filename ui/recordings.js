@@ -1,5 +1,3 @@
-const THUMB_FACES = 3;
-
 const thumbSrc = (set) => convertFileSrc(`thumb/${set.room}/${set.id}`, "ezh");
 
 function recordingRows() {
@@ -16,11 +14,10 @@ function importedPill(s) {
 
 const noPicture = (s) => s.players.length > 0 && s.players.every((p) => (p.parts || []).every((part) => !part.v));
 
-function thumbBox(set, faces, live) {
+function thumbBox(set, live) {
   const box = el("div", { className: "thumb" + (live ? " live" : "") });
   if (set && set.thumb) box.append(el("img", { src: thumbSrc(set), alt: "", draggable: false }));
   else box.append(icon(live ? "rec" : "film"));
-  if (faces.length) box.append(el("span", { className: "thumbfaces" }, avatars(faces, "xs", THUMB_FACES)));
   return box;
 }
 
