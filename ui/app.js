@@ -1097,12 +1097,11 @@ function editNote(n, row) {
   };
   input.onkeydown = (e) => {
     e.stopPropagation();
-    if (composing(e)) return;
-    if (e.key === "Enter") close(true);
-    if (e.key === "Escape") { e.preventDefault(); close(false); }
+    const act = editKey(e);
+    if (act) { e.preventDefault(); close(act === "save"); }
   };
   input.onblur = () => close(true);
-  row.replaceChildren(input);
+  row.replaceChildren(input, el("span", { className: "acts" }, cancelButton(() => close(false))));
   input.focus();
 }
 function stepTo(times, dir) {
@@ -1171,11 +1170,16 @@ function submitQuick() {
   closeQuick(true);
   run("add_event", { kind: "note", text, target: q.timed ? { t_us: q.wall } : { set: q.set }, values: null }, () => { osd(q.timed ? t("Note added at {time}", { time: fmt(q.m) }) : t("Note added")); refresh(); });
 }
+function cancelQuick() {
+  $("quicktext").value = "";
+  closeQuick(true);
+}
+$("quicktext").after(cancelButton(cancelQuick));
 $("quicktext").oninput = () => { hintIndex = 0; renderQuick(); };
 $("quicktext").onkeydown = (e) => {
   e.stopPropagation();
   if (composing(e)) return;
-  if (e.key === "Escape") { e.preventDefault(); $("quicktext").value = ""; closeQuick(true); }
+  if (e.key === "Escape") { e.preventDefault(); cancelQuick(); }
   else if (e.key === "Tab") {
     e.preventDefault();
     const hint = renderQuick();

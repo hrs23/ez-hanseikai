@@ -77,6 +77,20 @@ function pick(box, value, onPick) {
   }
 }
 const composing = (e) => e.isComposing || e.keyCode === 229;
+function editKey(e, multiline) {
+  if (composing(e)) return null;
+  if (e.key === "Escape") return "cancel";
+  if (e.key === "Enter" && (!multiline || e.ctrlKey)) return "save";
+  return null;
+}
+function cancelButton(onCancel) {
+  const b = el("button", { type: "button", className: "icon sm cancel", onmousedown: (e) => e.preventDefault(), onclick: onCancel }, icon("x", "sm"));
+  b.dataset.tTitle = "Cancel (Esc)";
+  b.dataset.tLabel = "Cancel (Esc)";
+  b.title = t("Cancel (Esc)");
+  b.setAttribute("aria-label", t("Cancel (Esc)"));
+  return b;
+}
 function nativeKey(e) {
   const a = document.activeElement;
   if (!a) return false;

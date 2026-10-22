@@ -39,6 +39,7 @@ function renderStart() {
   if (!st.name) askName = true;
   $("namefield").hidden = !askName;
   $("nameshow").hidden = askName;
+  nameNo.hidden = !st.name;
   if (!askName && changed("startname", [st.name, look(st.id)])) $("nameshow").replaceChildren(nameChip(avatar(st.id, "lg"), st.name, $("nameedit")));
   if (document.activeElement !== $("startname")) $("startname").value = st.name;
   const named = !!st.name || !!cleanText($("startname").value, LIMITS.name);
@@ -381,11 +382,20 @@ $("limit").max = 100000;
 $("startname").oninput = () => renderStart();
 $("startname").onchange = () => { run("set_name", { name: cleanText($("startname").value, LIMITS.name) }); if (cleanText($("startname").value, LIMITS.name)) askName = false; };
 $("nameedit").onclick = () => { askName = true; renderStart(); $("startname").focus(); };
+function cancelName() {
+  askName = false;
+  $("startname").value = st.name;
+  renderStart();
+}
+const nameNo = cancelButton(cancelName);
+$("startname").after(nameNo);
+$("startname").onkeydown = (e) => { if (e.key === "Escape" && st.name && !composing(e)) { e.preventDefault(); e.stopPropagation(); cancelName(); } };
 $("newroom").onclick = single(() => run("set_name", { name: typedName() }, createRoom));
 $("joincode").oninput = () => renderStart();
 $("join").onclick = single(() => run("set_name", { name: typedName() }, () => joinWith($("joincode"))));
 $("joincode").onkeydown = (e) => { if (e.key === "Enter" && !composing(e) && !$("join").disabled) $("join").click(); };
 $("pendingcancel").onclick = () => st.room && run("remove_room", { id: st.room.id });
+const roomDraft = () => cleanText($("roomnameinput").value, LIMITS.room) !== st.room.name || iconDraft !== st.room.icon;
 $("roomnameinput").oninput = showIconDraft;
 $("roomiconpick").onclick = () => pickImage((image) => { iconDraft = image; showIconDraft(); });
 roomPresetBtns.push(...ROOM_PRESETS.map((name, i) => [el("button", { className: "facebtn", ariaLabel: `${t("Room icon")} ${i + 1}`, onclick: () => { iconDraft = presetImage(name); showIconDraft(); } }, presetTile(name, "lg")), name]));
@@ -474,7 +484,7 @@ for (const d of document.querySelectorAll("dialog")) {
   d.addEventListener("click", (e) => {
     const r = d.getBoundingClientRect();
     const outside = e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
-    if ((e.target === d && outside) || e.target.closest(".close")) d.close();
+    if ((e.target === d && outside && !(d.id === "roomdlg" && roomDraft())) || e.target.closest(".close")) d.close();
   });
 }
 

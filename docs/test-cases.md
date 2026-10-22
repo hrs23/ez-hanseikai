@@ -240,6 +240,7 @@ The UI cleans typed text and the app cleans it again, the same way, and counts w
 
 ## Interface
 
+- every inline text editor (quick note, timeline note, board card and new card name, start name, room settings) has an x button at its corner with the tooltip Cancel (Esc), Esc cancels, Enter (Ctrl+Enter in the card text) saves, and clicking outside never drops typed text: a note, card name or start name keeps or saves it, and Room settings stays open while it has unsaved changes. `ui-test` (the keys), `manual`
 - the timeline time column fits its longest time with no overlap, in English and Japanese at 820 and 1280 wide; a recording not on this PC dims only its thumbnail and keeps its text readable; small buttons, the connection badge, the Join pill and Download are at least 28 px tall to click; high contrast mode outlines the selected and pressed states. `manual` (UI walkthrough harness)
 - a last seen time has the full local date and time as a tooltip; IDs show three groups everywhere with the full ID as a tooltip; the window is named after the room, and the recording open in the player. `ui-test`
 - the app reopens the room's last page or recording, with its timeline scroll, after a restart. `manual`

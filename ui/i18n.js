@@ -103,6 +103,7 @@ const JA = {
   "Back 5 s (←)": "5秒戻る (←)",
   "by {name}": "{name} が開始",
   "Cancel": "キャンセル",
+  "Cancel (Esc)": "キャンセル (Esc)",
   "Cancel invite": "招待を取り消す",
   "Cancelled": "取り消しました",
   "Capture": "キャプチャ",

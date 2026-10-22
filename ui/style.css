@@ -558,7 +558,7 @@ body.nopanel .panel { display: none; }
 .ev .by .dt { width: 6px; height: 6px; border-radius: 50%; flex: none; }
 .ev .acts { position: absolute; right: var(--s1); top: var(--s1); display: flex; gap: var(--s0); padding: var(--s0); border-radius: var(--r-sm); background: var(--raised); visibility: hidden; }
 .ev:hover .acts, .ev:focus-within .acts { visibility: visible; }
-.ev input { grid-column: 1 / 4; }
+.ev input { grid-column: 1 / 4; padding-right: calc(var(--control-sm) + var(--s2)); }
 
 [popover] { inset: auto; margin: 0; border: 0; overflow: visible; color: inherit; }
 .toast { position: fixed; z-index: 45; left: 50%; bottom: var(--s5); transform: translateX(-50%); background: var(--accent); color: var(--on-accent); border: 1px solid var(--accent-hover); box-shadow: var(--shadow-pop); border-radius: var(--r-md); padding: var(--s3) var(--s3) var(--s3) var(--s4); display: flex; align-items: center; gap: var(--s3); min-height: 48px; max-width: 80%; font-size: var(--t-lg); font-weight: var(--w-semibold); }
@@ -768,3 +768,8 @@ body.full .side, body.full .splitter, body.full .notices { display: none !import
   .seg > button { height: 24px; margin: 0; border-width: 0; }
   .ev.cur, .srow.on, .sidenav button.on, .seg > button.on, .seg > button[aria-pressed="true"], #tools button.on, button.icon.on, .chap.cur { outline: 2px solid Highlight; outline-offset: -2px; }
 }
+#namefield { position: relative; }
+#namefield .cancel { position: absolute; right: var(--s2); bottom: 8px; }
+#namefield input { padding-right: calc(var(--control-sm) + var(--s3)); }
+.quick .cancel { flex: none; }
+.bhead .cancel { flex: none; }

@@ -26,9 +26,8 @@ function cardEditor(c) {
   };
   box.onkeydown = (e) => {
     e.stopPropagation();
-    if (composing(e)) return;
-    if (e.key === "Enter" && e.ctrlKey) { e.preventDefault(); save(); }
-    if (e.key === "Escape") { e.preventDefault(); stopEditing(); }
+    const act = editKey(e, true);
+    if (act) { e.preventDefault(); if (act === "save") save(); else stopEditing(); }
   };
   return el("div", { className: "cedit" }, box, el("div", { className: "row end" }, el("button", { className: "sm", textContent: t("Cancel"), onclick: stopEditing }), el("button", { className: "primary sm", onclick: save }, t("Save"), el("kbd", { textContent: "Ctrl+Enter" }))));
 }
@@ -52,12 +51,11 @@ function nameInput(value, done) {
   };
   input.onkeydown = (e) => {
     e.stopPropagation();
-    if (composing(e)) return;
-    if (e.key === "Enter") close(true);
-    if (e.key === "Escape") { e.preventDefault(); close(false); }
+    const act = editKey(e);
+    if (act) { e.preventDefault(); close(act === "save"); }
   };
-  input.onblur = () => close(false);
-  return input;
+  input.onblur = () => close(true);
+  return [input, cancelButton(() => close(false))];
 }
 async function deleteCard(c) {
   if (!(await ask(t("Delete {name}?", { name: cardTitle(c) }), t("Delete"), true))) return;
@@ -149,8 +147,7 @@ function addCard() {
   if (input) input.focus();
 }
 function newCardEl() {
-  const input = nameInput("", (name) => { editing = null; if (name) putCard("", { title: name }); else renderBoard(); });
-  const box = el("div", { className: "bcard new" }, el("div", { className: "bhead" }, input));
+  const box = el("div", { className: "bcard new" }, el("div", { className: "bhead" }, ...nameInput("", (name) => { editing = null; if (name) putCard("", { title: name }); else renderBoard(); })));
   spanCard(box, NEW_CARD);
   return box;
 }
