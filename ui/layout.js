@@ -53,6 +53,10 @@ function minimapRect(width, height) {
   return side > 0 ? { x: at / width, y: MINIMAP.at, w: side / width, h: side / height } : null;
 }
 
+const osdSpeed = (rate) => `${rate}×`;
+const osdSeek = (run) => t(run < 0 ? "−{n} s" : "+{n} s", { n: Math.abs(run) });
+const osdVolume = (volume, muted) => (muted || volume === 0 ? t("Muted") : t("Volume {n}%", { n: Math.round(volume * 100) }));
+
 const seekSum = (run, delta) => (Math.sign(run) === Math.sign(delta) ? run + delta : delta);
 
 const BOARD_COLS = 12;

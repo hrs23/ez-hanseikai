@@ -5,7 +5,7 @@ const MAX_KEYED = 6;
 const TICK_MS = 150;
 const REFRESH_MS = 1000;
 const IDLE_MS = 2500;
-const OSD_MS = 2500;
+const OSD_MS = 1200;
 const SEEKWHO_MS = 4000;
 const TOAST_MS = 6000;
 const UNDO_MS = 8000;
@@ -51,7 +51,6 @@ let gameSound = stored("gameSound", null);
 let voiceSide = known(stored("voiceSide", null), VOICE_SIDES, VOICE_SIDE_DEFAULT);
 let voiceToneChoice = known(stored("voiceTone", null), VOICE_TONES, VOICE_TONE_DEFAULT);
 let seekRun = null;
-const BEZEL_MS = 500;
 let muted = false;
 let live = false;
 let watchParty = false;
@@ -266,7 +265,7 @@ function setView(s, view) {
   s.view = Math.max(0, Math.min(view, s.keys.length));
   if (s.view) s.last = s.view;
   place(s);
-  if (s === play) { applyAudio(); renderViews(); share(); }
+  if (s === play) { applyAudio(); renderViews(); share(); osd("monitor", s.view ? nameOf(s.keys[s.view - 1]) : t("All"), { kind: "view" }); }
 }
 function tileAt(s, x, y) {
   return Object.entries(s.tiles).find(([, tl]) => { const r = tl.box.getBoundingClientRect(); return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom; });
@@ -635,7 +634,7 @@ function renderViews() {
 }
 function cycleTool() {
   ink.tool = nextInkTool(ink.tool);
-  osd(t(INK_TOOL_NAME[ink.tool || "off"]));
+  osd(ink.tool || "x", t(INK_TOOL_NAME[ink.tool || "off"]));
   renderTools();
 }
 function renderTools() {
@@ -699,7 +698,7 @@ function stepSet(dir) {
   const list = recordingRows().map((r) => r.s);
   const i = list.findIndex((s) => s.id === selected);
   const next = i < 0 ? list[0] : list[i - dir];
-  if (next) { openSession(next.id); osd(sessionName(next.id)); }
+  if (next) { openSession(next.id); osd("film", sessionName(next.id)); }
 }
 
 function lineNodes(set, line, iconName, sep = "") {
@@ -777,11 +776,22 @@ function hideAfter(box, ms, then) {
   clearTimeout(box.hideTimer);
   box.hideTimer = setTimeout(() => { box.hidden = true; if (then) then(); }, ms);
 }
-function osd(text, who) {
+let osdTimer = null;
+function osd(name, text, o = {}) {
+  const box = $("osd");
+  if (o.kind !== "seek") seekRun = null;
+  $("osdicon").replaceChildren(o.who ? avatar(o.who, "lg") : name ? icon(name) : "");
   $("osdtext").textContent = text;
-  $("osdav").replaceChildren(who ? avatar(who, "sm") : "");
-  $("osd").hidden = false;
-  hideAfter($("osd"), OSD_MS);
+  $("osdbar").hidden = o.bar === undefined;
+  if (o.bar !== undefined) $("osdbar").firstElementChild.style.width = `${Math.round(Math.max(0, Math.min(1, o.bar)) * 100)}%`;
+  box.classList.add("on");
+  clearTimeout(osdTimer);
+  osdTimer = setTimeout(() => { box.classList.remove("on"); seekRun = null; }, OSD_MS);
+}
+function renderSpeed() {
+  const badge = $("speedbadge");
+  badge.hidden = rate === 1;
+  if (!badge.hidden) badge.replaceChildren(icon("gauge"), osdSpeed(rate));
 }
 function seekWho(who, m) {
   const box = $("seekwho");
@@ -797,19 +807,10 @@ function setUndo(fn) {
   undo = { fn, at: Date.now() };
 }
 function runUndo() {
-  if (!undo || Date.now() - undo.at > UNDO_MS) { osd(t("Nothing to undo")); return; }
+  if (!undo || Date.now() - undo.at > UNDO_MS) { osd("info", t("Nothing to undo")); return; }
   const u = undo;
   undo = null;
   u.fn();
-}
-function bezel(...children) {
-  const b = $("bezel");
-  seekRun = null;
-  b.replaceChildren(...children);
-  b.hidden = true;
-  void b.offsetWidth;
-  b.hidden = false;
-  hideAfter(b, BEZEL_MS, () => { seekRun = null; });
 }
 function apply(cmd, m, who, prev = { playing: clock.playing, m: nowM() }) {
   live = false;
@@ -817,11 +818,11 @@ function apply(cmd, m, who, prev = { playing: clock.playing, m: nowM() }) {
   else if (cmd === "pause") setClock(false, m);
   else if (cmd === "seek") setClock(clock.playing, m);
   else return;
-  if (cmd !== "seek") bezel(icon(cmd === "play" ? "play" : "pause"));
+  if (cmd !== "seek" && who === st.id) osd(cmd, t(cmd === "play" ? "Play" : "Pause"));
   if (who !== st.id) {
     const name = nameOf(who);
     const where = [fmt(m), matchNow(m)].filter(Boolean).join(" · ");
-    osd(cmd === "play" ? t("{name} played", { name }) : cmd === "pause" ? t("{name} paused", { name }) : t("{name} moved to {time}", { name, time: where }), who);
+    osd(null, cmd === "play" ? t("{name} played", { name }) : cmd === "pause" ? t("{name} paused", { name }) : t("{name} moved to {time}", { name, time: where }), { who });
     seekWho(who, m);
   }
   setUndo(() => act(prev.playing ? "play" : "pause", prev.m));
@@ -873,7 +874,7 @@ const seekTo = (m) => act("seek", Math.max(0, m));
 function jump(delta) {
   const run = seekSum(seekRun, delta);
   seekTo(Math.min(total(), nowM() + delta));
-  bezel(t(delta < 0 ? "◀◀ {n} s" : "{n} s ▶▶", { n: Math.abs(run) }));
+  osd(delta < 0 ? "rotate-ccw" : "rotate-cw", osdSeek(run), { kind: "seek", bar: total() ? nowM() / total() : undefined });
   seekRun = run;
 }
 
@@ -1106,7 +1107,7 @@ function editNote(n, row) {
 function stepTo(times, dir) {
   const next = stepTarget(times, nowM(), dir, NOTE_STEP_GAP);
   if (next !== undefined) seekTo(next);
-  else osd(dir > 0 ? t("No next one") : t("No previous one"));
+  else osd("info", dir > 0 ? t("No next one") : t("No previous one"));
 }
 const stepNote = (dir) => stepTo(noteMoments(items).map((n) => n.m), dir);
 function stepMatch(dir) {
@@ -1167,7 +1168,7 @@ function submitQuick() {
   if (!text) { closeQuick(true); return; }
   $("quicktext").value = "";
   closeQuick(true);
-  run("add_event", { kind: "note", text, target: q.timed ? { t_us: q.wall } : { set: q.set }, values: null }, () => { osd(q.timed ? t("Note added at {time}", { time: fmt(q.m) }) : t("Note added")); refresh(); });
+  run("add_event", { kind: "note", text, target: q.timed ? { t_us: q.wall } : { set: q.set }, values: null }, () => { osd("note", q.timed ? t("Note added at {time}", { time: fmt(q.m) }) : t("Note added")); refresh(); });
 }
 function cancelQuick() {
   $("quicktext").value = "";
@@ -1217,7 +1218,7 @@ function pickLayout(s, anchor) {
     }));
     const kinds = el("div", { className: "kinds" }, ...LAYOUTS.filter((l) => layoutFits(l.id, count)).map((l) => {
       const b = el("button", { className: "kind" + (effectiveMode(s) === l.id && Math.max(present, s.slots || 0) === count ? " on" : "") }, layoutIcon(l.id, count), el("span", { className: "label", textContent: t(l.name) }));
-      b.onclick = () => { closeMenu(); saveLayout(s, l.id, count > present ? count : 0); };
+      b.onclick = () => { closeMenu(); saveLayout(s, l.id, count > present ? count : 0); osd("grid", t(l.name), { kind: "view" }); };
       return b;
     }));
     box.append(counts, kinds);
@@ -1277,7 +1278,7 @@ function stageMenu(e, key) {
   openMenu([
     ...(pick ? [{ label: t("Switch app sound"), icon: "volume-2", check: soundKey(0, play.keys, st.id, gameSound) === key, run: () => chooseSound(key) }, { separator: true }] : []),
     { label: t("Add note"), icon: "note", right: "C", run: openQuick },
-    { label: t("Copy link to this moment"), icon: "link", run: () => navigator.clipboard.writeText(momentLink(set.id, nowM(), play.view ? play.keys[play.view - 1] : null)).then(() => flash(t("Link copied"))).catch(fail) },
+    { label: t("Copy link to this moment"), icon: "link", run: () => navigator.clipboard.writeText(momentLink(set.id, nowM(), play.view ? play.keys[play.view - 1] : null)).then(() => osd("link", t("Link copied"))).catch(fail) },
     { label: t("Clear drawing"), icon: "eraser", right: "X", run: () => clearInk(false) },
   ], e);
 }
@@ -1560,16 +1561,19 @@ function hold(on) {
 function setRate(r) {
   anchor();
   rate = r;
-  $("rate").textContent = `${r}×`;
+  $("rate").textContent = osdSpeed(r);
+  renderSpeed();
   applyAudio();
 }
-const changeRate = (dir) => { setRate(SPEEDS[Math.max(0, Math.min(SPEEDS.length - 1, SPEEDS.indexOf(rate) + dir))]); osd(t("Speed {rate}×", { rate })); share(); };
-const toggleMute = () => { muted = !muted; applyAudio(); };
+const changeRate = (dir) => { setRate(SPEEDS[Math.max(0, Math.min(SPEEDS.length - 1, SPEEDS.indexOf(rate) + dir))]); osd("gauge", osdSpeed(rate), { kind: "speed" }); share(); };
+const toggleMute = () => { muted = !muted; applyAudio(); osdVolumeNow(); };
+const osdVolumeNow = () => osd(muted || volume === 0 ? "volume-x" : "volume-2", osdVolume(volume, muted), { kind: "volume", bar: muted ? 0 : volume });
 function setVolume(v) {
   volume = Math.max(0, Math.min(1, v));
   muted = false;
   store("volume", volume);
   applyAudio();
+  osdVolumeNow();
 }
 document.addEventListener("mouseover", (e) => {
   for (let n = e.target; n instanceof HTMLElement && n !== document.body; n = n.parentElement) {
@@ -1640,7 +1644,7 @@ $("seek").onpointerdown = (e) => {
     const from = drag;
     drag = null;
     act("seek", nowM(), from);
-    bezel(fmt(nowM()));
+    osd(null, fmt(nowM()), { kind: "seek", bar: total() ? nowM() / total() : undefined });
   };
 };
 const peek = { slot: slot(el("video", { muted: true, preload: "auto" }), "peek"), at: null };
