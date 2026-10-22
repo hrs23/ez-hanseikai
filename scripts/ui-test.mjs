@@ -402,6 +402,7 @@ test("the AI menu offers a few prompts, or the switch when the API is off", () =
   off[0].run();
   assert.equal(calls[1], "enable");
   assert.ok("Copy prompt" in ui$.JA);
+  assert.ok("This app does not run the AI. Copy the prompt and give it to your own AI agent (such as Claude Code); it works through the local API." in ui$.JA);
 });
 
 test("a prompt names the API address, the token, llms.txt, the room and the recording", () => {

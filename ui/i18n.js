@@ -36,6 +36,7 @@ const JA = {
   "Paste": "貼り付け",
   "Select all": "すべて選択",
   "Copy prompt": "プロンプトをコピー",
+  "This app does not run the AI. Copy the prompt and give it to your own AI agent (such as Claude Code); it works through the local API.": "このアプリがAIを動かすのではありません。プロンプトをコピーして手元のAIエージェント（Claude Code など）に渡すと、ローカルAPI経由で作業します。",
   "Prompt": "プロンプト",
   "AI": "AI",
   "API": "API",
