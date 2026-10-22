@@ -1467,7 +1467,7 @@ async function library(ctx) {
     await evaluate(a, `act("pause", nowM()); true`);
   });
 
-  await step("clicking a tile, or Hear this in its right-click menu, picks whose app sound plays and clicks keep no focus", async () => {
+  await step("clicking a tile, or Switch app sound in its right-click menu, picks whose app sound plays and clicks keep no focus", async () => {
     await openTiles(a);
     const pick = await evaluate(a, `play.keys.find((k) => k !== soundKey(0, play.keys, st.id, gameSound))`);
     await clickAt(a, `play.tiles[${JSON.stringify(pick)}].box`);
@@ -1475,8 +1475,8 @@ async function library(ctx) {
     check(await evaluate(a, `[...$("views").children].slice(0, -1).every((b, i) => (b.querySelector(".key") === null) === (i > MAX_KEYED) && (i > MAX_KEYED || b.querySelector(".key").textContent === String(i)))`), "the view buttons show their shortcut numbers");
     const next = await evaluate(a, `play.keys[(play.keys.indexOf(${JSON.stringify(pick)}) + 1) % play.keys.length]`);
     await evaluate(a, `play.tiles[${JSON.stringify(next)}].box.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 80, clientY: 120 })); true`);
-    await clickAt(a, `[...$("menu").querySelectorAll("button")].find((b) => b.textContent === t("Hear this"))`);
-    await waitFor("Hear this in the tile menu picks that member", within(UI_REFRESH_S * 3), () => evaluate(a, `soundKey(0, play.keys, st.id, gameSound) === ${JSON.stringify(next)}`));
+    await clickAt(a, `[...$("menu").querySelectorAll("button")].find((b) => b.textContent === t("Switch app sound"))`);
+    await waitFor("Switch app sound in the tile menu picks that member", within(UI_REFRESH_S * 3), () => evaluate(a, `soundKey(0, play.keys, st.id, gameSound) === ${JSON.stringify(next)}`));
     const third = await evaluate(a, `play.keys[(play.keys.indexOf(${JSON.stringify(next)}) + 1) % play.keys.length]`);
     await clickAt(a, `$("gamesound")`);
     await clickAt(a, `[...$("pop").querySelectorAll(".who")][play.keys.indexOf(${JSON.stringify(third)})].querySelector("button")`);

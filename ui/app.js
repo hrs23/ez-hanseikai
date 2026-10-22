@@ -436,7 +436,7 @@ function mixRow(key, kind, label) {
 function openMix(anchor) {
   const keys = play.keys;
   const heard = soundKey(play.view, keys, st.id, gameSound);
-  const pick = (key) => el("button", { className: "icon sm" + (key === heard ? " on" : ""), title: t("Hear this"), ariaLabel: t("Hear this"), onclick: () => { chooseSound(key); openMix(anchor); } }, icon("volume-2", "sm"));
+  const pick = (key) => el("button", { className: "icon sm" + (key === heard ? " on" : ""), title: t("Switch app sound"), ariaLabel: t("Switch app sound"), onclick: () => { chooseSound(key); openMix(anchor); } }, icon("volume-2", "sm"));
   showPop([el("div", { className: "head" }, el("b", { textContent: t("Volume per member") })), el("div", { className: "mixgrid" }, ...keys.map((key) => el("div", { className: "mixm" }, el("div", { className: "who" }, avatar(key, "sm"), el("span", { className: "nm", textContent: nameOf(key) }), keys.length > 1 && !play.view ? pick(key) : null), mixRow(key, "app", t("App sound")), mixRow(key, "voice", t("Voice")))))], anchor, true, keys.length > 2 ? "wide" : "");
 }
 function showPop(children, anchor, above, cls = "") {
@@ -1123,7 +1123,7 @@ function stageMenu(e, key) {
   if (!set) return;
   const pick = !play.view && play.keys.length > 1;
   openMenu([
-    ...(pick ? [{ label: t("Hear this"), icon: "volume-2", check: soundKey(0, play.keys, st.id, gameSound) === key, run: () => chooseSound(key) }, { separator: true }] : []),
+    ...(pick ? [{ label: t("Switch app sound"), icon: "volume-2", check: soundKey(0, play.keys, st.id, gameSound) === key, run: () => chooseSound(key) }, { separator: true }] : []),
     { label: t("Add note"), icon: "note", right: "C", run: openQuick },
     { label: t("Copy link to this moment"), icon: "link", run: () => navigator.clipboard.writeText(momentLink(set.id, nowM(), play.view ? play.keys[play.view - 1] : null)).then(() => osd(t("Link copied"))).catch(fail) },
     { label: t("Clear drawing"), icon: "eraser", right: "X", run: () => clearInk(false) },
