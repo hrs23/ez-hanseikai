@@ -35,7 +35,7 @@ const OUTPUT_COLORS: u32 = (1 << 2) | (1 << 4);
 
 pub fn fit_rect((w, h): (u32, u32), (cw, ch): (u32, u32)) -> (u32, u32, u32, u32) {
     let scale = (cw as f64 / w as f64).min(ch as f64 / h as f64);
-    let (dw, dh) = (((w as f64 * scale) as u32).clamp(2, cw) & !1, ((h as f64 * scale) as u32).clamp(2, ch) & !1);
+    let (dw, dh) = (((w as f64 * scale) as u32).max(2).min(cw) & !1, ((h as f64 * scale) as u32).max(2).min(ch) & !1);
     (((cw - dw) / 2) & !1, ((ch - dh) / 2) & !1, dw, dh)
 }
 
@@ -260,7 +260,7 @@ impl GraphicsCaptureApiHandler for Capture {
 
     fn on_frame_arrived(&mut self, frame: &mut Frame, _control: InternalCaptureControl) -> Result<(), Self::Error> {
         let (w, h) = (frame.width(), frame.height());
-        if self.last.elapsed() < FRAME_GAP || w < 2 || h < 2 {
+        if self.last.elapsed() < FRAME_GAP || w < 2 || h < 2 || !crate::record::wants_picture(&self.core) {
             return Ok(());
         }
         debug::frame(debug::TAKEN);
@@ -276,7 +276,7 @@ impl GraphicsCaptureApiHandler for Capture {
             }
             canvas.unwrap()
         };
-        let Some(sink) = current_sink(&core, Some(canvas)) else { return Ok(()) };
+        let Some(sink) = current_sink(&core, Some(canvas)).filter(|s| !s.voice) else { return Ok(()) };
         let mut picture = Vec::new();
         self.convert(frame, sink.out(), &mut picture)?;
         let picture = Arc::new(picture);
@@ -347,6 +347,18 @@ mod tests {
         assert_eq!(fit_rect((2560, 1440), (1280, 720)), (0, 0, 1280, 720));
         assert_eq!(fit_rect((1920, 1200), (1280, 720)), (64, 0, 1152, 720));
         assert_eq!(fit_rect((3440, 1440), (1280, 720)), (0, 92, 1280, 534));
+    }
+
+    #[test]
+    fn an_empty_or_tiny_output_never_panics() {
+        assert_eq!(fit_rect((1920, 1080), (0, 0)), (0, 0, 0, 0));
+        assert_eq!(fit_rect((1920, 1080), (0, 720)), (0, 358, 0, 2));
+        assert_eq!(fit_rect((1920, 1080), (1, 1)), (0, 0, 0, 0));
+        assert_eq!(fit_rect((1920, 1080), (3, 3)), (0, 0, 2, 2));
+        assert_eq!(fit_rect((0, 0), (1280, 720)), (638, 358, 2, 2));
+        let mut out = vec![1];
+        nv12(&[255u8; 16], (2, 2), (0, 0), &mut out);
+        assert!(out.is_empty());
     }
 
     #[test]

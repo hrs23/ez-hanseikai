@@ -48,8 +48,9 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - A long recording of an hour or more with three members runs without a stall, a growing delay or a lost part (soak test). `manual`
 - The hardware encoders (NVENC, AMF, QSV) record on each GPU kind, and the fallback to the software encoder works. `manual`
 - While recording with a game in focus, the global shortcuts mark the moment, turn the microphone and the screen off and on with the dock buttons following, and a notification says each change; reset puts a changed shortcut back to its default. `manual`
+- Turning the screen off with its shortcut while a display is captured during a recording switches to voice only without a crash. `manual`
 - Closing the captured window while on standby shows that the source closed and lets the screen be chosen again, with no stuck encoder. `todo`
-- capture: a picture fits inside with even bars; colors become studio range bt709; a narrow picture gets black bars on the sides. `unit`
+- capture: a picture fits inside with even bars; an empty or tiny output never panics; colors become studio range bt709; a narrow picture gets black bars on the sides. `unit`
 - data: the standby ring keeps the newest segments and only standby is trimmed. `unit`
 - ffmpeg: choice skips dropped encoders down to the fallback; a dropped backend falls to another backend of the same codec; probe results are reused only for the same key. `unit`
 - media: splitter finds init and whole fragments across reads; scan finds times and the last whole fragment; huge box sizes in damaged files stop the scan; patch moves times to zero even in partial ranges; segments cut on count and on set changes. `unit`

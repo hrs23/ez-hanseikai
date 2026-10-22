@@ -412,6 +412,10 @@ fn want(core: &Core) -> Option<(String, bool)> {
     wanted(!e.source.lock().unwrap().is_null(), e.source_lost.load(Ordering::Relaxed), recording.as_deref(), core.room_id(), core.disk_full())
 }
 
+pub(crate) fn wants_picture(core: &Core) -> bool {
+    want(core).is_none_or(|(_, voice)| !voice)
+}
+
 pub fn usable_codecs(core: &Core) -> Vec<String> {
     let mut usable = core.codecs.lock().unwrap().clone();
     for p in core.peers.lock().unwrap().iter().filter(|p| p.conn.is_some()) {
