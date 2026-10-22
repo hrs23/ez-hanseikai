@@ -214,10 +214,14 @@ body.noside .side, body.boardfull .side, body.noside .splitter, body.boardfull .
 .thumb.live { outline: 2px solid var(--rec); outline-offset: -2px; color: var(--rec); }
 .thumbfaces { position: absolute; right: -6px; bottom: -6px; display: flex; }
 .thumbfaces .avs .av { box-shadow: 0 0 0 2px var(--ring, var(--surface)); }
-.srow.on .thumbfaces .avs .av { box-shadow: 0 0 0 2px var(--raised-2); }
-.srow:hover:not(.on) .thumbfaces .avs .av { box-shadow: 0 0 0 2px var(--raised); }
+.srow.on .thumbfaces .avs .av, .srow.on .wpn .av { box-shadow: 0 0 0 2px var(--raised-2); }
+.srow:hover:not(.on) .thumbfaces .avs .av, .srow:hover:not(.on) .wpn .av { box-shadow: 0 0 0 2px var(--raised); }
 .recdot { width: 8px; height: 8px; border-radius: 50%; background: var(--rec); flex: none; display: inline-block; animation: pulse var(--pulse) infinite; }
-.wpn { margin-left: auto; display: inline-flex; align-items: center; gap: var(--s1); color: var(--soft); font-size: var(--t-sm); }
+.wpn { margin-left: auto; display: inline-flex; align-items: center; flex: none; }
+.srow.wp { box-shadow: inset 2px 0 0 var(--accent); }
+.srow .wt { display: none; margin-left: auto; flex: none; }
+.srow:hover .wt, .srow:focus-within .wt { display: inline-flex; }
+.srow .wt + .wpn { margin-left: 0; }
 .aimark { font-size: var(--t-xs); font-weight: var(--w-semibold); padding: 0 var(--s1); border-radius: var(--r-sm); background: var(--hover-bg); color: var(--muted); }
 .sidebanner { margin: var(--s2) var(--s2); padding: var(--s2) var(--s3); border-radius: var(--r-sm); background: var(--warn-soft); color: var(--warn); font-size: var(--t-sm); display: flex; gap: var(--s2); align-items: flex-start; cursor: pointer; flex: none; }
 .sidebanner svg { margin-top: var(--s0); }
@@ -385,7 +389,8 @@ body.boardwin .side, body.boardwin .splitter, body.boardwin .notices, body.board
 
 .player { flex: 1; display: flex; min-height: 0; }
 .pcol { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.wpbox { display: flex; padding-bottom: var(--s2); }
+.corner { position: absolute; top: var(--s3); right: var(--s3); z-index: 8; display: flex; align-items: center; gap: var(--s2); transition: opacity var(--slow); }
+.wpbox { display: flex; }
 .wpoff { white-space: nowrap; height: 34px; border-radius: var(--r-full); padding: 0 var(--s1) 0 var(--s3); gap: var(--s2); font-weight: var(--w-semibold); background: var(--raised); }
 .wpoff { --ring: var(--raised); }
 .wpoff .join { height: 26px; padding: 0 var(--s3); border-radius: var(--r-full); background: var(--accent); color: var(--on-accent); display: inline-flex; align-items: center; }
@@ -634,6 +639,7 @@ dialog.diag .dlghead { padding: var(--s3) var(--s3) var(--s3) var(--s4); margin:
 .pop .head { display: flex; align-items: center; gap: var(--s2); }
 .pop .head b { font-weight: var(--w-semibold); flex: 1; overflow: hidden; text-overflow: ellipsis; }
 .pop .who { display: flex; align-items: center; gap: var(--s2); font-size: var(--t-sm); font-weight: var(--w-semibold); margin-top: var(--s1); }
+.pop .who .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .pop .poprow { display: grid; grid-template-columns: 76px 1fr auto; align-items: center; gap: var(--s2); font-size: var(--t-sm); color: var(--muted); }
 .pop .ph { padding: var(--s2) var(--s3) var(--s1); font-size: var(--t-xs); color: var(--faint); font-weight: var(--w-semibold); letter-spacing: .04em; text-transform: uppercase; }
 :lang(ja) .pop .ph { text-transform: none; }
@@ -677,7 +683,7 @@ dialog.diag .dlghead { padding: var(--s3) var(--s3) var(--s3) var(--s4); margin:
 .player.full .transport { bottom: 0; padding-top: var(--s5); background: linear-gradient(transparent, var(--scrim-strong)); }
 .player.full .stage { margin: 0; }
 .player.full.idle { cursor: none; }
-.player.full.idle .toolsov, .player.full.idle .transport { opacity: 0; pointer-events: none; }
+.player.full.idle .toolsov, .player.full.idle .corner, .player.full.idle .transport { opacity: 0; pointer-events: none; }
 body.full .side, body.full .splitter, body.full .notices { display: none !important; }
 
 @media (max-width: 1240px) {

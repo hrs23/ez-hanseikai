@@ -1477,8 +1477,12 @@ async function library(ctx) {
     await evaluate(a, `play.tiles[${JSON.stringify(next)}].box.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 80, clientY: 120 })); true`);
     await clickAt(a, `[...$("menu").querySelectorAll("button")].find((b) => b.textContent === t("Hear this"))`);
     await waitFor("Hear this in the tile menu picks that member", within(UI_REFRESH_S * 3), () => evaluate(a, `soundKey(0, play.keys, st.id, gameSound) === ${JSON.stringify(next)}`));
+    const third = await evaluate(a, `play.keys[(play.keys.indexOf(${JSON.stringify(next)}) + 1) % play.keys.length]`);
     await clickAt(a, `$("gamesound")`);
-    await waitFor("the app sound button picks the next member", within(UI_REFRESH_S * 3), () => evaluate(a, `soundKey(0, play.keys, st.id, gameSound) === play.keys[(play.keys.indexOf(${JSON.stringify(next)}) + 1) % play.keys.length]`));
+    await clickAt(a, `[...$("pop").querySelectorAll(".who")][play.keys.indexOf(${JSON.stringify(third)})].querySelector("button")`);
+    await waitFor("the app sound popup picks the member whose button was clicked", within(UI_REFRESH_S * 3), () => evaluate(a, `soundKey(0, play.keys, st.id, gameSound) === ${JSON.stringify(third)}`));
+    check(await evaluate(a, `$("pop").querySelectorAll(".poprow").length === play.keys.length * 2`), "the app sound popup lacks the per-member volumes");
+    await evaluate(a, `closePop(); true`);
     for (const id of ["volume", "play"]) {
       await clickAt(a, `$(${JSON.stringify(id)})`);
       check(await evaluate(a, `document.activeElement === document.body`), `a click on ${id} kept the keyboard focus`);
@@ -1507,18 +1511,18 @@ async function library(ctx) {
   await step("a session started while watching together records voices and the Watch Party", async () => {
     const all = [a, b, c];
     await allSee(all, "watching the set together", within(PARTY_REPEAT_S + UI_REFRESH_S * 2), (st) => st.party.on && st.party.shared.set === ctx.set);
-    check(await evaluate(a, `startState() === "review" && $("startbtn").textContent === t("Record debrief")`), "A's start button does not offer to record the debrief");
+    check(await evaluate(a, `$("startbtn").textContent === t("Start recording")`), "A's start button changed while watching together");
     await evaluate(a, `openSession(${JSON.stringify(ctx.set)}); true`);
     check(await evaluate(a, `!$("debrief").hidden && $("debrief").title === t("Record debrief")`), "the player does not offer to record a debrief");
     await evaluate(a, `go("room"); true`);
     await evaluate(a, `$("startmore").click(); true`);
-    check(await evaluate(a, `[...$("menu").querySelectorAll("button")].map((b) => b.textContent).join() === t("Switch to recording")`), "the record menu does not offer to switch back to recording while watching together");
+    check(await evaluate(a, `[...$("menu").querySelectorAll("button")].map((b) => b.textContent).join() === t("Record debrief")`), "the record menu does not offer the debrief");
     await evaluate(a, `closeMenu(); true`);
     for (const app of [b, c]) await evaluate(app, `window.e2eNotes = []; window.__TAURI__.event.listen("session", (e) => e2eNotes.push(sessionNotice(e.payload.action, e.payload.by))).then(() => true)`);
-    await pressAndConfirm(a, "toggleRecording()", false);
+    await pressAndConfirm(a, "toggleRecording('debrief')", false);
     await sleep(UI_REFRESH_S * 1000);
     check(!(await state(a)).active_set, "A started recording although it answered No");
-    const asked = await pressAndConfirm(a, "toggleRecording()");
+    const asked = await pressAndConfirm(a, "toggleRecording('debrief')");
     check(asked === "Record the debrief for everyone?", `A was asked "${asked}"`);
     await waitFor("B is told who started", within(LOG_SYNC_S * 2), () => evaluate(b, `e2eNotes.includes(${JSON.stringify(a.name + " started recording")})`));
     ctx.review = (await state(a)).active_set.id;

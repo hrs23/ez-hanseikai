@@ -90,7 +90,6 @@ const showingNow = () => nowView || !playSet();
 const followingLive = () => live && !!playSet() && playSet().live;
 const livePinned = () => followingLive() && liveClock.pos !== null;
 const setById = (id) => (st && st.sets.find((s) => s.id === id)) || null;
-const reviewing = () => !!(watchParty && st && st.party.on && typeof st.party.shared.set === "string");
 
 function markVoice(e, on, off) {
   e.classList.toggle("speaking", on && !off);
@@ -404,7 +403,7 @@ function applyAudio() {
       s.video.playbackRate = livePinned() ? liveClock.rate : rate;
     }
   });
-  const pick = play.keys.length > 1 && !play.view;
+  const pick = play.keys.length > 0;
   $("gamesound").hidden = !pick;
   if (pick && changed("gamesound", [heard, nameOf(heard), look(heard), lang])) {
     $("gamesound").replaceChildren(avatar(heard, "sm"));
@@ -413,7 +412,6 @@ function applyAudio() {
   if (changed("mute", [muted || volume === 0])) $("mute").replaceChildren(icon(muted || volume === 0 ? "volume-x" : "volume-2"));
   $("volume").value = muted ? 0 : volume;
   rangeFill($("volume"));
-  $("speed").textContent = `${rate}×`;
 }
 function rangeFill(r) {
   r.style.setProperty("--v", ((Number(r.value) - Number(r.min)) / (Number(r.max) - Number(r.min))) * 100 + "%");
@@ -434,7 +432,15 @@ function openReceive(key, anchor) {
 }
 function openMix(anchor) {
   const keys = play.keys;
-  showPop([el("div", { className: "head" }, el("b", { textContent: t("Volume per member") })), ...keys.flatMap((key) => [el("div", { className: "who" }, avatar(key, "sm"), nameOf(key)), mixRow(key, "app", t("App sound")), mixRow(key, "voice", t("Voice"))])], anchor, true);
+  const heard = soundKey(play.view, keys, st.id, gameSound);
+  const pick = (key) => el("button", { className: "icon sm" + (key === heard ? " on" : ""), title: t("Hear this"), ariaLabel: t("Hear this"), onclick: () => { chooseSound(key); openMix(anchor); } }, icon("volume-2", "sm"));
+  showPop([el("div", { className: "head" }, el("b", { textContent: t("Volume per member") })), ...keys.flatMap((key) => [el("div", { className: "who" }, avatar(key, "sm"), el("span", { className: "nm", textContent: nameOf(key) }), keys.length > 1 && !play.view ? pick(key) : null), mixRow(key, "app", t("App sound")), mixRow(key, "voice", t("Voice"))])], anchor, true);
+}
+function openMore(anchor) {
+  openMenu([
+    ...(followingLive() ? [] : [{ label: t("Speed"), right: `${rate}×`, more: true, run: speedMenu }]),
+    { label: t("Layout"), icon: "grid", more: true, run: (b) => pickLayout(current(), b) },
+  ], anchor);
 }
 function showPop(children, anchor, above, cls = "") {
   const pop = $("pop");
@@ -477,8 +483,8 @@ function renderTransport(set, idle) {
   const liveSetShown = !!(set && set.live);
   const edge = liveEdge(total(), nowM());
   if (set && !set.live) live = false;
-  for (const id of ["play", "back", "fwd", "addnote", "mixbtn", "seek", "lane", "chapters", "matchchip"]) $(id).classList.toggle("nodisp", idle);
-  $("speed").classList.toggle("nodisp", idle || followingLive());
+  for (const id of ["play", "back", "fwd", "addnote", "seek", "lane", "chapters", "matchchip"]) $(id).classList.toggle("nodisp", idle);
+  $("more").classList.toggle("nodisp", idle);
   $("transport").classList.toggle("idle", idle);
   $("clocknow").parentElement.hidden = idle;
   $("live").hidden = !liveSetShown;
@@ -1413,30 +1419,27 @@ document.addEventListener("contextmenu", (e) => {
 async function toggleRecording(kind) {
   if (!st) return;
   const ending = !!st.active_set;
-  const debrief = !ending && (kind ? kind === "debrief" : debriefNow());
+  const debrief = !ending && kind === "debrief";
   const title = ending ? t("Stop recording for everyone?") : debrief ? t("Record the debrief for everyone?") : t("Start recording for everyone?");
   const action = ending ? t("Stop recording") : debrief ? t("Record debrief") : t("Start recording");
   if (!(await ask(title, action, ending))) return;
-  debriefMode = null;
   run(ending ? "stop_recording" : "start_recording", ending ? null : { debrief });
 }
 const current = () => (playSet() ? play : rec);
 
 $("play").onclick = togglePlay;
-$("gamesound").onclick = () => chooseSound(play.keys[(play.keys.indexOf(soundKey(play.view, play.keys, st.id, gameSound)) + 1) % play.keys.length]);
+$("gamesound").onclick = (e) => openMix(e.currentTarget);
 $("back").onclick = () => jump(-STEP.normal);
 $("fwd").onclick = () => jump(STEP.normal);
 $("addnote").onclick = openQuick;
 $("live").onclick = () => { if (!playSet()) return; goLive(); share(); renderPlayer(); };
-$("speed").onclick = (e) => speedMenu(e.currentTarget);
+$("more").onclick = (e) => openMore(e.currentTarget);
 $("matchchip").onclick = (e) => matchMenu(e.currentTarget);
 $("debrief").onclick = () => toggleRecording("debrief");
-$("mixbtn").onclick = (e) => openMix(e.currentTarget);
 $("volume").oninput = () => setVolume(Number($("volume").value));
 $("mute").onclick = toggleMute;
 $("panelbtn").onclick = togglePanel;
 $("full").onclick = toggleFull;
-$("layoutplay").onclick = (e) => pickLayout(current(), e.currentTarget);
 for (const b of $("tools").querySelectorAll("[data-tool]")) b.onclick = () => { ink.tool = b.dataset.tool; renderTools(); };
 $("clearink").onclick = () => clearInk(false);
 $("toast").onmouseenter = () => clearTimeout($("toast").hideTimer);

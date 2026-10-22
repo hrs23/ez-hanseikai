@@ -5,8 +5,6 @@ const meters = { app: { v: 0, peak: 0, at: 0, clip: 0 }, mic: { v: 0, peak: 0, a
 const rates = {};
 
 let sideWidth = clampSide(stored("sideWidth", SIDE_DEFAULT));
-let debriefMode = null;
-const debriefNow = () => (debriefMode === null ? reviewing() : debriefMode);
 
 function renderSide() {
   if (!inRoom()) return;
@@ -112,12 +110,8 @@ function renderFaces() {
   $("roomfaces").replaceChildren(el("span", { className: "avs" }, ...faces), ids.length > SIDE_FACES ? el("span", { className: "more", textContent: `+${ids.length - SIDE_FACES}` }) : "");
 }
 
-function startState() {
-  if (st.active_set) return "end";
-  return debriefNow() ? "review" : "start";
-}
 function renderStartButton() {
-  const state = startState();
+  const state = st.active_set ? "end" : "start";
   const online = 1 + st.peers.filter((p) => p.connected).length;
   if (!changed("startbtn", [state, lang, online])) return;
   const b = $("startbtn");
@@ -126,10 +120,10 @@ function renderStartButton() {
   $("standby").hidden = state === "end";
   $("standby").replaceChildren(icon("radio", "sm"), el("span", { textContent: `${t("Standby")} · ${t("{n} online", { n: online })}` }));
   if (state === "end") b.replaceChildren(el("i", { className: "recdot" }), el("span", { textContent: t("Stop recording") }), el("span", { className: "timer", id: "livetimer", textContent: fmt((nowUs() - st.active_set.start_us) / 1e6) }));
-  else b.replaceChildren(el("i", { className: "rd" }), el("span", { textContent: state === "review" ? t("Record debrief") : t("Start recording") }));
+  else b.replaceChildren(el("i", { className: "rd" }), el("span", { textContent: t("Start recording") }));
 }
 function startMenu(anchor) {
-  openMenu([{ label: debriefNow() ? t("Switch to recording") : t("Switch to debrief"), icon: debriefNow() ? "film" : "mic", run: () => { debriefMode = !debriefNow(); delete sigs.startbtn; renderStartButton(); } }], anchor);
+  openMenu([{ label: t("Record debrief"), icon: "mic", run: () => toggleRecording("debrief") }], anchor);
 }
 
 function noteCount(s) {
@@ -160,7 +154,7 @@ function liveRow() {
   const on = page === "player" && nowView;
   const detail = a.voice ? null : matchNow(nowM()) || t("by {name}", { name: a.by || "" });
   const row = el("div", { className: "srow liverow" + (on ? " on" : ""), role: "option", tabIndex: 0, ariaSelected: on },
-    thumbBox(null, who, "xs", THUMB_FACES, true),
+    thumbBox(null, who, true),
     el("div", { className: "txt" }, el("div", { className: "l1" }, icon("rec", "sm"), el("b", { textContent: t(a.voice ? "Recording audio" : "Recording") })), el("div", { className: "l2" }, a.voice ? pill("gray", "mic", t("Debrief")) : null, detail ? el("span", { textContent: detail }) : null)));
   row.onclick = openNow;
   row.onkeydown = (e) => { if (e.key === "Enter") openNow(); };
@@ -174,9 +168,10 @@ function sessionRow(s) {
   let l2;
   if (state && state.kind === "bar") l2 = el("div", { className: "prog", title: state.title || "" }, el("div", { className: "l2" }, icon(state.icon, "sm"), el("span", { textContent: state.text })), el("div", { className: "bar" }, el("i", { style: `width:${Math.round(state.frac * 100)}%` })));
   else l2 = el("div", { className: "l2" }, el("span", { textContent: setLength(s) }), s.imported_by ? importedPill(s) : null);
-  const row = el("div", { className: "srow" + (on ? " on" : "") + (here ? "" : " gone"), role: "option", tabIndex: 0, ariaSelected: on },
-    thumbBox(s, s.players.map((p) => p.owner), "xs", THUMB_FACES, false),
-    el("div", { className: "txt" }, el("div", { className: "l1" }, el("b", { textContent: sessionName(s.id) }), watching && watching.length ? el("span", { className: "wpn", title: watching.map(nameOf).join(", ") }, icon("users", "sm"), String(watching.length)) : null, partyFrom === s.id && watching && watching.length ? el("button", { className: "sm", textContent: t("Back"), onclick: (e) => { e.stopPropagation(); openSession(s.id); } }) : null), l2, whereLine(s)));
+  const mine = !!watching && watching.includes(st.id);
+  const row = el("div", { className: "srow" + (on ? " on" : "") + (mine ? " wp" : "") + (here ? "" : " gone"), role: "option", tabIndex: 0, ariaSelected: on },
+    thumbBox(s, [], false),
+    el("div", { className: "txt" }, el("div", { className: "l1" }, el("b", { textContent: sessionName(s.id) }), here && !mine ? el("button", { className: "sm wt", textContent: t("Watch together"), onclick: (e) => { e.stopPropagation(); openSession(s.id); setParty(true); } }) : null, watching && watching.length ? el("span", { className: "wpn", title: watching.map(nameOf).join(", ") }, avatars(watching, "xs", 3)) : null, partyFrom === s.id && watching && watching.length ? el("button", { className: "sm", textContent: t("Back"), onclick: (e) => { e.stopPropagation(); openSession(s.id); } }) : null), l2, whereLine(s)));
   row.onclick = () => { if (onThisPc(s)) openSession(s.id); };
   row.onkeydown = (e) => { if (e.key === "Enter" && onThisPc(s)) openSession(s.id); };
   row.oncontextmenu = (e) => { e.preventDefault(); sessionMenu(s.id, e); };
