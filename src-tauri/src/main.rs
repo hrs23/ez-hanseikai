@@ -7,6 +7,7 @@ mod check;
 mod cleanup;
 mod clock;
 mod data;
+mod debrief;
 mod debug;
 mod export;
 mod ffmpeg;

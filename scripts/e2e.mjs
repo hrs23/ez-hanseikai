@@ -1740,6 +1740,22 @@ async function library(ctx) {
     check(await invoke(a, "export_folder", { room: ctx.room, set: ctx.set, folder, range: "matches" }, EXPORT_FOLDER_S).then(() => false, () => true) && !fs.existsSync(folder), "a per-match export without matches was accepted");
   });
 
+  await step("a debrief exports as one video on its own clock with its voices and the reviewed recording's picture", async () => {
+    const review = setOf(await state(a), ctx.review);
+    const lengthS = (review.end_us - review.start_us) / 1e6;
+    const out = await invoke(a, "export_folder", { room: ctx.room, set: ctx.review, folder: path.join(a.data, "bundles", `${ctx.review} video`), kind: "debrief_video" }, EXPORT_FOLDER_S);
+    check(out.files === 1 && fs.readdirSync(out.folder).join() === "debrief.mp4", `debrief video: ${brief(out)} ${brief(fs.readdirSync(out.folder))}`);
+    const file = path.join(out.folder, "debrief.mp4");
+    const probe = ffmpeg("ffprobe", ["-v", "error", "-show_entries", "format=duration:stream=codec_type", "-of", "json", file]);
+    check(probe.ok, `ffprobe debrief.mp4: ${probe.err}`);
+    const info = JSON.parse(probe.out);
+    check(info.streams.map((y) => y.codec_type).sort().join() === "audio,video", `debrief.mp4 has streams ${brief(info.streams)}`);
+    check(Math.abs(Number(info.format.duration) - lengthS) <= 0.5, `debrief.mp4 lasts ${info.format.duration} s, the debrief ${lengthS} s`);
+    const decode = ffmpeg("ffmpeg", ["-v", "error", "-i", file, "-f", "null", "-"]);
+    check(decode.ok && !decode.err, `debrief.mp4 does not decode cleanly: ${decode.err.slice(0, 300)}`);
+    check(await invoke(a, "export_folder", { room: ctx.room, set: ctx.set, folder: path.join(a.data, "bundles", `${ctx.set} video`), kind: "debrief_video" }, EXPORT_FOLDER_S).then(() => false, () => true), "a recording that is not a debrief was exported as a debrief video");
+  });
+
   const confirmDeletion = async (app, set, form) => {
     await evaluate(app, `confirmDelete([${JSON.stringify(set)}]); true`);
     await waitFor(`${app.key} asks before deleting`, within(UI_REFRESH_S * 5), () => evaluate(app, `$("deletedlg").open`));

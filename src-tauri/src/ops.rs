@@ -471,7 +471,9 @@ fn focus_set(core: &Arc<Core>, args: Value) -> Result<Value, String> {
 
 fn export_folder(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     let (room, set) = recording_ids(core, &args)?;
-    let opts = export::Options { range: arg::<Option<_>>(&args, "range")?.unwrap_or_default(), quality: arg::<Option<_>>(&args, "quality")?.unwrap_or_default(), member: arg(&args, "member")? };
+    let on = |key: &str| arg::<Option<bool>>(&args, key).map(|v| v.unwrap_or(true));
+    let burn = crate::debrief::Burn { notes: on("notes")?, marks: on("marks")?, matches: on("matches")? };
+    let opts = export::Options { range: arg::<Option<_>>(&args, "range")?.unwrap_or_default(), quality: arg::<Option<_>>(&args, "quality")?.unwrap_or_default(), member: arg(&args, "member")?, kind: arg::<Option<_>>(&args, "kind")?.unwrap_or_default(), burn };
     let dir = match arg::<Option<String>>(&args, "folder")? {
         Some(folder) => PathBuf::from(folder),
         None => target(core, &args, &room, &set)?,

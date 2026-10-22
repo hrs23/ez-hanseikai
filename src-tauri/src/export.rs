@@ -49,10 +49,20 @@ pub enum Quality {
     Light,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum Kind {
+    #[default]
+    Folder,
+    DebriefVideo,
+}
+
 pub struct Options {
     pub range: Range,
     pub quality: Quality,
     pub member: Option<String>,
+    pub kind: Kind,
+    pub burn: crate::debrief::Burn,
 }
 
 pub struct Running {
@@ -62,49 +72,50 @@ pub struct Running {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-struct Input {
-    delay_s: f64,
-    end_s: f64,
-    video: bool,
-    audio: bool,
+pub struct Input {
+    pub delay_s: f64,
+    pub end_s: f64,
+    pub video: bool,
+    pub audio: bool,
 }
 
 #[derive(Clone)]
-struct Captured {
-    input: Input,
-    pieces: Vec<Piece>,
-    times: Vec<(f64, f64)>,
+pub struct Captured {
+    pub input: Input,
+    pub pieces: Vec<Piece>,
+    pub times: Vec<(f64, f64)>,
 }
 
 #[derive(Debug, PartialEq)]
-struct Note {
-    at_s: f64,
-    kind: String,
-    text: String,
-    tags: Vec<String>,
+pub struct Note {
+    pub at_s: f64,
+    pub kind: String,
+    pub text: String,
+    pub tags: Vec<String>,
+    pub by: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-struct Cue {
-    from_s: f64,
-    to_s: f64,
-    text: String,
+pub struct Cue {
+    pub from_s: f64,
+    pub to_s: f64,
+    pub text: String,
 }
 
 #[derive(Clone)]
-struct Output {
-    name: String,
-    owner: String,
-    video: Vec<Captured>,
-    voice: Vec<Captured>,
-    size: (u32, u32),
-    kbps: f64,
+pub struct Output {
+    pub name: String,
+    pub owner: String,
+    pub video: Vec<Captured>,
+    pub voice: Vec<Captured>,
+    pub size: (u32, u32),
+    pub kbps: f64,
 }
 
-struct Items {
-    notes: Vec<Note>,
-    chapters: Vec<Cue>,
-    matches: Vec<Cue>,
+pub struct Items {
+    pub notes: Vec<Note>,
+    pub chapters: Vec<Cue>,
+    pub matches: Vec<Cue>,
 }
 
 #[derive(Clone, Copy)]
@@ -114,12 +125,12 @@ struct Take {
     whole: bool,
 }
 
-struct Job {
-    feeds: Vec<Vec<Piece>>,
-    args: Vec<String>,
-    partial: PathBuf,
-    path: PathBuf,
-    total: f64,
+pub struct Job {
+    pub feeds: Vec<Vec<Piece>>,
+    pub args: Vec<String>,
+    pub partial: PathBuf,
+    pub path: PathBuf,
+    pub total: f64,
 }
 
 fn source_kbps(cap: &Value) -> f64 {
@@ -138,7 +149,7 @@ fn fit(size: (u32, u32), limit: (u32, u32)) -> (u32, u32) {
     ((size.0 as f64 * scale).round() as u32 & !1, (size.1 as f64 * scale).round() as u32 & !1)
 }
 
-fn picture(quality: Quality, size: (u32, u32), source: f64, factor: f64) -> ((u32, u32), u32) {
+pub fn picture(quality: Quality, size: (u32, u32), source: f64, factor: f64) -> ((u32, u32), u32) {
     match quality {
         Quality::Original => (size, (source * factor).round() as u32),
         Quality::Standard => (size, export_kbps(&[source], size, factor)),
@@ -149,7 +160,7 @@ fn picture(quality: Quality, size: (u32, u32), source: f64, factor: f64) -> ((u3
     }
 }
 
-fn clip(c: &Captured, from: f64, to: f64) -> Option<Captured> {
+pub fn clip(c: &Captured, from: f64, to: f64) -> Option<Captured> {
     let picked: Vec<usize> = (0..c.times.len()).filter(|&i| c.times[i].1 > from && c.times[i].0 < to).collect();
     let (first, last) = (*picked.first()?, *picked.last()?);
     let pieces = std::iter::once(c.pieces[0].clone()).chain(picked.iter().map(|&i| c.pieces[i + 1].clone())).collect();
@@ -168,15 +179,15 @@ fn match_stem(n: usize, from_s: f64, file: &str) -> String {
     format!("Match {n:02} {}-{:02}-{:02} {file}", s / 3600, s / 60 % 60, s % 60)
 }
 
-fn cut(a: &str, delay: f64) -> String {
+pub fn cut(a: &str, delay: f64) -> String {
     if delay < 0.0 { format!("{a}setpts=PTS-STARTPTS,{a}trim=start={:.3},", -delay) } else { String::new() }
 }
 
-fn delayed_sound(i: usize, delay: f64) -> String {
+pub fn delayed_sound(i: usize, delay: f64) -> String {
     format!("[{i}:a:0]{}asetpts=PTS-STARTPTS,adelay=delays={}:all=1[s{i}];", cut("a", delay), (delay.max(0.0) * 1000.0).round() as u64)
 }
 
-fn amix(labels: &[String]) -> String {
+pub fn amix(labels: &[String]) -> String {
     format!("{}amix=inputs={}:normalize=0:duration=longest,apad", labels.concat(), labels.len())
 }
 
@@ -317,7 +328,7 @@ fn vtt_text(cues: &[Cue]) -> String {
     out
 }
 
-fn events_to_items(events: &[Value], set: &Set) -> Items {
+pub fn events_to_items(events: &[Value], set: &Set) -> Items {
     let start = set.start();
     let at = |us: i64| tenth((us - start) as f64 / 1e6).max(0.0);
     let (mut notes, mut chapters, mut ends, mut starts): (Vec<Note>, Vec<Cue>, Vec<f64>, Vec<f64>) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
@@ -330,7 +341,7 @@ fn events_to_items(events: &[Value], set: &Set) -> Items {
             ("drawing" | "board", _) => {}
             (_, Some(end)) if e["file"].is_null() && !text.is_empty() && at(end) > at(local) => chapters.push(Cue { from_s: at(local), to_s: at(end), text }),
             (_, Some(_)) => {}
-            (kind @ ("note" | "mark"), None) if !plugin && (kind == "mark" || !text.is_empty()) => notes.push(Note { at_s: at(local), kind: kind.into(), text, tags }),
+            (kind @ ("note" | "mark"), None) if !plugin && (kind == "mark" || !text.is_empty()) => notes.push(Note { at_s: at(local), kind: kind.into(), text, tags, by: e["author"].as_str().unwrap_or_default().into() }),
             (_, None) if room::match_end(e).is_some() => ends.push(at(local)),
             (_, None) if room::match_start(e).is_some() => starts.push(at(local)),
             _ => {}
@@ -516,7 +527,7 @@ fn has_sound(piece: &Piece) -> bool {
     std::fs::read(&piece.path).is_ok_and(|bytes| bytes.windows(4).any(|w| w == b"soun"))
 }
 
-fn view_outputs(core: &Core, room_id: &str, set: &Set, f: &File) -> Option<Output> {
+pub fn view_outputs(core: &Core, room_id: &str, set: &Set, f: &File) -> Option<Output> {
     let (tracks, (w, h), kbps) = tracks(core, room_id, set, f);
     if tracks.is_empty() {
         return None;
@@ -526,7 +537,7 @@ fn view_outputs(core: &Core, room_id: &str, set: &Set, f: &File) -> Option<Outpu
     Some(Output { name: room::display_name(core, &f.owner), owner: f.owner.clone(), video, voice, size, kbps })
 }
 
-fn encode_args(graph: &str, mapped_audio: bool, video: Option<Vec<String>>, total: f64) -> Vec<String> {
+pub fn encode_args(graph: &str, mapped_audio: bool, video: Option<Vec<String>>, total: f64) -> Vec<String> {
     let mut args: Vec<String> = vec!["-filter_complex".into(), graph.into()];
     if video.is_some() {
         args.extend(["-map", "[vout]"].map(String::from));
@@ -580,6 +591,25 @@ struct Part {
     to: f64,
 }
 
+pub fn run_all(core: &Arc<Core>, key: (String, String), jobs: Vec<Job>, work: &Path, dir: &Path) -> Result<(), String> {
+    let count = jobs.len();
+    let mut owned = false;
+    let failure = jobs.into_iter().enumerate().try_for_each(|(n, job)| run_job(core, &key, job, work, n, count, &mut owned)).err();
+    if owned {
+        end(core);
+    }
+    let Some(e) = failure else { return Ok(()) };
+    let _ = std::fs::remove_dir_all(dir);
+    if owned {
+        emit(core, 0.0, true, Some(e.clone()));
+    }
+    Err(e)
+}
+
+pub fn emit_done(core: &Core, dir: &Path) {
+    let _ = core.app.emit("export", json!({"percent": 100.0, "done": true, "error": null, "folder": dir.to_string_lossy()}));
+}
+
 fn parts(outputs: &[Output], names: &[String], matches: &[Cue], range: Range, total: f64) -> Vec<Part> {
     let pairs = || outputs.iter().zip(names);
     match range {
@@ -599,6 +629,9 @@ pub fn folder(core: &Arc<Core>, room_id: &str, set_id: &str, dir: &Path, opts: &
     let total = (set.end_shown().ok_or("This recording is still being recorded.")? - set.start()) as f64 / 1e6;
     if dir.is_file() || std::fs::read_dir(dir).is_ok_and(|mut d| d.next().is_some()) {
         return Err("Choose a new or empty folder.".into());
+    }
+    if opts.kind == Kind::DebriefVideo {
+        return crate::debrief::video(core, room_id, &logs, &set, total, dir, opts);
     }
     let files: Vec<&File> = set.files.iter().filter(|f| opts.member.as_deref().is_none_or(|m| m == f.owner)).collect();
     if files.is_empty() {
@@ -628,21 +661,8 @@ pub fn folder(core: &Arc<Core>, room_id: &str, set_id: &str, dir: &Path, opts: &
             jobs.push(job(&part.out, false, dir.join(format!("{} voice.m4a", part.stem)), work.join(format!("part-{}.m4a", jobs.len())), take));
         }
     }
-    let count = jobs.len();
-    tracing::info!("folder export of {set_id} started: {count} files");
-    let key = (room_id.to_string(), set_id.to_string());
-    let mut owned = false;
-    let failure = jobs.into_iter().enumerate().try_for_each(|(n, job)| run_job(core, &key, job, &work, n, count, &mut owned)).err();
-    if owned {
-        end(core);
-    }
-    if let Some(e) = failure {
-        let _ = std::fs::remove_dir_all(dir);
-        if owned {
-            emit(core, 0.0, true, Some(e.clone()));
-        }
-        return Err(e);
-    }
+    tracing::info!("folder export of {set_id} started: {} files", jobs.len());
+    run_all(core, (room_id.to_string(), set_id.to_string()), jobs, &work, dir)?;
     let write = |name: &str, text: String| std::fs::write(dir.join(name), text).map_err(|e| format!("Export failed: {e}"));
     if !items.notes.is_empty() {
         write(NOTES, notes_text(&items.notes))?;
@@ -653,7 +673,7 @@ pub fn folder(core: &Arc<Core>, room_id: &str, set_id: &str, dir: &Path, opts: &
     if let Some(records) = crate::party::records(&logs).remove(set_id) {
         write(WATCH, crate::party::watch_json(&records).to_string())?;
     }
-    let _ = core.app.emit("export", json!({"percent": 100.0, "done": true, "error": null, "folder": dir.to_string_lossy()}));
+    emit_done(core, dir);
     Ok(json!({"folder": dir.to_string_lossy(), "files": outputs.len(), "skipped": skipped}))
 }
 
@@ -868,8 +888,8 @@ mod tests {
     #[test]
     fn notes_are_written_as_csv() {
         let notes = vec![
-            Note { at_s: 84.5, kind: "note".into(), text: "Late, \"very\" late\nrotate".into(), tags: vec!["mistake".into(), "rotate".into()] },
-            Note { at_s: 90.0, kind: "mark".into(), text: String::new(), tags: Vec::new() },
+            Note { at_s: 84.5, kind: "note".into(), text: "Late, \"very\" late\nrotate".into(), tags: vec!["mistake".into(), "rotate".into()], by: "a".into() },
+            Note { at_s: 90.0, kind: "mark".into(), text: String::new(), tags: Vec::new(), by: "a".into() },
         ];
         assert_eq!(notes_text(&notes), "seconds,kind,text,tags\n84.5,note,\"Late, \"\"very\"\" late\nrotate\",mistake rotate\n90,mark,,\n");
     }
