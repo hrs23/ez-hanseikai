@@ -486,12 +486,24 @@ function renderTransport(set, idle) {
   const atLive = idle || live;
   $("live").className = "livebtn " + (atLive ? "at" : "behind");
   if (changed("livebtn", [idle, atLive, idle ? 0 : Math.round(edge.behind), lang])) $("live").replaceChildren(el("i"), idle ? t("Live") : atLive ? t("Latest") : t("Jump to latest"), atLive ? "" : el("span", { className: "lagt", textContent: "−" + fmt(edge.behind) }));
+  renderDebriefButton(set);
   $("seek").classList.toggle("onlive", liveSetShown && atLive);
   $("seek").querySelector(".grow").hidden = !liveSetShown;
   const frac = set && set.progress.total ? Math.min(1, set.progress.have / set.progress.total) : 1;
   $("seek").querySelector(".got").style.width = frac * 100 + "%";
   $("seek").querySelector(".missing").hidden = !(set && set.progress.stuck);
   $("seek").querySelector(".missing").style.left = frac * 100 + "%";
+}
+function renderDebriefButton(set) {
+  const stopping = !!(st.active_set && st.active_set.voice);
+  const shown = !!set && !set.live && (stopping || !st.active_set);
+  const b = $("debrief");
+  b.hidden = !shown;
+  if (!changed("debriefbtn", [shown, stopping, lang])) return;
+  const label = stopping ? t("Stop recording") : t("Record debrief");
+  b.title = b.ariaLabel = label;
+  b.classList.toggle("on", stopping);
+  b.replaceChildren(icon(stopping ? "stop" : "mic"));
 }
 function viewChip(set, line) {
   return el("span", { className: "pill " + (line.kind === "away" ? "warn" : "gray") }, ...lineNodes(set, line, line.kind === "receiving" ? "spinner" : line.kind === "away" ? "alert" : "download", " · "));
@@ -1411,6 +1423,7 @@ $("addnote").onclick = openQuick;
 $("live").onclick = () => { if (!playSet()) return; goLive(); share(); renderPlayer(); };
 $("speed").onclick = (e) => speedMenu(e.currentTarget);
 $("matchchip").onclick = (e) => matchMenu(e.currentTarget);
+$("debrief").onclick = () => toggleRecording("debrief");
 $("mixbtn").onclick = (e) => openMix(e.currentTarget);
 $("volume").oninput = () => setVolume(Number($("volume").value));
 $("mute").onclick = toggleMute;

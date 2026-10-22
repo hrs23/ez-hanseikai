@@ -129,7 +129,7 @@ function renderStartButton() {
   else b.replaceChildren(el("i", { className: "rd" }), el("span", { textContent: state === "review" ? t("Record debrief") : t("Start recording") }));
 }
 function startMenu(anchor) {
-  openMenu([{ label: debriefNow() ? t("Switch to recording") : t("Switch to debrief"), icon: "mic", run: () => { debriefMode = !debriefNow(); delete sigs.startbtn; renderStartButton(); } }], anchor);
+  openMenu([{ label: debriefNow() ? t("Switch to recording") : t("Switch to debrief"), icon: "refresh", run: () => { debriefMode = !debriefNow(); delete sigs.startbtn; renderStartButton(); } }], anchor);
 }
 
 function noteCount(s) {
