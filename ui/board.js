@@ -1,13 +1,8 @@
 const BOARD_MAX = 4000;
-const BOARD_WIDTH = 1080;
 const BOARD_PAD = 28;
-const ZOOM_STEP = 0.1;
-const ZOOM_MIN = 0.5;
-const ZOOM_MAX = 2;
 
 let editing = null;
 let boardFull = false;
-let zoom = stored("boardZoom", 0);
 
 const onBoard = () => boardWindow || (page === "room" && roomTab === "board");
 const cardTitle = (c) => c.title || (c.card.startsWith("m:") ? nameOf(c.card.slice(2)) : c.card === "team" ? t("Game plan") : t("Card"));
@@ -113,7 +108,6 @@ function newCardEl() {
   const input = nameInput("", (name) => { editing = null; if (name) putCard("", { title: name }); else renderBoard(); });
   return el("div", { className: "bcard new" }, el("div", { className: "bhead" }, input));
 }
-const fitScale = (box, pad, min) => Math.max(min, Math.min(1, (box.clientWidth - 2 * pad) / BOARD_WIDTH));
 function fitAll() {
   const wrap = $("boardwrap");
   const canvas = $("canvas");
@@ -121,10 +115,7 @@ function fitAll() {
   return Math.min((wrap.clientWidth - 2 * BOARD_PAD) / canvas.offsetWidth, (wrap.clientHeight - 2 * BOARD_PAD) / Math.max(1, canvas.offsetHeight));
 }
 function placeBoard() {
-  const z = boardFull || boardWindow ? fitAll() : zoom || fitScale($("boardwrap"), BOARD_PAD, ZOOM_MIN);
-  $("canvas").style.zoom = String(z);
-  $("zoomfit").textContent = `${Math.round(z * 100)}%`;
-  $("zoomfit").title = t("Fit to the window");
+  $("canvas").style.zoom = String(fitAll());
 }
 function renderBoard() {
   if (!onBoard() || !inRoom()) return;
@@ -139,15 +130,7 @@ function toggleBoardFull() {
   setFull(boardFull);
   setTimeout(placeBoard, 50);
 }
-function setZoom(z) {
-  zoom = z ? Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.round(z * 10) / 10)) : 0;
-  store("boardZoom", zoom);
-  placeBoard();
-}
 new ResizeObserver(() => { if (onBoard()) placeBoard(); }).observe($("boardpane"));
-$("zoomin").onclick = () => setZoom((zoom || fitScale($("boardwrap"), BOARD_PAD, ZOOM_MIN)) + ZOOM_STEP);
-$("zoomout").onclick = () => setZoom((zoom || fitScale($("boardwrap"), BOARD_PAD, ZOOM_MIN)) - ZOOM_STEP);
-$("zoomfit").onclick = () => setZoom(0);
 $("boardfull").onclick = toggleBoardFull;
 $("boardadd").onclick = addCard;
 $("boardwin").onclick = () => invoke("open_board_window").catch(fail);

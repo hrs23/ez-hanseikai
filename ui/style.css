@@ -338,9 +338,6 @@ body.noside .side, body.boardfull .side, body.noside .splitter, body.boardfull .
 .bbar > .sub { flex: 0 1 auto; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .bbar > .sp { flex: 1; }
 .bbar .row { gap: 8px; }
-.zoom { display: inline-flex; align-items: center; border: 1px solid var(--line-strong); border-radius: var(--r-sm); height: 30px; }
-.zoom button { height: 28px; border: 0; background: transparent; color: var(--muted); width: 30px; padding: 0; }
-.zoom button.zv { width: auto; min-width: 56px; color: var(--soft); font-size: var(--t-sm); }
 .boardwrap { flex: 1; overflow: auto; padding: 28px; display: flex; justify-content: center; align-items: flex-start; }
 .canvas { width: 1080px; flex: none; display: flex; flex-direction: column; gap: 16px; }
 .bcard.team { font-size: 20px; padding: 24px 28px 28px; }
