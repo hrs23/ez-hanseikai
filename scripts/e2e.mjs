@@ -1139,8 +1139,7 @@ async function library(ctx) {
   let a, b, c;
   await step("A, B and C record a short set, C joining late", async () => {
     [a, b, c] = await gather(ctx);
-    const all = [a, b, c];
-    await waitFor(`A has logged ${SHORT_SET_SEGMENTS} segments`, within(SEGMENT_S * SHORT_SET_SEGMENTS), () => segsOf(logOf(a, ctx.room, a.id), ctx.set, "v").length >= SHORT_SET_SEGMENTS);
+    await waitFor(`C has logged ${SHORT_SET_SEGMENTS} segments`, within(SEGMENT_S * (SHORT_SET_SEGMENTS + 1)), () => segsOf(logOf(c, ctx.room, c.id), ctx.set, "v").length >= SHORT_SET_SEGMENTS);
   });
 
   await step("stopping a recording opens it from the start for everyone in the Watch Party, and leaves a PC already watching that recording where it is", async () => {

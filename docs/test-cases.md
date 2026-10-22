@@ -35,7 +35,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - Record on A starts the set on B. `e2e` (`live`)
 - while recording the start box says Stop recording with the time and the list gets the running recording. `e2e` (`live`)
 - the set stops and everyone has it. `e2e` (`live`)
-- A, B and C record a short set, C joining late. `e2e` (`library`)
+- A, B and C record a short set, C joining late and recording long enough that every tile has video at the far seek. `e2e` (`library`)
 - Start pressed on A and B together makes one recording on every PC. `e2e` (`library`)
 - the microphone, the mix and the hotkey are kept in the settings. `e2e` (`library`)
 - A real two-PC recording of a real game with game sound and the microphone, lined up in playback. `manual`
