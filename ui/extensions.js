@@ -19,15 +19,9 @@ function analysisReason(a, name) {
   if (a.reason === "no_runner") return t("No runner");
   return a.waiting_for ? t("Waiting for {name}'s PC", { name: name(a.waiting_for) }) : t("Waiting");
 }
-function recordingAnalysis(s) {
-  const list = s.analysis || [];
-  if (!list.length) return null;
-  if (list.some((a) => a.state === "failed")) return { icon: "alert", cls: "warn", title: t("Analysis failed") };
-  if (list.some((a) => a.state !== "done")) return { icon: "cpu", cls: "", title: t("Analyzing") };
-  return { icon: "check", cls: "", title: t("Analysis done") };
-}
 function analysisState(a, runner, name) {
   if (a.state === "done") return t("Done");
+  if (a.state === "idle") return t("Not analyzed");
   const who = a.state === "running" && runner ? t("{name}'s PC", { name: name(runner) }) : null;
   return [analysisReason(a, name), who].filter(Boolean).join(" · ");
 }

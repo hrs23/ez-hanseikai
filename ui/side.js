@@ -170,11 +170,10 @@ function sessionRow(s) {
   const on = page === "player" && !showingNow() && selected === s.id;
   const here = onThisPc(s);
   const state = sessionState(s);
-  const mark = recordingAnalysis(s);
   const watching = st.party.watching[s.id];
   let l2;
   if (state && state.kind === "bar") l2 = el("div", { className: "prog", title: state.title || "" }, el("div", { className: "l2" }, icon(state.icon, "sm"), el("span", { textContent: state.text })), el("div", { className: "bar" }, el("i", { style: `width:${Math.round(state.frac * 100)}%` })));
-  else l2 = el("div", { className: "l2" }, el("span", { textContent: setLength(s) }), s.imported_by ? importedPill(s) : null, mark ? el("span", { className: "r " + mark.cls, title: mark.title }, icon(mark.icon, "sm")) : null);
+  else l2 = el("div", { className: "l2" }, el("span", { textContent: setLength(s) }), s.imported_by ? importedPill(s) : null);
   const row = el("div", { className: "srow" + (on ? " on" : "") + (here ? "" : " gone"), role: "option", tabIndex: 0, ariaSelected: on },
     thumbBox(s, s.players.map((p) => p.owner), "xs", THUMB_FACES, false),
     el("div", { className: "txt" }, el("div", { className: "l1" }, el("b", { textContent: sessionName(s.id) }), watching && watching.length ? el("span", { className: "wpn", title: watching.map(nameOf).join(", ") }, icon("users", "sm"), String(watching.length)) : null, partyFrom === s.id && watching && watching.length ? el("button", { className: "sm", textContent: t("Back"), onclick: (e) => { e.stopPropagation(); openSession(s.id); } }) : null), l2, whereLine(s)));

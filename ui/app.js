@@ -871,7 +871,7 @@ function renderAnalysis(set) {
   $("analysis").replaceChildren(el("div", { className: "h3", textContent: t("Analysis") }), ...list.map((a) => el("div", { className: "drow" + (a.state === "failed" ? " warn" : "") },
     icon(a.state === "done" ? "check" : a.state === "failed" ? "alert" : "cpu", "sm"), el("span", { textContent: t(pluginName(a.plugin)) }), el("span", { className: "sp" }),
     el("span", { className: a.state === "failed" ? "" : "muted", textContent: analysisState(a, (plugins.find((p) => p.id === a.plugin) || {}).runner, nameOf) }),
-    a.state === "failed" ? el("button", { className: "sm", textContent: t("Retry"), onclick: () => retryAnalysis(set, a.plugin) }) : null)));
+    a.state === "failed" || a.state === "idle" ? el("button", { className: "sm", textContent: t(a.state === "idle" ? "Analyze" : "Retry"), onclick: () => retryAnalysis(set, a.plugin) }) : null)));
 }
 function renderDebriefs(set) {
   const list = set ? debriefsOf(set.id) : [];
