@@ -1338,9 +1338,11 @@ async function library(ctx) {
     await evaluate(a, `openLive(); true`);
     await waitFor("A shows the live tiles while idle", within(UI_REFRESH_S * 10), () => evaluate(a, `!$("livetiles").hidden && Object.keys(rec.tiles).length === 3 && navActive() === "live" && $("psub").textContent.startsWith("Free ")`));
     await screenshot(a, "live-idle");
+    const ownText = `(() => { const tl = rec.tiles[st.id]; return tl ? tl.what.textContent + "|" + tl.problem.textContent : null; })()`;
+    const before = await evaluate(a, ownText);
     await evaluate(a, `go("room"); true`);
     await evaluate(a, `openLive(); true`);
-    await waitFor("A's own live tile offers Select screen again after another page", within(UI_REFRESH_S * 10), () => evaluate(a, `!!rec.tiles[st.id] && !!rec.tiles[st.id].box.querySelector(".pick")`));
+    await waitFor("A's own live tile says the same after another page", within(UI_REFRESH_S * 10), async () => (await evaluate(a, ownText)) === before);
     check(rows.length === 3 && rows.every((x) => x === "Standby"), `member states ${brief(rows)}`);
   });
 
