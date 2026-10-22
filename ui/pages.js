@@ -429,6 +429,16 @@ $("checkupdate").onclick = () => checkUpdate(true);
 $("selnone").onclick = () => { picked.clear(); delete sigs.storage; renderStorage(); };
 $("selold").onclick = () => { picked = new Set(oldSessions(st.sets.filter((s) => !s.live))); delete sigs.storage; renderStorage(); };
 $("deletesel").onclick = () => confirmDelete([...picked]);
+$("cleanup").onclick = async () => {
+  const plan = await invoke("cleanup_plan").catch(fail);
+  if (!plan) return;
+  if (!plan.files) { flash(t("Nothing to clean up")); return; }
+  const { title, action } = cleanupAsk(plan);
+  if (!(await ask(title, action, true))) return;
+  const done = await invoke("cleanup_run").catch(fail);
+  if (done) flash(cleanupDone(done));
+  loadStorage();
+};
 $("delno").onclick = () => $("deletedlg").close();
 $("diagcopy").onclick = () => diagnosticsText().then((text) => navigator.clipboard.writeText(text)).then(() => flash(t("Copied"))).catch(fail);
 $("diagsave").onclick = () => diagnosticsText().then((text) => dialog("save_text", { name: "ez-hanseikai-diagnostics.txt", text })).then((saved) => { if (saved) flash(t("Saved")); }).catch(fail);

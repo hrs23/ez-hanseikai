@@ -123,6 +123,10 @@ static CANCEL: AtomicBool = AtomicBool::new(false);
 static STOP: AtomicBool = AtomicBool::new(false);
 static WORK: Mutex<Option<String>> = Mutex::new(None);
 
+pub fn busy() -> bool {
+    RUNNING.lock().unwrap().is_some()
+}
+
 fn capped<'a>(logs: &'a [Log], caps: Option<&'a HashMap<String, u64>>) -> impl Iterator<Item = (&'a Log, &'a [Value])> {
     logs.iter().map(move |log| {
         let cap = caps.map_or(usize::MAX, |c| c.get(&log.owner).copied().unwrap_or(0) as usize);

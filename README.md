@@ -63,7 +63,7 @@ Data lives in `%LOCALAPPDATA%\dev.ez-hanseikai.app`; File > Open data folder ope
 9. No hard-coded numbers without a reason; keep the needed ones in one place.
 10. Logic comes with automated tests, kept in plain functions that run without the network, capture or UI.
 11. The repository is public: English only, made-up examples, and no secrets, personal data, real recordings or private addresses.
-12. While in early development, breaking changes are fine and no migration code is added: the latest version only has to work with its own data. It must still start and work when files from older versions are present, ignoring what it does not understand and never deleting it.
+12. While in early development, breaking changes are fine and no migration code is added: the latest version only has to work with its own data. It must still start and work when files from older versions are present, ignoring what it does not understand and never deleting it. Clean up in Settings removes only files the app knows it made, moving all but temporary ones to the Recycle Bin, and never a file with an unknown name.
 
 ## Development
 

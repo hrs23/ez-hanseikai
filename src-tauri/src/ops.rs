@@ -7,7 +7,7 @@ use iroh::Watcher;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
-use crate::{api, audio, clean_name, clean_note, clean_text, data, debug, export, ffmpeg, jobs, merge, net, now_us, party, record, relay, room, shell, sources, Core, BOARD_MAX, EVENT_KINDS, NAME_MAX, NOTE_MAX, REPO, VALUES_MAX};
+use crate::{api, audio, clean_name, cleanup, clean_note, clean_text, data, debug, export, ffmpeg, jobs, merge, net, now_us, party, record, relay, room, shell, sources, Core, BOARD_MAX, EVENT_KINDS, NAME_MAX, NOTE_MAX, REPO, VALUES_MAX};
 
 pub type Op = fn(&Arc<Core>, Value) -> Result<Value, String>;
 
@@ -44,6 +44,8 @@ pub const OPS: &[(&str, Op)] = &[
     ("check_update", |c, _| Ok(json!(find_update(c)?.map(|u| u.version)))),
     ("install_update", install_update),
     ("data_info", |c, _| Ok(json!({"dir": c.dir, "used_bytes": data::used_bytes(&c.dir), "free_bytes": c.free_bytes.load(Ordering::Relaxed)}))),
+    ("cleanup_plan", cleanup::plan_op),
+    ("cleanup_run", cleanup::run_op),
     ("reset", reset),
     ("dismiss_recovery", dismiss_recovery),
     ("retry_ffmpeg", retry_ffmpeg),

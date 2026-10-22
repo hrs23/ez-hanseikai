@@ -1810,6 +1810,29 @@ async function library(ctx) {
     check(!fs.existsSync(path.join(c.data, oldStandby())), "C kept a live segment of an earlier run");
     await allSee([a, b, c], "every recording still held", within(SYNC_ROUND_S), (st) => heldByAll(st, ctx.set, [a, b, c]));
   });
+
+  await step("C's Clean up moves only old files it made that nothing refers to to the Recycle Bin and deletes its temporary files", async () => {
+    const room = path.join("rooms", ctx.room);
+    const orphan = "2020-01-01 00-00-00";
+    const made = { [path.join(room, "thumbs", `${orphan}.16x9.jpg`)]: "orphan thumbnail", [path.join(room, "recordings", orphan, c.id, "1", "v", "000001.m4s")]: "orphan segment" };
+    const temp = path.join(room, "thumbs", `${orphan}.tmp.jpg`);
+    for (const [name, body] of Object.entries({ ...made, [temp]: "temp" })) {
+      fs.mkdirSync(path.dirname(path.join(c.data, name)), { recursive: true });
+      fs.writeFileSync(path.join(c.data, name), body);
+    }
+    const binned = { ...made, ...Object.fromEntries(["rec-1767225600000.mp4", "log.bin", "peer.txt", "peers.txt", path.join("peer", "a1b2", "log.bin")].map((name) => [name, oldFiles()[name]])) };
+    const old = new Date(Date.now() - 2 * 86_400_000);
+    for (const name of [...Object.keys(binned), temp]) fs.utimesSync(path.join(c.data, name), old, old);
+    const kept = Object.keys(oldFiles()).filter((name) => !(name in binned)).concat(["key.bin", "settings.json", "rooms.json", "log.old.txt"]);
+    const size = (names) => names.reduce((n, name) => n + fs.statSync(path.join(c.data, name)).size, 0);
+    const plan = { files: Object.keys(binned).length + 1, bytes: size(Object.keys(binned)) + size([temp]), temp_files: 1, temp_bytes: size([temp]) };
+    const title = await pressAndConfirm(c, `$("cleanup").click()`);
+    const want = await evaluate(c, `cleanupAsk(${JSON.stringify(plan)}).title`);
+    check(title === want, `C asked "${title}", not "${want}"`);
+    await waitFor("the old and orphan files are gone", within(UI_REFRESH_S * 5), () => [...Object.keys(binned), temp].every((name) => !fs.existsSync(path.join(c.data, name))));
+    for (const name of kept) check(fs.existsSync(path.join(c.data, name)), `${name} was removed`);
+    await allSee([a, b, c], "every recording still held", within(SYNC_ROUND_S), (st) => heldByAll(st, ctx.set, [a, b, c]));
+  });
 }
 
 async function main() {

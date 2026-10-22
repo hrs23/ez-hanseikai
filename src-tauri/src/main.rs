@@ -4,6 +4,7 @@ mod api;
 mod audio;
 mod capture;
 mod check;
+mod cleanup;
 mod clock;
 mod data;
 mod debug;
