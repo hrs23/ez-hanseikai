@@ -35,21 +35,19 @@ Requires Windows 10 version 2004 or later, or Windows 11.
 
 ## Update
 
-The app checks for a new version at start, every four hours while it runs (or Help > Check for updates), and shows it above the page with Install. Install works while recording too: the restart cuts your part, and afterwards the app is back in the room and, while the recording still runs, records again in a new part. Updates are signed and checked before they install. An older version may not read data from a newer one, so going back means starting with an empty data folder. Updating from GGI Hanseikai moves the data folder to [its name](#uninstall), removes the old app and its shortcuts, and Windows asks about the firewall again.
-
-Settings > Updates chooses the channel: Stable (the default) gets releases marked stable, Beta gets every release first.
+The app checks for a new version at start, every four hours while it runs (or Help > Check for updates), and shows it above the page with Install. Install works while recording or exporting too: it ends your part and cancels the export first, and afterwards the app is back in the room and, while the recording still runs, records again in a new part. Updates are signed and checked before they install. An older version may not read data from a newer one, so going back means starting with an empty data folder. Updating from GGI Hanseikai moves the data folder to [its name](#uninstall), removes the old app and its shortcuts, and Windows asks about the firewall again.
 
 ## Uninstall
 
 Settings > Apps > Installed apps > EZ Hanseikai > Uninstall. Your data stays unless you tick the option to delete it, so a reinstall keeps your ID and recordings.
 
-Data lives in `%LOCALAPPDATA%\dev.ez-hanseikai.app`; File > Open data folder opens it, and Help > Reset app resets it, keeping the log and, unless you choose otherwise, your ID, rooms and recordings. `key.bin` is your identity: keep it private, and deleting it changes your ID.
+Data lives in `%LOCALAPPDATA%\dev.ez-hanseikai.app`; File > Open data folder opens it, and Help > Reset app resets it, keeping the log and, unless you choose otherwise, your ID, rooms and recordings. `key.bin` is your identity: keep it private, and deleting it changes your ID. To move your ID to another PC, copy `key.bin` while the app is closed.
 
 ## Security
 
 - Only the teammates you connect to receive your recording, game sound, notes and name. Anything visible on your main screen, such as chats or notifications, is recorded too.
-- Your ID is the public half of a key made on first start. Connections are encrypted and accepted only from room members. When two members reach each other only through a relay server, only voice, notes and logs go that way and the picture waits for a direct connection, so until then a member reachable only through a relay keeps the only copy of their picture. Settings > General lists relay servers to try before the public ones; the one in use is published with your ID. An invite code works once; anyone who joins can invite others, so share it only with your team.
-- The local API (Settings > API) is off by default, listens on 127.0.0.1 only unless you choose Other devices, and needs a token, and then does what the window does: see [docs/llms.txt](docs/llms.txt).
+- Your ID is the public half of a key made on first start. Connections are encrypted and accepted only from room members. When two members reach each other only through a relay server, only voice, notes and logs go that way and the picture waits for a direct connection, so until then a member reachable only through a relay keeps the only copy of their picture. Settings > General lists relay servers to try before the public ones ([running one](docs/relay.md)); the one in use is published with your ID. An invite code works once; anyone who joins can invite others, so share it only with your team.
+- The local API (Settings > API) is off by default, listens on 127.0.0.1 only (from another PC, forward the port over SSH), and needs a token, and then does what the window does: see [docs/llms.txt](docs/llms.txt).
 - With the Screen button off, nothing of your screen is sent; what was already recorded still reaches the room. The upload limit (Settings > Capture) caps your upload. The app asks time.cloudflare.com for the time at start and every hour and sends nothing else there. Help > Diagnostics > Where data goes shows each connection and what goes over it.
 
 ## Contributing

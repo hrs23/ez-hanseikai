@@ -160,7 +160,6 @@ pub struct Sink {
     pub room: String,
     pub capture: String,
     pub voice: bool,
-    size: (u32, u32),
     out: (u32, u32),
     quality: String,
     kbps: u32,
@@ -181,7 +180,6 @@ pub struct Sink {
     cap_logged: Mutex<Option<[Value; 2]>>,
     closed: AtomicBool,
     dead: AtomicBool,
-    born: Instant,
 }
 
 #[derive(Default, Clone)]
@@ -534,7 +532,6 @@ impl Sink {
                 use std::io::BufRead;
                 for line in std::io::BufReader::new(stderr).lines().map_while(Result::ok) {
                     tracing::warn!("ffmpeg: {line}");
-                    debug::ffmpeg_line(&line);
                 }
             });
         }
@@ -548,16 +545,15 @@ impl Sink {
             })
         };
         if voice {
-            tracing::info!("capture {capture} started: voice only");
+            tracing::info!("capture {capture} started: voice only, process {}", child.id());
         } else {
-            tracing::info!("capture {capture} started: {} {}x{} at {kbps} kbit/s from a {}", chosen.0, out.0, out.1, names.kind);
+            tracing::info!("capture {capture} started: {} {}x{} at {kbps} kbit/s from a {}, process {}", chosen.0, out.0, out.1, names.kind, child.id());
         }
         let stdin = child.child.stdin.take();
         let sink = Arc::new(Self {
             room,
             capture,
             voice,
-            size,
             out,
             quality,
             kbps,
@@ -578,7 +574,6 @@ impl Sink {
             cap_logged: Mutex::new(None),
             closed: AtomicBool::new(false),
             dead: AtomicBool::new(false),
-            born: Instant::now(),
         });
         for (track, listener) in listeners.into_iter().enumerate() {
             let sink = sink.clone();
@@ -714,7 +709,6 @@ impl Sink {
         drop(open.file);
         let path = open.dir.join(seg_name(open.n));
         let d_us = next_us.map_or(series.last_us - open.t_us + series.step_us.max(0), |next| next - open.t_us);
-        debug::cut(&self.capture, SERIES[which], open.n, open.set.as_deref(), open.size, open.count, d_us);
         if open.stopped && open.count == 0 {
             let _ = std::fs::remove_file(part_of(&path));
             return;
@@ -831,50 +825,6 @@ impl Sink {
             let _ = reader.join();
         }
     }
-
-    fn debug_json(&self) -> Value {
-        let series: Vec<Value> = (0..SERIES.len())
-            .map(|i| {
-                let s = self.outputs[i].lock().unwrap();
-                let open = s.open.as_ref().map(|o| json!({"n": o.n, "set": o.set, "size": o.size, "fragments": o.count, "t_us": o.t_us}));
-                json!({"series": SERIES[i], "n": s.n, "open": open, "last_us": s.last_us, "step_us": s.step_us, "pcm_frames": self.tracks[i].try_lock().ok().map(|t| t.written)})
-            })
-            .collect();
-        json!({
-            "room": self.room, "capture": self.capture, "size": self.size, "codec": self.codec, "meta": self.meta, "age_ms": self.born.elapsed().as_millis() as u64,
-            "encoder": self.encoder, "working": self.watch.lock().unwrap().working(Instant::now()),
-            "dead": self.dead.load(Ordering::Relaxed), "closed": self.closed.load(Ordering::Relaxed), "pid": self.child.lock().unwrap().id(), "series": series, "inits": *self.inits.lock().unwrap(),
-        })
-    }
-}
-
-pub fn debug_json(core: &Core) -> Value {
-    let e = &core.engine;
-    let names = e.names.lock().unwrap().clone();
-    let sink = e.sink.lock().unwrap().clone();
-    let (frame_size, frame_ms) = {
-        let last = e.last.lock().unwrap();
-        (last.1, (!last.0.is_empty()).then(|| last.2.elapsed().as_millis() as u64))
-    };
-    json!({
-        "source": e.source.lock().unwrap().clone(),
-        "names": {"kind": names.kind, "source": names.source, "game": names.game, "mic": names.mic},
-        "source_lost": e.source_lost.load(Ordering::Relaxed),
-        "status": e.status.lock().unwrap().clone(),
-        "failures": e.failures.load(Ordering::Relaxed),
-        "strikes": *e.strikes.lock().unwrap(),
-        "dropped": ffmpeg::dropped(),
-        "retry_in_ms": e.retry_at.lock().unwrap().saturating_duration_since(Instant::now()).as_millis() as u64,
-        "capturing": e.video.lock().unwrap().is_some(),
-        "canvas": *e.canvas.lock().unwrap(),
-        "frame_size": frame_size,
-        "frame_age_ms": frame_ms,
-        "audio": ([APP, MIC].map(|t| e.audio[t].lock().unwrap().is_some())),
-        "mix": e.mix.lock().unwrap().clone(),
-        "want": want(core),
-        "encoders_ready": ffmpeg::encoders_ready(),
-        "sink": sink.map(|s| s.debug_json()),
-    })
 }
 
 pub(crate) fn current_sink(core: &Arc<Core>, canvas: Option<(u32, u32)>) -> Option<Arc<Sink>> {
@@ -1041,7 +991,6 @@ fn repeat(core: Arc<Core>) {
             continue;
         }
         if let Some(sink) = sink.filter(|s| !s.voice && s.out == last.1) {
-            debug::frame(debug::REPEATED);
             sink.write_video(last.0.clone());
         }
         last.2 = Instant::now() - (REPEAT_AFTER - REPEAT_POLL);

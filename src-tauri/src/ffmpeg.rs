@@ -1,19 +1,48 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use crate::download::{self, Download};
 use crate::record::FPS;
 use crate::{proc, read_json, write_whole};
 
 const URL: &str = "https://github.com/GyanD/codexffmpeg/releases/download/8.1/ffmpeg-8.1-essentials_build.zip";
 const SHA256: &str = "8748283d821613d930b0e7be685aaa9df4ca6f0ad4d0c42fd02622b3623463c6";
 const SIZE: u64 = 108_771_139;
+const DOWNLOAD_WAIT: Duration = Duration::from_secs(6 * 3600);
+const WATCH_EVERY: Duration = Duration::from_millis(500);
+const DOWNLOAD: &str = r#"
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+$ErrorActionPreference = 'Stop'
+trap { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072
+$part = $env:EZH_PART
+try {
+  $request = [Net.HttpWebRequest]::Create($env:EZH_URL)
+  $request.Timeout = 60000
+  $request.ReadWriteTimeout = 60000
+  $response = $request.GetResponse()
+  $body = $response.GetResponseStream()
+  $file = [IO.File]::Create($part)
+  try { $body.CopyTo($file) } finally { $file.Dispose(); $body.Dispose(); $response.Dispose() }
+  if ((Get-Item -LiteralPath $part).Length -ne [int64]$env:EZH_SIZE) { throw 'The download has the wrong size.' }
+  if ((Get-FileHash -LiteralPath $part -Algorithm SHA256).Hash.ToLower() -ne $env:EZH_SHA) { throw 'The download has the wrong checksum.' }
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  $zip = [IO.Compression.ZipFile]::OpenRead($part)
+  try {
+    $entry = @($zip.Entries | Where-Object { $_.Name -eq 'ffmpeg.exe' })[0]
+    if (-not $entry) { throw 'ffmpeg.exe is missing from the download.' }
+    $target = $env:EZH_OUT
+    [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, "$target.part", $true)
+    Move-Item -Force -LiteralPath "$target.part" -Destination $target
+  } finally { $zip.Dispose() }
+} finally { if (Test-Path -LiteralPath $part) { Remove-Item -LiteralPath $part } }
+exit 0
+"#;
 const PROBE_SOURCE: &str = "testsrc2=size=1280x720:rate=30";
 const PROBE_WAIT: Duration = Duration::from_secs(10);
 const PROBES: &str = "encoders.json";
@@ -42,6 +71,7 @@ static RESULTS: OnceLock<Vec<(&'static str, bool)>> = OnceLock::new();
 static DROPPED: Mutex<Vec<(&'static str, Instant)>> = Mutex::new(Vec::new());
 static FAILED: Mutex<Option<String>> = Mutex::new(None);
 static RETRY: AtomicBool = AtomicBool::new(false);
+static DOWNLOADING: Mutex<Option<(u64, Instant)>> = Mutex::new(None);
 
 pub fn set_data_dir(dir: PathBuf) {
     let _ = DATA_DIR.set(dir);
@@ -67,12 +97,6 @@ pub fn ready() -> Result<(), String> {
     }
 }
 
-pub fn failure() -> Option<String> {
-    FAILED.lock().unwrap().clone()
-}
-
-pub const DOWNLOAD_KEY: &str = "ffmpeg";
-
 pub fn retry_after(failures: u32) -> Duration {
     RETRY_FIRST.saturating_mul(1 << failures.saturating_sub(1).min(5)).min(RETRY_MAX)
 }
@@ -83,7 +107,7 @@ pub fn prepare(status: &Mutex<String>) {
         let Some(dir) = DATA_DIR.get() else { return };
         *status.lock().unwrap() = "downloading".into();
         tracing::info!("downloading ffmpeg");
-        match download::fetch_group(DOWNLOAD_KEY, dir, &[Download { url: URL.into(), sha256: SHA256, size: SIZE, dest: String::new(), pick: &["ffmpeg.exe"] }]) {
+        match download(dir) {
             Ok(()) => *FAILED.lock().unwrap() = None,
             Err(e) => {
                 failures += 1;
@@ -103,6 +127,55 @@ pub fn command(level: &str) -> Command {
     let mut command = Command::new(path());
     command.args(["-hide_banner", "-loglevel", level, "-y"]);
     command
+}
+
+pub fn pace(done: u64, total: u64, seconds: f64) -> (u64, Option<u64>) {
+    if done == 0 || seconds <= 0.0 {
+        return (0, None);
+    }
+    let speed = done as f64 / seconds;
+    (speed as u64, Some((total.saturating_sub(done) as f64 / speed).ceil() as u64))
+}
+
+pub fn progress() -> Value {
+    let Some((done, started)) = *DOWNLOADING.lock().unwrap() else { return Value::Null };
+    let (speed, left) = pace(done, SIZE, started.elapsed().as_secs_f64());
+    json!({"done": done, "total": SIZE, "speed": speed, "left_s": left})
+}
+
+pub fn download_host() -> Option<&'static str> {
+    DOWNLOADING.lock().unwrap().and(URL.split('/').nth(2))
+}
+
+fn download(dir: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let part = dir.join(format!("{}.part", URL.rsplit('/').next().unwrap_or_default()));
+    *DOWNLOADING.lock().unwrap() = Some((0, Instant::now()));
+    let stop = Arc::new(AtomicBool::new(false));
+    let watcher = {
+        let (stop, part) = (stop.clone(), part.clone());
+        std::thread::spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                if let Some((done, _)) = DOWNLOADING.lock().unwrap().as_mut() {
+                    *done = crate::file_len(&part);
+                }
+                std::thread::sleep(WATCH_EVERY);
+            }
+        })
+    };
+    let mut command = Command::new("powershell");
+    command
+        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", DOWNLOAD])
+        .env("EZH_URL", URL)
+        .env("EZH_SHA", SHA256)
+        .env("EZH_SIZE", SIZE.to_string())
+        .env("EZH_PART", &part)
+        .env("EZH_OUT", dir.join("ffmpeg.exe"));
+    let result = proc::run(&mut command, 0, DOWNLOAD_WAIT).map(|_| ()).map_err(|e| e.lines().last().unwrap_or("download failed").trim().to_string());
+    stop.store(true, Ordering::Relaxed);
+    let _ = watcher.join();
+    *DOWNLOADING.lock().unwrap() = None;
+    result
 }
 
 pub fn retry() {
@@ -245,6 +318,14 @@ mod tests {
         assert!(got.iter().all(|(n, ok)| *ok == (*n == "libx264")));
         assert!(cached(&saved, "b").is_none());
         assert!(cached(&json!({"key": "a", "results": {}}), "a").is_none());
+    }
+
+    #[test]
+    fn pace_gives_speed_and_time_left() {
+        assert_eq!(pace(0, 100, 5.0), (0, None));
+        assert_eq!(pace(50, 100, 10.0), (5, Some(10)));
+        assert_eq!(pace(100, 100, 10.0), (10, Some(0)));
+        assert_eq!(pace(120, 100, 10.0).1, Some(0));
     }
 
     #[test]

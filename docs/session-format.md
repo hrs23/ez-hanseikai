@@ -82,8 +82,8 @@ Every kind the app writes. The body's field `k` holds the kind, for example {`k`
 | `profile` | `color?`, `avatar?`, `t_us` | The writer's colour (0 to 7, an index into the member palette) and avatar (an image data URL as above, or a built-in name of 1 to 16 lowercase letters). A full snapshot; a missing field is none. |
 | `offset` | `peer` (short ID), `t_us`, `rtt_us`, `offset_us` | The writer measured the peer's clock: `offset_us` is theirs minus the writer's. |
 | `layout` | `set`, `t_us`, `layout` | The writer's layout for the set; `set` is also inside `layout`. A `layout` record without `set`, written while watching, belongs to no set's default layout and is ignored. |
-| `plugin` | `plugin`, `on`, `version`, `settings`, `runner?`, `t_us` | The room's choice for a plugin. `runner` is the member who runs it; without it, the writer. |
-| `job` | `state`, `job`, `run`, `t_us`, `plugin?`, `version?`, `settings?`, `file?`, `error?`, `events?`, `tags?`, `note?` | A step of an analysis job: `state` is `claim`, `fail`, `done`, `retry` or `stop` (`stop`, and `yield` from older versions, read as waiting). |
+| `plugin` | `plugin`, `on`, `version`, `runner?`, `t_us` | The room's choice for a plugin. `runner` is the member who runs it; without it, the writer. Older versions also wrote `settings`, which is ignored. |
+| `job` | `state`, `job`, `run`, `t_us`, `plugin?`, `version?`, `file?`, `error?`, `events?`, `tags?` | A step of an analysis job: `state` is `claim`, `fail`, `done`, `retry` or `stop` (`stop`, and `yield` from older versions, read as waiting). |
 | `party` | `set`, `t_us`, `shared` | The Watch Party state while a set records. |
 | `ai_del` | `set`, `t_us` | Hides every note with `source` `ai` of the set written before it, from any log. |
 | `file_bad` | `room`, `set`, `file`, `size`, `t_us` | A fetched file failed its check and was deleted (`file` is `<member id>/<capture>/<name>`). |
@@ -117,13 +117,13 @@ Members get the view like any other: a removed member's log is pulled and shared
 
 The app starts and works with files of older versions present, and reads none of them. These shapes are old, judged by the name at each depth:
 
-- In the data folder: `log.bin`, `peer/`, `peer.txt`, `peers.txt`, `running.marker`, and `rec-<digits>.mp4`.
+- In the data folder: `log.bin`, `peer/`, `peer.txt`, `peers.txt`, `running.marker`, `plugins/` (the transcription tool and models), and `rec-<digits>.mp4`.
 - In `rooms/<room>/`: a folder named by a member ID, `sets/` and `live/`.
 - In `logs/`: `<name>.bin` where the name is not a member ID.
 - In a capture folder `recordings/<set>/<member id>/<capture id>/`: `verified.json` and `cap.json`.
 - In a series folder: `open.json`.
 
-Records of the older kinds `file` and `note` stay in current logs and are ignored; logs are append-only and members sync them by byte offset.
+Records of the older kinds `file` and `note` stay in current logs and are ignored; logs are append-only and members sync them by byte offset. `rooms/solo/`, where versions before 0.19 recorded outside a room, is no longer opened and stays like any unlisted room.
 
 Settings > Recordings > Delete old files removes exactly these paths, after one confirmation, and nothing else: unknown names, `key.bin.old` and the like, orphan sets and unlisted rooms stay. Nothing deletes them on its own.
 
@@ -135,5 +135,5 @@ Recording > Export to folder… writes a new folder of plain files for a video e
 - `<name> voice.m4a`: that member's voice, when there is also a picture.
 - `notes.csv`: notes and marks, one row each, with the columns `seconds,kind,text,tags` (seconds from the start; `kind` is `note` or `mark`; `tags` are separated by spaces). Written only when there are any.
 - `chapters.vtt`: chapters as WebVTT cues (chapters people made, and the matches that the Apex matches plugin found). Written only when there are any.
-- `<name>.vtt`: the spoken lines of that member as WebVTT cues, from Transcription.
+- `<name>.vtt`: the spoken lines of that member as WebVTT cues, from the Transcription of older versions.
 - `watch.json`: for a debrief, its `party` records as `[{"t_us", "by", "set", "at_us", "playing", "rate"}]`, in microseconds on the exporting PC's clock.

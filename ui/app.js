@@ -16,7 +16,6 @@ const DOUBLE_CLICK_MS = 250;
 const JUMP_MIN = 1;
 const NOTE_STEP_GAP = 0.5;
 const PLUGINS_MS = 5000;
-const DOWNLOAD_POLL_MS = 1000;
 const CHIME = { start: [660, 880], end: [880, 660], join: [784, 988] };
 const CHIME_NOTE_S = 0.14;
 const CHIME_GAIN = 0.15;
@@ -816,7 +815,7 @@ const viewContext = () => ({ me: st.id, name: nameOf, online: (id) => id === st.
 function itemOf(e, set) {
   const r = role(e);
   const at = (us) => (us === null || us === undefined || !set ? null : (us - set.start_us) / 1e6);
-  return { ...e, role: r, setId: set ? set.id : null, m: at(e.local_us), end: at(e.end_us), who: e.plugin ? pluginName(e.plugin.id) : nameOf(e.author), body: e.kind === "mark" ? t("Marked") : eventText(e), speaker: e.file ? nameOf(e.file) : nameOf(e.author) };
+  return { ...e, role: r, setId: set ? set.id : null, m: at(e.local_us), end: at(e.end_us), who: e.plugin ? (e.plugin.name ? t(e.plugin.name) : pluginName(e.plugin.id)) : nameOf(e.author), body: e.kind === "mark" ? t("Marked") : eventText(e), speaker: e.file ? nameOf(e.file) : nameOf(e.author) };
 }
 function matches(n, words) {
   const text = `${n.body} ${n.who} ${n.kind}`.toLowerCase();
@@ -895,7 +894,6 @@ function renderEventList(shown, words) {
 }
 function renderConvo(speech) {
   if (!changed("convo", [speech.map((n) => [n.key, n.m, n.speaker, n.body]), lang, st.colors])) return;
-  if (!speech.length) { $("convolist").replaceChildren(el("div", { className: "none", textContent: t("No transcript yet") })); return; }
   $("convolist").replaceChildren(...speech.map((n) => {
     const row = el("div", { className: "ev talk", tabIndex: 0 }, el("span", { className: "at", textContent: fmt(n.m) }), el("span", { className: "tx" }, el("span", { className: "who" }, dot(n.file || n.author), n.speaker), el("span", { textContent: n.body })));
     row.dataset.key = n.key;
@@ -1227,7 +1225,6 @@ function downloadLine(label, d) {
 function notices() {
   const list = [];
   if (st.ffmpeg === "downloading") list.push({ key: "ffmpeg", level: "info", icon: "spinner", spin: true, text: downloadLine(t("Downloading video tools…"), st.ffmpeg_progress), sticky: true });
-  for (const p of plugins.filter((x) => x.download)) list.push({ key: "download:" + p.id, level: "info", icon: "spinner", spin: true, text: downloadLine(t("Downloading {name}…", { name: t(p.name) }), p.download), sticky: true });
   if (st.ffmpeg === "failed") list.push({ key: "ffmpegfail", level: "error", icon: "fail", text: t("Couldn't download the video tools. Check your connection."), action: { label: t("Retry"), run: () => run("retry_ffmpeg", null) } });
   if (st.notice) list.push({ key: "n:" + st.notice, level: "warn", icon: "alert", text: t(st.notice) });
   for (const p of st.peers.filter((x) => x.connected && x.other_version)) list.push({ key: "v:" + p.id, level: "warn", icon: "alert", text: t("{name} is on a different version. Both of you need the latest one.", { name: nameOf(p.id) }) });

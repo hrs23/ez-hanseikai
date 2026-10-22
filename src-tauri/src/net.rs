@@ -14,7 +14,7 @@ use tokio::time::{sleep, timeout};
 
 use crate::record::{self, LiveStep};
 use crate::room::{self, capture_id, part_of, seg_name, valid_id, INIT, SERIES};
-use crate::{data, debug, default_codecs, relay, tenth, file_len, hw, log, merge, now_us, party, short, strings, test_flag, Core, ALPN, PROTOCOL, VERSION};
+use crate::{data, debug, default_codecs, relay, tenth, file_len, log, merge, now_us, party, short, strings, test_flag, Core, ALPN, PROTOCOL, VERSION};
 
 const CHUNK: usize = 64 << 10;
 pub const LOG_SYNC: Duration = Duration::from_secs(2);
@@ -26,7 +26,6 @@ const RETRY_JITTER: f64 = 0.25;
 const STABLE_FOR: Duration = Duration::from_secs(10);
 const PING_WAIT: Duration = Duration::from_secs(3);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 const REQUEST_MAX: usize = 4 << 20;
 const SPEED_BYTES: usize = 2 << 20;
 const SPEED_TIMEOUT: Duration = Duration::from_secs(60);
@@ -87,10 +86,7 @@ fn room_info(core: &Core) -> Value {
 }
 
 fn learn_members(core: &Arc<Core>, room: &Value) {
-    let Some(id) = room["id"].as_str() else { return };
-    if core.active_room_id() != id {
-        return;
-    }
+    let Some(id) = room["id"].as_str().filter(|id| core.in_room(id)) else { return };
     for member in room["members"].as_array().into_iter().flatten().filter_map(|v| v.as_str()) {
         room::add_member(core, id, member);
     }
@@ -114,12 +110,10 @@ fn learn_hello(core: &Arc<Core>, id: &EndpointId, message: &Value) -> u32 {
         let _ = core.app.emit("joined", if name.is_empty() { short(id) } else { name.clone() });
     }
     let codecs = codec_list(&message["codecs"]);
-    let hw = hw::sanitize(&message["hw"]);
     core.update_peer(id, |p| {
         p.info = Some((version, proto));
         p.seen_us = Some(now_us());
         p.codecs = codecs;
-        p.hw = hw;
     });
     room::remember_name(core, &id.to_string(), &name, true);
     if proto != PROTOCOL {
@@ -128,7 +122,7 @@ fn learn_hello(core: &Arc<Core>, id: &EndpointId, message: &Value) -> u32 {
     learn_members(core, &message["room"]);
     learn_holdings(core, id, message);
     react_to_set(core, &message["set"]);
-    if message["room"]["id"].as_str() == Some(core.active_room_id().as_str()) {
+    if core.in_room(message["room"]["id"].as_str().unwrap_or_default()) {
         let asks = message["asks"].as_array().cloned().unwrap_or_default();
         core.update_peer(id, |p| p.asks = asks);
     }
@@ -149,10 +143,6 @@ impl Pacer {
         Self { next: Instant::now(), history: Instant::now() }
     }
 
-    fn ahead(&self, now: Instant) -> (u64, u64) {
-        (self.next.saturating_duration_since(now).as_millis() as u64, self.history.saturating_duration_since(now).as_millis() as u64)
-    }
-
     fn reserve(&mut self, now: Instant, bytes: usize, history: bool, rate: f64) -> Option<Duration> {
         if history {
             if self.next > now && self.history > now {
@@ -163,12 +153,6 @@ impl Pacer {
         self.next = self.next.max(now) + Duration::from_secs_f64(bytes as f64 / rate);
         Some(self.next - now)
     }
-}
-
-pub fn pacer_json(core: &Core) -> Value {
-    let (ahead, history) = core.pacer.lock().unwrap().ahead(Instant::now());
-    let priorities = [("log", LOG_PRIORITY), ("live voice", LIVE_VOICE_PRIORITY), ("live picture", LIVE_PICTURE_PRIORITY), ("history voice", HISTORY_VOICE_PRIORITY), ("history picture", HISTORY_PICTURE_PRIORITY)];
-    json!({"limit_mbps": *core.limit_mbps.lock().unwrap(), "ahead_ms": ahead, "history_ahead_ms": history, "history_share": HISTORY_SHARE, "chunk": CHUNK, "priorities": priorities.map(|(k, p)| json!({"kind": k, "priority": p}))})
 }
 
 async fn pace(core: &Core, bytes: usize, history: bool) {
@@ -188,7 +172,7 @@ async fn pace(core: &Core, bytes: usize, history: bool) {
 
 fn holdings(core: &Core) -> Value {
     static HELD: Mutex<Option<(Instant, String, Value)>> = Mutex::new(None);
-    let room = core.active_room_id();
+    let Some(room) = core.room_id() else { return json!({}) };
     let mut held = HELD.lock().unwrap();
     if let Some((_, _, value)) = held.as_ref().filter(|(at, r, _)| at.elapsed() < LOG_SYNC / 2 && *r == room) {
         return value.clone();
@@ -207,7 +191,7 @@ fn count_holdings(core: &Core, room: &str) -> Value {
 }
 
 fn learn_holdings(core: &Core, id: &EndpointId, message: &Value) {
-    if message["room"]["id"].as_str() != Some(core.active_room_id().as_str()) {
+    if !core.in_room(message["room"]["id"].as_str().unwrap_or_default()) {
         return;
     }
     core.update_peer(id, |p| {
@@ -217,13 +201,9 @@ fn learn_holdings(core: &Core, id: &EndpointId, message: &Value) {
 }
 
 fn hello_message(core: &Core) -> Value {
-    let mut message = json!({"t": "hello", "app": VERSION, "proto": PROTOCOL, "name": *core.name.lock().unwrap(), "room": room_info(core), "set": core.active_set_json(), "codecs": *core.codecs.lock().unwrap(), "asks": pending_asks(core), "hw": hw::share(core)});
+    let mut message = json!({"t": "hello", "app": VERSION, "proto": PROTOCOL, "name": *core.name.lock().unwrap(), "room": room_info(core), "set": core.active_set_json(), "codecs": *core.codecs.lock().unwrap(), "asks": pending_asks(core)});
     merge(&mut message, &holdings(core));
     message
-}
-
-fn in_active_room(core: &Core, room: &str) -> bool {
-    valid_id(room) && room == core.active_room_id()
 }
 
 fn priority(live: bool, series: &str) -> i32 {
@@ -312,7 +292,7 @@ async fn follow(core: &Core, conn: &Connection, send: &mut SendStream, req: &Val
     let set = Some(text("set")).filter(|s| valid_id(s));
     let own = owner == core.me();
     let live = req["live"] == true;
-    let valid = in_active_room(core, &room) && room::member_id(&owner) && SERIES.contains(&series.as_str()) && capture_id(&capture);
+    let valid = core.in_room(&room) && room::member_id(&owner) && SERIES.contains(&series.as_str()) && capture_id(&capture);
     let picture = series == SERIES[0];
     let relayed = || picture && relay::relayed(conn);
     if !valid || (live && !own) || (!own && set.is_none()) || relayed() {
@@ -369,7 +349,7 @@ async fn follow(core: &Core, conn: &Connection, send: &mut SendStream, req: &Val
 
 fn react_to_set(core: &Arc<Core>, set: &Value) {
     let (Some(id), Some(room)) = (set["id"].as_str(), set["room"].as_str()) else { return };
-    if !valid_id(id) || room != core.active_room_id() {
+    if !valid_id(id) || !core.in_room(room) {
         return;
     }
     let logs = room::logs(core, room);
@@ -450,7 +430,7 @@ async fn handle(core: Arc<Core>, conn: Connection, mut send: SendStream, mut rec
         Some("rec") => {
             let by = req["by"].as_str().unwrap_or_default();
             let set = req["set"].as_str().unwrap_or_default();
-            let here = req["room"].as_str() == Some(core.active_room_id().as_str());
+            let here = core.in_room(req["room"].as_str().unwrap_or_default());
             if req["action"] == "start" {
                 if here {
                     room::announce(&core, "start", by, req["voice"] == true, set);
@@ -467,7 +447,7 @@ async fn handle(core: Arc<Core>, conn: Connection, mut send: SendStream, mut rec
         }
         Some("live") => {
             let sharing = core.sharing_live();
-            let reply = match core.engine.live().filter(|l| sharing && l.room == core.active_room_id()) {
+            let reply = match core.engine.live().filter(|l| sharing && core.in_room(&l.room)) {
                 Some(l) => {
                     let newest = l.recent.map(|r| r.last().cloned().unwrap_or_default());
                     json!({"sharing": true, "capture": l.capture, "start_us": l.start_us, "n": newest.clone().map(|(n, _)| n), "set": newest.map(|(_, set)| set)})
@@ -490,27 +470,22 @@ async fn handle(core: Arc<Core>, conn: Connection, mut send: SendStream, mut rec
             let _ = core.app.emit("speaking", json!({"from": from.to_string(), "on": on}));
             send.write_all(b"ok").await?;
         }
-        Some("draw") if in_active_room(&core, req["room"].as_str().unwrap_or_default()) && core.party.lock().unwrap().on => {
+        Some("draw") if core.in_room(req["room"].as_str().unwrap_or_default()) && core.party.lock().unwrap().on => {
             let _ = core.app.emit("draw", json!({"from": from.to_string(), "stroke": req["stroke"]}));
             send.write_all(b"ok").await?;
         }
-        Some("check") => {
-            let c = core.clone();
-            let lines = tokio::task::spawn_blocking(move || crate::check::run(&c)).await?;
-            send.write_all(&serde_json::to_vec(&lines)?).await?;
-        }
-        Some("asks") if req["room"].as_str() == Some(core.active_room_id().as_str()) => {
+        Some("asks") if core.in_room(req["room"].as_str().unwrap_or_default()) => {
             let asks = req["asks"].as_array().cloned().unwrap_or_default();
             core.update_peer(&from, |p| p.asks = asks);
             send.write_all(b"ok").await?;
         }
         Some("answer") => {
             if room::answer_ask(&mut core.asks.lock().unwrap(), req["id"].as_str().unwrap_or_default(), req["approve"] == true) {
-                broadcast(&core, asks_message(&core));
+                send_asks(&core);
             }
             send.write_all(b"ok").await?;
         }
-        Some("remove") if req["room"].as_str() == Some(core.active_room_id().as_str()) => {
+        Some("remove") if core.in_room(req["room"].as_str().unwrap_or_default()) => {
             core.wake.notify_waiters();
             send.write_all(b"ok").await?;
         }
@@ -519,15 +494,6 @@ async fn handle(core: Arc<Core>, conn: Connection, mut send: SendStream, mut rec
     }
     send.finish()?;
     Ok(())
-}
-
-pub async fn check_peer(core: &Arc<Core>, id: &str) -> Value {
-    let conn = core.peers.lock().unwrap().iter().find(|p| p.id.to_string() == id).and_then(|p| p.alive().cloned());
-    let reply = match conn {
-        Some(conn) => request_within(&conn, &json!({"t": "check"}), CHECK_TIMEOUT).await.ok(),
-        None => None,
-    };
-    reply.and_then(|b| serde_json::from_slice::<Value>(&b).ok()).unwrap_or(Value::Null)
 }
 
 pub fn speed_json(up_bytes: usize, up_took: Duration, down_bytes: usize, down_took: Duration, rtt_ms: u64, path: &str) -> Value {
@@ -567,14 +533,15 @@ pub fn pending_asks(core: &Core) -> Vec<Value> {
     core.asks.lock().unwrap().iter().filter(|a| a.answer.is_none()).map(|a| json!({"id": a.id, "name": a.name})).collect()
 }
 
-pub fn asks_message(core: &Core) -> Value {
-    json!({"t": "asks", "room": core.active_room_id(), "asks": pending_asks(core)})
+pub fn send_asks(core: &Arc<Core>) {
+    let Some(room) = core.room_id() else { return };
+    broadcast(core, json!({"t": "asks", "room": room, "asks": pending_asks(core)}));
 }
 
 pub fn answer(core: &Arc<Core>, id: &str, approve: bool) {
     let mine = room::answer_ask(&mut core.asks.lock().unwrap(), id, approve);
     if mine {
-        broadcast(core, asks_message(core));
+        send_asks(core);
     } else {
         broadcast(core, json!({"t": "answer", "id": id, "approve": approve}));
     }
@@ -582,12 +549,11 @@ pub fn answer(core: &Arc<Core>, id: &str, approve: bool) {
 
 async fn join(core: &Arc<Core>, from: EndpointId, mut send: SendStream, mut recv: RecvStream) -> Result<Option<room::Step>> {
     let req: Value = serde_json::from_slice(&recv.read_to_end(JOIN_MAX).await?)?;
-    let room_id = core.active_room_id();
     let (token, id, name) = (req["token"].as_str().unwrap_or_default(), from.to_string(), crate::clean_name(req["name"].as_str().unwrap_or_default()));
-    if req["t"] != "join" {
+    let Some(room_id) = core.joined_room().ok().filter(|_| req["t"] == "join") else {
         send.finish()?;
         return Ok(None);
-    }
+    };
     let step = {
         let mut invites = core.invites.lock().unwrap();
         let mut asks = core.asks.lock().unwrap();
@@ -597,16 +563,16 @@ async fn join(core: &Arc<Core>, from: EndpointId, mut send: SendStream, mut recv
         room::Step::Refused => json!({"ok": false}),
         room::Step::Wait(changed) => {
             if *changed {
-                broadcast(core, asks_message(core));
+                send_asks(core);
             }
             json!({"wait": true})
         }
         room::Step::Declined => {
-            broadcast(core, asks_message(core));
+            send_asks(core);
             json!({"declined": true})
         }
         room::Step::Admitted => {
-            broadcast(core, asks_message(core));
+            send_asks(core);
             room::admit(core, &room_id, &id);
             tracing::info!("admitted {} to room {room_id}", short(&id));
             json!({"ok": true, "room": room_info(core)})
@@ -845,7 +811,7 @@ async fn live_info(core: &Core, id: &EndpointId, conn: &Connection) -> Option<Pe
 async fn follow_live(core: Arc<Core>, id: EndpointId, conn: Connection, room: String, which: usize, key: String) {
     let (series, owner) = (SERIES[which], id.to_string());
     let mut capture = String::new();
-    while core.active_room_id() == room && conn.close_reason().is_none() && core.has_peer(&id) {
+    while core.in_room(&room) && conn.close_reason().is_none() && core.has_peer(&id) {
         let Some(info) = live_info(&core, &id, &conn).await else { break };
         if info.capture != capture {
             capture = info.capture.clone();
@@ -1004,8 +970,8 @@ async fn present_invite(core: &Arc<Core>, id: &EndpointId, conn: &Connection) ->
 async fn sync(core: &Arc<Core>, id: &EndpointId, conn: &Connection) -> Result<()> {
     let mut samples = Vec::new();
     let mut tick = 0u32;
+    let Some(room) = core.room_id() else { return Ok(()) };
     let mut told = Some(holdings(core));
-    let room = core.active_room_id();
     loop {
         if test_flag(&core.dir, "offline") {
             anyhow::bail!("offline");

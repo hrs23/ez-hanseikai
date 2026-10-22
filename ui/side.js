@@ -40,15 +40,7 @@ function renderNav() {
   }
   $("askcount").hidden = !st.asks.length;
   $("askcount").textContent = String(st.asks.length);
-  const badge = apiBadge(st.api);
-  for (const b of document.querySelectorAll(".apibadge")) {
-    b.hidden = !badge;
-    if (!badge) continue;
-    b.className = "apibadge" + (badge.lan ? " lan" : "");
-    b.replaceChildren(icon(badge.lan ? "alert" : "terminal", "sm"), "API");
-    b.title = badge.title;
-    b.setAttribute("aria-label", badge.title);
-  }
+  for (const b of document.querySelectorAll(".apibadge")) b.hidden = !st.api.on;
 }
 function setSideWidth(px, keep = true) {
   sideWidth = clampSide(px);
@@ -358,5 +350,5 @@ $("screenbtn").onclick = () => { if (st.capture.source && !st.capture.source_los
 $("screenmore").onclick = (e) => openSource(e.currentTarget);
 $("micbtn").onclick = () => run("set_mix", { kind: "mic", volume: st.capture.mix.mic.volume, muted: !st.capture.mix.mic.muted });
 $("micmore").onclick = (e) => openMic(e.currentTarget);
-$("netbadge").onclick = () => openDiagnostics("flow");
+$("netbadge").onclick = () => openDiagnostics();
 $("gear").onclick = () => openSettings();

@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
-use std::net::{IpAddr, Ipv4Addr, TcpListener, TcpStream, ToSocketAddrs};
+use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -40,34 +40,6 @@ pub fn address() -> String {
 
 pub fn requested() -> bool {
     std::env::args().any(|a| a == "--api") || std::env::var("EZH_API").is_ok_and(|v| v == "1")
-}
-
-fn computer_name() -> String {
-    std::env::var("COMPUTERNAME").unwrap_or_default()
-}
-
-fn own_addresses() -> Vec<String> {
-    let name = computer_name();
-    if name.is_empty() {
-        return Vec::new();
-    }
-    let found = (name.as_str(), 0).to_socket_addrs().into_iter().flatten();
-    let mut out: Vec<String> = found.filter_map(|a| if let IpAddr::V4(ip) = a.ip() { (!ip.is_loopback()).then(|| ip.to_string()) } else { None }).collect();
-    out.dedup();
-    out
-}
-
-pub fn local_hosts() -> Vec<String> {
-    let mut out = own_addresses();
-    let name = computer_name();
-    if !name.is_empty() {
-        out.push(name);
-    }
-    out
-}
-
-pub fn lan_addresses() -> Vec<String> {
-    local_hosts().into_iter().map(|h| format!("{h}:{}", port())).collect()
 }
 
 fn restrict(path: &Path) -> std::io::Result<()> {
@@ -150,9 +122,9 @@ fn error(status: u16, text: &str) -> Response {
     reply(status, json!({"error": text}))
 }
 
-pub fn host_ok(host: Option<&str>, port: u16, own: &[String]) -> bool {
+pub fn host_ok(host: Option<&str>, port: u16) -> bool {
     let Some((name, given)) = host.and_then(|h| h.rsplit_once(':')) else { return false };
-    given.parse::<u16>().ok() == Some(port) && (["127.0.0.1", "localhost"].contains(&name) || own.iter().any(|h| h.eq_ignore_ascii_case(name)))
+    given.parse::<u16>().ok() == Some(port) && ["127.0.0.1", "localhost"].contains(&name)
 }
 
 fn same(a: &[u8], b: &[u8]) -> bool {
@@ -649,9 +621,9 @@ fn route(req: &Request, be: &dyn Backend, parts: &[&str]) -> Response {
     }
 }
 
-pub fn handle(req: &Request, be: &dyn Backend, token: &str, port: u16, own: &[String]) -> Response {
-    if !host_ok(req.header("host"), port, own) {
-        return error(403, "The Host header must be an address of this PC and the port.");
+pub fn handle(req: &Request, be: &dyn Backend, token: &str, port: u16) -> Response {
+    if !host_ok(req.header("host"), port) {
+        return error(403, "The Host header must be 127.0.0.1 or localhost and the port.");
     }
     if req.method == "GET" && req.path == "/llms.txt" {
         return Response { status: 200, kind: "text/plain; charset=utf-8", body: LLMS.as_bytes().to_vec() };
@@ -744,11 +716,8 @@ impl Backend for Live {
     }
 
     fn add(&self, room: &str, record: Value) -> Result<(), String> {
-        if self.0.room_id().as_deref() != Some(room) {
-            return Err("Enter the room first: the app writes only to the room that is open.".into());
-        }
-        self.0.append_log(room, &record);
-        party::send(&self.0);
+        self.0.check_joined(room)?;
+        crate::ops::log_and_share(&self.0, room, &record);
         Ok(())
     }
 
@@ -757,7 +726,7 @@ impl Backend for Live {
     }
 
     fn diagnostics(&self, everyone: bool) -> Result<String, String> {
-        crate::debug::diagnostics(&self.0, everyone, None)
+        crate::debug::diagnostics(&self.0, everyone)
     }
 }
 
@@ -779,8 +748,7 @@ fn serve_one(mut stream: TcpStream, core: &Arc<Core>) {
     let response = match read_request(&mut stream) {
         Ok(request) => {
             let token = core.api_token.lock().unwrap().clone();
-            let own = if *core.api_lan.lock().unwrap() { local_hosts() } else { Vec::new() };
-            handle(&request, &Live(core.clone()), &token, port(), &own)
+            handle(&request, &Live(core.clone()), &token, port())
         }
         Err(response) => response,
     };
@@ -843,10 +811,9 @@ pub fn apply(core: &Arc<Core>) {
     if !*core.api_on.lock().unwrap() {
         return;
     }
-    let bind = if *core.api_lan.lock().unwrap() { Ipv4Addr::UNSPECIFIED } else { Ipv4Addr::LOCALHOST };
-    match TcpListener::bind((bind, port())).and_then(|l| l.set_nonblocking(true).map(|_| l)) {
+    match TcpListener::bind((Ipv4Addr::LOCALHOST, port())).and_then(|l| l.set_nonblocking(true).map(|_| l)) {
         Ok(listener) => {
-            tracing::info!("the local API listens on {bind}:{}", port());
+            tracing::info!("the local API listens on {}", address());
             let stop = Arc::new(AtomicBool::new(false));
             let (c, s) = (core.clone(), stop.clone());
             *server = Some(Running { stop, thread: std::thread::spawn(move || serve(listener, c, s)) });
@@ -915,7 +882,7 @@ mod tests {
         }
         fn add(&self, room: &str, record: Value) -> Result<(), String> {
             if room != "r1" {
-                return Err("Enter the room first.".into());
+                return Err("Join a room first.".into());
             }
             Arc::make_mut(&mut self.logs.lock().unwrap()[0].records).push(record);
             Ok(())
@@ -936,22 +903,21 @@ mod tests {
     }
 
     fn plugin_records(id: &str, owner: &str) -> Vec<Value> {
-        let p = crate::plugins::find(id).unwrap();
-        let config = crate::jobs::Config::new(p, true, &Value::Null, Some(owner.to_string()));
+        let config = crate::jobs::Config { on: true, version: "1.1.0".into(), runner: Some(owner.to_string()) };
         let key = format!("{}s1/{owner}", crate::jobs::prefix(id, &config));
         vec![
-            json!({"k": "plugin", "plugin": id, "on": true, "version": p.version, "settings": config.settings, "t_us": 1}),
+            json!({"k": "plugin", "plugin": id, "on": true, "version": config.version, "t_us": 1}),
             json!({"k": "job", "state": "done", "job": key, "run": 7, "t_us": 2, "tags": {}}),
         ]
     }
 
     fn plugin_event(id: &str, owner: &str, kind: &str, from: i64, to: Option<i64>, text: &str, tags: Value) -> Value {
-        let p = crate::plugins::find(id).unwrap();
+        let name = crate::plugins::find(id).map_or("Transcription", |p| p.name);
         let mut target = json!({"set": "s1", "file": owner, "t_us": START + from * S});
         if let Some(to) = to {
             target = json!({"set": "s1", "file": owner, "from_us": START + from * S, "to_us": START + to * S});
         }
-        json!({"k": "event", "id": START + from * S + 1, "t_us": 1, "kind": kind, "target": target, "text": text, "values": {}, "tags": tags, "plugin": {"id": id, "name": p.name, "version": p.version}, "job": "j", "run": 7})
+        json!({"k": "event", "id": START + from * S + 1, "t_us": 1, "kind": kind, "target": target, "text": text, "values": {}, "tags": tags, "plugin": {"id": id, "name": name, "version": "1.1.0"}, "job": "j", "run": 7})
     }
 
     fn fixture() -> Fake {
@@ -988,7 +954,7 @@ mod tests {
     fn call(be: &dyn Backend, method: &str, path: &str, body: &str) -> (u16, Value) {
         let text = format!("{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{PORT_FOR_TESTS}\r\nAuthorization: Bearer {TOKEN}\r\nContent-Length: {}\r\n\r\n{body}", body.len());
         let request = read_request(&mut text.as_bytes()).ok().unwrap();
-        let response = handle(&request, be, TOKEN, PORT_FOR_TESTS, &[]);
+        let response = handle(&request, be, TOKEN, PORT_FOR_TESTS);
         (response.status, serde_json::from_slice(&response.body).unwrap_or(Value::Null))
     }
 
@@ -998,35 +964,13 @@ mod tests {
 
     #[test]
     fn only_the_loopback_address_and_port_are_a_valid_host() {
-        assert!(host_ok(Some("127.0.0.1:4000"), 4000, &[]));
-        assert!(host_ok(Some("localhost:4000"), 4000, &[]));
-        for bad in [None, Some("127.0.0.1"), Some("127.0.0.1:4001"), Some("evil.example:4000"), Some("127.0.0.1.evil.example:4000"), Some("localhost.evil.example:4000"), Some("[::1]:4000"), Some("0.0.0.0:4000"), Some("")] {
-            assert!(!host_ok(bad, 4000, &[]), "{bad:?}");
+        assert!(host_ok(Some("127.0.0.1:4000"), 4000));
+        assert!(host_ok(Some("localhost:4000"), 4000));
+        for bad in [None, Some("127.0.0.1"), Some("127.0.0.1:4001"), Some("evil.example:4000"), Some("127.0.0.1.evil.example:4000"), Some("localhost.evil.example:4000"), Some("[::1]:4000"), Some("0.0.0.0:4000"), Some("192.0.2.20:4000"), Some("")] {
+            assert!(!host_ok(bad, 4000), "{bad:?}");
         }
-    }
-
-    #[test]
-    fn a_pcs_own_addresses_and_name_are_valid_hosts_only_when_given() {
-        let own = vec!["192.0.2.20".to_string(), "198.51.100.7".to_string(), "Gaming-PC".to_string()];
-        for good in ["192.0.2.20:4000", "198.51.100.7:4000", "gaming-pc:4000", "GAMING-PC:4000", "127.0.0.1:4000", "localhost:4000"] {
-            assert!(host_ok(Some(good), 4000, &own), "{good}");
-        }
-        for bad in ["192.0.2.21:4000", "192.0.2.20:4001", "192.0.2.20", "gaming-pc.evil.example:4000", "evil.example:4000", "gaming-pc:80", "0.0.0.0:4000", ""] {
-            assert!(!host_ok(Some(bad), 4000, &own), "{bad}");
-        }
-        assert!(!host_ok(Some("192.0.2.20:4000"), 4000, &[]));
-    }
-
-    #[test]
-    fn the_whole_handler_uses_the_hosts_it_is_given() {
-        let fake = fixture();
         let text = format!("GET /v1 HTTP/1.1\r\nHost: 192.0.2.20:4000\r\nAuthorization: Bearer {TOKEN}\r\n\r\n");
-        let request = read_request(&mut text.as_bytes()).ok().unwrap();
-        assert_eq!(handle(&request, &fake, TOKEN, 4000, &[]).status, 403);
-        assert_eq!(handle(&request, &fake, TOKEN, 4000, &["192.0.2.20".to_string()]).status, 200);
-        let wrong = text.replace(TOKEN, "nope");
-        let request = read_request(&mut wrong.as_bytes()).ok().unwrap();
-        assert_eq!(handle(&request, &fake, TOKEN, 4000, &["192.0.2.20".to_string()]).status, 401);
+        assert_eq!(handle(&read_request(&mut text.as_bytes()).ok().unwrap(), &fixture(), TOKEN, 4000).status, 403);
     }
 
     #[test]
@@ -1074,7 +1018,7 @@ mod tests {
         let fake = fixture();
         let send = |host: &str, auth: &str, path: &str| {
             let text = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\n{auth}\r\n");
-            handle(&read_request(&mut text.as_bytes()).ok().unwrap(), &fake, TOKEN, PORT_FOR_TESTS, &[])
+            handle(&read_request(&mut text.as_bytes()).ok().unwrap(), &fake, TOKEN, PORT_FOR_TESTS)
         };
         let ok_auth = format!("Authorization: Bearer {TOKEN}\r\n");
         assert_eq!(send("evil.example:4000", &ok_auth, "/v1/rooms").status, 403);
@@ -1295,7 +1239,7 @@ mod tests {
         let (_, s1) = get(&fake, "/v1/rooms/r1/recordings/s1");
         assert!(s1.get("of").is_none() && s1.get("watch").is_none());
         let text = format!("GET /v1/rooms/r1/recordings/s2/voices/b HTTP/1.1\r\nHost: 127.0.0.1:{PORT_FOR_TESTS}\r\nAuthorization: Bearer {TOKEN}\r\n\r\n");
-        let voice = handle(&read_request(&mut text.as_bytes()).ok().unwrap(), &fake, TOKEN, PORT_FOR_TESTS, &[]);
+        let voice = handle(&read_request(&mut text.as_bytes()).ok().unwrap(), &fake, TOKEN, PORT_FOR_TESTS);
         assert_eq!((voice.status, voice.kind), (200, "audio/mp4"));
         assert_eq!(&voice.body[4..8], b"ftyp");
         assert_eq!(get(&fake, "/v1/rooms/r1/recordings/s2/voices/a").0, 404);

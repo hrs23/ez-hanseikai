@@ -15,66 +15,36 @@ use serde_json::{json, Value};
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::EnvFilter;
 
-use crate::room::{self, part_of, SERIES};
+use crate::room::{self, SERIES};
 use crate::ops::arg;
-use crate::{check, data, download, ffmpeg, hw, net, now_us, party, record, relay, short, Core, NO_WINDOW};
+use crate::{check, data, ffmpeg, hw, net, now_us, relay, short, Core, NO_WINDOW};
 
 const MAX_LOG: u64 = 10 << 20;
 pub const LOG_FILES: [&str; 3] = ["log.txt", "log.old.txt", "log.older.txt"];
 pub const CRASH: &str = "crash.txt";
 const EVENTS_KEPT: usize = 500;
 const TRANSFERS_KEPT: usize = 1500;
-const CUTS_KEPT: usize = 120;
-const FFMPEG_KEPT: usize = 200;
-const LOG_TAIL: u64 = 256 << 10;
+const CRASH_TAIL: u64 = 256 << 10;
 const REPORT_LINES: usize = 400;
 const ERRORS_KEPT: usize = 50;
-const JOB_RECORDS_KEPT: usize = 200;
 const JOB_LINES: usize = 40;
 const NAME_MIN_CHARS: usize = 2;
 pub const UPDATE_HOST: &str = "github.com";
 
-pub const ARRIVED: usize = 0;
-pub const TAKEN: usize = 1;
-pub const ENCODED: usize = 2;
-pub const REPEATED: usize = 3;
-pub const DROPPED: usize = 4;
-pub static FRAMES: [AtomicU64; 5] = [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+pub const TAKEN: usize = 0;
+pub const ENCODED: usize = 1;
+pub const DROPPED: usize = 2;
+pub static FRAMES: [AtomicU64; 3] = [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
 
-static TRANSFERS: Mutex<Ring> = Mutex::new(Ring::new(TRANSFERS_KEPT));
-static CUTS: Mutex<Ring> = Mutex::new(Ring::new(CUTS_KEPT));
-static FFMPEG: Mutex<Ring> = Mutex::new(Ring::new(FFMPEG_KEPT));
-static ACTIVE: Mutex<Vec<(u64, Value, Instant, Arc<AtomicU64>)>> = Mutex::new(Vec::new());
+static TRANSFERS: Mutex<VecDeque<Value>> = Mutex::new(VecDeque::new());
+static ACTIVE: Mutex<Vec<(u64, Value)>> = Mutex::new(Vec::new());
 static MESSAGES: Mutex<BTreeMap<(String, String), (u64, u64)>> = Mutex::new(BTreeMap::new());
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
-pub struct Ring {
-    items: VecDeque<(u64, Value)>,
-    cap: usize,
-    seq: u64,
-}
-
-impl Ring {
-    pub const fn new(cap: usize) -> Self {
-        Self { items: VecDeque::new(), cap, seq: 0 }
-    }
-
-    pub fn push(&mut self, mut item: Value) -> u64 {
-        self.seq += 1;
-        item["seq"] = json!(self.seq);
-        self.items.push_back((self.seq, item));
-        while self.items.len() > self.cap {
-            self.items.pop_front();
-        }
-        self.seq
-    }
-
-    pub fn since(&self, seq: u64) -> Vec<Value> {
-        self.items.iter().filter(|(s, _)| *s > seq).map(|(_, v)| v.clone()).collect()
-    }
-
-    fn rows(&self) -> impl DoubleEndedIterator<Item = &Value> {
-        self.items.iter().map(|(_, v)| v)
+fn push(rows: &mut VecDeque<Value>, row: Value) {
+    rows.push_back(row);
+    while rows.len() > TRANSFERS_KEPT {
+        rows.pop_front();
     }
 }
 
@@ -189,7 +159,7 @@ pub struct Transfer {
     id: u64,
     row: Value,
     started: Instant,
-    bytes: Arc<AtomicU64>,
+    bytes: AtomicU64,
     done: bool,
 }
 
@@ -199,9 +169,9 @@ pub fn start(dir: &str, what: &What, n: u32) -> Transfer {
     row["n"] = json!(n);
     row["kind"] = json!(kind(what.live, &what.series, n));
     row["priority"] = json!(what.priority);
-    let (id, started, bytes) = (NEXT_ID.fetch_add(1, Ordering::Relaxed), Instant::now(), Arc::new(AtomicU64::new(0)));
-    ACTIVE.lock().unwrap().push((id, row.clone(), started, bytes.clone()));
-    Transfer { id, row, started, bytes, done: false }
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    ACTIVE.lock().unwrap().push((id, row.clone()));
+    Transfer { id, row, started: Instant::now(), bytes: AtomicU64::new(0), done: false }
 }
 
 impl Transfer {
@@ -216,7 +186,7 @@ impl Transfer {
 
 impl Drop for Transfer {
     fn drop(&mut self) {
-        ACTIVE.lock().unwrap().retain(|(id, ..)| *id != self.id);
+        ACTIVE.lock().unwrap().retain(|(id, _)| *id != self.id);
         let mut row = std::mem::take(&mut self.row);
         row["bytes"] = json!(self.bytes.load(Ordering::Relaxed));
         row["ms"] = json!(self.started.elapsed().as_millis() as u64);
@@ -228,11 +198,11 @@ fn same_piece(a: &Value, b: &Value) -> bool {
     ["dir", "owner", "capture", "series", "n"].iter().all(|k| a[k] == b[k])
 }
 
-pub fn result(rows: &Ring, row: &Value, done: bool) -> &'static str {
+pub fn result(rows: &VecDeque<Value>, row: &Value, done: bool) -> &'static str {
     if !done {
         return "partial";
     }
-    let failed_before = rows.rows().rev().find(|r| same_piece(r, row)).is_some_and(|r| r["result"] != "ok");
+    let failed_before = rows.iter().rev().find(|r| same_piece(r, row)).is_some_and(|r| r["result"] != "ok");
     if failed_before { "retry" } else { "ok" }
 }
 
@@ -240,12 +210,12 @@ fn record(mut row: Value, done: bool) {
     row["t_us"] = json!(now_us());
     let mut rows = TRANSFERS.lock().unwrap();
     row["result"] = json!(result(&rows, &row, done));
-    rows.push(row);
+    push(&mut rows, row);
 }
 
-pub fn mark_bad(rows: &mut Ring, owner: &str, capture: &str, series: &str, n: u32, bytes: u64) {
+pub fn mark_bad(rows: &mut VecDeque<Value>, owner: &str, capture: &str, series: &str, n: u32, bytes: u64) {
     let wanted = json!({"dir": "in", "owner": short(owner), "capture": capture, "series": series, "n": n});
-    if let Some((_, row)) = rows.items.iter_mut().rev().find(|(_, r)| same_piece(r, &wanted)) {
+    if let Some(row) = rows.iter_mut().rev().find(|r| same_piece(r, &wanted)) {
         row["result"] = json!("hash fail");
         return;
     }
@@ -254,7 +224,7 @@ pub fn mark_bad(rows: &mut Ring, owner: &str, capture: &str, series: &str, n: u3
     row["bytes"] = json!(bytes);
     row["result"] = json!("hash fail");
     row["t_us"] = json!(now_us());
-    rows.push(row);
+    push(rows, row);
 }
 
 pub fn hash_fail(owner: &str, capture: &str, series: &str, n: u32, bytes: u64) {
@@ -262,7 +232,7 @@ pub fn hash_fail(owner: &str, capture: &str, series: &str, n: u32, bytes: u64) {
 }
 
 pub fn queued_out(peer: &str) -> usize {
-    ACTIVE.lock().unwrap().iter().filter(|(_, row, ..)| row["dir"] == "out" && row["peer"] == peer).count()
+    ACTIVE.lock().unwrap().iter().filter(|(_, row)| row["dir"] == "out" && row["peer"] == peer).count()
 }
 
 pub fn slow_send(what: &What, took: std::time::Duration) {
@@ -287,39 +257,8 @@ pub fn message(dir: &str, kind: Option<&str>, bytes: usize) {
     entry.1 += bytes as u64;
 }
 
-pub fn cut(capture: &str, series: &str, n: u32, set: Option<&str>, bytes: u64, fragments: u32, d_us: i64) {
-    let row = json!({"t_us": now_us(), "capture": capture, "series": series, "n": n, "set": set, "bytes": bytes, "fragments": fragments, "d_us": d_us});
-    CUTS.lock().unwrap().push(row);
-}
-
-pub fn ffmpeg_line(line: &str) {
-    FFMPEG.lock().unwrap().push(json!({"t_us": now_us(), "text": line}));
-}
-
 pub fn frame(which: usize) {
     FRAMES[which].fetch_add(1, Ordering::Relaxed);
-}
-
-pub fn kinds(records: &[Value]) -> BTreeMap<String, u64> {
-    let mut out = BTreeMap::new();
-    for r in records {
-        *out.entry(r["k"].as_str().unwrap_or("?").to_string()).or_insert(0) += 1;
-    }
-    out
-}
-
-pub fn ranges(numbers: &[u32]) -> String {
-    let mut out: Vec<String> = Vec::new();
-    let mut i = 0;
-    while i < numbers.len() {
-        let mut j = i;
-        while j + 1 < numbers.len() && numbers[j + 1] == numbers[j] + 1 {
-            j += 1;
-        }
-        out.push(if i == j { numbers[i].to_string() } else { format!("{}-{}", numbers[i], numbers[j]) });
-        i = j + 1;
-    }
-    out.join(", ")
 }
 
 pub fn jobs(logs: &[(String, &[Value])]) -> Vec<Value> {
@@ -353,32 +292,6 @@ pub fn jobs(logs: &[(String, &[Value])]) -> Vec<Value> {
     out
 }
 
-pub struct Candidate {
-    pub name: &'static str,
-    pub codec: &'static str,
-    pub probe: &'static str,
-    pub playable: bool,
-    pub chosen: bool,
-}
-
-pub fn choice(candidates: &[(&'static str, &'static str, f64)], results: &[(&str, bool)], usable: &[String], chosen: &str) -> Vec<Candidate> {
-    candidates
-        .iter()
-        .map(|(name, codec, _)| Candidate {
-            name: *name,
-            codec: *codec,
-            probe: match results.iter().find(|(n, _)| n == name) {
-                Some((_, true)) => "works",
-                Some((_, false)) => "not available",
-                None if results.is_empty() => "not probed yet",
-                None => "skipped",
-            },
-            playable: usable.iter().any(|u| u == codec),
-            chosen: *name == chosen,
-        })
-        .collect()
-}
-
 fn path_json(conn: &Connection) -> Vec<Value> {
     conn.paths()
         .iter()
@@ -396,28 +309,15 @@ fn path_json(conn: &Connection) -> Vec<Value> {
         .collect()
 }
 
-fn conn_json(label: &str, conn: &Connection) -> Value {
-    let stats = conn.stats();
-    json!({
-        "label": label,
-        "closed": conn.close_reason().map(|r| r.to_string()),
-        "tx": stats.udp_tx.bytes,
-        "rx": stats.udp_rx.bytes,
-        "lost": stats.lost_packets,
-        "paths": path_json(conn),
-    })
-}
-
-fn endpoint_json(core: &Core, addresses: bool) -> Value {
+fn endpoint_json(core: &Core) -> Value {
     let report = core.ep.net_report().get();
     let home = relay::home(core);
-    let hidden = |text: String| if addresses { text } else { String::new() };
     json!({
         "id": core.me(),
         "relay_connected": home.is_some(),
-        "relay": hidden(home.map(|u| u.to_string()).unwrap_or_default()),
-        "sockets": hidden(format!("{:?}", core.ep.bound_sockets())),
-        "addr": hidden(format!("{:?}", core.ep.addr())),
+        "relay": home.map(|u| u.to_string()).unwrap_or_default(),
+        "sockets": format!("{:?}", core.ep.bound_sockets()),
+        "addr": format!("{:?}", core.ep.addr()),
         "relay_only": std::env::var_os("EZH_RELAY_ONLY").is_some(),
         "net": report.map(|r| json!({
             "udp_v4": r.udp_v4,
@@ -425,75 +325,14 @@ fn endpoint_json(core: &Core, addresses: bool) -> Value {
             "mapping_varies_v4": r.mapping_varies_by_dest_ipv4,
             "mapping_varies_v6": r.mapping_varies_by_dest_ipv6,
             "captive_portal": r.captive_portal,
-            "preferred_relay": hidden(r.preferred_relay.map(|u| u.to_string()).unwrap_or_default()),
-            "global_v4": hidden(r.global_v4.map(|a| a.to_string()).unwrap_or_default()),
-            "global_v6": hidden(r.global_v6.map(|a| a.to_string()).unwrap_or_default()),
+            "preferred_relay": r.preferred_relay.map(|u| u.to_string()).unwrap_or_default(),
+            "global_v4": r.global_v4.map(|a| a.to_string()).unwrap_or_default(),
+            "global_v6": r.global_v6.map(|a| a.to_string()).unwrap_or_default(),
         })),
     })
 }
 
-fn connections_json(core: &Core, since: u64) -> Value {
-    let mut peers: Vec<Value> = core
-        .peers
-        .lock()
-        .unwrap()
-        .iter()
-        .map(|p| {
-            let conns: Vec<Value> = p.conn.iter().map(|c| conn_json("connection", c)).collect();
-            json!({
-                "id": p.id.to_string(), "short": short(p.id), "name": p.name, "failures": p.failures, "offset_us": p.offset_us,
-                "version": p.info.as_ref().map(|i| &i.0), "proto": p.info.as_ref().map(|i| i.1), "codecs": p.codecs, "sharing": p.live.is_some(), "conns": conns,
-            })
-        })
-        .collect();
-    for p in peers.iter_mut().filter(|p| p["name"] == "") {
-        p["name"] = json!(room::display_name(core, p["id"].as_str().unwrap_or_default()));
-    }
-    let events: Vec<Value> = core.events.lock().unwrap().iter().filter(|e| e.t_us as u64 > since).map(|e| json!({"t_us": e.t_us, "text": hide_addresses(&e.text)})).collect();
-    json!({"me": endpoint_json(core, false), "proto": crate::PROTOCOL, "peers": peers, "events": events})
-}
-
-fn network_json(core: &Core, since: u64) -> Value {
-    let rows = TRANSFERS.lock().unwrap();
-    let active: Vec<Value> = ACTIVE
-        .lock()
-        .unwrap()
-        .iter()
-        .map(|(_, row, started, bytes)| {
-            let mut row = row.clone();
-            row["bytes"] = json!(bytes.load(Ordering::Relaxed));
-            row["ms"] = json!(started.elapsed().as_millis() as u64);
-            row
-        })
-        .collect();
-    let messages: Vec<Value> = MESSAGES.lock().unwrap().iter().map(|((dir, kind), (count, bytes))| json!({"dir": dir, "kind": kind, "count": count, "bytes": bytes})).collect();
-    json!({"rows": rows.since(since), "seq": rows.seq, "active": active, "messages": messages, "pacer": net::pacer_json(core)})
-}
-
-fn recording_json(core: &Core, since: u64) -> Value {
-    let usable = record::usable_codecs(core);
-    let chosen = ffmpeg::pick(&usable);
-    let candidates: Vec<Value> = choice(&ffmpeg::CANDIDATES, &ffmpeg::encoder_results(), &usable, chosen.0)
-        .into_iter()
-        .map(|c| json!({"name": c.name, "codec": c.codec, "probe": c.probe, "playable": c.playable, "chosen": c.chosen}))
-        .collect();
-    let frames: Vec<u64> = FRAMES.iter().map(|f| f.load(Ordering::Relaxed)).collect();
-    json!({
-        "engine": record::debug_json(core),
-        "frames": {"arrived": frames[ARRIVED], "taken": frames[TAKEN], "encoded": frames[ENCODED], "repeated": frames[REPEATED], "dropped": frames[DROPPED]},
-        "fps": record::FPS,
-        "fragments_per_segment": record::FRAGMENTS_PER_SEGMENT,
-        "usable": usable,
-        "mine": *core.codecs.lock().unwrap(),
-        "candidates": candidates,
-        "ffmpeg": {"path": ffmpeg::path().display().to_string(), "present": ffmpeg::present(), "status": core.ffmpeg_status.lock().unwrap().clone(), "error": ffmpeg::failure()},
-        "cuts": CUTS.lock().unwrap().since(since),
-        "stderr": FFMPEG.lock().unwrap().since(0),
-        "recording": core.active_set_json(),
-    })
-}
-
-fn flow_json(core: &Core) -> Value {
+pub fn flow_json(core: &Core) -> Value {
     let members: Vec<Value> = core
         .peers
         .lock()
@@ -507,10 +346,10 @@ fn flow_json(core: &Core) -> Value {
     json!({
         "members": members,
         "relay": relay::home(core).and_then(|u| u.host_str().map(String::from)),
-        "downloads": download::active(),
-        "update": {"host": UPDATE_HOST, "channel": *core.channel.lock().unwrap()},
+        "downloads": ffmpeg::download_host().map(|host| json!({"key": "ffmpeg", "hosts": [host]})).into_iter().collect::<Vec<_>>(),
+        "update": {"host": UPDATE_HOST},
         "time": {"host": crate::clock::HOST, "ok": crate::clock::status()["ok"] == true},
-        "api": {"on": *core.api_on.lock().unwrap(), "lan": *core.api_lan.lock().unwrap()},
+        "api": {"on": *core.api_on.lock().unwrap()},
     })
 }
 
@@ -526,143 +365,33 @@ pub fn flow_text(flow: &Value) -> String {
         out.push_str(&format!("  member {}: {how}\n", short(m["id"].as_str().unwrap_or_default())));
     }
     out.push_str(&format!("  address lookup: relay {}\n", host(&flow["relay"])));
-    out.push_str(&format!("  update check: {}, {} channel\n", flow["update"]["host"].as_str().unwrap_or("?"), flow["update"]["channel"].as_str().unwrap_or("?")));
+    out.push_str(&format!("  update check: {}\n", flow["update"]["host"].as_str().unwrap_or("?")));
     out.push_str(&format!("  time check: {}, {}\n", flow["time"]["host"].as_str().unwrap_or("?"), if flow["time"]["ok"] == true { "ok" } else { "unreachable" }));
     let downloads: Vec<String> = flow["downloads"].as_array().into_iter().flatten().map(|d| format!("{} from {}", d["key"].as_str().unwrap_or("?"), d["hosts"].as_array().into_iter().flatten().filter_map(|h| h.as_str()).collect::<Vec<_>>().join(", "))).collect();
     out.push_str(&format!("  downloads: {}\n", if downloads.is_empty() { "none now".to_string() } else { downloads.join("; ") }));
-    let api = if flow["api"]["on"] != true { "off" } else if flow["api"]["lan"] == true { "on, open to the network" } else { "on, this PC only" };
+    let api = if flow["api"]["on"] == true { "on, this PC only" } else { "off" };
     out.push_str(&format!("  local API: {api}\n"));
     out
 }
 
-fn hardware_text(core: &Core) -> String {
-    let peers: Vec<(String, Value, Option<i64>)> = core.peers.lock().unwrap().iter().map(|p| (short(p.id), p.hw.clone(), p.offset_us)).collect();
-    let others: Vec<(String, Value)> = peers.iter().map(|(who, hw, _)| (who.clone(), hw.clone())).collect();
-    let offsets: Vec<(String, Option<i64>)> = peers.iter().map(|(who, _, offset)| (who.clone(), *offset)).collect();
-    hw::report(&hw::share(core), &others, &offsets, &crate::clock::status())
-}
-
-fn set_detail(core: &Core, room: &str, set: &room::Set) -> Value {
-    let peers = room::others_have(core);
-    let mine = data::have_counts(core, room, std::slice::from_ref(set));
-    let files: Vec<Value> = set
-        .files
-        .iter()
-        .map(|f| {
-            let mut series = json!({});
-            for s in SERIES {
-                let segs = f.series(s);
-                let (mut missing, mut receiving, mut present) = (Vec::new(), Vec::new(), 0u64);
-                let room_dir = core.room_dir(room);
-                for (seg, (here, _)) in segs.iter().zip(data::presence(&core.files, &room_dir, f, s)) {
-                    let path = data::seg_dir(&room_dir, f, &seg.capture, s).join(room::seg_name(seg.n));
-                    if here {
-                        present += 1;
-                    } else if part_of(&path).exists() || core.writing.lock().unwrap().contains(&path) {
-                        receiving.push(seg.n);
-                    } else {
-                        missing.push(seg.n);
-                    }
-                }
-                let key = room::have_key(&set.id, &f.owner, s);
-                let mut have = json!({"you": mine.get(&key).copied().unwrap_or(0)});
-                for (id, h, online) in &peers {
-                    have[short(id)] = json!({"n": h.get(&key).copied().unwrap_or(0), "online": online});
-                }
-                series[s] = json!({"total": segs.len(), "present": present, "receiving": ranges(&receiving), "missing": ranges(&missing), "have": have});
-            }
-            json!({"owner": f.owner, "short": short(&f.owner), "name": room::display_name(core, &f.owner), "start_us": f.start_us, "end_us": f.end_us, "captures": f.captures(), "series": series})
-        })
-        .collect();
-    json!({"id": set.id, "files": files})
-}
-
-fn data_json(core: &Core, set: Option<&str>) -> Value {
-    let active = core.active_room_id();
-    let list = core.rooms.lock().unwrap().list.clone();
-    let rooms: Vec<Value> = list
-        .iter()
-        .map(|r| {
-            let logs = room::logs(core, &r.id);
-            let members: Vec<Value> = logs
-                .iter()
-                .map(|l| json!({"id": l.owner, "short": short(&l.owner), "name": room::display_name(core, &l.owner), "head": l.records.len(), "bytes": crate::file_len(&core.log_path(&r.id, &l.owner)), "kinds": kinds(&l.records)}))
-                .collect();
-            let pending = core.room_dir(&r.id).join(room::PENDING);
-            json!({"id": r.id, "name": r.name, "active": r.id == active, "members": members, "pending": crate::file_len(&pending)})
-        })
-        .collect();
-    let logs = room::logs(core, &active);
-    let sets = room::sets(core, &active, &logs);
-    let bad: Vec<Value> = logs.iter().flat_map(|l| l.records.iter().filter(|r| r["k"] == "file_bad").map(move |r| json!({"by": short(&l.owner), "record": r}))).collect();
-    let summary: Vec<Value> = sets.iter().map(|s| json!({"id": s.id, "live": s.recording(), "files": s.files.len(), "segs": s.files.iter().map(|f| f.segs.len()).sum::<usize>()})).collect();
-    let detail = set.and_then(|id| sets.iter().find(|s| s.id == id)).map(|s| set_detail(core, &active, s));
-    let party = core.party.lock().unwrap();
-    let now = Instant::now();
-    let viewers: Value = party
-        .viewers
-        .iter()
-        .map(|(id, v)| (short(id), json!({"set": v.set, "heads": v.heads, "seen_ms": now.duration_since(v.seen).as_millis() as u64})))
-        .collect::<serde_json::Map<String, Value>>()
-        .into();
-    let party = json!({"on": party.on, "room": party.room, "lamport": party.lamport, "shared": party.shared, "heads": party.heads, "own": room::holdings(&logs), "viewers": viewers, "repeat_ms": party::REPEAT.as_millis() as u64});
-    json!({"rooms": rooms, "sets": summary, "detail": detail, "bad": bad, "party": party})
-}
-
-fn jobs_json(core: &Core) -> Value {
-    let room = core.active_room_id();
-    let logs = room::logs(core, &room);
-    let pairs: Vec<(String, &[Value])> = logs.iter().map(|l| (short(&l.owner), l.records.as_slice())).collect();
-    let mut records: Vec<Value> = logs
-        .iter()
-        .flat_map(|l| l.records.iter().filter(|r| r["k"].as_str().is_some_and(|k| k.starts_with("job"))).map(move |r| json!({"by": short(&l.owner), "record": r})))
-        .collect();
-    records.sort_by_key(|r| std::cmp::Reverse(r["record"]["t_us"].as_i64()));
-    records.truncate(JOB_RECORDS_KEPT);
-    json!({"jobs": jobs(&pairs), "records": records})
-}
-
-pub fn tail(path: &Path, from: u64, max: u64) -> (String, u64, bool) {
-    let Ok(mut file) = File::open(path) else { return (String::new(), 0, true) };
+pub fn tail(path: &Path, max: u64) -> String {
+    let Ok(mut file) = File::open(path) else { return String::new() };
     let len = file.metadata().map(|m| m.len()).unwrap_or(0);
-    let restart = from > len;
-    let start = if restart { 0 } else { from }.max(len.saturating_sub(max));
+    let start = len.saturating_sub(max);
     let mut bytes = Vec::new();
     if file.seek(SeekFrom::Start(start)).is_ok() {
         let _ = file.take(len - start).read_to_end(&mut bytes);
     }
-    let skipped = start > from || restart;
-    let mut text = String::from_utf8_lossy(&bytes).into_owned();
-    if skipped && start > 0 {
-        text = text.split_once('\n').map(|(_, rest)| rest.to_string()).unwrap_or_default();
-    }
-    (text, len, skipped)
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    if start > 0 { text.split_once('\n').map(|(_, rest)| rest.to_string()).unwrap_or_default() } else { text }
 }
 
-fn log_json(core: &Core, from: u64) -> Value {
-    let (text, len, reset) = tail(&core.dir.join("log.txt"), from, LOG_TAIL);
-    json!({"text": hide_addresses(&text), "len": len, "reset": reset})
-}
-
-pub fn view(core: &Core, tab: &str, since: u64, set: Option<&str>) -> Value {
-    match tab {
-        "connections" => connections_json(core, since),
-        "network" => network_json(core, since),
-        "recording" => recording_json(core, since),
-        "data" => data_json(core, set),
-        "jobs" => jobs_json(core),
-        "flow" => flow_json(core),
-        "log" => log_json(core, since),
-        _ => Value::Null,
-    }
-}
-
-pub fn debug_view(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    Ok(view(core, &arg::<String>(&args, "tab")?, arg(&args, "since")?, arg::<Option<String>>(&args, "set")?.as_deref()))
+pub fn debug_flow(core: &Arc<Core>, _: Value) -> Result<Value, String> {
+    Ok(flow_json(core))
 }
 
 pub fn debug_report(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    let text = diagnostics(core, false, arg(&args, "head")?)?;
+    let text = diagnostics(core, false)?;
     if !arg::<bool>(&args, "save")? {
         return Ok(json!(text));
     }
@@ -671,14 +400,9 @@ pub fn debug_report(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     Ok(json!(path.display().to_string()))
 }
 
-pub fn diagnostics(core: &Arc<Core>, everyone: bool, head: Option<String>) -> Result<String, String> {
+pub fn diagnostics(core: &Arc<Core>, everyone: bool) -> Result<String, String> {
     crate::ops::warm(core);
-    let lines = check::run(core);
-    let own = report_text(core, Some(&check::text(&lines)));
-    let own = match head.filter(|h| !h.is_empty()) {
-        Some(h) => format!("{}\n\n{own}", redact(&h, &home(), &known_names(core))),
-        None => own,
-    };
+    let own = report_text(core, Some(&check::run(core).join("\n")));
     Ok(if everyone { combine(own, tauri::async_runtime::block_on(team(core))) } else { own })
 }
 
@@ -734,7 +458,7 @@ pub fn text(core: &Core) -> String {
     let mut out = String::new();
     out.push_str(&format!("encoder {} ({})\n", ffmpeg::encoder(), ffmpeg::path().display()));
     out.push_str(&format!("encoder probe {:?}\n", ffmpeg::encoder_results()));
-    out.push_str(&format!("endpoint {}\n", endpoint_json(core, true)));
+    out.push_str(&format!("endpoint {}\n", endpoint_json(core)));
     let peers: Vec<(String, Option<Connection>, Option<i64>)> = core.peers.lock().unwrap().iter().map(|p| (p.id.to_string(), p.conn.clone(), p.offset_us)).collect();
     for (id, conn, offset) in peers {
         out.push_str(&format!("peer {id} clock offset {offset:?} us\n"));
@@ -743,19 +467,20 @@ pub fn text(core: &Core) -> String {
             None => out.push_str("connection: none\n"),
         }
     }
-    let room = core.active_room_id();
-    let logs = room::logs(core, &room);
-    for set in room::sets_json(core, &room, &logs, &[]) {
-        out.push_str(&format!("set {}\n", set["id"].as_str().unwrap_or_default()));
-        for p in set["players"].as_array().into_iter().flatten() {
-            out.push_str(&format!(
-                "  {} have {} of {} B in {} parts verified by {}\n",
-                short(p["owner"].as_str().unwrap_or_default()),
-                p["have"],
-                p["total"],
-                p["parts"].as_array().map_or(0, |a| a.len()),
-                p["verified_by"].as_array().into_iter().flatten().filter_map(|k| k.as_str()).map(short).collect::<Vec<_>>().join(", ")
-            ));
+    if let Some(room) = core.room_id() {
+        let logs = room::logs(core, &room);
+        for set in room::sets_json(core, &room, &logs, &[]) {
+            out.push_str(&format!("set {}\n", set["id"].as_str().unwrap_or_default()));
+            for p in set["players"].as_array().into_iter().flatten() {
+                out.push_str(&format!(
+                    "  {} have {} of {} B in {} parts verified by {}\n",
+                    short(p["owner"].as_str().unwrap_or_default()),
+                    p["have"],
+                    p["total"],
+                    p["parts"].as_array().map_or(0, |a| a.len()),
+                    p["verified_by"].as_array().into_iter().flatten().filter_map(|k| k.as_str()).map(short).collect::<Vec<_>>().join(", ")
+                ));
+            }
         }
     }
     out.push_str("transfers\n");
@@ -773,9 +498,9 @@ pub fn text(core: &Core) -> String {
     out
 }
 
-pub fn transfer_summary(rows: &Ring) -> BTreeMap<String, u64> {
+pub fn transfer_summary(rows: &VecDeque<Value>) -> BTreeMap<String, u64> {
     let mut out = BTreeMap::new();
-    for r in rows.rows() {
+    for r in rows {
         *out.entry(format!("{} {} {}", r["dir"].as_str().unwrap_or("?"), r["kind"].as_str().unwrap_or("?"), r["result"].as_str().unwrap_or("?"))).or_insert(0) += 1;
     }
     out
@@ -858,9 +583,9 @@ pub fn job_line(job: &Value) -> String {
     format!("  {} {} {}{} by {}", text("plugin"), text("set"), text("state"), progress, job["by"].as_str().map(String::from).unwrap_or_else(|| "?".into()))
 }
 
-fn jobs_text(core: &Core) -> String {
-    let jobs = jobs_json(core);
-    let lines: Vec<String> = jobs["jobs"].as_array().into_iter().flatten().take(JOB_LINES).map(job_line).collect();
+fn jobs_text(logs: &[room::Log]) -> String {
+    let pairs: Vec<(String, &[Value])> = logs.iter().map(|l| (short(&l.owner), l.records.as_slice())).collect();
+    let lines: Vec<String> = jobs(&pairs).iter().take(JOB_LINES).map(job_line).collect();
     if lines.is_empty() { "  none".into() } else { lines.join("\n") }
 }
 
@@ -874,13 +599,13 @@ pub fn report_text(core: &Core, check: Option<&str>) -> String {
     let infos: Vec<String> = core.peers.lock().unwrap().iter().map(|p| format!("{} {:?}", short(p.id), p.info)).collect();
     out.push_str(&format!("peers {}\n\nenvironment check\n{}\n\n", infos.join(", "), check.unwrap_or("not run")));
     out.push_str(&text(core));
-    out.push_str(&format!("\n{}\n{}", hardware_text(core), flow_text(&flow_json(core))));
+    out.push_str(&format!("\n{}\n\n{}", hw::report(core), flow_text(&flow_json(core))));
     out.push_str("\nrecent errors\n");
     out.push_str(&errors(&log).join("\n"));
     out.push_str("\n\njobs\n");
-    out.push_str(&jobs_text(core));
+    out.push_str(&jobs_text(&core.room_id().map(|room| room::logs(core, &room)).unwrap_or_default()));
     out.push_str("\n\nrecent crashes\n");
-    out.push_str(&tail(&core.dir.join(CRASH), 0, LOG_TAIL).0);
+    out.push_str(&tail(&core.dir.join(CRASH), CRASH_TAIL));
     out.push_str("\n\nrecent log\n");
     out.push_str(&recent.join("\n"));
     redact(&out, &home(), &known_names(core))
@@ -895,14 +620,12 @@ mod tests {
     }
 
     #[test]
-    fn the_ring_keeps_the_newest_and_counts_on() {
-        let mut ring = Ring::new(3);
-        for n in 0..5 {
-            ring.push(json!({"n": n}));
+    fn the_transfer_list_keeps_the_newest() {
+        let mut rows = VecDeque::new();
+        for n in 0..TRANSFERS_KEPT + 2 {
+            push(&mut rows, json!({"n": n}));
         }
-        assert_eq!(ring.since(0).iter().map(|r| r["n"].as_u64().unwrap()).collect::<Vec<_>>(), [2, 3, 4]);
-        assert_eq!(ring.since(4).len(), 1);
-        assert_eq!(ring.seq, 5);
+        assert_eq!((rows.len(), rows[0]["n"].as_u64()), (TRANSFERS_KEPT, Some(2)));
     }
 
     #[test]
@@ -916,11 +639,11 @@ mod tests {
 
     #[test]
     fn a_piece_after_a_failure_is_a_retry() {
-        let mut ring = Ring::new(10);
+        let mut ring = VecDeque::new();
         assert_eq!(result(&ring, &row("in", 1, ""), true), "ok");
         assert_eq!(result(&ring, &row("in", 1, ""), false), "partial");
-        ring.push(row("in", 1, "partial"));
-        ring.push(row("in", 2, "ok"));
+        push(&mut ring, row("in", 1, "partial"));
+        push(&mut ring, row("in", 2, "ok"));
         assert_eq!(result(&ring, &row("in", 1, ""), true), "retry");
         assert_eq!(result(&ring, &row("out", 1, ""), true), "ok");
         assert_eq!(result(&ring, &row("in", 2, ""), true), "ok");
@@ -928,30 +651,14 @@ mod tests {
 
     #[test]
     fn a_hash_failure_marks_the_last_receipt_or_adds_a_row() {
-        let mut ring = Ring::new(10);
-        ring.push(json!({"dir": "in", "owner": short("abcdefghijklmnop"), "capture": "1", "series": "v", "n": 4, "result": "ok"}));
+        let mut ring = VecDeque::new();
+        push(&mut ring, json!({"dir": "in", "owner": short("abcdefghijklmnop"), "capture": "1", "series": "v", "n": 4, "result": "ok"}));
         mark_bad(&mut ring, "abcdefghijklmnop", "1", "v", 4, 10);
-        assert_eq!(ring.since(0)[0]["result"], "hash fail");
+        assert_eq!(ring[0]["result"], "hash fail");
         mark_bad(&mut ring, "abcdefghijklmnop", "1", "m", 5, 10);
-        let rows = ring.since(0);
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[1]["kind"], "history voice");
-        assert_eq!(result(&ring, &rows[1], true), "retry");
-    }
-
-    #[test]
-    fn numbers_become_ranges() {
-        assert_eq!(ranges(&[]), "");
-        assert_eq!(ranges(&[3]), "3");
-        assert_eq!(ranges(&[1, 2, 3, 5, 7, 8]), "1-3, 5, 7-8");
-    }
-
-    #[test]
-    fn records_are_counted_by_kind() {
-        let counts = kinds(&[json!({"k": "seg"}), json!({"k": "seg"}), json!({"k": "rec"}), json!({})]);
-        assert_eq!(counts.get("seg"), Some(&2));
-        assert_eq!(counts.get("rec"), Some(&1));
-        assert_eq!(counts.get("?"), Some(&1));
+        assert_eq!(ring.len(), 2);
+        assert_eq!(ring[1]["kind"], "history voice");
+        assert_eq!(result(&ring, &ring[1], true), "retry");
     }
 
     #[test]
@@ -968,16 +675,6 @@ mod tests {
         assert_eq!(jobs[0]["plugin"], "p");
         assert_eq!(jobs[0]["records"], 3);
         assert_eq!(jobs[1]["job"], "j2");
-    }
-
-    #[test]
-    fn the_encoder_choice_explains_each_candidate() {
-        let candidates = [("av1_x", "av1", 0.5), ("hevc_x", "hevc", 0.7), ("hevc_y", "hevc", 0.7), ("h264_x", "h264", 1.0)];
-        let rows = choice(&candidates, &[("av1_x", true), ("hevc_x", true), ("h264_x", true)], &["hevc".into(), "h264".into()], "hevc_x");
-        assert_eq!(rows.iter().map(|r| r.probe).collect::<Vec<_>>(), ["works", "works", "skipped", "works"]);
-        assert_eq!(rows.iter().map(|r| r.playable).collect::<Vec<_>>(), [false, true, true, true]);
-        assert_eq!(rows.iter().filter(|r| r.chosen).map(|r| r.name).collect::<Vec<_>>(), ["hevc_x"]);
-        assert_eq!(choice(&candidates, &[], &[], "h264_x")[0].probe, "not probed yet");
     }
 
     #[test]
@@ -1001,13 +698,13 @@ mod tests {
 
     #[test]
     fn a_job_reads_as_one_line() {
-        let job = json!({"plugin": "transcribe", "set": "s1", "state": "running", "progress": 0.426, "by": "ab12"});
-        assert_eq!(job_line(&job), "  transcribe s1 running 42% by ab12");
+        let job = json!({"plugin": "apex-matches", "set": "s1", "state": "running", "progress": 0.426, "by": "ab12"});
+        assert_eq!(job_line(&job), "  apex-matches s1 running 42% by ab12");
         assert_eq!(job_line(&json!({})), "  ? ? ? by ?");
     }
 
     #[test]
-    fn the_page_hides_addresses_but_keeps_the_rest() {
+    fn addresses_are_hidden_and_the_rest_kept() {
         let out = hide_addresses("Closed { remote_addr: Ip(198.51.100.7:58007) } via https://relay.example.net./ by Ren");
         assert!(!out.contains("198.51") && !out.contains("relay.example"), "{out}");
         assert!(out.contains("Ren") && out.contains("Closed"), "{out}");
@@ -1022,18 +719,13 @@ mod tests {
     }
 
     #[test]
-    fn the_log_tail_resumes_and_restarts_after_a_roll() {
+    fn the_tail_starts_at_a_whole_line() {
         let dir = crate::log::tests::temp("tail");
-        let path = dir.join("log.txt");
+        let path = dir.join("crash.txt");
         fs::write(&path, "one\ntwo\nthree\n").unwrap();
-        let (text, len, reset) = tail(&path, 0, 1000);
-        assert_eq!((text.as_str(), len, reset), ("one\ntwo\nthree\n", 14, false));
-        let (text, _, reset) = tail(&path, 0, 8);
-        assert_eq!((text.as_str(), reset), ("three\n", true));
-        fs::write(&path, "one\ntwo\nthree\nfour\n").unwrap();
-        assert_eq!(tail(&path, 14, 1000).0, "four\n");
-        fs::write(&path, "new\n").unwrap();
-        assert_eq!(tail(&path, 19, 1000), ("new\n".to_string(), 4, true));
+        assert_eq!(tail(&path, 1000), "one\ntwo\nthree\n");
+        assert_eq!(tail(&path, 8), "three\n");
+        assert_eq!(tail(&dir.join("none.txt"), 8), "");
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -1043,16 +735,16 @@ mod tests {
             "members": [{"id": "abcdefghijklmnop", "path": "direct", "relay": null}, {"id": "qrstuvwxyz012345", "path": "relay", "relay": "relay.example.net"}, {"id": "0123456789abcdef", "path": null, "relay": null}],
             "relay": "relay.example.net",
             "downloads": [{"key": "ffmpeg", "hosts": ["github.com"]}],
-            "update": {"host": "github.com", "channel": "beta"},
+            "update": {"host": "github.com"},
             "time": {"host": "time.cloudflare.com", "ok": true},
-            "api": {"on": true, "lan": false},
+            "api": {"on": true},
         });
         let hidden = flow_text(&flow);
         assert!(!hidden.contains("relay.example.net"), "{hidden}");
         assert!(hidden.contains("member abcdefghij: direct") && hidden.contains("member qrstuvwxyz: through the relay <host>") && hidden.contains("member 0123456789: offline"), "{hidden}");
-        assert!(hidden.contains("update check: github.com, beta channel") && hidden.contains("downloads: ffmpeg from github.com") && hidden.contains("local API: on, this PC only"), "{hidden}");
+        assert!(hidden.contains("update check: github.com\n") && hidden.contains("downloads: ffmpeg from github.com") && hidden.contains("local API: on, this PC only"), "{hidden}");
         assert!(hidden.contains("address lookup: relay <host>") && hidden.contains("time check: time.cloudflare.com, ok"), "{hidden}");
-        let quiet = flow_text(&json!({"members": [], "relay": null, "downloads": [], "update": {"host": "github.com", "channel": "stable"}, "time": {"host": "time.cloudflare.com", "ok": false}, "api": {"on": false}}));
+        let quiet = flow_text(&json!({"members": [], "relay": null, "downloads": [], "update": {"host": "github.com"}, "time": {"host": "time.cloudflare.com", "ok": false}, "api": {"on": false}}));
         assert!(quiet.contains("address lookup: relay none") && quiet.contains("downloads: none now") && quiet.contains("local API: off") && quiet.contains("time check: time.cloudflare.com, unreachable"), "{quiet}");
     }
 

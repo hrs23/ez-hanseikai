@@ -10,9 +10,8 @@ use serde_json::{json, Value};
 
 use tauri::Emitter;
 
-use crate::{clean_text, data, ffmpeg, hex, hw, net, now_us, party, record, short, stream, Core, Peer, PROTOCOL, ROOM_NAME_MAX, VERSION};
+use crate::{clean_text, data, ffmpeg, hex, net, now_us, party, record, short, stream, Core, Peer, PROTOCOL, ROOM_NAME_MAX, VERSION};
 
-pub const SOLO: &str = "solo";
 pub const SERIES: [&str; 2] = ["v", "m"];
 pub const INIT: &str = "init.mp4";
 pub const RECORDINGS: &str = "recordings";
@@ -85,6 +84,12 @@ pub struct Ask {
 pub struct Rooms {
     pub active: Option<String>,
     pub list: Vec<Room>,
+}
+
+impl Rooms {
+    pub fn joined(&self) -> Result<String, String> {
+        self.active.clone().filter(|id| self.list.iter().any(|r| r.id == *id && r.invite.is_none())).ok_or_else(|| "Join a room first.".into())
+    }
 }
 
 pub fn read_rooms(value: &Value) -> Rooms {
@@ -180,8 +185,16 @@ impl Core {
         self.active_set.lock().unwrap().is_some()
     }
 
-    pub fn active_room_id(&self) -> String {
-        self.room_id().unwrap_or_else(|| SOLO.to_string())
+    pub fn joined_room(&self) -> Result<String, String> {
+        self.rooms.lock().unwrap().joined()
+    }
+
+    pub fn check_joined(&self, room: &str) -> Result<(), String> {
+        if self.joined_room()? == room { Ok(()) } else { Err("Join a room first.".into()) }
+    }
+
+    pub fn in_room(&self, room: &str) -> bool {
+        self.room_id().as_deref() == Some(room)
     }
 
     pub fn room_dir(&self, room: &str) -> PathBuf {
@@ -338,7 +351,7 @@ pub fn listed(core: &Core, id: &str) -> Result<Room, String> {
 }
 
 pub fn enter_room(core: &Arc<Core>, id: &str) -> Result<(), String> {
-    if core.room_id().as_deref() == Some(id) {
+    if core.in_room(id) {
         return Ok(());
     }
     listed(core, id)?;
@@ -359,8 +372,8 @@ pub fn forget_room(core: &Arc<Core>, id: &str) {
 }
 
 pub fn rename_room(core: &Arc<Core>, name: &str) -> Result<(), String> {
+    let room = core.joined_room()?;
     let name = clean_text(name, ROOM_NAME_MAX);
-    let room = core.room_id().ok_or("Join a room first.")?;
     if name.is_empty() {
         return Err("Enter a room name.".into());
     }
@@ -371,7 +384,7 @@ pub fn rename_room(core: &Arc<Core>, name: &str) -> Result<(), String> {
 }
 
 pub fn set_room_icon(core: &Arc<Core>, icon: &str) -> Result<(), String> {
-    let room = core.room_id().ok_or("Join a room first.")?;
+    let room = core.joined_room()?;
     if !icon.is_empty() {
         check_image(icon)?;
     }
@@ -477,8 +490,8 @@ pub fn profiles(logs: &[Log]) -> HashMap<String, Profile> {
     logs.iter().filter_map(|log| Some((log.owner.clone(), newest_profile(&log.records)?))).collect()
 }
 
-fn profile_to_write(room: &str, wanted: &Profile, own: &[Value]) -> Option<Value> {
-    if room.starts_with("pending-") || *wanted == newest_profile(own).unwrap_or_default() {
+fn profile_to_write(wanted: &Profile, own: &[Value]) -> Option<Value> {
+    if *wanted == newest_profile(own).unwrap_or_default() {
         return None;
     }
     let mut record = json!({"k": "profile", "t_us": now_us()});
@@ -492,8 +505,8 @@ fn profile_to_write(room: &str, wanted: &Profile, own: &[Value]) -> Option<Value
 }
 
 pub fn share_profile(core: &Core) {
-    let Some(room) = core.room_id() else { return };
-    if let Some(record) = profile_to_write(&room, &my_profile(core), &core.own_log(&room)) {
+    let Ok(room) = core.joined_room() else { return };
+    if let Some(record) = profile_to_write(&my_profile(core), &core.own_log(&room)) {
         core.append_log(&room, &record);
     }
 }
@@ -534,20 +547,21 @@ pub fn add_member(core: &Arc<Core>, room: &str, id: &str) {
     };
     if changed {
         core.save_rooms();
-        if core.active_room_id() == room {
+        if core.in_room(room) {
             apply_active(core);
         }
     }
 }
 
-pub fn remove_member(core: &Arc<Core>, id: &str) {
-    let room = core.active_room_id();
+pub fn remove_member(core: &Arc<Core>, id: &str) -> Result<(), String> {
+    let room = core.joined_room()?;
     if id.parse::<EndpointId>().is_err() || id == core.me() {
-        return;
+        return Ok(());
     }
     core.append_log(&room, &json!({"k": "remove", "member": id, "t_us": now_us()}));
     net::broadcast(core, json!({"t": "remove", "room": room, "member": id}));
     apply_removals(core);
+    Ok(())
 }
 
 pub fn shares(room: &Room, asker: &str, of: &str) -> bool {
@@ -624,7 +638,7 @@ pub fn removals(logs: &[Log]) -> HashMap<String, (i64, bool, String)> {
 }
 
 pub fn apply_removals(core: &Arc<Core>) {
-    let room_id = core.active_room_id();
+    let Some(room_id) = core.room_id() else { return };
     let latest = removals(&logs(core, &room_id));
     let me = core.me();
     let mut news = Vec::new();
@@ -693,7 +707,7 @@ pub fn begin_set(core: &Arc<Core>, room: &str, set: &str, by: &str, start_us: i6
     }
     {
         let mut slot = core.active_set.lock().unwrap();
-        if slot.is_some() || core.room_id().as_deref() != Some(room) {
+        if slot.is_some() || !core.in_room(room) {
             return Ok(false);
         }
         *slot = Some(ActiveSet { id: set.to_string(), room: room.to_string(), by: by.to_string(), start_us, voice, of });
@@ -729,7 +743,7 @@ pub fn apply_stops(core: &Arc<Core>) {
 
 pub fn log_set_layout(core: &Core) {
     let active = core.active_set.lock().unwrap().clone();
-    if let Some(active) = active {
+    if let Some(active) = active.filter(|a| core.joined_room().is_ok_and(|room| room == a.room)) {
         core.append_log(&active.room, &json!({"k": "layout", "set": active.id, "t_us": now_us(), "layout": *core.layout.lock().unwrap()}));
     }
 }
@@ -740,8 +754,8 @@ pub fn unused_set(logs: &[Log], room_dir: &Path, start_us: i64, tz_offset_s: i64
 }
 
 pub fn start_set(core: &Arc<Core>, debrief: Option<bool>) -> Result<(), String> {
+    let room = core.joined_room()?;
     let start_us = now_us();
-    let room = core.active_room().filter(|r| r.invite.is_none()).map(|r| r.id).ok_or("Join a room first.")?;
     let set = unused_set(&logs(core, &room), &core.room_dir(&room), start_us, core.tz_offset_s);
     let by = core.name.lock().unwrap().clone();
     let open = core.party.lock().unwrap().open_set();
@@ -762,12 +776,12 @@ pub fn announce(core: &Core, action: &str, by: &str, voice: bool, set: &str) {
 }
 
 pub fn stop_set(core: &Arc<Core>) {
-    let set = core.active_set.lock().unwrap().as_ref().map(|s| s.id.clone());
+    let active = core.active_set.lock().unwrap().clone();
     end_set(core, true, None);
-    if let Some(set) = set {
+    if let Some(active) = active {
         let by = core.name.lock().unwrap().clone();
-        net::broadcast(core, json!({"t": "rec", "action": "stop", "set": set, "room": core.active_room_id(), "by": by}));
-        announce(core, "end", &by, false, &set);
+        net::broadcast(core, json!({"t": "rec", "action": "stop", "set": active.id, "room": active.room, "by": by}));
+        announce(core, "end", &by, false, &active.id);
     }
 }
 
@@ -1339,7 +1353,6 @@ fn peer_json(p: &Peer) -> Value {
         "failures": p.failures,
         "seen_us": p.seen_us,
         "offset_us": p.offset_us,
-        "hw": p.hw,
         "version": p.info.as_ref().map(|(version, _)| version),
         "other_version": other_version,
         "sharing": sharing,
@@ -1361,21 +1374,24 @@ pub fn names(core: &Core, room: Option<&Room>, only_people: bool) -> HashMap<Str
 }
 
 pub fn state_json(core: &Core) -> Value {
-    let room_id = core.active_room_id();
+    let room_id = core.room_id();
+    let live = |owner: &str| room_id.as_deref().and_then(|room| stream::live_json(core, room, owner));
     let my_id = core.ep.id().to_string();
     let active = core.active_room();
     let mut peers: Vec<Value> = core.peers.lock().unwrap().iter().map(peer_json).collect();
     for p in peers.iter_mut().filter(|p| p["sharing"] == true) {
-        p["live"] = json!(stream::live_json(core, &room_id, p["id"].as_str().unwrap_or_default()));
+        p["live"] = json!(live(p["id"].as_str().unwrap_or_default()));
     }
     let mut names = names(core, active.as_ref(), false);
     names.insert(my_id.clone(), "You".to_string());
-    let logs = logs(core, &room_id);
-    keep_room(core, &room_id, latest_name(&logs).as_deref(), Some(&latest_icon(&logs)));
+    let logs = room_id.as_deref().map(|room| logs(core, room)).unwrap_or_default();
+    if let Some(room) = room_id.as_deref() {
+        keep_room(core, room, latest_name(&logs).as_deref(), Some(&latest_icon(&logs)));
+    }
     let active = core.active_room();
     let caps = core.party.lock().unwrap().caps();
     let mut events = events(&logs, caps.as_ref());
-    let sets = sets_json(core, &room_id, &logs, &events);
+    let sets = room_id.as_deref().map(|room| sets_json(core, room, &logs, &events)).unwrap_or_default();
     let recorded: Vec<(u64, i64)> = sets.iter().filter_map(|s| Some((s["progress"]["total"].as_u64()?, s["end_us"].as_i64()? - s["start_us"].as_i64()?))).collect();
     let disk = data::disk_json(core.free_bytes.load(Ordering::Relaxed), core.total_bytes.load(Ordering::Relaxed), data::bytes_per_hour(&recorded), core.disk_full());
     let members: Vec<String> = active.as_ref().map(|r| r.members.clone()).unwrap_or_default();
@@ -1408,11 +1424,10 @@ pub fn state_json(core: &Core) -> Value {
     json!({
         "app": crate::shell::app_name(&core.app, &crate::language(core)),
         "version": VERSION,
-        "hw": hw::share(core),
         "now_us": now_us(),
         "clock": crate::clock::status(),
         "ffmpeg": core.ffmpeg_status.lock().unwrap().clone(),
-        "ffmpeg_progress": crate::download::progress(ffmpeg::DOWNLOAD_KEY),
+        "ffmpeg_progress": ffmpeg::progress(),
         "id": my_id,
         "name": core.name.lock().unwrap().clone(),
         "lang": crate::language(core),
@@ -1425,16 +1440,15 @@ pub fn state_json(core: &Core) -> Value {
         "recovery": core.recovery.lock().unwrap().clone(),
         "notice": core.notice.lock().unwrap().clone(),
         "disk": disk,
-        "channel": *core.channel.lock().unwrap(),
         "previous_version": core.previous_version,
         "recording": core.any_recording(),
-        "capture": record::capture_json(core, stream::live_json(core, &room_id, &my_id)),
+        "capture": record::capture_json(core, live(&my_id)),
         "active_set": core.active_set_json(),
         "room": active.map(|r| json!({"id": r.id, "name": r.name, "icon": r.icon, "pending": r.invite.is_some(), "waiting": r.waiting})),
         "rooms": room_list,
         "layout": core.layout.lock().unwrap().clone(),
         "hotkey": core.hotkey.lock().unwrap().clone(),
-        "api": {"on": *core.api_on.lock().unwrap(), "lan": *core.api_lan.lock().unwrap(), "address": crate::api::address(), "error": core.api_error.lock().unwrap().clone()},
+        "api": {"on": *core.api_on.lock().unwrap(), "address": crate::api::address(), "error": core.api_error.lock().unwrap().clone()},
         "sets": sets,
         "peers": peers,
         "events": events,
@@ -1940,16 +1954,25 @@ pub mod tests {
     }
 
     #[test]
-    fn a_profile_is_written_only_when_the_look_differs_and_never_into_a_pending_room() {
+    fn a_profile_is_written_only_when_the_look_differs() {
         let wanted = Profile { color: Some(5), avatar: "star".into() };
-        assert!(profile_to_write("r1", &Profile::default(), &[]).is_none());
-        assert!(profile_to_write("pending-ab", &wanted, &[]).is_none());
-        let record = profile_to_write("r1", &wanted, &[]).unwrap();
+        assert!(profile_to_write(&Profile::default(), &[]).is_none());
+        let record = profile_to_write(&wanted, &[]).unwrap();
         assert_eq!((record["k"].as_str(), record["color"].as_u64(), record["avatar"].as_str()), (Some("profile"), Some(5), Some("star")));
-        assert!(profile_to_write("r1", &wanted, &[record.clone()]).is_none());
-        let cleared = profile_to_write("r1", &Profile::default(), &[record]).unwrap();
+        assert!(profile_to_write(&wanted, &[record.clone()]).is_none());
+        let cleared = profile_to_write(&Profile::default(), &[record]).unwrap();
         assert!(cleared["color"].is_null() && cleared["avatar"].is_null());
-        assert!(profile_to_write("r1", &Profile::default(), &[cleared]).is_none());
+        assert!(profile_to_write(&Profile::default(), &[cleared]).is_none());
+    }
+
+    #[test]
+    fn writes_go_only_to_the_open_room_once_joined() {
+        let room = |id: &str, pending: bool| Room { id: id.into(), invite: pending.then(|| ("peer".to_string(), "token".to_string())), ..Default::default() };
+        let rooms = |active: Option<&str>| Rooms { active: active.map(String::from), list: vec![room("r1", false), room("pending-ab", true)] };
+        for active in [None, Some("pending-ab"), Some("r9")] {
+            assert_eq!(rooms(active).joined(), Err("Join a room first.".to_string()), "{active:?}");
+        }
+        assert_eq!(rooms(Some("r1")).joined(), Ok("r1".to_string()));
     }
 
     #[test]

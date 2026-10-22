@@ -95,7 +95,7 @@ fn given_up(key: &str) -> bool {
 }
 
 fn make_missing(core: &Core) {
-    let room = core.active_room_id();
+    let Some(room) = core.room_id() else { return };
     for set in room::sets(core, &room, &room::logs(core, &room)) {
         let key = format!("{room}/{}", set.id);
         if set.recording() || path(&core.room_dir(&room), &set.id).exists() || given_up(&key) {

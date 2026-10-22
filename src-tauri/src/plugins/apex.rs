@@ -1,10 +1,8 @@
 use std::collections::BTreeMap;
 
-use serde_json::Value;
+use super::{keyframes, planes, Found, Job, Output, Plane, Plugin};
 
-use super::{keyframes, planes, Download, Found, Job, Output, Plane, Plugin};
-
-pub const PLUGIN: Plugin = Plugin { id: "apex-matches", name: "Apex matches", summary: "Marks where each match ends as chapters on the seek bar.", sample: "chapters", version: "1.1.0", live: false, per_set: true, options: &[], needs, run };
+pub const PLUGIN: Plugin = Plugin { id: "apex-matches", name: "Apex matches", summary: "Marks where each match ends as chapters on the seek bar.", sample: "chapters", version: "1.1.0", run };
 
 const W: usize = 64;
 const H: usize = 36;
@@ -24,10 +22,6 @@ const MATCH_MIN_S: f64 = 150.0;
 pub struct Frame {
     pub time: f64,
     pub result: bool,
-}
-
-fn needs(_: &Value) -> Vec<Download> {
-    Vec::new()
 }
 
 struct Color {
@@ -74,7 +68,7 @@ fn run(job: &Job, progress: &mut dyn FnMut(f64)) -> Result<Output, String> {
         }
     })?;
     let events = match_ends(&frames).into_iter().map(|t| Found { kind: "match_end".into(), at_s: Some(t), text: "Match end".into(), tags: vec!["match".into()], ..Default::default() }).collect();
-    Ok(Output { events, tags: BTreeMap::from([("match".to_string(), "Match".to_string())]), ..Default::default() })
+    Ok(Output { events, tags: BTreeMap::from([("match".to_string(), "Match".to_string())]) })
 }
 
 #[cfg(test)]

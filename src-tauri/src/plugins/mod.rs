@@ -1,18 +1,16 @@
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::windows::process::CommandExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::mpsc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-pub use crate::download::{fetch_group, present, Download};
 use crate::proc::{self, Process, IDLE, NO_WINDOW};
 
 mod apex;
-mod transcribe;
 
 pub const FLAG: &str = "--plugin";
 pub const LINE_MAX: usize = 16 << 20;
@@ -23,10 +21,6 @@ pub struct Plugin {
     pub summary: &'static str,
     pub sample: &'static str,
     pub version: &'static str,
-    pub live: bool,
-    pub per_set: bool,
-    pub options: &'static [(&'static str, &'static [&'static str])],
-    pub needs: fn(&Value) -> Vec<Download>,
     pub run: fn(&Job, &mut dyn FnMut(f64)) -> Result<Output, String>,
 }
 
@@ -39,16 +33,9 @@ pub struct Media {
 #[derive(Serialize, Deserialize, Clone, Default, Debug)]
 pub struct Job {
     pub plugin: String,
-    pub settings: Value,
-    pub set: Value,
-    pub file: Value,
     pub duration_s: f64,
     pub picture: Media,
-    pub sound: Media,
-    pub voice: Media,
     pub ffmpeg: PathBuf,
-    pub dir: PathBuf,
-    pub work: PathBuf,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default, Debug, PartialEq)]
@@ -56,10 +43,6 @@ pub struct Found {
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at_s: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub from_s: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub to_s: Option<f64>,
     #[serde(default)]
     pub text: String,
     #[serde(default)]
@@ -73,8 +56,6 @@ pub struct Output {
     pub events: Vec<Found>,
     #[serde(default)]
     pub tags: BTreeMap<String, String>,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub note: String,
 }
 
 #[derive(Debug, PartialEq)]
@@ -84,28 +65,14 @@ pub enum Reply {
     Failed(String),
 }
 
-pub const ALL: [Plugin; 2] = [apex::PLUGIN, transcribe::PLUGIN];
+pub const ALL: [Plugin; 1] = [apex::PLUGIN];
 
 pub fn find(id: &str) -> Option<&'static Plugin> {
     ALL.iter().find(|p| p.id == id)
 }
 
-pub fn normalize(plugin: &Plugin, settings: &Value) -> Value {
-    let mut out = json!({});
-    for (key, choices) in plugin.options {
-        let value = settings[*key].as_str().filter(|v| choices.contains(v)).unwrap_or(choices[0]);
-        out[*key] = json!(value);
-    }
-    out
-}
-
 pub fn manifest(plugin: &Plugin) -> Value {
-    let options: Value = plugin.options.iter().map(|(key, choices)| json!({"key": key, "choices": choices, "default": choices[0]})).collect();
-    json!({"id": plugin.id, "name": plugin.name, "summary": plugin.summary, "sample": plugin.sample, "version": plugin.version, "live": plugin.live, "per_set": plugin.per_set, "options": options})
-}
-
-pub fn missing(plugin: &Plugin, dir: &Path, settings: &Value) -> Vec<Download> {
-    (plugin.needs)(settings).into_iter().filter(|d| !present(dir, d)).collect()
+    json!({"id": plugin.id, "name": plugin.name, "summary": plugin.summary, "sample": plugin.sample, "version": plugin.version})
 }
 
 pub fn child() -> Option<i32> {
@@ -273,19 +240,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn settings_keep_known_choices_and_fill_defaults() {
-        let plugin = find("transcribe").unwrap();
-        let s = normalize(plugin, &json!({"model": "base", "language": "xx", "other": 1}));
-        assert_eq!(s, json!({"model": "base", "language": "auto"}));
-        assert_eq!(normalize(find("apex-matches").unwrap(), &json!({"a": 1})), json!({}));
-    }
-
-    #[test]
     fn replies_are_read_from_lines() {
         assert_eq!(reply(r#"{"progress": 1.5}"#), Some(Reply::Progress(1.0)));
         assert_eq!(reply(r#"{"error": "no"}"#), Some(Reply::Failed("no".into())));
         let done = reply(r#"{"output": {"events": [{"kind": "x", "at_s": 2.0}]}}"#);
-        assert_eq!(done, Some(Reply::Done(Output { events: vec![Found { kind: "x".into(), at_s: Some(2.0), ..Default::default() }], tags: BTreeMap::new(), note: String::new() })));
+        assert_eq!(done, Some(Reply::Done(Output { events: vec![Found { kind: "x".into(), at_s: Some(2.0), ..Default::default() }], tags: BTreeMap::new() })));
         assert_eq!(reply("noise"), None);
     }
 
@@ -317,19 +276,5 @@ mod tests {
         let [y, u, _] = planes(&frame, w, h);
         assert_eq!(y.mean(0, 1, 4, 1), 9.0 / 4.0);
         assert_eq!(u.mean(1, 0, 2, 1), 6.0);
-    }
-
-    #[test]
-    fn needs_are_present_only_when_their_files_are() {
-        let dir = std::env::temp_dir().join(format!("ezh-test-needs-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let plugin = find("transcribe").unwrap();
-        let settings = normalize(plugin, &json!({"model": "base"}));
-        assert_eq!(missing(plugin, &dir, &settings).len(), 2);
-        let needs = (plugin.needs)(&settings);
-        std::fs::create_dir_all(dir.join(&needs[0].dest)).unwrap();
-        std::fs::write(dir.join(&needs[0].dest).join(needs[0].pick[0]), b"").unwrap();
-        assert_eq!(missing(plugin, &dir, &settings).len(), 1);
-        let _ = std::fs::remove_dir_all(dir);
     }
 }

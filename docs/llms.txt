@@ -11,10 +11,10 @@ The API is off by default. A person turns it on in the app: Settings > API > Loc
 ## Rules
 
 - Every request except GET /llms.txt needs the header `Authorization: Bearer <token>`.
-- The Host header must be 127.0.0.1:47625 or localhost:47625. With Settings > API > Other devices, the PC's own addresses and name with the same port work too. There is no CORS.
+- The API listens on 127.0.0.1 only; from another PC, forward the port over SSH. The Host header must be 127.0.0.1:47625 or localhost:47625. There is no CORS.
 - JSON in, JSON out (UTF-8). Errors are `{"error": "..."}` with the status 400, 401, 403, 404, 405, 409, 413, 500 or 503.
 - Times in a recording are seconds from its start (`at_s`, `from_s`, `to_s`, rounded to 0.1). Clock times are milliseconds since 1970 (`start_ms`, `end_ms`).
-- Reads work for every room on this PC. Operations act on the room that is open in the app, as the window does; events and the board are written only to the open room (409 otherwise): open it with enter_room.
+- Reads work for every room on this PC. Operations act on the room that is open in the app, as the window does; events and the board are written only to the open room once this PC is a member of it (409 otherwise): open it with enter_room.
 - Operations run at once, without the window's confirmations. delete_set, remove_room, delete_old_files and reset {keep_rooms: false} delete recordings or the app's data with no undo: call them only when the person asked for exactly that. The token gives the same control as the window.
 - Notes are at most 500 characters, a game plan card at most 4000 and a request body at most 64 kB. A note you add through this API is shown to people with an AI mark, and a person can delete all of them at once. Write `#tag` in a note text to tag it, or send `tags`.
 - Paths are on this PC (write them like C:/videos/scrim). A recording leaves (export_folder) as a folder of plain files; the format is in docs/session-format.md of the repository.
@@ -39,7 +39,7 @@ GET /v1/rooms/{room}/recordings/{recording}
   One element of the list above.
 
 GET /v1/rooms/{room}/recordings/{recording}/voices/{member}
-  The member's voice in the recording as raw audio/mp4; when it has several captures (the app restarted while recording) they follow one another in time order, each starting with its own ftyp. 404 when there is none. Read a debrief's voices here to transcribe them.
+  The member's voice in the recording as raw audio/mp4; when it has several captures (the app restarted while recording) they follow one another in time order, each starting with its own ftyp. 404 when there is none. Transcribe them to know what was said.
 
 GET /v1/rooms/{room}/recordings/{recording}/events[?tag=rotate][&kind=note]
   {"events": [{"key": "<author>/<id>", "id": 1792445520000000, "author": "...", "author_name": "Ann", "plugin": null, "kind": "note", "at_s": 120.5, "to_s": null, "member": null, "member_name": null, "text": "Rotate early #rotate", "tags": ["rotate"], "values": null}]}
@@ -51,19 +51,19 @@ GET /v1/rooms/{room}/recordings/{recording}/chapters
 
 GET /v1/rooms/{room}/recordings/{recording}/transcript[?member=<id>]
   {"lines": [{"member": "...", "member_name": "Ren", "from_s": 5.0, "to_s": 8.0, "text": "Drop north"}]}
-  Spoken lines from the Transcription extension, in time order (empty when it is off or not finished).
+  Speech recorded by older versions, in time order.
 
 GET /v1/rooms/{room}/board
   {"text": "# This week\n...", "author": "...", "author_name": "Ann", "updated_ms": 1792445000000}
   The team card. text is "" when nobody has written it. Other cards are written with put_board_card.
 
 GET /v1/rooms/{room}/plugins
-  {"plugins": [{"id": "transcribe", "name": "Transcription", "version": "1.0.0", "on": true, "settings": {"model": "small"}, "ready": true, "runner": "...", "runner_name": "Ren", "left": 2, "failed": 0, "waiting_for": null, "waiting_for_name": null}]}
+  {"plugins": [{"id": "apex-matches", "name": "Apex matches", "version": "1.1.0", "on": true, "runner": "...", "runner_name": "Ren", "left": 2, "failed": 0, "waiting_for": null, "waiting_for_name": null}]}
   runner is the one member whose PC analyses every recording for the extension (null when that member left the room); left and failed count recordings.
 
 GET /v1/diagnostics[?everyone=true]
   {"text": "ez-hanseikai 0.16.2 on windows ...\n\nrecent errors\n..."}
-  The report that Help > Diagnostics > Copy report gives, without its summary lines and with names and addresses hidden: versions, environment check, connections, hardware and clocks, where data goes, recent errors, jobs, crashes and the recent log. everyone=true puts this report under `=== this PC ===` and adds each connected member's under `=== member <first 10 characters of the id> ===`. Read it when something does not work.
+  The report that Help > Diagnostics > Copy report gives, with names and addresses hidden: versions, environment check, connections with clock offsets, hardware, where data goes, recent errors, jobs, crashes and the recent log. everyone=true puts this report under `=== this PC ===` and adds each connected member's under `=== member <first 10 characters of the id> ===`. Read it when something does not work.
 
 ## Write
 
@@ -76,26 +76,26 @@ PUT /v1/rooms/{room}/board
   Replaces the team card for the whole room. Read it first and keep what still applies. Answer 200 with the board. The format: the first line is shown bold, then short Markdown (headings, lists, **bold**, ==marked==, #tags); [text](ezh://moment/<recording id>/<seconds>/all) links open a moment. put_board_card writes any card.
 
 POST /v1/ops/{name}
-  Runs one operation of the app. The body is a JSON object with its arguments (empty means {}). Answer 200 with the operation's value (null for most); 404 for a name that does not exist; 400 {"error": "..."} when the app refuses, with the message the window would show. A long one (export_folder, check_peer, measure_speed, check_update, prepare_plugin, debug_report) answers when it is done. reset and install_update restart the app, so their request ends without an answer. Arguments marked ? are optional. The operations:
-  Rooms and invites: create_room {name} (empty: "<your name>'s room") -> room id, join_room {code} (ezh-<id>-<token>; pending until a member approves), enter_room {id} (these three leave the open room first), close_room {id}, remove_room {id}, rename_room {name}, set_room_icon {icon} (an image data URL of PNG, JPEG or WebP up to 16384 characters, or "" for none), create_invite {reuse} -> invite code, cancel_invites, answer_ask {id, approve}, remove_peer {id}, check_peer {id} (this PC for its own id; up to 12 s), measure_speed {id} -> {up_mbps, down_mbps, rtt_ms, path} (up to 60 s; "No answer" from an older member)
+  Runs one operation of the app. The body is a JSON object with its arguments (empty means {}). Answer 200 with the operation's value (null for most); 404 for a name that does not exist; 400 {"error": "..."} when the app refuses, with the message the window would show. A long one (export_folder, measure_speed, check_update, debug_report) answers when it is done. reset and install_update restart the app, so their request ends without an answer. Arguments marked ? are optional. The operations:
+  Rooms and invites: create_room {name} (empty: "<your name>'s room") -> room id, join_room {code} (ezh-<id>-<token>; pending until a member approves), enter_room {id} (these three leave the open room first), close_room {id}, remove_room {id}, rename_room {name}, set_room_icon {icon} (an image data URL of PNG, JPEG or WebP up to 16384 characters, or "" for none), create_invite {reuse} -> invite code, cancel_invites, answer_ask {id, approve}, remove_peer {id}, measure_speed {id} -> {up_mbps, down_mbps, rtt_ms, path} (up to 60 s; "No answer" from an older member)
   Recording: start_recording {debrief?} (true: voices only), stop_recording, mark -> event id
   Capture and devices: list_sources, set_source {source} (an id from list_sources, or null), list_mics, set_mic {id}, set_mix {kind, volume, muted} (kind app or mic, volume 0 to 1), set_quality {id} (light, standard, high), set_limit {mbps} (null for none), set_relays {urls} (https relay servers tried in order before the public ones; [] for none), set_codecs {list} (what the window can decode)
-  Settings: set_name {name}, set_profile {color?, avatar?} (color 0 to 7; avatar an image data URL, a built-in name such as bolt, or "" for none), set_language {language} ("", en, ja), set_hotkey {keys}, set_channel {channel} (stable, beta), set_layout {layout}, check_update -> version or null, install_update (also while recording; the restart cuts your part), data_info -> {dir, used_bytes, old_bytes, free_bytes}, delete_old_files -> {freed} (files of older versions only), reset {keep_rooms}, dismiss_recovery, retry_ffmpeg
+  Settings: set_name {name}, set_profile {color?, avatar?} (color 0 to 7; avatar an image data URL, a built-in name such as bolt, or "" for none), set_language {language} ("", en, ja), set_hotkey {keys}, set_layout {layout}, check_update -> version or null, install_update (also while recording; it ends your part and cancels a running export first), data_info -> {dir, used_bytes, old_bytes, free_bytes}, delete_old_files -> {freed} (files of older versions only), reset {keep_rooms}, dismiss_recovery, retry_ffmpeg
   Notes and events: add_event {kind, text, target, values} (kind note, drawing or board; target {t_us, set}) -> event id, event_action {kind, id, text} (kind edit, delete or restore), delete_ai_notes {room, set} (hides every note added through the API in that recording), put_board_card {room, card?, text?, title?, pos?, gone?} (card team, m:<member id> or a card id from an earlier answer; an empty card makes a new one and answers its id)
   Watch Party: party_on {on, view} (view is {set, playing, live, wall_us, at_us, rate, focus, mode, slots, order}), party_act {view}, party_typing {on}, draw {stroke}
-  Extensions: room_plugins, set_room_plugin {id, on, settings}, set_plugin_runner {id, runner} (a room member), prepare_plugin {id}, retry_job {room, set, plugin?} (analyse the recording again with every extension that is on, or the one named)
+  Extensions: room_plugins, set_room_plugin {id, on}, set_plugin_runner {id, runner} (a room member), retry_job {room, set, plugin?} (analyse the recording again with every extension that is on, or the one named)
   Windows: open_board_window, set_fullscreen {on, window} (window main or board)
   Recordings on this PC: delete_set {room, set} (this PC's files and the debriefs that name it; answers whether any), download_set {room, set}, focus_set {set}, export_folder {room, set, folder} (a new or empty folder; every file starts at the recording's start; answers {folder, files, skipped}, the members whose parts are not here), export_check (refused when an export cannot start)
-  API: set_api {on}, set_api_lan {lan}, new_api_token (then read api.json), api_info -> {on, lan, address, hosts, token, error}, api_reference
-  Diagnostics and page state: state (the window's whole state), debug_view {tab, since, set} (tab connections, network, recording, data, jobs, flow or log), debug_report {save, head} (answers the report text, or with save true the path of report.txt in the data folder)
-  Not available: the operations that open a window (choosing files or folders, opening links and folders, the identity file).
+  API: set_api {on}, new_api_token (then read api.json), api_info -> {on, address, token, error}, api_reference
+  Diagnostics and page state: state (the window's whole state), debug_flow (where data goes), debug_report {save} (answers the report text, or with save true the path of report.txt in the data folder)
+  Not available: the operations that open a window (choosing files or folders, opening links and folders).
 
 
 ## Recipes
 
-- Notes from the transcript: GET the transcript and chapters, read them, then POST a note at the time of each decision or mistake with a tag. Check the existing events first so you do not repeat notes.
-- Game plan from a recording: GET events, chapters and transcript, then PUT a short board: a goal and a few cards of what to do next.
-- Mistakes in a match: GET chapters, take one match's from_s and to_s, read the transcript and events between them, and POST a note with the tag mistake at each moment.
+- Notes from the voices: GET the voices of each member and transcribe them, GET the chapters, then POST a note at the time of each decision or mistake with a tag. Check the existing events first so you do not repeat notes.
+- Game plan from a recording: GET events and chapters, GET the voices and transcribe them, then PUT a short board: a goal and a few cards of what to do next.
+- Mistakes in a match: GET chapters, take one match's from_s and to_s, transcribe the voices and read the events between them, and POST a note with the tag mistake at each moment.
 
 Examples (replace the token and ids):
 

@@ -60,7 +60,7 @@
         <h1 id="homename"></h1>
         <span id="homesub" class="sub"></span>
         <span class="sp"></span>
-        <button class="apibadge" hidden></button>
+        <button class="apibadge" hidden data-t-title="The local API is on" data-t-label="The local API is on"><span data-icon="terminal" data-icon-class="sm"></span>API</button>
         <button id="aibtn" aria-haspopup="menu"><span data-icon="sparkles" data-icon-class="sm"></span><span data-t="AI">AI</span></button>
       </div>
       <div id="boardpane" class="boardpane" hidden>
@@ -87,7 +87,7 @@
           <span id="psub" class="sub"></span>
           <span class="sp"></span>
           <span id="reviewrec" class="pill rec" hidden></span>
-          <button class="apibadge" hidden></button>
+          <button class="apibadge" hidden data-t-title="The local API is on" data-t-label="The local API is on"><span data-icon="terminal" data-icon-class="sm"></span>API</button>
           <button id="aiplay" aria-haspopup="menu"><span data-icon="sparkles" data-icon-class="sm"></span><span data-t="AI">AI</span></button>
           <div id="wpbox" class="wpbox"></div>
           <button id="panelbtn" class="icon" data-icon="panel" data-t-title="Side panel" data-t-label="Side panel"></button>
@@ -177,7 +177,6 @@
       <div class="srow2"><span class="lab" data-t="Language">Language</span><select id="language" class="w240"><option value="" data-t="Automatic">Automatic</option><option value="en">English</option><option value="ja">日本語</option></select></div>
       <div class="srow2"><span class="lab" data-t="Recording sounds">Recording sounds</span><input id="sessionsound" type="checkbox" class="switch" role="switch"></div>
       <div class="srow2"><span class="lab" data-t="Relay servers">Relay servers</span><textarea id="relays" class="w240" rows="3" spellcheck="false" placeholder="https://"></textarea></div>
-      <div class="srow2"><span class="lab" data-t="ID key">ID key</span><button id="exportid"><span data-icon="upload" data-icon-class="sm"></span><span data-t="Export…">Export…</span></button><button id="importid"><span data-icon="download" data-icon-class="sm"></span><span data-t="Import…">Import…</span></button></div>
       <div class="srow2"><span class="lab" data-t="Data folder">Data folder</span><span id="datadir" class="mono ellip"></span><button id="opendata" class="sm"><span data-icon="folder" data-icon-class="sm"></span><span data-t="Open">Open</span></button></div>
     </section>
     <section data-pane="capture">
@@ -204,8 +203,6 @@
       <div id="apirows" hidden>
         <div class="srow2"><span class="lab" data-t="Address">Address</span><span id="apiaddr" class="mono"></span></div>
         <div class="srow2"><span class="lab" data-t="Token">Token</span><button id="apicopy"><span data-icon="copy" data-icon-class="sm"></span><span data-t="Copy token">Copy token</span></button><button id="apinew"><span data-icon="refresh" data-icon-class="sm"></span><span data-t="New token">New token</span></button></div>
-        <div class="srow2"><span class="lab" data-t="Access">Access</span><div id="apiaccess" class="seg" role="radiogroup" data-t-label="Access"><button data-lan="0" data-t="This PC only">This PC only</button><button data-lan="1" data-t="Other devices">Other devices</button></div></div>
-        <div id="apilanbox" class="warnbox" hidden><span data-icon="alert" data-icon-class="sm"></span><span data-t="Other devices on your network can control the app">Other devices on your network can control the app</span><span class="sp"></span><span id="apihosts" class="mono"></span></div>
         <div class="srow2"><span class="lab" data-t="Endpoints">Endpoints</span><button id="apidoc"><span data-icon="link" data-icon-class="sm"></span><span data-t="Open llms.txt">Open llms.txt</span></button></div>
         <div id="apiref" class="apiref"></div>
       </div>
@@ -214,7 +211,6 @@
     <section data-pane="updates">
       <h2 data-t="Updates">Updates</h2>
       <div class="srow2"><span class="lab" data-t="Version">Version</span><span id="version"></span><button id="checkupdate" class="sm" data-t="Check for updates">Check for updates</button></div>
-      <div class="srow2"><span class="lab" data-t="Channel">Channel</span><div id="channel" class="seg" role="radiogroup" data-t-label="Channel"><button data-c="stable" data-t="Stable">Stable</button><button data-c="beta" data-t="Beta">Beta</button></div></div>
     </section>
   </div>
 </dialog>
@@ -225,7 +221,7 @@
   <div class="row end"><button id="delno" data-t="Cancel">Cancel</button><button id="delyes" class="danger"></button></div>
 </dialog>
 <dialog id="diagdlg" class="diag">
-  <div class="dlghead"><div class="ptabs" role="tablist"><button data-dtab="summary" role="tab"><span data-icon="ok" data-icon-class="sm"></span><span data-t="Summary">Summary</span></button><button data-dtab="flow" role="tab"><span data-icon="shield" data-icon-class="sm"></span><span data-t="Where data goes">Where data goes</span></button><button data-dtab="pcs" role="tab"><span data-icon="monitor" data-icon-class="sm"></span><span data-t="PCs">PCs</span></button><button data-dtab="traffic" role="tab"><span data-icon="activity" data-icon-class="sm"></span><span data-t="Traffic">Traffic</span></button><button data-dtab="log" role="tab"><span data-icon="terminal" data-icon-class="sm"></span><span data-t="Log">Log</span></button><button data-dtab="jobs" role="tab"><span data-icon="cpu" data-icon-class="sm"></span><span data-t="Analysis">Analysis</span></button></div><button class="icon close" data-icon="x" data-t-label="Close"></button></div>
+  <div class="dlghead"><h2 data-t="Diagnostics">Diagnostics</h2><button class="icon close" data-icon="x" data-t-label="Close"></button></div>
   <div id="diagbody" class="diagbody"></div>
   <div class="row foot"><span class="sp"></span><button id="diagcopy"><span data-icon="copy" data-icon-class="sm"></span><span data-t="Copy report">Copy report</span></button><button id="diagsave"><span data-icon="download" data-icon-class="sm"></span><span data-t="Save as file…">Save as file…</span></button></div>
 </dialog>

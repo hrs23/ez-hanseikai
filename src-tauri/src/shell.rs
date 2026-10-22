@@ -11,12 +11,12 @@ use tauri_plugin_dialog::{DialogExt, FileDialogBuilder, MessageDialogButtons, Me
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Modifiers, Shortcut};
 use tauri_plugin_notification::NotificationExt;
 
-use crate::{language, room, Core, REPO, VERSION};
+use crate::{language, Core, REPO, VERSION};
 
 pub const DEFAULT_HOTKEY: &str = "Ctrl+Alt+M";
 const BOARD: &str = "board";
 const STATUS_POLL: Duration = Duration::from_secs(1);
-const JA: [(&str, &str); 47] = [
+const JA: [(&str, &str); 41] = [
     ("Already running with this data folder.", "このデータフォルダですでに動いています。"),
     ("EZ Hanseikai", "EZ反省会"),
     ("File", "ファイル"),
@@ -25,8 +25,6 @@ const JA: [(&str, &str); 47] = [
     ("View", "表示"),
     ("Help", "ヘルプ"),
     ("Open data folder", "データフォルダを開く"),
-    ("Export identity…", "IDをエクスポート…"),
-    ("Import identity…", "IDをインポート…"),
     ("Settings…", "設定…"),
     ("Exit", "終了"),
     ("Copy invite code", "招待コードをコピー"),
@@ -57,10 +55,6 @@ const JA: [(&str, &str); 47] = [
     ("Cancel the export and exit?", "エクスポートを中止してアプリを終了しますか?"),
     ("Files are still arriving. Exit anyway?", "まだファイルを受け取っています。それでも終了しますか?"),
     ("Cancel", "キャンセル"),
-    ("Identity saved. Keep this file private: anyone with it can act as you.", "IDを保存しました。このファイルは誰にも渡さないでください。持っている人はあなたとして振る舞えます。"),
-    ("That file is not an identity key.", "このファイルはIDの鍵ではありません。"),
-    ("Importing replaces your identity, so your ID changes. Your current key is kept as key.bin.old.", "インポートするとIDが置き換わり、IDが変わります。今の鍵は key.bin.old として残ります。"),
-    ("Import", "インポート"),
     ("Version", "バージョン"),
     ("Moment marked", "マークしました"),
     ("{name} wants to join", "{name} が参加を希望しています"),
@@ -107,10 +101,6 @@ pub fn save_file(app: &AppHandle, name: &str) -> Option<PathBuf> {
 
 pub fn pick_folder(app: &AppHandle) -> Option<PathBuf> {
     file_dialog(app).blocking_pick_folder().and_then(|p| p.into_path().ok())
-}
-
-fn open_file(app: &AppHandle, kind: &str, ext: &str) -> Option<PathBuf> {
-    file_dialog(app).add_filter(kind, &[ext]).blocking_pick_file().and_then(|p| p.into_path().ok())
 }
 
 pub fn notify(app: &AppHandle, title: &str, body: &str) {
@@ -224,33 +214,9 @@ pub fn exit_app(app: &AppHandle, core: &Arc<Core>) {
         if !ask(app, &lang, tr(&lang, question), tr(&lang, "Exit"), tr(&lang, "Cancel")) {
             return;
         }
-        crate::export::cancel(core);
     }
-    room::end_set(core, false, None);
+    crate::data::release(core);
     app.exit(0);
-}
-
-pub fn export_identity(app: &AppHandle, core: &Arc<Core>) {
-    let Some(path) = save_file(app, "ez-hanseikai-identity.key") else { return };
-    if std::fs::copy(core.dir.join("key.bin"), &path).is_ok() {
-        tell(app, &language(core), tr(&language(core), "Identity saved. Keep this file private: anyone with it can act as you."));
-    }
-}
-
-pub fn import_identity(app: &AppHandle, core: &Arc<Core>) {
-    let Some(path) = open_file(app, "Key", "key") else { return };
-    let lang = language(core);
-    if !std::fs::read(&path).is_ok_and(|b| b.len() == 32) {
-        tell(app, &lang, tr(&lang, "That file is not an identity key."));
-        return;
-    }
-    if !ask(app, &lang, tr(&lang, "Importing replaces your identity, so your ID changes. Your current key is kept as key.bin.old."), tr(&lang, "Import"), tr(&lang, "Cancel")) {
-        return;
-    }
-    let _ = std::fs::copy(core.dir.join("key.bin"), core.dir.join("key.bin.old"));
-    if std::fs::copy(&path, core.dir.join("key.bin")).is_ok() {
-        app.restart();
-    }
 }
 
 pub fn hotkey(text: &str) -> Option<Shortcut> {
@@ -305,9 +271,6 @@ fn build_menu(app: &AppHandle, lang: &str, toggle: &MenuItem<Wry>, mark: &MenuIt
     let it = |id: &str, text: &'static str, accel: Option<&str>| item(app, lang, id, text, accel);
     let file = SubmenuBuilder::new(app, tr(lang, "File"))
         .item(&it("open-folder", "Open data folder", None)?)
-        .separator()
-        .item(&it("export-identity", "Export identity…", None)?)
-        .item(&it("import-identity", "Import identity…", None)?)
         .separator()
         .item(&it("settings", "Settings…", Some("CmdOrCtrl+,"))?)
         .separator()
@@ -382,7 +345,7 @@ pub fn clock(seconds: i64) -> String {
 }
 
 fn status_text(core: &Core) -> String {
-    let room = core.active_room().filter(|r| r.invite.is_none()).map(|r| r.name);
+    let room = core.joined_room().ok().and(core.active_room()).map(|r| r.name);
     let timer = core.active_set.lock().unwrap().as_ref().map(|s| clock((crate::now_us() - s.start_us) / 1_000_000));
     match (room, timer) {
         (Some(room), Some(timer)) => format!("{room} · {timer}"),
@@ -415,8 +378,6 @@ pub fn setup(app: &tauri::App, core: Arc<Core>) -> tauri::Result<()> {
         };
         match event.id().as_ref() {
             "open-folder" => crate::data::open_folder(&core.dir),
-            "export-identity" => dialog(export_identity),
-            "import-identity" => dialog(import_identity),
             "exit" => dialog(exit_app),
             "mark" => marked(core),
             "github" => open_link(REPO),

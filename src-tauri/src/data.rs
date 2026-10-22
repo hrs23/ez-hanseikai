@@ -25,7 +25,7 @@ const RESUME_FRESH: Duration = Duration::from_secs(120);
 pub type Listing = Arc<HashMap<String, u64>>;
 pub type Files = Mutex<HashMap<PathBuf, Listing>>;
 
-const OLD_ROOT: [&str; 5] = ["log.bin", "peer", "peer.txt", "peers.txt", "running.marker"];
+const OLD_ROOT: [&str; 6] = ["log.bin", "peer", "peer.txt", "peers.txt", "running.marker", "plugins"];
 const OLD_ROOM: [&str; 2] = ["sets", "live"];
 const OLD_CAPTURE: [&str; 2] = ["verified.json", "cap.json"];
 const OLD_SERIES: &str = "open.json";
@@ -86,7 +86,7 @@ fn recreate(core: &Core) {
     }
     let _ = std::fs::write(core.dir.join("id.txt"), core.me());
     if !core.dir.join("key.bin").exists() {
-        *core.notice.lock().unwrap() = "key.bin was deleted. The app keeps your ID until it restarts, then makes a new one; to keep it, import your identity after the restart.".into();
+        *core.notice.lock().unwrap() = "key.bin was deleted. The app keeps your ID until it restarts; put key.bin back before then to keep it.".into();
     }
     debug::event(core, core.started, "the data folder was missing files; recreated them".into());
 }
@@ -277,6 +277,13 @@ pub fn migrate(old: &Path, new: &Path) -> PathBuf {
     (if moved { new } else { old }).to_path_buf()
 }
 
+pub fn release(core: &Arc<Core>) {
+    room::end_set(core, false, None);
+    crate::export::cancel(core);
+    crate::jobs::stop_and_wait(core);
+    unlock(&core.dir);
+}
+
 pub fn unlock(dir: &Path) {
     if HELD.lock().unwrap().take().is_some() {
         let _ = std::fs::remove_file(dir.join(LOCK));
@@ -439,8 +446,9 @@ pub fn keeper(core: Arc<Core>) {
             cleanup(&core);
             aged = Some(Instant::now());
         }
-        let room = core.active_room_id();
-        room::sweep_dropped(&core, &room, &room::logs(&core, &room));
+        if let Some(room) = core.room_id() {
+            room::sweep_dropped(&core, &room, &room::logs(&core, &room));
+        }
         room::sweep_removed(&core);
         std::thread::sleep(KEEP_EVERY);
     }
@@ -584,11 +592,11 @@ mod tests {
             }
             out.into_iter().map(|p| p.strip_prefix(&dir).unwrap().to_path_buf()).collect()
         };
-        let unknown = ["key.bin.old", "legacy/x", "key.bin", "rooms.json", "settings.json", "app.lock", "rooms/r/recordings/orphan/OT/9/v/000001.m4s", "rooms/unlisted/logs/OT.bin", "rooms/r/newer.dat", "rooms/r/newer/x", "rooms/r/logs/OT.bin.part", "rooms/r/recordings/s1/ME/1000/newer.json"];
-        let older = ["log.bin", "peer/a/log.bin", "peer.txt", "peers.txt", "running.marker", "rec-1700000000000.mp4", "rooms/r/ME/1000/v/init.mp4", "rooms/r/sets/s1/a.mp4", "rooms/r/live/a.mp4", "rooms/r/logs/someone.bin", "rooms/r/recordings/s1/ME/1000/verified.json", "rooms/r/recordings/s1/ME/1000/cap.json", "rooms/r/recordings/s1/ME/1000/v/open.json", "rooms/r/recordings/s1/ME/1000/m/open.json"];
+        let unknown = ["key.bin.old", "legacy/x", "key.bin", "rooms.json", "settings.json", "app.lock", "rooms/r/recordings/orphan/OT/9/v/000001.m4s", "rooms/unlisted/logs/OT.bin", "rooms/solo/logs/ME.bin", "rooms/r/newer.dat", "rooms/r/newer/x", "rooms/r/logs/OT.bin.part", "rooms/r/recordings/s1/ME/1000/newer.json"];
+        let older = ["log.bin", "peer/a/log.bin", "peer.txt", "peers.txt", "running.marker", "plugins/whisper/whisper-cli.exe", "plugins/work/1/voice.wav", "rec-1700000000000.mp4", "rooms/r/ME/1000/v/init.mp4", "rooms/r/sets/s1/a.mp4", "rooms/r/live/a.mp4", "rooms/r/logs/someone.bin", "rooms/r/recordings/s1/ME/1000/verified.json", "rooms/r/recordings/s1/ME/1000/cap.json", "rooms/r/recordings/s1/ME/1000/v/open.json", "rooms/r/recordings/s1/ME/1000/m/open.json"];
         seed(&dir, unknown.iter().chain(&older).map(|n| n.replace("ME", &me).replace("OT", &other)));
         seed(&dir, current.iter().map(|p| p.to_string_lossy().to_string()));
-        let expected = ["log.bin", "peer", "peer.txt", "peers.txt", "running.marker", "rec-1700000000000.mp4", "rooms/r/ME", "rooms/r/sets", "rooms/r/live", "rooms/r/logs/someone.bin", "rooms/r/recordings/s1/ME/1000/verified.json", "rooms/r/recordings/s1/ME/1000/cap.json", "rooms/r/recordings/s1/ME/1000/v/open.json", "rooms/r/recordings/s1/ME/1000/m/open.json"];
+        let expected = ["log.bin", "peer", "peer.txt", "peers.txt", "running.marker", "plugins", "rec-1700000000000.mp4", "rooms/r/ME", "rooms/r/sets", "rooms/r/live", "rooms/r/logs/someone.bin", "rooms/r/recordings/s1/ME/1000/verified.json", "rooms/r/recordings/s1/ME/1000/cap.json", "rooms/r/recordings/s1/ME/1000/v/open.json", "rooms/r/recordings/s1/ME/1000/m/open.json"];
         let mut expected: Vec<String> = expected.iter().map(|n| n.replace("ME", &me)).collect();
         expected.sort();
         assert_eq!(relative(&dir, old_files(&dir)), expected);

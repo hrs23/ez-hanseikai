@@ -217,20 +217,19 @@ pub fn send(core: &Arc<Core>) {
     if !core.party.lock().unwrap().on {
         return;
     }
-    let room = core.active_room_id();
-    let own = room::holdings(&room::logs(core, &room));
+    let Some((room, own)) = own_heads(core) else { return };
     let message = core.party.lock().unwrap().message(&room, &own, Instant::now());
     net::broadcast(core, message);
 }
 
-fn own_heads(core: &Core) -> (String, Heads) {
-    let room = core.active_room_id();
+fn own_heads(core: &Core) -> Option<(String, Heads)> {
+    let room = core.room_id()?;
     let own = room::holdings(&room::logs(core, &room));
-    (room, own)
+    Some((room, own))
 }
 
 pub fn receive(core: &Arc<Core>, from: &str, msg: &Value, offset_us: i64) -> bool {
-    let (room, own) = own_heads(core);
+    let Some((room, own)) = own_heads(core) else { return false };
     let (changed, lacks) = {
         let mut party = core.party.lock().unwrap();
         let changed = party.receive(from, msg, offset_us, &room, Instant::now());
@@ -255,7 +254,7 @@ pub fn state_json(core: &Core, own: &Heads) -> Value {
 pub async fn repeat(core: Arc<Core>) {
     loop {
         tokio::time::sleep(CHECK).await;
-        let (_, own) = own_heads(&core);
+        let Some((_, own)) = own_heads(&core) else { continue };
         if core.party.lock().unwrap().due(&own, Instant::now()) {
             send(&core);
         }

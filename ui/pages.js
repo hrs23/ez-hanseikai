@@ -23,15 +23,12 @@ let askName = false;
 let joining = false;
 let roomTab = "members";
 let drawerFor = null;
-let checks = {};
-let checking = {};
 let speed = null;
 let settingsPane = "general";
 let storageInfo = null;
 let picked = new Set();
-let diagTab = "summary";
-let diagFeed = null;
-let diagFeedAt = 0;
+let flow = null;
+let flowAt = 0;
 
 function renderStart() {
   if (inRoom()) return;
@@ -137,7 +134,7 @@ function renderMembers() {
   const body = rows.map(({ id, p }) => {
     const me = id === st.id;
     const state = memberOf(id).status;
-    const conn = me || !p.connected ? el("span", { className: "faint", textContent: "—" }) : el("span", { className: "net " + (p.path === "relay" ? "warn" : "ok"), onclick: (e) => { e.stopPropagation(); openDiagnostics("flow"); } }, icon("relay", "sm"), p.path === "relay" ? t("Relay") : t("Direct"));
+    const conn = me || !p.connected ? el("span", { className: "faint", textContent: "—" }) : el("span", { className: "net " + (p.path === "relay" ? "warn" : "ok"), onclick: (e) => { e.stopPropagation(); openDiagnostics(); } }, icon("relay", "sm"), p.path === "relay" ? t("Relay") : t("Direct"));
     const version = me ? st.version : p && p.version;
     const tr = el("tr", { className: "pick" + (drawerFor === id ? " sel" : "") + (state.kind === "off" ? " dim" : ""), tabIndex: 0 },
       el("td", {}, el("span", { className: "who" }, me ? el("button", { className: "plain", ariaLabel: t("Avatar"), onclick: (e) => { e.stopPropagation(); openSettings("general"); } }, avatar(id, "", "on")) : avatar(id, "", p && p.connected ? "on" : null), el("b", { textContent: nameOf(id) }), me ? el("span", { className: "pill gray", textContent: t("You") }) : null)),
@@ -155,13 +152,6 @@ function renderMembers() {
   out.push(el("div", { className: "tablebox" }, el("table", { className: "table" }, el("thead", {}, head), el("tbody", {}, ...body))));
   $("roomtab").replaceChildren(...out);
 }
-function checkMember(id) {
-  if (checking[id]) return;
-  checking[id] = true;
-  delete sigs.drawer;
-  renderDrawer();
-  invoke("check_peer", { id }).then((lines) => { checks[id] = Array.isArray(lines) ? lines : [{ level: "fail", text: t("No answer") }]; }).catch(() => { checks[id] = [{ level: "fail", text: t("No answer") }]; }).finally(() => { checking[id] = false; delete sigs.drawer; renderDrawer(); });
-}
 const speedLine = (r) => [t("Up {n} Mbit/s", { n: r.up_mbps.toFixed(1) }), t("Down {n} Mbit/s", { n: r.down_mbps.toFixed(1) }), `${r.rtt_ms} ms`, r.path === "relay" ? t("Relay") : t("Direct")].join(" · ");
 function measureSpeed(id) {
   speed = { id, line: null };
@@ -176,9 +166,8 @@ function renderDrawer() {
   if (box.hidden) { speed = null; return; }
   const me = id === st.id;
   const p = me ? null : peerOf(id);
-  if (!checks[id] && !checking[id] && (me || (p && p.connected))) checkMember(id);
   const receivingFrom = st.sets.filter((s) => !s.live).flatMap((s) => s.players.filter((x) => x.owner === id && x.total && x.have < x.total).map((x) => ({ s, x })));
-  const sig = [id, p && [p.connected, p.path, p.rtt_ms, p.sent, p.received, p.offset_us, p.version], checks[id], checking[id], speed, receivingFrom.map((r) => [r.s.id, r.x.have]), st.names, look(id), lang];
+  const sig = [id, p && [p.connected, p.path, p.rtt_ms, p.sent, p.received, p.offset_us, p.version], speed, receivingFrom.map((r) => [r.s.id, r.x.have]), st.names, look(id), lang];
   if (!changed("drawer", sig)) return;
   const kv = [];
   const add = (k, v) => kv.push(el("dt", { textContent: k }), el("dd", { textContent: v }));
@@ -193,15 +182,13 @@ function renderDrawer() {
   add(t("Version"), (me ? st.version : p && p.version) || "—");
   const measuring = !!speed && speed.id === id && !speed.line;
   if (speed && speed.id === id && speed.line) add(t("Speed"), speed.line);
-  const lines = checks[id];
-  const checkBox = [el("div", { className: "h3", textContent: t("Checks") }), ...(lines ? lines.filter((l) => l.level !== "info").map((l) => el("div", { className: "line lv-" + l.level }, icon({ ok: "ok", warn: "alert", fail: "fail" }[l.level] || "info", "sm"), el("span", { textContent: t(l.text, l.args) }))) : checking[id] ? [el("div", { className: "line" }, icon("spinner", "sm spin"), t("Checking…"))] : []), el("div", { className: "row" }, el("button", { className: "sm", disabled: !!checking[id] || (!me && !(p && p.connected)), onclick: () => checkMember(id) }, icon("refresh", "sm"), t("Check again")), me ? "" : el("button", { className: "sm", disabled: measuring || !(p && p.connected), onclick: () => measureSpeed(id) }, icon("activity", "sm"), measuring ? t("Measuring…") : t("Measure speed")))];
   box.replaceChildren(
     el("div", { className: "dhead" }, avatar(id, "xl"), el("div", { className: "t" }, el("b", { textContent: nameOf(id) }), el("small", { className: "mono", textContent: longId(id) })), iconButton("x", t("Close"), () => { drawerFor = null; delete sigs.roomtab; renderRoom(); })),
     path || "",
     el("dl", { className: "kv" }, ...kv),
     receivingFrom.length ? el("div", { className: "h3", textContent: t("Receiving") }) : "",
     ...receivingFrom.map(({ s, x }) => el("div", { className: "recvrow" }, el("div", { className: "row" }, el("span", { textContent: sessionName(s.id) }), el("span", { className: "sp" }), el("span", { className: "muted", textContent: `${Math.floor((x.have / x.total) * 100)}%` })), el("div", { className: "bar" }, el("i", { style: `width:${(x.have / x.total) * 100}%` })))),
-    el("div", { className: "checks" }, ...checkBox),
+    me ? "" : el("div", { className: "row" }, el("button", { className: "sm", disabled: measuring || !(p && p.connected), onclick: () => measureSpeed(id) }, icon("activity", "sm"), measuring ? t("Measuring…") : t("Measure speed"))),
     el("span", { className: "sp" }),
     me ? "" : el("button", { className: "danger", onclick: () => removeMember(id), textContent: t("Remove from room…") }),
   );
@@ -238,12 +225,9 @@ function renderSettings() {
   for (const b of $("quality").children) press(b, b.dataset.q === q.id);
   $("qinfo").textContent = [q.width ? `${q.width} × ${q.height}` : "", `${q.fps} fps`, `${(q.kbps / 1000).toFixed(1)} Mbit/s`, String(q.codec).toUpperCase()].filter(Boolean).join(" · ");
   if (document.activeElement !== $("limit")) $("limit").value = st.limit_mbps || "";
-  for (const b of $("channel").children) press(b, b.dataset.c === st.channel);
   if (document.activeElement !== $("apion")) $("apion").checked = st.api.on;
   $("apirows").hidden = !st.api.on;
   $("apiaddr").textContent = apiUrl(st.api.address);
-  for (const b of $("apiaccess").children) press(b, (b.dataset.lan === "1") === st.api.lan);
-  $("apilanbox").hidden = !st.api.lan;
   if (st.api.on && settingsPane === "api") renderApiReference();
   $("apierrrow").hidden = !st.api.error;
   $("apierr").textContent = st.api.error ? t(st.api.error) : "";
@@ -268,8 +252,6 @@ function renderProfile() {
   $("avatarclear").hidden = !image;
 }
 function renderApiReference() {
-  if (st.api.lan) invoke("api_info").then((info) => { $("apihosts").textContent = info.hosts.map(apiUrl).join("  "); }).catch(() => {});
-  else $("apihosts").textContent = "";
   if ($("apiref").children.length) return;
   invoke("api_reference").then((list) => {
     $("apiref").replaceChildren(...list.map((e) => el("details", { className: "apiep" }, el("summary", { textContent: e.title }), el("div", { className: "apibody" }, ...apiReferenceBlocks(e.lines).map((b) => b.code ? el("pre", { textContent: b.text }) : el("p", { className: "muted small", textContent: b.text }))))));
@@ -339,90 +321,30 @@ async function deleteSession(set) {
   if (set) confirmDelete([set.id]);
 }
 
-function openDiagnostics(tab) {
-  if (tab) diagTab = tab;
+function openDiagnostics() {
   if (!$("diagdlg").open) $("diagdlg").showModal();
   delete sigs.diag;
   renderDiagnostics();
 }
 const DIAG_FEED_MS = 2000;
-const DIAG_LOG_LINES = 300;
-const TRANSFER_KINDS = { init: "Setup", "live picture": "Live picture", "live voice": "Live voice", "history picture": "Recorded picture", "history voice": "Recorded voice" };
-const TRANSFER_RESULTS = { ok: "Done", retry: "Retried", partial: "Partial", "hash fail": "Checksum failed" };
-function pullDiag() {
-  const tab = { traffic: "network", log: "log", flow: "flow", jobs: "jobs" }[diagTab];
-  if (!tab || Date.now() - diagFeedAt < DIAG_FEED_MS) return;
-  diagFeedAt = Date.now();
-  invoke("debug_view", { tab, since: 0, set: null }).then((data) => { diagFeed = { tab: diagTab, data }; delete sigs.diag; renderDiagnostics(); }).catch(warn);
-}
-function diagTable(head, rows, empty) {
-  if (!rows.length) return el("div", { className: "empty", textContent: empty });
-  return el("div", { className: "tablebox" }, el("table", { className: "table" }, el("thead", {}, el("tr", {}, ...head.map((h) => el("th", { textContent: h })))), el("tbody", {}, ...rows.map((cells) => el("tr", {}, ...cells.map((c) => el("td", { textContent: c })))))));
-}
-function trafficView(data) {
-  const kind = (k) => t(TRANSFER_KINDS[k] || k);
-  const dir = (d) => (d === "in" ? t("Received") : t("Sent"));
-  const active = diagTable([t("Direction"), t("Kind"), t("Size")], data.active.map((r) => [dir(r.dir), kind(r.kind), bytes(r.bytes || 0)]), t("Nothing is moving right now"));
-  const groups = new Map();
-  for (const r of data.rows) {
-    const key = [r.dir, r.kind, r.result].join("|");
-    const g = groups.get(key) || { r, n: 0, size: 0 };
-    g.n += 1;
-    g.size += r.bytes || 0;
-    groups.set(key, g);
-  }
-  const recent = diagTable([t("Direction"), t("Kind"), t("Result"), t("Count"), t("Size")], [...groups.values()].map((g) => [dir(g.r.dir), kind(g.r.kind), t(TRANSFER_RESULTS[g.r.result] || g.r.result), String(g.n), bytes(g.size)]), t("Nothing yet"));
-  return [el("div", { className: "h3 first", textContent: t("Moving now") }), active, el("div", { className: "h3", textContent: t("Since the app started") }), recent];
-}
-function logView(data) {
-  const lines = String(data.text || "").split("\n").filter(Boolean).slice(-DIAG_LOG_LINES);
-  return [el("pre", { className: "logview", textContent: lines.length ? lines.join("\n") : t("Nothing yet") })];
-}
-function jobsView(data) {
-  const jobs = (data && data.jobs) || [];
-  const progress = (j) => (typeof j.progress === "number" ? ` ${Math.floor(j.progress * 100)}%` : "");
-  return [diagTable([t("Extension"), t("Recorded"), t("State"), t("Run by")], jobs.map((j) => [j.plugin ? pluginName(j.plugin) : "—", j.set ? sessionName(j.set) : "—", `${j.state || "—"}${progress(j)}`, j.by || "—"]), t("Nothing yet"))];
-}
-const failedCount = () => st.sets.filter((s) => (s.analysis || []).some((a) => a.state === "failed")).length;
 function renderDiagnostics() {
   if (!$("diagdlg").open) return;
-  for (const b of $("diagdlg").querySelectorAll("[data-dtab]")) b.classList.toggle("on", b.dataset.dtab === diagTab);
-  pullDiag();
-  const failed = failedCount();
-  const lines = summaryLines(st, failed);
-  const fed = diagFeed && diagFeed.tab === diagTab ? diagFeed.data : null;
-  if (!changed("diag", [diagTab, lines, st.peers, st.hw, st.clock, st.api, st.channel, fed, lang])) return;
-  if (diagTab === "summary") {
-    $("diagbody").replaceChildren(el("div", { className: "okbox" }, ...lines.map((l) => el("div", { className: "ok-line lv-" + l.level }, icon({ ok: "ok", warn: "alert", fail: "fail" }[l.level] || "info", "sm"), el("b", { textContent: t(l.key) }), el("span", { textContent: l.text }), l.key === "Extensions" && failed ? el("button", { className: "sm", textContent: t("Open extensions"), onclick: () => { $("diagdlg").close(); showRoomTab("extensions"); } }) : null))));
-    return;
+  if (Date.now() - flowAt >= DIAG_FEED_MS) {
+    flowAt = Date.now();
+    invoke("debug_flow").then((f) => { flow = f; delete sigs.diag; renderDiagnostics(); }).catch(warn);
   }
-  if (diagTab === "traffic" || diagTab === "log") {
-    $("diagbody").replaceChildren(...(fed ? (diagTab === "traffic" ? trafficView(fed) : logView(fed)) : [el("div", { className: "empty", textContent: t("Loading…") })]));
-    if (diagTab === "log") $("diagbody").scrollTop = $("diagbody").scrollHeight;
-    return;
-  }
-  if (diagTab === "jobs") {
-    $("diagbody").replaceChildren(...(fed ? jobsView(fed) : [el("div", { className: "empty", textContent: t("Loading…") })]));
-    return;
-  }
-  if (diagTab === "pcs") {
-    $("diagbody").replaceChildren(...pcsView(st));
-    return;
-  }
+  if (!changed("diag", [st.peers, st.capture.sharing, flow, lang])) return;
   const peers = st.peers;
-  const sendsLive = st.capture.sharing;
-  const what = (p) => [sendsLive ? t("Live picture and voice") : null, t("Recorded files"), t("Log")].filter(Boolean).join(" · ");
+  const what = () => [st.capture.sharing ? t("Live picture and voice") : null, t("Recorded files"), t("Log")].filter(Boolean).join(" · ");
   const node = (id, sub, cls = "") => el("div", { className: "node " + cls }, avatar(id, "lg"), el("div", { className: "t" }, el("b", { textContent: nameOf(id) }), sub ? el("small", { textContent: sub }) : null));
   const links = peers.map((p) => el("div", { className: "flink " + (p.connected ? p.path : "off") }, el("span", { className: "line" }), p.connected && p.path === "relay" ? el("span", { className: "relaybox" }, el("b", { textContent: t("Relay server") }), el("small", { textContent: p.relay || t("content not visible") })) : el("span", { className: "label", textContent: p.connected ? `${t("Direct")} · ${t("encrypted")} · ${p.rtt_ms} ms` : t("Offline") }), node(p.id, "", p.connected ? "" : "dim")));
   const diagram = el("div", { className: "flowmap" }, node(st.id, t("This PC")), el("div", { className: "links" }, ...(links.length ? links : [el("div", { className: "none", textContent: t("No other members") })])));
   const head = el("tr", {}, ...["Peer", "Path", "What is sent", "Sent", "Received"].map((h) => el("th", { textContent: t(h) })));
-  const rows = peers.map((p) => el("tr", { className: p.connected ? "" : "dim" }, el("td", {}, el("b", { textContent: nameOf(p.id) })), el("td", { className: p.connected ? (p.path === "relay" ? "warn" : "ok") : "faint", textContent: p.connected ? (p.path === "relay" ? [t("Relay"), p.relay].filter(Boolean).join(" ") : t("Direct")) : t("Offline") }), el("td", { textContent: p.connected ? what(p) : "—" }), el("td", { textContent: p.sent != null ? bytes(p.sent) : "—" }), el("td", { textContent: p.received != null ? bytes(p.received) : "—" })));
-  const sent = flowRows(st, fed, (k) => (k === "ffmpeg" ? t("Video tools") : pluginName(k)));
-  $("diagbody").replaceChildren(el("div", { className: "okbox" }, ...sent.map(okLine)), diagram, el("div", { className: "tablebox" }, el("table", { className: "table" }, el("thead", {}, head), el("tbody", {}, ...rows))));
+  const rows = peers.map((p) => el("tr", { className: p.connected ? "" : "dim" }, el("td", {}, el("b", { textContent: nameOf(p.id) })), el("td", { className: p.connected ? (p.path === "relay" ? "warn" : "ok") : "faint", textContent: p.connected ? (p.path === "relay" ? [t("Relay"), p.relay].filter(Boolean).join(" ") : t("Direct")) : t("Offline") }), el("td", { textContent: p.connected ? what() : "—" }), el("td", { textContent: p.sent != null ? bytes(p.sent) : "—" }), el("td", { textContent: p.received != null ? bytes(p.received) : "—" })));
+  $("diagbody").replaceChildren(el("div", { className: "okbox" }, ...flowRows(st, flow).map(okLine)), diagram, el("div", { className: "tablebox" }, el("table", { className: "table" }, el("thead", {}, head), el("tbody", {}, ...rows))));
 }
-async function diagnosticsText() {
-  const head = summaryLines(st, failedCount()).map((l) => `[${l.level}] ${l.key}: ${l.text}`).join("\n");
-  return invoke("debug_report", { save: false, head });
+function diagnosticsText() {
+  return invoke("debug_report", { save: false });
 }
 
 function openReset() {
@@ -461,7 +383,6 @@ $("promptcopy").onclick = () => navigator.clipboard.writeText(promptFull).then((
 $("aibtn").onclick = (e) => openAiMenu(e.currentTarget, newestRecording());
 $("aiplay").onclick = (e) => openAiMenu(e.currentTarget, selected);
 for (const b of document.querySelectorAll(".apibadge")) b.onclick = () => openSettings("api");
-for (const b of $("apiaccess").children) b.onclick = () => run("set_api_lan", { lan: b.dataset.lan === "1" });
 $("apidoc").onclick = () => dialog("open_link", { url: `${apiUrl(st.api.address)}/llms.txt` }).catch(fail);
 $("apion").onchange = () => run("set_api", { on: $("apion").checked });
 $("apicopy").onclick = () => invoke("api_info").then((info) => navigator.clipboard.writeText(info.token)).then(() => flash(t("Token copied"))).catch(fail);
@@ -474,13 +395,10 @@ $("avatarclear").onclick = () => run("set_profile", { avatar: "" });
 $("language").onchange = () => run("set_language", { language: $("language").value });
 $("sessionsound").onchange = () => { sessionSound = $("sessionsound").checked; store("sessionSound", sessionSound); };
 $("copyid").onclick = () => navigator.clipboard.writeText(st.id).then(() => flash(t("ID copied")));
-$("exportid").onclick = () => dialog("identity", { export: true }).catch(warn);
-$("importid").onclick = () => dialog("identity", { export: false }).catch(warn);
 $("opendata").onclick = $("storeopen").onclick = () => dialog("open_data_folder").catch(fail);
 for (const b of $("quality").children) b.onclick = () => run("set_quality", { id: b.dataset.q });
 $("relays").onchange = () => run("set_relays", { urls: $("relays").value.split("\n") });
 $("limit").onchange = () => run("set_limit", { mbps: $("limit").value ? Number($("limit").value) : null });
-for (const b of $("channel").children) b.onclick = () => run("set_channel", { channel: b.dataset.c }, () => { refresh(); checkUpdate(false); });
 $("checkupdate").onclick = () => checkUpdate(true);
 $("selnone").onclick = () => { picked.clear(); delete sigs.storage; renderStorage(); };
 $("selold").onclick = () => { picked = new Set(oldSessions(st.sets.filter((s) => !s.live))); delete sigs.storage; renderStorage(); };
@@ -489,7 +407,6 @@ $("oldfiles").onclick = async () => {
   if (await ask(t("Delete old files?"), t("Delete"), true)) invoke("delete_old_files").catch(fail).finally(loadStorage);
 };
 $("delno").onclick = () => $("deletedlg").close();
-for (const b of $("diagdlg").querySelectorAll("[data-dtab]")) b.onclick = () => openDiagnostics(b.dataset.dtab);
 $("diagcopy").onclick = () => diagnosticsText().then((text) => navigator.clipboard.writeText(text)).then(() => flash(t("Copied"))).catch(fail);
 $("diagsave").onclick = () => diagnosticsText().then((text) => dialog("save_text", { name: "ez-hanseikai-diagnostics.txt", text })).then((saved) => { if (saved) flash(t("Saved")); }).catch(fail);
 $("resetno").onclick = () => $("resetdlg").close();

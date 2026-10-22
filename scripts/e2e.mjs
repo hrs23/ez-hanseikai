@@ -45,8 +45,6 @@ const PLAY_START_S = 8;
 const LOG_TAIL_LINES = 15;
 const APPROVAL_WAIT_S = LOG_SYNC_S * 3;
 const SOURCE = { kind: "display", index: 1 };
-const MODEL_BYTES = { base: 147_951_465, medium: 1_533_763_059 };
-const WHISPER_BYTES = 8_573_270;
 const LOG_LINE_CHARS = 200;
 const EXPORT_FOLDER_S = 240;
 const GONE = { kind: "window", exe: "gone.exe", title: "Gone" };
@@ -264,7 +262,7 @@ function seedOld(dir) {
     fs.writeFileSync(path.join(dir, name), body);
   }
   fs.writeFileSync(path.join(dir, "log.old.txt"), "old log");
-  fs.writeFileSync(path.join(dir, "settings.json"), JSON.stringify({ limit_mbps: 0, keep_days: 0, source: "display:1", language: "xx", quality: "ultra", obs_port: 4455 }));
+  fs.writeFileSync(path.join(dir, "settings.json"), JSON.stringify({ limit_mbps: 0, keep_days: 0, source: "display:1", language: "xx", quality: "ultra", obs_port: 4455, channel: "beta", api_lan: true }));
   fs.writeFileSync(path.join(dir, "rooms.json"), JSON.stringify({ active: null, list: [{ id: "oldshape", title: "from an older version" }] }));
 }
 
@@ -423,17 +421,20 @@ async function together(app, [from, to]) {
   check(later.playing && later.tiles.every((t, i) => !t.has || !first.tiles[i].has || t.at > first.tiles[i].at), `${app.key}'s tiles did not move on: ${JSON.stringify([first, later])}`);
 }
 
-async function connects(app, peer, since = 0) {
-  const view = await invoke(app, "debug_view", { tab: "connections", since, set: null });
-  return view.events.filter((e) => e.text.startsWith(peer.id.slice(0, 10)) && e.text.includes(": connected")).length;
+function logLines(app) {
+  return fs.readFileSync(path.join(app.data, "log.txt"), "utf8").split("\n");
 }
 
-function api(app, method, route, { token, host, body, connect, timeout = CALL_S } = {}) {
+function connects(app, peer, from = 0) {
+  return logLines(app).slice(from).filter((l) => l.includes(` ${peer.id.slice(0, 10)} `) && l.includes(": connected (")).length;
+}
+
+function api(app, method, route, { token, host, body, timeout = CALL_S } = {}) {
   const port = API_PORTS[app.key];
   return new Promise((resolve, reject) => {
     const payload = body === undefined ? null : Buffer.from(typeof body === "string" ? body : JSON.stringify(body));
     const headers = { Host: host || `127.0.0.1:${port}`, ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(payload ? { "Content-Type": "application/json", "Content-Length": payload.length } : {}) };
-    const req = http.request({ host: connect || "127.0.0.1", port, method, path: route, headers, agent: false, timeout: timeout * 1000 }, (res) => {
+    const req = http.request({ host: "127.0.0.1", port, method, path: route, headers, agent: false, timeout: timeout * 1000 }, (res) => {
       const chunks = [];
       res.on("data", (c) => chunks.push(c));
       res.on("end", () => {
@@ -597,6 +598,14 @@ async function allSee(list, label, seconds, probe) {
 
 const meshed = (list, room, seconds = DIAL_S * 2) => allSee(list, "connected to each other", within(seconds), (st, app) => (!room || (st.room?.id === room && !st.room.pending)) && connected(st, list.filter((x) => x !== app).map((x) => x.id)));
 
+async function refusedOutsideARoom(app) {
+  const writes = [["add_event", { kind: "note", text: "x", target: {}, values: null }], ["create_invite", { reuse: false }], ["put_board_card", { room: "r1", card: "", text: "x" }], ["start_recording", {}]];
+  for (const [op, args] of writes) {
+    const said = await invoke(app, op, args).then(() => "", (e) => String(e.message || e));
+    check(said.includes("Join a room first."), `${app.key}'s ${op} outside a room: ${brief(said)}`);
+  }
+}
+
 async function asks(approver, joiner, inviter) {
   await invoke(joiner, "join_room", { code: await invoke(inviter, "create_invite", { reuse: false }) });
   await waitFor(`${approver.key} sees ${joiner.key} asking to join`, within(DIAL_S * 2), async () => (await state(approver)).asks.some((x) => x.id === joiner.id));
@@ -668,9 +677,11 @@ function logTail(app) {
 
 async function live(ctx) {
   let a, b, c;
-  await step("start A and B", async () => {
+  await step("start A and B, and nothing is written before A is in a room", async () => {
     a = await launch("a");
     b = await launch("b");
+    await refusedOutsideARoom(a);
+    check(!fs.existsSync(path.join(a.data, "rooms", "solo")), "a write without a room made a room folder");
   });
 
   await step("recording alone, the player follows the picture as it grows", async () => {
@@ -698,12 +709,13 @@ async function live(ctx) {
 
   await step("B joins A's room with approval", async () => {
     await asks(a, b, a);
+    await refusedOutsideARoom(b);
     await sleep(APPROVAL_WAIT_S * 1000);
     await invoke(a, "answer_ask", { id: b.id, approve: true });
     await meshed([a, b], ctx.room);
     const names = (await state(b)).names;
     check(names[a.id] === a.name, `B knows A as ${names[a.id]}`);
-    const dials = await connects(b, a);
+    const dials = connects(b, a);
     check(dials === 1, `B connected to A ${dials} times while waiting for approval`);
   });
 
@@ -757,12 +769,11 @@ async function live(ctx) {
 
   await step("B's time answer runs 8.2 s ahead and C gets none, and the recording still lines up", async () => {
     check(Math.abs((await state(b)).clock.offset_us - CLOCK_SHIFT_S * 1e6) < 5e5, `B measured ${brief((await state(b)).clock)}`);
-    check(await evaluate(b, `pcCards(st)[0].rows.find((r) => r.key === "Clock").text === "8.2 s behind"`), "B's own card does not say its clock is 8.2 s behind");
     const offset = (st, x) => st.peers.find((p) => p.id === x.id)?.offset_us;
     await waitFor("A measures B 8.2 s ahead and C in step", within(SYNC_ROUND_S * 2), async () => { const st = await state(a); return Math.abs(offset(st, b) - CLOCK_SHIFT_S * 1e6) < 1e6 && Math.abs(offset(st, c)) < 1e6; });
-    check((await state(c)).clock.offset_us === null && (await evaluate(c, `pcCards(st)[0].rows.find((r) => r.key === "Clock").text === t("Unreachable")`)), "C's own card does not say its time check is unreachable");
-    const flow = await invoke(c, "debug_view", { tab: "flow", since: 0, set: null });
-    check(await evaluate(c, `flowRows(st, ${JSON.stringify(flow)}, (k) => k).find((r) => r.key === "Time check").level === "warn"`), "C's Where data goes does not warn about the time check");
+    check((await state(c)).clock.offset_us === null, "C has a time answer");
+    const flow = await invoke(c, "debug_flow");
+    check(await evaluate(c, `flowRows(st, ${JSON.stringify(flow)}).find((r) => r.key === "Time check").level === "warn"`), "C's Where data goes does not warn about the time check");
     const players = setOf(await state(a), ctx.set).players;
     const begins = (x) => { const p = players.find((y) => y.owner === x.id); return (p.start_us - p.offset_us) / 1e6; };
     check(Math.abs(begins(b) - begins(a)) < within(1), `B's part starts ${begins(b) - begins(a)} s from A's`);
@@ -791,12 +802,12 @@ async function live(ctx) {
       await waitFor(`A's live tiles in step after ${view}`, within(SEGMENT_S * 3), async () => { const x = await evaluate(a, LIVE_PROBE); check(x.pos !== null && x.at.length === 3 && Math.max(...x.at) - Math.min(...x.at) < 1, brief(x)); return true; });
     };
     const all = [a, b, c];
-    const since = Object.fromEntries(await Promise.all(all.map(async (x) => [x.key, (await state(x)).now_us])));
+    const since = Object.fromEntries(all.map((x) => [x.key, logLines(x).length]));
     await inStep("openNow()");
     await watchLive(a, b, SEGMENT_S * 2);
     for (const app of all) {
       for (const peer of all.filter((x) => x !== app)) {
-        const n = await connects(app, peer, since[app.key]);
+        const n = connects(app, peer, since[app.key]);
         check(n === 0, `${app.key} connected to ${peer.key} ${n} times while the live tiles ran`);
       }
       check(connected(await state(app), all.filter((x) => x !== app).map((x) => x.id)), `${app.key} lost a peer`);
@@ -1024,10 +1035,11 @@ async function recover(ctx) {
   });
 
   await step("A's encoder is killed and A keeps recording the set in a new part", async () => {
-    const sink = (await invoke(a, "debug_view", { tab: "recording", since: 0, set: null })).engine.sink;
-    check(sink && sink.pid, "A has no encoder");
-    spawnSync("taskkill", ["/PID", String(sink.pid), "/F"], { stdio: "ignore" });
-    const parts = () => segsOf(logOf(a, ctx.room, a.id), ctx.set, "v").filter((r) => r.capture !== sink.capture).length;
+    const started = logLines(a).map((l) => l.match(/capture (\S+) started: .*, process (\d+)/)).filter(Boolean).pop();
+    check(started, "A has no encoder");
+    const [, capture, pid] = started;
+    spawnSync("taskkill", ["/PID", pid, "/F"], { stdio: "ignore" });
+    const parts = () => segsOf(logOf(a, ctx.room, a.id), ctx.set, "v").filter((r) => r.capture !== capture).length;
     await waitFor(`A logs ${SEGMENTS_AFTER_RESTART} segments of the set from a new encoder`, within(SEGMENT_S * (SEGMENTS_AFTER_RESTART + 2)), () => parts() >= SEGMENTS_AFTER_RESTART);
     const st = await state(a);
     check(st.active_set?.id === ctx.set && st.capture.working, `A is not recording the set again: ${brief(st.capture.status)}`);
@@ -1176,7 +1188,7 @@ async function library(ctx) {
     const all = [a, b, c];
     const sizes = Object.fromEntries(all.map((owner) => [owner.key, fileSize(logFile(owner, ctx.room, owner.id))]));
     await waitFor("every member pulls every log again", within(REQUEST_TIMEOUT_S + DIAL_S + LOG_SYNC_S), () => all.every((holder) => all.every((owner) => fileSize(logFile(holder, ctx.room, owner.id)) >= sizes[owner.key])));
-    await invoke(a, "set_room_plugin", { id: PLUGIN, on: true, settings: {} });
+    await invoke(a, "set_room_plugin", { id: PLUGIN, on: true });
     const seconds = within(JOB_CHECK_S + LOG_SYNC_S + ctx.durationS / KEYFRAME_DECODE_SPEED);
     const analysed = async (app) => setOf(await state(app), ctx.set)?.analysis?.find((x) => x.plugin === PLUGIN)?.state;
     await Promise.all(all.map((app) => waitFor(`${app.key}: the set's analysis done`, seconds, async () => (await analysed(app)) === "done")));
@@ -1209,38 +1221,23 @@ async function library(ctx) {
     for (const app of all) await waitFor(`${app.key} sees A as the runner again`, within(LOG_SYNC_S * 3), async () => (await invoke(app, "room_plugins")).find((x) => x.id === PLUGIN).runner === a.id);
   });
 
-  await step("the transcription extension follows the chosen model and the runner is chosen from the members", async () => {
-    await invoke(b, "set_room_plugin", { id: "transcribe", on: true, settings: {} });
-    await evaluate(b, `openExtensions.add("transcribe"); roomTab = "extensions"; go("room"); pollPlugins(); true`);
-    const shown = `[...$("roomtab").querySelectorAll(".plug")].find((p) => p.querySelector(".pt b").textContent === t("Transcription"))`;
-    await waitFor("B shows the extension rows collapsed except the one opened", within(UI_REFRESH_S * 5), () => evaluate(b, `(() => { const rows = [...$("roomtab").querySelectorAll(".plug")]; return rows.length > 1 && rows.filter((p) => p.classList.contains("open")).length === 1; })()`));
-    for (const [model, size] of Object.entries(MODEL_BYTES)) {
-      await waitFor("B shows the transcription settings", within(UI_REFRESH_S * 5), () => evaluate(b, `!!${shown} && !!${shown}.querySelector(".field select")`));
-      await evaluate(b, `(() => { const s = ${shown}.querySelector(".field select"); s.value = ${JSON.stringify(model)}; s.dispatchEvent(new Event("change")); return true; })()`);
-      await waitFor("B asks before changing the room", within(UI_REFRESH_S * 5), () => evaluate(b, `$("confirm").open`));
-      const said = await evaluate(b, `$("confirmtext").textContent`);
-      check(said === "Applies to everyone in the room.", `the change says "${said}" instead of that it applies to everyone`);
-      await evaluate(b, `$("confirmyes").click(); true`);
-      const text = bytes(size + WHISPER_BYTES);
-      await waitFor(`B's card offers ${text}`, within(LOG_SYNC_S * 2), () => evaluate(b, `${shown}.textContent.includes(${JSON.stringify(text)})`));
-      for (const app of [b, a]) {
-        await waitFor(`${app.key} offers the ${model} model`, within(LOG_SYNC_S * 2), async () => {
-          const p = (await invoke(app, "room_plugins")).find((x) => x.id === "transcribe");
-          return p.settings.model === model && p.download_bytes === size + WHISPER_BYTES;
-        });
-      }
-    }
-    const choices = await evaluate(b, `[...${shown}.querySelectorAll("select[aria-label='" + t("Runner") + "'] option")].map((o) => o.textContent).join()`);
+  await step("the runner of an extension is chosen from the members in its row", async () => {
+    await evaluate(b, `openExtensions.add(${JSON.stringify(PLUGIN)}); roomTab = "extensions"; go("room"); pollPlugins(); true`);
+    const runner = `[...$("roomtab").querySelectorAll(".plug")].find((p) => p.querySelector(".pt b").textContent === t("Apex matches"))?.querySelector("select[aria-label='" + t("Runner") + "']")`;
+    await waitFor("B shows the runner choice", within(UI_REFRESH_S * 5), () => evaluate(b, `!!${runner}`));
+    const choices = await evaluate(b, `[...${runner}.options].map((o) => o.textContent).join()`);
     check(choices.split(",").sort().join() === [a.name, b.name, c.name].sort().join(), `the runner choices are ${choices}`);
     await invoke(b, "dismiss_recovery");
     await screenshot(b, "plugins");
-    await evaluate(b, `(() => { const s = ${shown}.querySelector("select[aria-label='" + t("Runner") + "']"); s.value = ${JSON.stringify(c.id)}; s.dispatchEvent(new Event("change")); return true; })()`);
+    await evaluate(b, `(() => { const s = ${runner}; s.value = ${JSON.stringify(c.id)}; s.dispatchEvent(new Event("change")); return true; })()`);
     await waitFor("B asks before changing who runs it", within(UI_REFRESH_S * 5), () => evaluate(b, `$("confirm").open`));
+    const said = await evaluate(b, `$("confirmtext").textContent`);
+    check(said === "Applies to everyone in the room.", `the change says "${said}" instead of that it applies to everyone`);
     await evaluate(b, `$("confirmyes").click(); true`);
-    for (const app of [a, b, c]) await waitFor(`${app.key} sees C as the runner`, within(LOG_SYNC_S * 3), async () => (await invoke(app, "room_plugins")).find((x) => x.id === "transcribe").runner === c.id);
-    await invoke(b, "set_room_plugin", { id: "transcribe", on: false, settings: {} });
+    for (const app of [a, b, c]) await waitFor(`${app.key} sees C as the runner`, within(LOG_SYNC_S * 3), async () => (await invoke(app, "room_plugins")).find((x) => x.id === PLUGIN).runner === c.id);
+    await invoke(b, "set_plugin_runner", { id: PLUGIN, runner: a.id });
+    for (const app of [a, b, c]) await waitFor(`${app.key} sees A as the runner`, within(LOG_SYNC_S * 3), async () => (await invoke(app, "room_plugins")).find((x) => x.id === PLUGIN).runner === a.id);
   });
-
 
   await step("the room header menu lists the room commands and a rename in its settings reaches everyone", async () => {
     await evaluate(a, `$("sidenav").querySelector("[data-nav=board]").click(); true`);
@@ -1348,7 +1345,7 @@ async function library(ctx) {
   });
 
   await step("a relay server from the settings is tried first and a dead one is skipped", async () => {
-    const relayHost = async () => (await invoke(a, "debug_view", { tab: "flow", since: 0, set: null })).relay || "";
+    const relayHost = async () => (await invoke(a, "debug_flow")).relay || "";
     const refused = await invoke(a, "set_relays", { urls: ["relay"] }).then(() => null, (e) => String(e.message || e));
     check(refused && refused.includes("Not a relay URL: relay"), `a non-URL was taken: ${brief(refused)}`);
     await invoke(a, "set_relays", { urls: ["https://127.0.0.1:9/", "https://euc1-1.relay.n0.iroh.link./"] });
@@ -1356,7 +1353,7 @@ async function library(ctx) {
     check(connected(await state(a), [b.id, c.id]), "A lost a member while it changed relays");
     check((await state(a)).relays.length === 2, "the relay list is not kept");
     await invoke(a, "set_relays", { urls: [] });
-    await waitFor("A is back on the public relays", within(RELAY_WAIT_S * 3), async () => (await invoke(a, "debug_view", { tab: "connections", since: 0, set: null })).events.some((e) => e.text.startsWith("relay: the public relays")));
+    await waitFor("A is back on the public relays", within(RELAY_WAIT_S * 3), async () => logLines(a).some((l) => l.includes("relay: the public relays")));
     check(connected(await state(a), [b.id, c.id]), "A lost a member after the relay list was cleared");
   });
 
@@ -1531,7 +1528,7 @@ async function library(ctx) {
       check(r.status === 200 && Array.isArray(r.json?.[tail === "events" ? "events" : tail === "chapters" ? "chapters" : "lines"]), `${tail}: ${r.status} ${brief(r.text)}`);
     }
     const plugins = await api(a, "GET", `${room}/plugins`, { token });
-    check(plugins.status === 200 && ["apex-matches", "transcribe"].every((id) => plugins.json.plugins.some((p) => p.id === id)), `plugins: ${brief(plugins.json)}`);
+    check(plugins.status === 200 && plugins.json.plugins.some((p) => p.id === "apex-matches"), `plugins: ${brief(plugins.json)}`);
     check((await api(a, "GET", `${room}/jobs`, { token })).status === 404, "the jobs endpoint is still there");
     const apex = plugins.json.plugins.find((p) => p.id === PLUGIN);
     check(apex.runner === a.id && apex.left === 0 && apex.failed === 0 && found.analysis.some((x) => x.plugin === PLUGIN && x.state === "done"), `the extension: ${brief(apex)} ${brief(found.analysis)}`);
@@ -1564,7 +1561,7 @@ async function library(ctx) {
     check((await api(a, "GET", `${room}/board`, { token })).json.text === board, "the game plan reads back differently");
     await waitFor("A has the game plan as its team card", within(UI_REFRESH_S * 5), () => evaluate(a, `st.board.find((c) => c.card === "team").text === ${JSON.stringify(board)}`));
     await evaluate(a, `$("settings").close(); go("room"); true`);
-    await waitFor("A shows the API badge beside the AI button, not with the faces", within(UI_REFRESH_S * 5), () => evaluate(a, `(() => { const b = document.querySelector("#roompage .apibadge"); return !b.hidden && !b.classList.contains("lan") && b.nextElementSibling === $("aibtn") && !$("roomfaces").parentElement.querySelector(".apibadge"); })()`));
+    await waitFor("A shows the API badge beside the AI button, not with the faces", within(UI_REFRESH_S * 5), () => evaluate(a, `(() => { const b = document.querySelector("#roompage .apibadge"); return !b.hidden && b.nextElementSibling === $("aibtn") && !$("roomfaces").parentElement.querySelector(".apibadge"); })()`));
     await evaluate(a, `document.querySelector("#roompage .apibadge").click(); true`);
     check(await evaluate(a, `$("settings").open && settingsPane === "api" && !$("settings").querySelector('section[data-pane="api"]').hidden`), "the badge does not open Settings > API");
     await waitFor("A lists the endpoints", within(UI_REFRESH_S * 5), () => evaluate(a, `$("apiref").querySelectorAll("details").length >= 15 && $("apiref").textContent.includes("/v1/status") && $("apiref").querySelector("pre") !== null`));
@@ -1587,25 +1584,10 @@ async function library(ctx) {
     a.token = fresh;
     check((await api(a, "GET", "/v1", { token })).status === 401 && (await api(a, "GET", "/v1", { token: fresh })).status === 200, "the old token still works or the new one does not");
     check((await invoke(a, "api_info")).token === fresh, "the app keeps the old token");
-    const hosts = (await invoke(a, "api_info")).hosts;
-    check(hosts.length === 0, "the PC's addresses are listed while only this PC may connect");
-    await evaluate(a, `document.querySelector('#apiaccess [data-lan="1"]').click(); true`);
-    await waitFor("A allows other devices", within(UI_REFRESH_S * 5), () => evaluate(a, `st.api.lan && !$("apilanbox").hidden`));
-    const own = (await invoke(a, "api_info")).hosts.find((h) => /^\d+\.\d+\.\d+\.\d+:/.test(h));
-    check(readJson(path.join(a.data, "settings.json")).api_lan === true, "settings.json does not keep the access choice");
-    if (own) {
-      const [address] = own.split(":");
-      const reached = await api(a, "GET", "/v1", { token: fresh, host: own, connect: address });
-      check(reached.status === 200, `this PC's own address: ${reached.status}`);
-      check((await api(a, "GET", "/v1", { host: own, connect: address })).status === 401, "an address without the token was not refused");
-      check((await api(a, "GET", "/v1", { token: fresh, host: `evil.example:${API_PORTS.a}`, connect: address })).status === 403, "a foreign Host header was not refused for other devices");
-    }
-    await waitFor("A shows the warning on the badge", within(UI_REFRESH_S * 5), () => evaluate(a, `go("room"), document.querySelector("#roompage .apibadge").classList.contains("lan") && document.querySelector("#roompage .apibadge").title.includes("Other devices on your network")`));
+    await evaluate(a, `$("settings").close(); go("room"); true`);
     const faces = await evaluate(a, `(() => { const was = sideWidth; setSideWidth(clampSide(0), false); const f = $("roomfaces"); const r = { shown: f.querySelectorAll(".av").length, clipped: f.scrollWidth > f.clientWidth }; setSideWidth(was, false); return r; })()`);
     check(faces.shown === 3 && !faces.clipped, `the faces at the narrowest sidebar: ${brief(faces)}`);
-    await evaluate(a, `openSettings("api"); document.querySelector('#apiaccess [data-lan="0"]').click(); true`);
-    await waitFor("A limits the API to this PC", within(UI_REFRESH_S * 5), () => evaluate(a, `!st.api.lan && $("apilanbox").hidden`));
-    if (own) check(await api(a, "GET", "/v1", { token: fresh, host: own, connect: "127.0.0.1" }).then((r) => r.status === 403), "this PC's own address is accepted again for this PC only");
+    await evaluate(a, `openSettings("api"); true`);
     await evaluate(a, `$("apion").click(); true`);
     await waitFor("A switches the API off", within(UI_REFRESH_S * 5), () => evaluate(a, `!st.api.on && $("apirows").hidden`));
     check(await api(a, "GET", "/llms.txt").then(() => false, () => true), "the API still answers after it was switched off");
@@ -1617,18 +1599,12 @@ async function library(ctx) {
     await evaluate(a, `$("settings").close(); true`);
   });
 
-  await step("Diagnostics is one screen with a masked report and the old developer window is gone", async () => {
-    check((await evaluate(a, `invoke("open_debug").then(() => "open", () => "gone")`)) === "gone", "the developer window can still be opened");
-    await evaluate(a, `openDiagnostics("summary"); true`);
-    check(await evaluate(a, `[...$("diagdlg").querySelectorAll("[data-dtab]")].map((x) => x.dataset.dtab).join() === "summary,flow,pcs,traffic,log,jobs"`), "Diagnostics lacks its tabs");
-    for (const tab of ["flow", "pcs", "traffic", "log", "jobs"]) {
-      await evaluate(a, `openDiagnostics(${JSON.stringify(tab)}); true`);
-      await waitFor(`Diagnostics shows ${tab}`, within(UI_REFRESH_S * 5), () => evaluate(a, `$("diagbody").textContent.length > 0 && !$("diagbody").textContent.includes(t("Loading…"))`));
-    }
-    await evaluate(a, `openDiagnostics("flow"); true`);
+  await step("Diagnostics opens on where data goes and copies a masked report", async () => {
+    await evaluate(a, `openDiagnostics(); true`);
+    await waitFor("Diagnostics shows where data goes", within(UI_REFRESH_S * 5), () => evaluate(a, `!!$("diagbody").querySelector(".flowmap") && $("diagbody").textContent.includes(t("Time check"))`));
     await screenshot(a, "diagnostics");
     const report = await evaluate(a, `diagnosticsText()`);
-    check(report.includes("ez-hanseikai") && report.includes("jobs") && report.includes("recent log") && report.includes("\nhardware\n") && report.includes("\nclocks\n") && report.includes("\nwhere data goes\n"), "the report lacks its parts");
+    check(report.includes("ez-hanseikai") && report.includes("environment check") && report.includes("jobs") && report.includes("recent log") && report.includes("\nhardware: ") && report.includes("\nwhere data goes\n"), "the report lacks its parts");
     for (const secret of [NAMES.a, NAMES.b, NAMES.c, a.id, b.id]) check(!report.includes(secret), `the report holds ${secret.slice(0, 4)}`);
     check(!/[A-Za-z]:\\/.test(report) && !/\b\d{1,3}(\.\d{1,3}){3}\b/.test(report), "the report holds a path or an address");
     await evaluate(a, `$("diagdlg").close(); true`);
@@ -1745,14 +1721,6 @@ async function library(ctx) {
     }
     await invoke(a, "stop_recording");
     await allSee(all, "the set ended", within(LOG_SYNC_S * 3), (st) => !st.active_set && setOf(st, winner) && !setOf(st, winner).live);
-  });
-
-  await step("the update channel is kept in the settings", async () => {
-    check((await state(b)).channel === "stable", "the channel does not start as stable");
-    await invoke(b, "set_channel", { channel: "beta" });
-    check(readJson(path.join(b.data, "settings.json")).channel === "beta", "settings.json does not keep the beta channel");
-    check(await invoke(b, "check_update").then(() => true, (e) => String(e).length > 0), "checking the beta channel failed");
-    await invoke(b, "set_channel", { channel: "stable" });
   });
 
   await step("the microphone, the mix and the hotkey are kept in the settings", async () => {

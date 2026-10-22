@@ -7,7 +7,7 @@ use iroh::Watcher;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
-use crate::{api, audio, check, clean_name, clean_note, clean_text, data, debug, export, ffmpeg, jobs, merge, net, now_us, party, record, relay, room, shell, sources, Core, BOARD_MAX, CHANNELS, EVENT_KINDS, NAME_MAX, NOTE_MAX, REPO, VALUES_MAX};
+use crate::{api, audio, clean_name, clean_note, clean_text, data, debug, export, ffmpeg, jobs, merge, net, now_us, party, record, relay, room, shell, sources, Core, BOARD_MAX, EVENT_KINDS, NAME_MAX, NOTE_MAX, REPO, VALUES_MAX};
 
 pub type Op = fn(&Arc<Core>, Value) -> Result<Value, String>;
 
@@ -23,7 +23,6 @@ pub const OPS: &[(&str, Op)] = &[
     ("cancel_invites", cancel_invites),
     ("answer_ask", answer_ask),
     ("remove_peer", remove_peer),
-    ("check_peer", check_peer),
     ("measure_speed", |c, a| tauri::async_runtime::block_on(net::measure_speed(c, &arg::<String>(&a, "id")?)).ok_or_else(|| "No answer".into())),
     ("start_recording", |c, a| null(room::start_set(c, arg(&a, "debrief")?))),
     ("stop_recording", stop_recording),
@@ -41,7 +40,6 @@ pub const OPS: &[(&str, Op)] = &[
     ("set_profile", set_profile),
     ("set_language", set_language),
     ("set_hotkey", |c, a| null(shell::set_hotkey(c, &arg::<String>(&a, "keys")?))),
-    ("set_channel", set_channel),
     ("set_layout", set_layout),
     ("check_update", |c, _| Ok(json!(find_update(c)?.map(|u| u.version)))),
     ("install_update", install_update),
@@ -63,7 +61,6 @@ pub const OPS: &[(&str, Op)] = &[
     ("room_plugins", jobs::room_plugins),
     ("set_room_plugin", jobs::set_room_plugin),
     ("set_plugin_runner", jobs::set_plugin_runner),
-    ("prepare_plugin", jobs::prepare_plugin),
     ("retry_job", jobs::retry_job),
     ("delete_set", |c, a| {
         let (room, set) = recording_ids(c, &a)?;
@@ -77,12 +74,11 @@ pub const OPS: &[(&str, Op)] = &[
     ("export_check", |c, _| null(export::check(c))),
     ("export_folder", export_folder),
     ("set_api", set_api),
-    ("set_api_lan", set_api_lan),
     ("new_api_token", new_api_token),
     ("api_info", api_info),
     ("api_reference", |_, _| Ok(json!(api::reference()))),
     ("state", |c, _| Ok(room::state_json(c))),
-    ("debug_view", debug::debug_view),
+    ("debug_flow", debug::debug_flow),
     ("debug_report", debug::debug_report),
 ];
 
@@ -130,8 +126,8 @@ fn remove_room(core: &Arc<Core>, args: Value) -> Result<Value, String> {
 }
 
 fn create_invite(core: &Arc<Core>, args: Value) -> Result<Value, String> {
+    let room = core.joined_room()?;
     let reuse: bool = arg(&args, "reuse")?;
-    let room = core.active_room_id();
     let mut invites = core.invites.lock().unwrap();
     let token = match invites.iter().rev().find(|(_, r)| *r == room).filter(|_| reuse) {
         Some((token, _)) => token.clone(),
@@ -147,7 +143,7 @@ fn create_invite(core: &Arc<Core>, args: Value) -> Result<Value, String> {
 fn cancel_invites(core: &Arc<Core>, _: Value) -> Result<Value, String> {
     core.invites.lock().unwrap().clear();
     core.asks.lock().unwrap().clear();
-    net::broadcast(core, net::asks_message(core));
+    net::send_asks(core);
     Ok(Value::Null)
 }
 
@@ -157,17 +153,7 @@ fn answer_ask(core: &Arc<Core>, args: Value) -> Result<Value, String> {
 }
 
 fn remove_peer(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    room::remove_member(core, &arg::<String>(&args, "id")?);
-    Ok(Value::Null)
-}
-
-fn check_peer(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    let id: String = arg(&args, "id")?;
-    if id != core.me() {
-        return Ok(tauri::async_runtime::block_on(net::check_peer(core, &id)));
-    }
-    warm(core);
-    Ok(json!(check::run(core)))
+    null(room::remove_member(core, &arg::<String>(&args, "id")?))
 }
 
 fn stop_recording(core: &Arc<Core>, _: Value) -> Result<Value, String> {
@@ -175,10 +161,14 @@ fn stop_recording(core: &Arc<Core>, _: Value) -> Result<Value, String> {
     Ok(Value::Null)
 }
 
+pub fn log_and_share(core: &Arc<Core>, room: &str, record: &Value) {
+    core.append_log(room, record);
+    party::send(core);
+}
+
 fn log_event(core: &Arc<Core>, room: &str, kind: &str, text: &str, target: Value, values: Value) -> Value {
     let id = now_us();
-    core.append_log(room, &room::user_event(id, kind, text, target, values));
-    party::send(core);
+    log_and_share(core, room, &room::user_event(id, kind, text, target, values));
     json!(id)
 }
 
@@ -302,16 +292,6 @@ fn set_language(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     Ok(Value::Null)
 }
 
-fn set_channel(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    let channel: String = arg(&args, "channel")?;
-    if !CHANNELS.contains(&channel.as_str()) {
-        return Err(format!("unknown channel {channel}"));
-    }
-    *core.channel.lock().unwrap() = channel;
-    core.save_settings();
-    Ok(Value::Null)
-}
-
 fn set_layout(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     *core.layout.lock().unwrap() = args["layout"].clone();
     core.save_settings();
@@ -319,35 +299,19 @@ fn set_layout(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     Ok(Value::Null)
 }
 
-fn update_allowed(core: &Core) -> Result<(), String> {
-    if core.export.lock().unwrap().is_some() {
-        return Err("Wait for the export to finish before updating.".into());
-    }
-    Ok(())
-}
-
-pub fn update_url(channel: &str) -> String {
-    let file = if channel == CHANNELS[1] { "latest-beta.json" } else { "latest.json" };
-    format!("{REPO}/releases/download/updater/{file}")
-}
-
 fn find_update(core: &Core) -> Result<Option<tauri_plugin_updater::Update>, String> {
     use tauri_plugin_updater::UpdaterExt;
-    let channel = core.channel.lock().unwrap().clone();
-    let url = tauri::Url::parse(&update_url(&channel)).map_err(|e| e.to_string())?;
+    let url = tauri::Url::parse(&format!("{REPO}/releases/download/updater/latest.json")).map_err(|e| e.to_string())?;
     let updater = core.app.updater_builder().endpoints(vec![url]).and_then(|b| b.build()).map_err(|e| e.to_string())?;
     tauri::async_runtime::block_on(updater.check()).map_err(|e| e.to_string())
 }
 
 fn install_update(core: &Arc<Core>, _: Value) -> Result<Value, String> {
-    update_allowed(core)?;
     let update = find_update(core)?.ok_or("No update is available.")?;
     let bytes = tauri::async_runtime::block_on(update.download(|_, _| {}, || {})).map_err(|e| e.to_string())?;
-    update_allowed(core)?;
     tracing::info!("installing version {}", update.version);
     data::resume_later(core);
-    jobs::stop_and_wait(core);
-    data::unlock(&core.dir);
+    data::release(core);
     let installed = update.install(bytes).map_err(|e| e.to_string());
     if installed.is_err() {
         let _ = data::lock(&core.dir);
@@ -359,10 +323,7 @@ fn install_update(core: &Arc<Core>, _: Value) -> Result<Value, String> {
 fn reset(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     let keep_rooms: bool = arg(&args, "keep_rooms")?;
     tracing::info!("resetting the app{}", if keep_rooms { ", keeping the rooms" } else { "" });
-    room::end_set(core, false, None);
-    export::cancel(core);
-    jobs::stop_and_wait(core);
-    data::unlock(&core.dir);
+    data::release(core);
     data::reset(&core.dir, keep_rooms);
     data::forget(&core.files, &core.dir);
     core.app.restart()
@@ -379,6 +340,7 @@ fn retry_ffmpeg(_: &Arc<Core>, _: Value) -> Result<Value, String> {
 }
 
 fn add_event(core: &Arc<Core>, args: Value) -> Result<Value, String> {
+    let room = core.joined_room()?;
     let (kind, text): (String, String) = (arg(&args, "kind")?, arg(&args, "text")?);
     let (target, values) = (args["target"].clone(), args["values"].clone());
     if !EVENT_KINDS.contains(&kind.as_str()) || !target.is_object() || values.to_string().len() > VALUES_MAX {
@@ -388,10 +350,11 @@ fn add_event(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     if kind == "note" && text.trim().is_empty() {
         return Err("Write something first.".into());
     }
-    Ok(log_event(core, &core.active_room_id(), &kind, &text, target, values))
+    Ok(log_event(core, &room, &kind, &text, target, values))
 }
 
 fn event_action(core: &Arc<Core>, args: Value) -> Result<Value, String> {
+    let room = core.joined_room()?;
     let mut record = match arg::<String>(&args, "kind")?.as_str() {
         "edit" => json!({"k": "event_edit"}),
         "delete" => json!({"k": "event_del"}),
@@ -400,23 +363,20 @@ fn event_action(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     };
     let text = clean_note(&arg::<String>(&args, "text")?, BOARD_MAX);
     merge(&mut record, &json!({"id": arg::<i64>(&args, "id")?, "t_us": now_us(), "text": text, "tags": room::tags(&text)}));
-    core.append_log(&core.active_room_id(), &record);
-    party::send(core);
+    log_and_share(core, &room, &record);
     Ok(Value::Null)
 }
 
 fn delete_ai_notes(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     let (room, set) = recording_ids(core, &args)?;
-    core.append_log(&room, &json!({"k": "ai_del", "set": set, "t_us": now_us()}));
-    party::send(core);
+    core.check_joined(&room)?;
+    log_and_share(core, &room, &json!({"k": "ai_del", "set": set, "t_us": now_us()}));
     Ok(Value::Null)
 }
 
 fn put_board_card(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     let room: String = arg(&args, "room")?;
-    if room != core.active_room_id() {
-        return Err("Enter the room first.".into());
-    }
+    core.check_joined(&room)?;
     let wanted: String = arg(&args, "card")?;
     let card = if wanted.is_empty() { format!("c:{}", room::random_hex(4)) } else { wanted };
     if !room::board_card_valid(&card) {
@@ -451,7 +411,8 @@ fn open_board_window(core: &Arc<Core>, _: Value) -> Result<Value, String> {
 
 fn party_on(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     let me = core.me();
-    core.party.lock().unwrap().turn(arg(&args, "on")?, &me, &args["view"], &core.active_room_id(), now_us());
+    let room = core.joined_room()?;
+    core.party.lock().unwrap().turn(arg(&args, "on")?, &me, &args["view"], &room, now_us());
     party::send(core);
     Ok(Value::Null)
 }
@@ -471,8 +432,9 @@ fn party_typing(core: &Arc<Core>, args: Value) -> Result<Value, String> {
 }
 
 fn draw(core: &Arc<Core>, args: Value) -> Result<Value, String> {
+    let Some(room) = core.room_id() else { return Ok(Value::Null) };
     if core.party.lock().unwrap().on {
-        net::broadcast(core, json!({"t": "draw", "room": core.active_room_id(), "stroke": args["stroke"]}));
+        net::broadcast(core, json!({"t": "draw", "room": room, "stroke": args["stroke"]}));
     }
     Ok(Value::Null)
 }
@@ -501,13 +463,6 @@ fn set_api(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     Ok(Value::Null)
 }
 
-fn set_api_lan(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    *core.api_lan.lock().unwrap() = arg(&args, "lan")?;
-    core.save_settings();
-    api::apply(core);
-    Ok(Value::Null)
-}
-
 fn new_api_token(core: &Arc<Core>, _: Value) -> Result<Value, String> {
     *core.api_token.lock().unwrap() = room::random_hex(api::TOKEN_BYTES);
     core.save_settings();
@@ -517,8 +472,7 @@ fn new_api_token(core: &Arc<Core>, _: Value) -> Result<Value, String> {
 
 fn api_info(core: &Arc<Core>, _: Value) -> Result<Value, String> {
     let on = *core.api_on.lock().unwrap();
-    let lan = *core.api_lan.lock().unwrap();
-    Ok(json!({"on": on, "lan": lan, "address": api::address(), "hosts": if on && lan { api::lan_addresses() } else { Vec::new() }, "token": if on { core.api_token.lock().unwrap().clone() } else { String::new() }, "error": core.api_error.lock().unwrap().clone()}))
+    Ok(json!({"on": on, "address": api::address(), "token": if on { core.api_token.lock().unwrap().clone() } else { String::new() }, "error": core.api_error.lock().unwrap().clone()}))
 }
 
 #[cfg(test)]
@@ -526,7 +480,7 @@ mod tests {
     use super::*;
     use crate::names;
 
-    const WINDOW_COMMANDS: [&str; 6] = ["identity", "open_set_folder", "open_data_folder", "open_link", "pick_folder", "save_text"];
+    const WINDOW_COMMANDS: [&str; 5] = ["open_set_folder", "open_data_folder", "open_link", "pick_folder", "save_text"];
 
     fn files(dir: &str, ext: &str) -> Vec<(String, String)> {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join(dir);
@@ -581,12 +535,5 @@ mod tests {
         assert!(out[0]["width"].is_null());
         assert_eq!((out[1]["width"].as_u64(), out[1]["height"].as_u64()), (Some(2560), Some(1440)));
         assert!(out[2]["width"].is_null());
-    }
-
-    #[test]
-    fn each_update_channel_reads_its_own_manifest() {
-        assert!(update_url("stable").ends_with("/updater/latest.json"));
-        assert!(update_url("beta").ends_with("/updater/latest-beta.json"));
-        assert_eq!(update_url("nonsense"), update_url("stable"));
     }
 }

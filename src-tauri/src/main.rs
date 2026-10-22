@@ -7,7 +7,6 @@ mod check;
 mod clock;
 mod data;
 mod debug;
-mod download;
 mod export;
 mod ffmpeg;
 mod hw;
@@ -51,7 +50,6 @@ const VALUES_MAX: usize = 32 << 10;
 const EVENT_KINDS: [&str; 3] = ["note", "drawing", "board"];
 const NAME_MAX: usize = 24;
 pub const ROOM_NAME_MAX: usize = 40;
-pub const CHANNELS: [&str; 2] = ["stable", "beta"];
 const DISK_EVERY: Duration = Duration::from_secs(20);
 const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required";
 static TEST_PORT: LazyLock<Option<String>> = LazyLock::new(|| std::env::var("EZH_TEST").ok());
@@ -168,7 +166,6 @@ pub struct Peer {
     pub announce: bool,
     pub codecs: Vec<String>,
     pub info: Option<(String, u32)>,
-    pub hw: Value,
     pub live: Option<net::PeerLive>,
     pub speaking: bool,
     pub seen_us: Option<i64>,
@@ -195,7 +192,7 @@ impl Peer {
     }
 
     pub fn new(id: EndpointId, name: String, task: tauri::async_runtime::JoinHandle<()>) -> Self {
-        Self { id, name, conn: None, offset_us: None, failures: 0, announce: true, codecs: default_codecs(), info: None, hw: Value::Null, live: None, speaking: false, seen_us: None, have: HashMap::new(), logs: HashMap::new(), asks: Vec::new(), drops: [None; 2], served: None, task }
+        Self { id, name, conn: None, offset_us: None, failures: 0, announce: true, codecs: default_codecs(), info: None, live: None, speaking: false, seen_us: None, have: HashMap::new(), logs: HashMap::new(), asks: Vec::new(), drops: [None; 2], served: None, task }
     }
 }
 
@@ -212,7 +209,6 @@ pub struct Core {
     pub rooms: Mutex<room::Rooms>,
     pub active_set: Mutex<Option<room::ActiveSet>>,
     pub tz_offset_s: i64,
-    pub channel: Mutex<String>,
     pub codecs: Mutex<Vec<String>>,
     pub following: Mutex<HashSet<String>>,
     pub recovery: Mutex<Option<String>>,
@@ -239,7 +235,6 @@ pub struct Core {
     pub language: Mutex<String>,
     pub hotkey: Mutex<String>,
     pub api_on: Mutex<bool>,
-    pub api_lan: Mutex<bool>,
     pub api_token: Mutex<String>,
     pub api_error: Mutex<String>,
     logs: Mutex<HashMap<PathBuf, (Arc<Vec<Value>>, u64)>>,
@@ -322,7 +317,6 @@ impl Core {
             "color": *self.color.lock().unwrap(),
             "avatar": *self.avatar.lock().unwrap(),
             "limit_mbps": *self.limit_mbps.lock().unwrap(),
-            "channel": *self.channel.lock().unwrap(),
             "mic": self.engine.mic.lock().unwrap().clone(),
             "mix": self.engine.mix.lock().unwrap().clone(),
             "quality": self.engine.quality.lock().unwrap().clone(),
@@ -330,7 +324,6 @@ impl Core {
             "layout": *self.layout.lock().unwrap(),
             "hotkey": *self.hotkey.lock().unwrap(),
             "api": *self.api_on.lock().unwrap(),
-            "api_lan": *self.api_lan.lock().unwrap(),
             "api_token": *self.api_token.lock().unwrap(),
             "relays": self.relays.lock().unwrap().iter().map(|u| u.to_string()).collect::<Vec<_>>(),
         });
@@ -372,12 +365,6 @@ async fn call(core: State<'_, Arc<Core>>, name: String, args: Value) -> Result<V
     let op = ops::find(&name).ok_or("No such operation.")?;
     let core = core.inner().clone();
     off_thread(move || op(&core, args)).await?
-}
-
-#[tauri::command]
-fn identity(core: State<Arc<Core>>, export: bool) {
-    let core = core.inner().clone();
-    std::thread::spawn(move || if export { shell::export_identity(&core.app, &core) } else { shell::import_identity(&core.app, &core) });
 }
 
 #[tauri::command]
@@ -443,7 +430,7 @@ async fn init(app: AppHandle, dir: PathBuf, left_lock: bool) -> Result<Arc<Core>
         }
     } else {
         if dir.join("rooms.json").exists() || dir.join("settings.json").exists() {
-            recovery = Some("key.bin was missing, so this PC now has a new identity. Import your identity (File menu) to keep your old one.".into());
+            recovery = Some("key.bin was missing, so this PC now has a new identity. To keep your old one, close the app and copy your key.bin back into the data folder.".into());
         }
         let key = SecretKey::generate();
         write_whole(&key_path, &key.to_bytes())?;
@@ -471,7 +458,6 @@ async fn init(app: AppHandle, dir: PathBuf, left_lock: bool) -> Result<Arc<Core>
         rooms: Mutex::new(rooms),
         active_set: Mutex::new(None),
         tz_offset_s: data::tz_offset_seconds(),
-        channel: Mutex::new(settings["channel"].as_str().unwrap_or(CHANNELS[0]).to_string()),
         codecs: Mutex::new(default_codecs()),
         following: Mutex::new(HashSet::new()),
         recovery: Mutex::new(recovery),
@@ -498,7 +484,6 @@ async fn init(app: AppHandle, dir: PathBuf, left_lock: bool) -> Result<Arc<Core>
         language: Mutex::new(settings["language"].as_str().unwrap_or_default().to_string()),
         hotkey: Mutex::new(settings["hotkey"].as_str().filter(|h| shell::hotkey(h).is_some()).unwrap_or(shell::DEFAULT_HOTKEY).to_string()),
         api_on: Mutex::new(settings["api"] == true),
-        api_lan: Mutex::new(settings["api_lan"] == true),
         api_token: Mutex::new(settings["api_token"].as_str().filter(|t| api::token_valid(t)).unwrap_or_default().to_string()),
         api_error: Mutex::new(String::new()),
         logs: Mutex::new(HashMap::new()),
@@ -522,9 +507,6 @@ pub fn clean_settings(mut settings: Value) -> Value {
     }
     if !settings["limit_mbps"].as_f64().is_some_and(|v| v.is_finite() && v > 0.0) {
         settings["limit_mbps"] = Value::Null;
-    }
-    if !settings["channel"].as_str().is_some_and(|c| CHANNELS.contains(&c)) {
-        settings["channel"] = Value::Null;
     }
     if !settings["language"].as_str().is_some_and(|l| ["", "en", "ja"].contains(&l)) {
         settings["language"] = json!("");
@@ -628,7 +610,7 @@ fn main() {
             std::thread::spawn(move || thumbs::keeper(c));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![call, identity, open_set_folder, open_data_folder, open_link, pick_folder, save_text])
+        .invoke_handler(tauri::generate_handler![call, open_set_folder, open_data_folder, open_link, pick_folder, save_text])
         .build(tauri::generate_context!())
         .expect("failed to start");
     app.run(|app, event| {
@@ -702,15 +684,15 @@ mod tests {
 
     #[test]
     fn settings_from_older_versions_fall_back_to_defaults() {
-        let old = clean_settings(json!({"name": "Ren", "limit_mbps": 0, "keep_days": 30, "channel": "nightly", "language": "fr", "quality": "ultra", "obs_port": 4455}));
+        let old = clean_settings(json!({"name": "Ren", "limit_mbps": 0, "keep_days": 30, "language": "fr", "quality": "ultra", "obs_port": 4455}));
         assert_eq!(old["name"], "Ren");
-        assert!(old["limit_mbps"].is_null() && old["channel"].is_null() && old["quality"].is_null());
+        assert!(old["limit_mbps"].is_null() && old["quality"].is_null());
         assert_eq!(old["language"], "");
         assert_eq!(old["relays"], json!([]));
         assert_eq!(clean_settings(json!({"relays": ["https://relay.example.org/", "http://relay.example.org", "relay", 5, " "]}))["relays"], json!(["https://relay.example.org/"]));
         assert_eq!(clean_settings(json!({"relays": "https://relay.example.org/"}))["relays"], json!([]));
-        let kept = clean_settings(json!({"limit_mbps": 8.5, "channel": "beta", "language": "ja", "quality": "high"}));
-        assert_eq!((kept["limit_mbps"].as_f64(), kept["channel"].as_str(), kept["language"].as_str(), kept["quality"].as_str()), (Some(8.5), Some("beta"), Some("ja"), Some("high")));
+        let kept = clean_settings(json!({"limit_mbps": 8.5, "language": "ja", "quality": "high"}));
+        assert_eq!((kept["limit_mbps"].as_f64(), kept["language"].as_str(), kept["quality"].as_str()), (Some(8.5), Some("ja"), Some("high")));
         assert_eq!(clean_settings(json!([1, 2])), clean_settings(json!({})));
     }
 

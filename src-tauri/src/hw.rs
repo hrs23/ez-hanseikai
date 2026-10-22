@@ -3,16 +3,13 @@ use std::sync::atomic::Ordering;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use serde_json::{json, Value};
+use serde_json::Value;
 use windows_capture::monitor::Monitor;
 
 use crate::{clean_text, debug, ffmpeg, now_us, record};
 use crate::Core;
 
 const TEXT_MAX: usize = 80;
-const RAM_MAX_MB: u64 = 16 << 20;
-const DISPLAY_MAX: u64 = 65536;
-const FPS_MAX: f64 = 1000.0;
 pub const SLOW_SEND: Duration = Duration::from_millis(1500);
 const SLOW_LOG_EVERY: Duration = Duration::from_secs(30);
 const WINDOW_MS: u64 = 5000;
@@ -88,46 +85,21 @@ pub struct Live {
     pub dropped: u64,
 }
 
-pub fn pc(hw: &Hardware, encoder: Option<(&str, &str)>, live: Option<Live>) -> Value {
+pub fn line(hw: Option<&Hardware>, encoder: Option<(&str, &str)>, live: Option<Live>) -> String {
+    let Some(hw) = hw else { return "hardware: not read yet".into() };
     let gpu = pick_gpu(&hw.gpus, encoder.map_or("", |e| e.0));
-    let mut out = json!({"gpu": gpu.map(|g| &g.0), "driver": gpu.map(|g| &g.1), "cpu": hw.cpu, "ram_mb": hw.ram_mb, "display": [hw.display.0, hw.display.1], "os": hw.os});
-    if let Some((name, codec)) = encoder {
-        out["encoder"] = json!(encoder_label(name));
-        out["codec"] = json!(codec);
-    }
+    let (gpu, driver) = gpu.map_or(("?", "?"), |g| (g.0.as_str(), g.1.as_str()));
+    let (label, codec) = encoder.map_or(("?", "?"), |(name, codec)| (encoder_label(name), codec));
+    let mut out = format!("hardware: gpu {gpu} driver {driver} encoder {label} {codec} cpu {} ram {} MB display {}x{} os {}", hw.cpu, hw.ram_mb, hw.display.0, hw.display.1, hw.os);
     if let Some(l) = live {
-        out["fps"] = json!(crate::tenth(l.fps));
-        out["dropped"] = json!(l.dropped);
+        out.push_str(&format!(" capture {:.1} fps dropped {}", l.fps, l.dropped));
     }
     out
 }
 
-pub fn share(core: &Core) -> Value {
-    let Some(hw) = HARDWARE.get() else { return Value::Null };
+pub fn report(core: &Core) -> String {
     let encoder = ffmpeg::encoders_ready().then(|| ffmpeg::pick(&record::usable_codecs(core))).map(|(name, codec, _)| (name, codec));
-    pc(hw, encoder, *LIVE.lock().unwrap())
-}
-
-pub fn sanitize(v: &Value) -> Value {
-    let mut out = serde_json::Map::new();
-    for key in ["gpu", "driver", "cpu", "os", "encoder", "codec"] {
-        if let Some(s) = v[key].as_str().map(|s| clean_text(s, TEXT_MAX)).filter(|s| !s.is_empty()) {
-            out.insert(key.into(), json!(s));
-        }
-    }
-    if let Some(n) = v["ram_mb"].as_u64().filter(|n| *n <= RAM_MAX_MB) {
-        out.insert("ram_mb".into(), json!(n));
-    }
-    if let [Some(w), Some(h)] = [0, 1].map(|i| v["display"][i].as_u64().filter(|n| *n <= DISPLAY_MAX)) {
-        out.insert("display".into(), json!([w, h]));
-    }
-    if let Some(f) = v["fps"].as_f64().filter(|f| (0.0..=FPS_MAX).contains(f)) {
-        out.insert("fps".into(), json!(f));
-    }
-    if let Some(n) = v["dropped"].as_u64() {
-        out.insert("dropped".into(), json!(n));
-    }
-    if out.is_empty() { Value::Null } else { Value::Object(out) }
+    line(HARDWARE.get(), encoder, *LIVE.lock().unwrap())
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -228,47 +200,6 @@ pub fn slow_send(peer: &str, took: Duration, queued: usize) {
     }
 }
 
-pub fn offset_text(us: Option<i64>) -> String {
-    match us {
-        None => "unknown".into(),
-        Some(us) if us.abs() >= 1_000_000 => format!("{:+.1} s", us as f64 / 1e6),
-        Some(us) => format!("{:+} ms", us / 1000),
-    }
-}
-
-pub fn report(me: &Value, others: &[(String, Value)], offsets: &[(String, Option<i64>)], clock: &Value) -> String {
-    let line = |who: &str, v: &Value| {
-        let display = match (v["display"][0].as_u64(), v["display"][1].as_u64()) {
-            (Some(w), Some(h)) => format!("{w}x{h}"),
-            _ => "?".into(),
-        };
-        let s = |k: &str| v[k].as_str().unwrap_or("?").to_string();
-        let mut out = format!(
-            "  {who}: gpu {} driver {} encoder {} {} cpu {} ram {} MB display {display} os {}",
-            s("gpu"), s("driver"), s("encoder"), s("codec"), s("cpu"), v["ram_mb"].as_u64().unwrap_or(0), s("os")
-        );
-        if let Some(fps) = v["fps"].as_f64() {
-            out.push_str(&format!(" capture {fps:.1} fps dropped {}", v["dropped"].as_u64().unwrap_or(0)));
-        }
-        out
-    };
-    let mut out = String::from("hardware\n");
-    out.push_str(&if me.is_null() { "  this PC: not read yet".to_string() } else { line("this PC", me) });
-    for (who, v) in others {
-        out.push('\n');
-        out.push_str(&if v.is_null() { format!("  {who}: not shared") } else { line(who, v) });
-    }
-    out.push_str("\n\nclocks\n");
-    out.push_str(&match (clock["offset_us"].as_i64(), clock["ago_s"].as_u64()) {
-        (Some(offset), Some(ago)) => format!("  NTP {} offset {}, round trip {} ms, measured {ago} s ago\n", crate::clock::HOST, offset_text(Some(offset)), clock["rtt_us"].as_i64().unwrap_or(0) / 1000),
-        _ => format!("  NTP {} unreachable\n", crate::clock::HOST),
-    });
-    for (who, offset) in offsets {
-        out.push_str(&format!("  {who} clock {} from this PC\n", offset_text(*offset)));
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,23 +242,12 @@ mod tests {
     }
 
     #[test]
-    fn a_shared_pc_carries_only_hardware_and_the_recording_rate() {
+    fn the_report_line_names_the_hardware_encoder_and_capture_rate() {
         let hw = Hardware::parse(SAMPLE, (1920, 1080));
-        let v = pc(&hw, Some(("hevc_nvenc", "hevc")), Some(Live { fps: 29.96, dropped: 3 }));
-        assert_eq!((v["encoder"].as_str(), v["codec"].as_str(), v["fps"].as_f64(), v["dropped"].as_u64()), (Some("NVENC"), Some("hevc"), Some(30.0), Some(3)));
-        assert!(v.as_object().unwrap().keys().all(|k| ["gpu", "driver", "cpu", "ram_mb", "display", "os", "encoder", "codec", "fps", "dropped"].contains(&k.as_str())));
-        assert!(pc(&hw, None, None).get("fps").is_none());
-    }
-
-    #[test]
-    fn what_members_send_is_cleaned() {
-        let sent = json!({"gpu": "G\u{0}PU", "cpu": "x".repeat(500), "ram_mb": 999999999999u64, "display": [1920, 70000], "fps": -4, "dropped": 2, "mic": "Some Headset", "path": "C:\\Users\\a"});
-        let v = sanitize(&sent);
-        assert_eq!(v["gpu"], "GPU");
-        assert_eq!(v["cpu"].as_str().unwrap().len(), TEXT_MAX);
-        assert_eq!(v["dropped"], 2);
-        assert!(v.get("ram_mb").is_none() && v.get("display").is_none() && v.get("fps").is_none() && v.get("mic").is_none() && v.get("path").is_none());
-        assert_eq!(sanitize(&json!("nonsense")), Value::Null);
+        assert_eq!(line(Some(&hw), Some(("libx264", "h264")), None), "hardware: gpu Test Graphics 9000 driver 31.0.15.1234 encoder Software h264 cpu Fake CPU 3.5GHz ram 16384 MB display 1920x1080 os Microsoft Windows 11 Test 10.0.99999");
+        assert!(line(Some(&hw), Some(("hevc_nvenc", "hevc")), Some(Live { fps: 29.96, dropped: 3 })).ends_with("capture 30.0 fps dropped 3"));
+        assert!(line(Some(&hw), None, None).contains("encoder ? ?"));
+        assert_eq!(line(None, None, None), "hardware: not read yet");
     }
 
     #[test]
@@ -398,25 +318,5 @@ mod tests {
         assert!(!limiter.allow("a", t + Duration::from_secs(5)));
         assert!(limiter.allow("b", t + Duration::from_secs(5)));
         assert!(limiter.allow("a", t + SLOW_LOG_EVERY));
-    }
-
-    #[test]
-    fn offsets_read_as_milliseconds_or_seconds() {
-        assert_eq!(offset_text(Some(12_400)), "+12 ms");
-        assert_eq!(offset_text(Some(-250_000)), "-250 ms");
-        assert_eq!(offset_text(Some(4_500_000)), "+4.5 s");
-        assert_eq!(offset_text(None), "unknown");
-    }
-
-    #[test]
-    fn the_report_lists_hardware_and_clocks() {
-        let hw = Hardware::parse(SAMPLE, (1920, 1080));
-        let me = pc(&hw, Some(("libx264", "h264")), None);
-        let measured = json!({"offset_us": 8_200_000, "rtt_us": 23_000, "ago_s": 120, "ok": true});
-        let out = report(&me, &[("abc".into(), Value::Null)], &[("abc".into(), Some(30_000))], &measured);
-        assert!(out.contains("this PC: gpu Test Graphics 9000 driver 31.0.15.1234 encoder Software h264 cpu Fake CPU 3.5GHz ram 16384 MB display 1920x1080"), "{out}");
-        assert!(out.contains("abc: not shared") && out.contains("abc clock +30 ms from this PC") && out.contains("NTP time.cloudflare.com offset +8.2 s, round trip 23 ms, measured 120 s ago"), "{out}");
-        let unreachable = report(&me, &[], &[], &json!({"offset_us": null, "ok": false}));
-        assert!(unreachable.contains("NTP time.cloudflare.com unreachable"), "{unreachable}");
     }
 }
