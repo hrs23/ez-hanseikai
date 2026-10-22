@@ -118,7 +118,7 @@
                 <button id="rate" class="txt rate" data-t-title="Speed" data-t-label="Speed" aria-haspopup="menu">1×</button>
                 <button id="live" class="livebtn"></button>
                 <button id="addnote" class="txt" data-t-title="Add note (C)"><span data-icon="note" data-icon-class="sm"></span><span data-t="Note">Note</span><kbd>C</kbd></button>
-                <button id="full" class="icon" data-t-title="Full screen (F)" data-t-label="Full screen"></button>
+                <button id="full" class="icon" data-t-label="Full screen" aria-pressed="false"></button>
               </div>
             </div>
           </div>
@@ -237,6 +237,7 @@
 </dialog>
 <input id="imagefile" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
 <div id="toast" class="toast" popover="manual" hidden><span id="toasticon"></span><span id="toasttext"></span><button id="toastaction" class="sm" hidden></button></div>
+<button id="exitfull" class="exitfull" popover="manual" hidden data-icon="minimize" data-t-title="Exit full screen (Esc)" data-t-label="Exit full screen"></button>
 <div id="menu" class="menu" popover="manual" role="menu" hidden></div>
 <div id="pop" class="pop" popover="manual" hidden></div>
 <div id="recovery" class="recovery" popover="manual" hidden>

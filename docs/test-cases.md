@@ -75,6 +75,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 
 ## Playback
 
+- full screen in the player and on the board is left like any video player: Esc (after a menu, dialog or popup has closed first, and a text field has been left), F, F11, double-click on a picture (not on the controls), the control bar's full screen button (pressed while on), and an Exit full screen button at the top right (tooltip Exit full screen (Esc), at least 32px, above popups, clear of the Watch Party pill) that shows when the mouse moves and fades after 2.5 s of stillness unless hovered or focused, together with the controls and the mouse cursor. `manual`; which key does what `ui-test`
 - recording alone, the player follows the picture as it grows. `e2e` (`live`)
 - each ended recording gets a thumbnail, and the sidebar lists recordings with it. `e2e` (`library`)
 - A recording in HEVC and in AV1 plays on every PC; a PC that cannot play one makes the room choose another codec. `manual`

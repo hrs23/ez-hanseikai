@@ -179,6 +179,7 @@ function toggleBoardFull() {
   boardFull = !boardFull;
   document.body.classList.toggle("boardfull", boardFull);
   setFull(boardFull);
+  wake();
 }
 new ResizeObserver(() => { if (onBoard()) placeBoard(); }).observe($("boardpane"));
 document.fonts.addEventListener("loadingdone", () => { if (onBoard()) placeBoard(); });

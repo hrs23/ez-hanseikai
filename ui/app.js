@@ -4,7 +4,7 @@ const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3];
 const MAX_KEYED = 6;
 const TICK_MS = 150;
 const REFRESH_MS = 1000;
-const IDLE_MS = 2000;
+const IDLE_MS = 2500;
 const OSD_MS = 2500;
 const SEEKWHO_MS = 4000;
 const TOAST_MS = 6000;
@@ -135,7 +135,7 @@ function tile(s, key) {
       if (tl.drew) { tl.drew = false; return; }
       chooseSound(key);
     };
-    tl.box.ondblclick = (e) => { if (!e.target.closest(".nl")) focus(); };
+    tl.box.ondblclick = (e) => { if (!e.target.closest(".nl") && !tl.drew) toggleFull(); };
     tl.box.oncontextmenu = (e) => { e.preventDefault(); stageMenu(e, key); };
   } else {
     tl.box.onclick = (e) => { if (e.target.closest(".choose")) return; focus(); };
@@ -574,7 +574,11 @@ function renderHeader(set) {
   renderParty(set);
   $("panelbtn").hidden = !set;
   $("panelbtn").classList.toggle("on", panelShown());
-  if (changed("fullicon", [full])) $("full").replaceChildren(icon(full ? "minimize" : "maximize"));
+  if (changed("fullicon", [full, lang])) {
+    $("full").replaceChildren(icon(full ? "minimize" : "maximize"));
+    $("full").title = t(full ? "Exit full screen (Esc)" : "Full screen (F)");
+    $("full").setAttribute("aria-pressed", full);
+  }
 }
 const watchers = (id) => (st.party.watching[id] || []).filter((w) => w !== st.id);
 function renderParty(set) {
@@ -1358,9 +1362,14 @@ function toggleFull() {
   wake();
 }
 function wake() {
-  $("playerpage").classList.remove("idle");
+  const body = document.body;
+  body.classList.remove("still", "idle");
+  $("exitfull").hidden = !(full || boardFull);
   clearTimeout(idleTimer);
-  if (full) idleTimer = setTimeout(() => { if (clock.playing) $("playerpage").classList.add("idle"); }, IDLE_MS);
+  if (full || boardFull) idleTimer = setTimeout(() => {
+    body.classList.add("still");
+    if (boardFull || clock.playing) body.classList.add("idle");
+  }, IDLE_MS);
 }
 document.addEventListener("mousemove", wake);
 function go(p) {
@@ -1498,6 +1507,7 @@ $("volume").oninput = () => setVolume(Number($("volume").value));
 $("mute").onclick = toggleMute;
 $("panelbtn").onclick = togglePanel;
 $("full").onclick = toggleFull;
+$("exitfull").onclick = toggleFull;
 for (const b of $("tools").querySelectorAll("[data-tool]")) b.onclick = () => { ink.tool = b.dataset.tool; renderTools(); };
 $("clearink").onclick = () => clearInk(false);
 $("toast").onmouseenter = () => clearTimeout($("toast").hideTimer);
@@ -1584,11 +1594,11 @@ function menuKey(e) {
   else if ((e.key === "ArrowDown" || e.key === "ArrowUp") && list.length) { e.preventDefault(); const down = e.key === "ArrowDown"; list[i < 0 ? (down ? 0 : list.length - 1) : (i + (down ? 1 : -1) + list.length) % list.length].focus(); }
 }
 function escapeKey() {
-  closePop();
-  if (typing()) document.activeElement.blur();
-  else if (full) toggleFull();
-  else if (boardFull) toggleBoardFull();
-  else if (panelOpen) showPanel(false);
+  const step = escapeStep({ menu: !$("menu").hidden, dialog: !!document.querySelector("dialog[open]"), pop: !$("pop").hidden, typing: !!typing(), full: full || boardFull, panel: panelOpen });
+  if (step === "pop") closePop();
+  else if (step === "blur") document.activeElement.blur();
+  else if (step === "full") (full ? toggleFull : toggleBoardFull)();
+  else if (step === "panel") showPanel(false);
 }
 document.addEventListener("focusin", (e) => {
   if (!e.target.matches(":focus-visible") && !typing() && !e.target.closest("dialog, .menu")) e.target.blur();
@@ -1603,6 +1613,7 @@ document.addEventListener("keydown", (e) => {
   if (ctrl && ["1", "2", "3", "4", "b", "r"].includes(e.key.toLowerCase())) { e.preventDefault(); return; }
   if (ctrl && e.key.toLowerCase() === "z" && !typing()) { e.preventDefault(); runUndo(); return; }
   if (e.key === "Escape") { escapeKey(); return; }
+  if (e.key === "F11" && !e.ctrlKey && !e.altKey && !e.metaKey && (full || boardFull || onBoard() || page === "player")) { e.preventDefault(); toggleFull(); return; }
   if (typing() || nativeKey(e) || e.metaKey || e.altKey) return;
   const player = page === "player" && !!playSet();
   const key = e.key.normalize("NFKC");

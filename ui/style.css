@@ -385,7 +385,7 @@ a.ext:hover { filter: brightness(1.2); }
 .cardmd del { color: var(--muted); }
 #roomdlg .field, #exportdlg .field { margin-top: var(--s3); }
 body.boardfull .bbar { display: none; }
-body.boardfull .boardwrap { background: var(--bg); }
+body.boardfull .boardwrap { background: var(--bg); padding-top: calc(var(--s3) + 36px + var(--s2)); }
 body.boardwin .side, body.boardwin .splitter, body.boardwin .notices, body.boardwin .bbar, body.boardwin .roombody { display: none; }
 
 .player { flex: 1; display: flex; min-height: 0; }
@@ -699,8 +699,13 @@ dialog.diag .dlghead { padding: var(--s3) var(--s3) var(--s3) var(--s4); margin:
 .player.full .toolsov { top: 0; background: linear-gradient(var(--scrim), transparent); }
 .player.full .transport { bottom: 0; padding-top: var(--s5); background: linear-gradient(transparent, var(--scrim-strong)); }
 .player.full .stage { margin: 0; }
-.player.full.idle { cursor: none; }
-.player.full.idle .toolsov, .player.full.idle .transport { opacity: 0; pointer-events: none; }
+body.idle .player.full, body.idle.boardfull { cursor: none; }
+body.idle .player.full .toolsov, body.idle .player.full .transport { opacity: 0; pointer-events: none; }
+.player.full .toolsov { padding-right: calc(var(--s3) + 36px + var(--s3)); }
+.exitfull { position: fixed; top: var(--s3); right: var(--s3); left: auto; bottom: auto; width: 36px; height: 36px; min-width: 36px; padding: 0; border: 1px solid var(--line-strong); border-radius: var(--r-full); background: var(--raised); color: var(--text); place-items: center; transition: opacity var(--slow); }
+.exitfull:popover-open { display: grid; }
+.exitfull:hover { background: var(--raised-2); }
+body.still .exitfull:not(:hover):not(:focus-visible) { opacity: 0; pointer-events: none; }
 body.full .side, body.full .splitter, body.full .notices { display: none !important; }
 
 @media (max-width: 1240px) {

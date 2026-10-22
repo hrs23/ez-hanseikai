@@ -8,7 +8,7 @@ const SHORTCUTS = [
   ["Back / forward 1 min", ["Ctrl+←", "Ctrl+→"]],
   ["Slower / faster", ["<", ">"]],
   ["Mute / volume", ["M", "↑", "↓"]],
-  ["Full screen / leave", ["F", "Esc"]],
+  ["Full screen / leave", ["F", "F11", "Esc"]],
   ["All players / one player", ["0", "1–6", "Tab"]],
   ["Previous / next recording", ["Shift+P", "Shift+N"]],
   ["Add note", ["C"]],

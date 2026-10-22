@@ -185,6 +185,8 @@ const JA = {
   "Forward 5 s": "5秒進む",
   "Full screen": "全画面",
   "Full screen (F)": "全画面 (F)",
+  "Exit full screen (Esc)": "全画面を終了 (Esc)",
+  "Exit full screen": "全画面を終了",
   "Full screen / leave": "全画面 / 戻る",
   "Game plan": "作戦ボード",
   "General": "一般",

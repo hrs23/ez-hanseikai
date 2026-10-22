@@ -59,6 +59,13 @@ function nativeKey(e) {
   if (a.type === "range" || a.getAttribute("role") === "separator") return /^(Arrow|Home$|End$|Page)/.test(e.key);
   return (e.key === " " || e.key === "Enter") && (a.tagName === "BUTTON" || a.type === "checkbox" || a.tagName === "SUMMARY");
 }
+function escapeStep(s) {
+  if (s.menu || s.dialog) return "none";
+  if (s.pop) return "pop";
+  if (s.typing) return "blur";
+  if (s.full) return "full";
+  return s.panel ? "panel" : "none";
+}
 const typing = () => { const a = document.activeElement; return a && (a.tagName === "SELECT" || a.tagName === "TEXTAREA" || (a.tagName === "INPUT" && a.type !== "range" && a.type !== "checkbox") || a.isContentEditable); };
 function stored(key, fallback) {
   try { const v = JSON.parse(localStorage.getItem(key)); return v === null ? fallback : v; } catch { return fallback; }
