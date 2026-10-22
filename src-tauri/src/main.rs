@@ -251,6 +251,7 @@ pub struct Core {
     pub hotkeys_taken: Mutex<shell::Taken>,
     pub api_on: Mutex<bool>,
     pub notify_joins: Mutex<bool>,
+    pub export_base: Mutex<Option<String>>,
     pub joins: Mutex<Vec<shell::Join>>,
     pub api_token: Mutex<String>,
     pub api_error: Mutex<String>,
@@ -342,6 +343,7 @@ impl Core {
             "hotkeys": shell::HOTKEYS.iter().zip(self.hotkeys.lock().unwrap().iter()).map(|((id, _, _), keys)| (id.to_string(), json!(keys))).collect::<serde_json::Map<_, _>>(),
             "api": *self.api_on.lock().unwrap(),
             "notify_joins": *self.notify_joins.lock().unwrap(),
+            "export_base": *self.export_base.lock().unwrap(),
             "api_token": *self.api_token.lock().unwrap(),
             "relays": self.relays.lock().unwrap().iter().map(|u| u.to_string()).collect::<Vec<_>>(),
         });
@@ -411,9 +413,23 @@ fn open_link(url: String) {
 }
 
 #[tauri::command]
-async fn pick_folder(core: State<'_, Arc<Core>>) -> Result<Option<String>, String> {
-    let app = core.app.clone();
-    off_thread(move || shell::pick_folder(&app).map(|p| p.to_string_lossy().into_owned())).await
+async fn pick_export_base(core: State<'_, Arc<Core>>) -> Result<Option<String>, String> {
+    let core = core.inner().clone();
+    off_thread(move || {
+        let base = shell::pick_folder(&core.app)?.to_string_lossy().into_owned();
+        *core.export_base.lock().unwrap() = Some(base.clone());
+        core.save_settings();
+        Some(base)
+    })
+    .await
+}
+
+#[tauri::command]
+fn open_folder(path: String) {
+    let dir = PathBuf::from(path);
+    if dir.is_dir() {
+        data::open_folder(&dir);
+    }
 }
 
 #[tauri::command]
@@ -510,6 +526,7 @@ async fn init(app: AppHandle, dir: PathBuf, left_lock: bool) -> Result<Arc<Core>
         hotkeys_taken: Mutex::new(Default::default()),
         api_on: Mutex::new(settings["api"] == true),
         notify_joins: Mutex::new(settings["notify_joins"] != false),
+        export_base: Mutex::new(settings["export_base"].as_str().map(String::from)),
         joins: Mutex::new(Vec::new()),
         api_token: Mutex::new(settings["api_token"].as_str().filter(|t| api::token_valid(t)).unwrap_or_default().to_string()),
         api_error: Mutex::new(String::new()),
@@ -643,7 +660,7 @@ fn main() {
             std::thread::spawn(move || thumbs::keeper(c));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![call, open_set_folder, open_data_folder, open_link, pick_folder, save_text, show_main])
+        .invoke_handler(tauri::generate_handler![call, open_set_folder, open_data_folder, open_link, open_folder, pick_export_base, save_text, show_main])
         .build(tauri::generate_context!())
         .expect("failed to start");
     app.run(|app, event| {

@@ -1,5 +1,7 @@
 const JA = {
-  "Choose folder…": "フォルダを選ぶ…",
+  "Choose a folder.": "フォルダを選んでください。",
+  "Save to": "保存先",
+  "Change…": "変更…",
   "Delete AI notes?": "AIのメモを削除しますか？",
   "Delete AI notes": "AIのメモを削除",
   "Everyone": "全員",

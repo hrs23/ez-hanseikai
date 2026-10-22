@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 use crate::ffmpeg;
 use crate::proc::{self, Process, BELOW_NORMAL};
@@ -28,6 +28,9 @@ const CONNECT_WAIT: Duration = Duration::from_secs(120);
 const POLL: Duration = Duration::from_millis(50);
 const ERROR_LINES: usize = 12;
 const LIGHT: f64 = 0.5;
+const FOLDER_MAX: usize = 80;
+const APP_FOLDER: &str = "EZ Hanseikai";
+const RESERVED: [&str; 22] = ["CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"];
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -212,10 +215,60 @@ fn copyable(inputs: &[Input], total: f64) -> bool {
     matches!(inputs, [only] if only.delay_s <= TOLERANCE_S && only.end_s >= total - TOLERANCE_S)
 }
 
+fn safe_name(name: &str, max: usize, fallback: &str) -> String {
+    let fit = |text: &str| text.trim_start().chars().take(max).collect::<String>().trim_end_matches(['.', ' ']).to_string();
+    let cleaned = fit(&name.chars().map(|c| if c.is_control() || "<>:\"/\\|?*".contains(c) { '_' } else { c }).collect::<String>());
+    let named = if cleaned.is_empty() { fallback.to_string() } else { cleaned };
+    let stem = named.split('.').next().unwrap_or_default().trim_end().to_uppercase();
+    if RESERVED.contains(&stem.as_str()) { fit(&format!("_{named}")) } else { named }
+}
+
 fn file_name(name: &str) -> String {
-    let cleaned: String = name.chars().map(|c| if c.is_control() || "<>:\"/\\|?*".contains(c) { '_' } else { c }).collect();
-    let trimmed = cleaned.trim().trim_end_matches('.').trim();
-    if trimmed.is_empty() { "view".into() } else { trimmed.chars().take(60).collect() }
+    safe_name(name, 60, "view")
+}
+
+fn unused_name(name: &str, taken: impl Fn(&str) -> bool) -> String {
+    let mut candidate = name.to_string();
+    let mut n = 2;
+    while taken(&candidate) {
+        let suffix = format!(" ({n})");
+        let head: String = name.chars().take(FOLDER_MAX.saturating_sub(suffix.len())).collect();
+        candidate = format!("{}{suffix}", head.trim_end_matches(['.', ' ']));
+        n += 1;
+    }
+    candidate
+}
+
+fn folder_name(room: &str, set_id: &str, title: Option<&str>, debrief_s: Option<f64>) -> String {
+    let when = set_id.get(..16).unwrap_or(set_id);
+    let raw = match debrief_s {
+        Some(s) => format!("{room} debrief {when} {} min", (s / 60.0).round().max(1.0)),
+        None => format!("{} {room}", title.map(str::trim).filter(|t| !t.is_empty()).unwrap_or(when)),
+    };
+    safe_name(raw.trim(), FOLDER_MAX, "Recording")
+}
+
+fn default_base(core: &Core) -> Option<PathBuf> {
+    if let Some(base) = core.export_base.lock().unwrap().clone() {
+        return Some(PathBuf::from(base));
+    }
+    let path = core.app.path();
+    path.video_dir().or_else(|_| path.document_dir()).ok().map(|d| d.join(APP_FOLDER))
+}
+
+pub fn target(core: &Core, room_id: &str, set_id: &str, base: Option<PathBuf>, name: Option<String>) -> Result<PathBuf, String> {
+    let base = base.or_else(|| default_base(core)).ok_or("Choose a folder.")?;
+    let name = match name {
+        Some(name) => safe_name(&name, FOLDER_MAX, "Recording"),
+        None => {
+            let logs = room::logs(core, room_id);
+            let set = room::sets(core, room_id, &logs).into_iter().find(|s| s.id == set_id).ok_or("Unknown recording.")?;
+            let title = set.files.iter().find_map(|f| f.view.as_ref()).and_then(|v| v.title.clone());
+            let debrief_s = room::debrief_of(set_id, &logs).map(|_| (set.end_shown().unwrap_or(set.start()) - set.start()) as f64 / 1e6);
+            folder_name(&core.room(room_id).map(|r| r.name).unwrap_or_default(), set_id, title.as_deref(), debrief_s)
+        }
+    };
+    Ok(base.join(unused_name(&name, |n| base.join(n).exists())))
 }
 
 fn unique_names(names: &[String]) -> Vec<String> {
@@ -606,7 +659,7 @@ pub fn folder(core: &Arc<Core>, room_id: &str, set_id: &str, dir: &Path, opts: &
     if let Some(records) = crate::party::records(&logs).remove(set_id) {
         write(WATCH, crate::party::watch_json(&records).to_string())?;
     }
-    emit(core, 100.0, true, None);
+    let _ = core.app.emit("export", json!({"percent": 100.0, "done": true, "error": null, "folder": dir.to_string_lossy()}));
     Ok(json!({"folder": dir.to_string_lossy(), "files": outputs.len(), "skipped": skipped}))
 }
 
@@ -772,6 +825,33 @@ mod tests {
         assert_eq!(file_name("Ann/Ben: \"x\"?"), "Ann_Ben_ _x__");
         assert_eq!(file_name("..."), "view");
         assert_eq!(unique_names(&["Ann".into(), "ann".into(), "".into(), "Ann".into()]), ["Ann", "ann 2", "View", "Ann 3"]);
+    }
+
+    #[test]
+    fn folder_names_are_safe_on_windows() {
+        assert_eq!(safe_name("CON", 80, "x"), "_CON");
+        assert_eq!(safe_name("nul.txt", 80, "x"), "_nul.txt");
+        assert_eq!(safe_name("Com1 ", 80, "x"), "_Com1");
+        assert_eq!(safe_name("CONSOLE", 80, "x"), "CONSOLE");
+        assert_eq!(safe_name("Scrim. . ", 80, "x"), "Scrim");
+        assert_eq!(safe_name("  a<b>|c  ", 80, "x"), "a_b__c");
+        assert_eq!(safe_name("...", 80, "x"), "x");
+        assert_eq!(safe_name(&"あ".repeat(100), 80, "x"), "あ".repeat(80));
+        assert_eq!(safe_name(&format!("{}.  b", "a".repeat(78)), 80, "x"), "a".repeat(78));
+        assert_eq!(folder_name("練習部屋", "2026-10-23 14-05-33", None, None), "2026-10-23 14-05 練習部屋");
+        assert_eq!(folder_name("Team", "2026-10-23 14-05-33", Some(" Final: G1 "), None), "Final_ G1 Team");
+        assert_eq!(folder_name("Team", "2026-10-23 14-05-33", None, Some(754.0)), "Team debrief 2026-10-23 14-05 13 min");
+        assert_eq!(folder_name("", "2026-10-23 14-05-33", None, Some(5.0)), "debrief 2026-10-23 14-05 1 min");
+        assert_eq!(folder_name("CON", "", Some(""), None), "_CON");
+    }
+
+    #[test]
+    fn a_taken_folder_name_gets_a_number() {
+        assert_eq!(unused_name("Scrim", |_| false), "Scrim");
+        assert_eq!(unused_name("Scrim", |n| ["Scrim", "Scrim (2)"].contains(&n)), "Scrim (3)");
+        let long = "あ".repeat(80);
+        let next = unused_name(&long, |n| n == long);
+        assert_eq!((next.chars().count(), next.ends_with(" (2)")), (80, true));
     }
 
     #[test]

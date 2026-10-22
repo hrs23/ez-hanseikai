@@ -105,6 +105,7 @@ function exportChoice(saved, owners) {
   };
 }
 
+const exportView = (set, folder) => ({ options: !noPicture(set), path: folder || "", ready: !!folder });
 const exportArgs = (choice) => ({ range: choice.range, quality: choice.quality, member: choice.member || null });
 
 function oldSessions(sets, keep = KEEP_NEWEST) {

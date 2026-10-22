@@ -1317,18 +1317,29 @@ function renderNotices() {
 function exportOptions(set) {
   const owners = set.players.map((p) => p.owner);
   const choice = exportChoice(stored("exportOptions", null), owners);
+  let folder = null;
+  const show = () => {
+    const v = exportView(set, folder);
+    $("exportopts").hidden = !v.options;
+    $("exportpath").textContent = v.path;
+    $("exportyes").disabled = !v.ready;
+  };
+  const where = () => invoke("export_target", { room: set.room, set: set.id }).then((f) => { folder = f; show(); });
   $("exportrange").value = choice.range;
   $("exportquality").value = choice.quality;
   $("exportmember").replaceChildren(el("option", { value: "", textContent: t("Everyone") }), ...owners.map((o) => el("option", { value: o, textContent: nameOf(o) })));
   $("exportmember").value = choice.member;
+  $("exportpick").onclick = () => dialog("pick_export_base").then((base) => base && where()).catch(fail);
+  show();
   const d = $("exportdlg");
   d.showModal();
+  where().catch((e) => { d.close(); fail(e); });
   return new Promise((done) => {
     $("exportyes").onclick = () => {
       const picked = exportChoice({ range: $("exportrange").value, quality: $("exportquality").value, member: $("exportmember").value }, owners);
-      store("exportOptions", picked);
+      if (exportView(set, folder).options) store("exportOptions", picked);
       d.close();
-      done(exportArgs(picked));
+      done({ folder, ...(exportView(set, folder).options ? exportArgs(picked) : {}) });
     };
     d.onclose = () => done(null);
   });
@@ -1337,12 +1348,11 @@ async function exportFolder(set) {
   if (!set) { flash(t("Open a recording first")); return; }
   try {
     await invoke("export_check");
-    const options = noPicture(set) ? {} : await exportOptions(set);
-    const folder = options && await dialog("pick_folder");
-    if (!folder) return;
-    exporting = { set: set.id, percent: 0 };
+    const options = await exportOptions(set);
+    if (!options) return;
+    exporting = { set: set.id, percent: 0, folder: options.folder };
     refresh();
-    invoke("export_folder", { room: set.room, set: set.id, folder, ...options }).then((r) => {
+    invoke("export_folder", { room: set.room, set: set.id, ...options }).then((r) => {
       if (r.skipped.length) flash(t("Exporting without {names}: not downloaded yet", { names: r.skipped.join(", ") }));
     }).catch((e) => { if (exporting) { exporting = null; fail(e); refresh(); } });
   } catch (e) {
@@ -1351,7 +1361,13 @@ async function exportFolder(set) {
 }
 listenMain("export", (e) => {
   const x = e.payload;
-  if (x.done) { exporting = null; if (x.error) fail(x.error); else flash(t("Export finished")); refresh(); return; }
+  if (x.done) {
+    exporting = null;
+    if (x.error) fail(x.error);
+    else flash(t("Export finished"), "info", x.folder ? { label: t("Open folder"), run: () => dialog("open_folder", { path: x.folder }).catch(fail) } : null);
+    refresh();
+    return;
+  }
   if (exporting) exporting.percent = x.percent;
   renderSessions();
 });

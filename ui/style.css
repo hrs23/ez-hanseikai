@@ -394,6 +394,7 @@ a.ext { unicode-bidi: isolate; color: var(--link); text-decoration: underline; t
 a.ext:hover { filter: brightness(1.2); }
 .cardmd del { color: var(--muted); }
 #roomdlg .field, #exportdlg .field { margin-top: var(--s3); }
+.exportpath { flex: 1; min-width: 0; color: var(--text); overflow-wrap: anywhere; user-select: text; }
 body.boardfull .bbar { display: none; }
 body.boardfull .boardwrap { background: var(--bg); padding-top: calc(var(--s3) + 36px + var(--s2)); }
 body.boardwin .side, body.boardwin .splitter, body.boardwin .notices, body.boardwin .bbar, body.boardwin .roombody { display: none; }

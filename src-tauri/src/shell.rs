@@ -803,7 +803,7 @@ mod tests {
         assert_eq!(joined_text("en", &["Ren", "Mio"], "Scrims"), "Ren and Mio joined Scrims");
         assert_eq!(joined_text("en", &["Ren", "Mio", "Kai", "Sora"], "Scrims"), "Ren, Mio and 2 more joined Scrims");
         assert_eq!(joined_text("ja", &["Ren"], "Scrims"), "Ren が Scrims に参加しました");
-        assert_eq!(joined_text("ja", &["Ren", "Mio", "Kai"], "Scrims"), "Ren、Mio ほか 1 人が Scrims に参加しました");
+        assert_eq!(joined_text("ja", &["Ren", "Mio", "Kai"], "Scrims"), "Ren、Mio ほか1人が Scrims に参加しました");
     }
 
     #[test]

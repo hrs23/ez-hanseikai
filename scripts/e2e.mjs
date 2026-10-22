@@ -1708,8 +1708,12 @@ async function library(ctx) {
     check(await invoke(a, "export_folder", { room: ctx.room, set: ctx.set, folder: out.folder }, EXPORT_FOLDER_S).then(() => false, () => true), "an export into a folder that is not empty was accepted");
   });
 
-  await step("one member's light export holds only that member's files, and a per-match export of a recording without matches is refused", async () => {
-    const out = await invoke(a, "export_folder", { room: ctx.room, set: ctx.set, folder: path.join(a.data, "bundles", `${ctx.set} light`), quality: "light", member: b.id }, EXPORT_FOLDER_S);
+  await step("one member's light export into a named folder holds only that member's files, the next folder of that name is numbered, and a per-match export of a recording without matches is refused", async () => {
+    const base = path.join(a.data, "bundles");
+    const out = await invoke(a, "export_folder", { room: ctx.room, set: ctx.set, base, name: `${ctx.set} light`, quality: "light", member: b.id }, EXPORT_FOLDER_S);
+    check(out.folder === path.join(base, `${ctx.set} light`), `light export folder: ${brief(out)}`);
+    const next = await invoke(a, "export_target", { room: ctx.room, set: ctx.set, base, name: `${ctx.set} light` });
+    check(next === path.join(base, `${ctx.set} light (2)`), `the next folder: ${next}`);
     const media = fs.readdirSync(out.folder).filter((f) => /\.(mp4|m4a)$/.test(f)).sort();
     check(out.files === 1 && media.join("|") === `${b.name} voice.m4a|${b.name}.mp4`, `light export: ${brief(out)} ${brief(media)}`);
     const decode = ffmpeg("ffmpeg", ["-v", "error", "-i", path.join(out.folder, `${b.name}.mp4`), "-f", "null", "-"]);

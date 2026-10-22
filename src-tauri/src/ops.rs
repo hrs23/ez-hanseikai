@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
@@ -75,6 +75,7 @@ pub const OPS: &[(&str, Op)] = &[
     ("focus_set", focus_set),
     ("export_check", |c, _| null(export::check(c))),
     ("export_folder", export_folder),
+    ("export_target", export_target),
     ("set_api", set_api),
     ("set_notify_joins", set_notify_joins),
     ("new_api_token", new_api_token),
@@ -463,7 +464,20 @@ fn focus_set(core: &Arc<Core>, args: Value) -> Result<Value, String> {
 fn export_folder(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     let (room, set) = recording_ids(core, &args)?;
     let opts = export::Options { range: arg::<Option<_>>(&args, "range")?.unwrap_or_default(), quality: arg::<Option<_>>(&args, "quality")?.unwrap_or_default(), member: arg(&args, "member")? };
-    export::folder(core, &room, &set, Path::new(&arg::<String>(&args, "folder")?), &opts)
+    let dir = match arg::<Option<String>>(&args, "folder")? {
+        Some(folder) => PathBuf::from(folder),
+        None => target(core, &args, &room, &set)?,
+    };
+    export::folder(core, &room, &set, &dir, &opts)
+}
+
+fn export_target(core: &Arc<Core>, args: Value) -> Result<Value, String> {
+    let (room, set) = recording_ids(core, &args)?;
+    Ok(json!(target(core, &args, &room, &set)?.to_string_lossy()))
+}
+
+fn target(core: &Core, args: &Value, room: &str, set: &str) -> Result<PathBuf, String> {
+    export::target(core, room, set, arg::<Option<String>>(args, "base")?.map(PathBuf::from), arg::<Option<String>>(args, "name")?)
 }
 
 pub fn enable_api(core: &Arc<Core>, on: bool) {
@@ -502,8 +516,9 @@ fn api_info(core: &Arc<Core>, _: Value) -> Result<Value, String> {
 mod tests {
     use super::*;
     use crate::names;
+    use std::path::Path;
 
-    const WINDOW_COMMANDS: [&str; 6] = ["open_set_folder", "open_data_folder", "open_link", "pick_folder", "save_text", "show_main"];
+    const WINDOW_COMMANDS: [&str; 7] = ["open_set_folder", "open_data_folder", "open_link", "open_folder", "pick_export_base", "save_text", "show_main"];
 
     fn files(dir: &str, ext: &str) -> Vec<(String, String)> {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join(dir);

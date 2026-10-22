@@ -115,7 +115,7 @@ Members get the view like any other: a removed member's log is pulled and shared
 
 ## Export folder
 
-Recording > Export to folder… writes a new folder of plain files for a video editor. Every file starts at the recording's start (a late part is padded with black and silence) and runs to its end, so the files line up with no manual syncing.
+Recording > Export to folder… writes a new folder of plain files for a video editor, named after the recording and its room (a debrief: room, debrief, start time and length), by default in Videos\EZ Hanseikai or the folder last chosen on that PC. Every file starts at the recording's start (a late part is padded with black and silence) and runs to its end, so the files line up with no manual syncing.
 
 Three options come first and are remembered on this PC:
 

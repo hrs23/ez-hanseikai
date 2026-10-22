@@ -124,7 +124,7 @@ function receiving(s) {
   return { n: Math.floor((p.have / p.total) * 100), stuck: p.stuck, speed, left: speed ? (p.total - p.have) / speed : null };
 }
 function sessionState(s) {
-  if (exporting && exporting.set === s.id) return { kind: "bar", icon: "film", text: t("Exporting {n}%", { n: Math.floor(exporting.percent) }), frac: exporting.percent / 100 };
+  if (exporting && exporting.set === s.id) return { kind: "bar", icon: "film", text: t("Exporting {n}%", { n: Math.floor(exporting.percent) }), frac: exporting.percent / 100, title: exporting.folder };
   const recv = receiving(s);
   if (recv && !recv.stuck) return { kind: "bar", icon: "download", text: progressText(recv), frac: recv.n / 100 };
   return null;
