@@ -16,7 +16,7 @@ if ($Test) {
     cargo test --manifest-path src-tauri/Cargo.toml
     exit $LASTEXITCODE
 }
-Get-Process ggi-hanseikai, ez-hanseikai -ErrorAction SilentlyContinue | Stop-Process -Force
+Get-Process ez-hanseikai -ErrorAction SilentlyContinue | Stop-Process -Force
 if ($Installer) {
     & (Join-Path $root "scripts\build-installer.ps1")
 } else {

@@ -16,19 +16,12 @@ const RATE_SETS: usize = 5;
 const KEEP_EVERY: Duration = Duration::from_secs(5);
 const AGE_EVERY: Duration = Duration::from_secs(3600);
 const OLD_AFTER: Duration = Duration::from_secs(7 * 86_400);
-const MOVE_WAIT: Duration = Duration::from_secs(5);
-const MOVE_GAP: Duration = Duration::from_millis(200);
 pub const LIVE_KEEP: u32 = 7;
 const RESUME: &str = "resume.json";
 const RESUME_FRESH: Duration = Duration::from_secs(120);
 
 pub type Listing = Arc<HashMap<u32, u64>>;
 pub type Files = Mutex<HashMap<PathBuf, Listing>>;
-
-const OLD_ROOT: [&str; 6] = ["log.bin", "peer", "peer.txt", "peers.txt", "running.marker", "plugins"];
-const OLD_ROOM: [&str; 2] = ["sets", "live"];
-const OLD_CAPTURE: [&str; 2] = ["verified.json", "cap.json"];
-const OLD_SERIES: &str = "open.json";
 
 pub fn repair_logs(dir: &Path) {
     for (_, room) in crate::entries(&dir.join("rooms")) {
@@ -95,57 +88,6 @@ pub fn clear_standby(dir: &Path) {
     for (_, room) in crate::entries(&dir.join("rooms")) {
         let _ = std::fs::remove_dir_all(room.join(room::STANDBY));
     }
-}
-
-fn old_recording(name: &str) -> bool {
-    name.strip_prefix("rec-").and_then(|rest| rest.strip_suffix(".mp4")).is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
-}
-
-pub fn old_files(dir: &Path) -> Vec<PathBuf> {
-    let mut old: Vec<PathBuf> = crate::entries(dir).into_iter().filter(|(name, _)| OLD_ROOT.contains(&name.as_str()) || old_recording(name)).map(|(_, path)| path).collect();
-    for (_, room) in crate::entries(&dir.join("rooms")) {
-        old.extend(crate::entries(&room).into_iter().filter(|(name, path)| OLD_ROOM.contains(&name.as_str()) || (room::member_id(name) && path.is_dir())).map(|(_, path)| path));
-        old.extend(crate::entries(&room.join(room::LOGS)).into_iter().filter(|(name, _)| name.strip_suffix(".bin").is_some_and(|stem| !room::member_id(stem))).map(|(_, path)| path));
-        for (_, set) in crate::entries(&room.join(room::RECORDINGS)) {
-            for (_, capture) in crate::entries(&set).iter().flat_map(|(_, owner)| crate::entries(owner)) {
-                old.extend(OLD_CAPTURE.iter().map(|name| capture.join(name)));
-                old.extend(SERIES.iter().map(|series| capture.join(series).join(OLD_SERIES)));
-            }
-        }
-    }
-    old.retain(|path| path.exists());
-    old
-}
-
-fn size_of(path: &Path) -> u64 {
-    if path.is_dir() { used_bytes(path) } else { file_len(path) }
-}
-
-pub fn old_bytes(dir: &Path) -> u64 {
-    old_files(dir).iter().map(|path| size_of(path)).sum()
-}
-
-fn remove_old(dir: &Path, files: &Files) -> (u64, Option<String>) {
-    let (mut freed, mut failure) = (0, None);
-    for path in old_files(dir) {
-        let size = size_of(&path);
-        match remove_path(&path) {
-            Ok(()) => {
-                forget(files, &path);
-                freed += size;
-            }
-            Err(e) => failure = failure.or(Some(format!("Delete failed: {e}"))),
-        }
-    }
-    (freed, failure)
-}
-
-pub fn delete_old_files(core: &Core) -> Result<u64, String> {
-    let (freed, failure) = remove_old(&core.dir, &core.files);
-    if freed > 0 {
-        debug::event(core, core.started, format!("deleted old files, {freed} bytes"));
-    }
-    failure.map_or(Ok(freed), Err)
 }
 
 fn in_standby(dir: &Path, depth: usize) -> bool {
@@ -254,27 +196,11 @@ pub fn resume(core: &Core) {
 pub const LOCK: &str = "app.lock";
 static HELD: Mutex<Option<std::fs::File>> = Mutex::new(None);
 
-fn open_lock(dir: &Path, create: bool) -> std::io::Result<std::fs::File> {
-    use std::os::windows::fs::OpenOptionsExt;
-    std::fs::OpenOptions::new().write(true).create(create).truncate(false).share_mode(0).open(dir.join(LOCK))
-}
-
 pub fn lock(dir: &Path) -> std::io::Result<bool> {
+    use std::os::windows::fs::OpenOptionsExt;
     let left = dir.join(LOCK).exists();
-    *HELD.lock().unwrap() = Some(open_lock(dir, true)?);
+    *HELD.lock().unwrap() = Some(std::fs::OpenOptions::new().write(true).create(true).truncate(false).share_mode(0).open(dir.join(LOCK))?);
     Ok(left)
-}
-
-pub fn migrate(old: &Path, new: &Path) -> PathBuf {
-    if !old.exists() {
-        return new.to_path_buf();
-    }
-    let used = new.join("key.bin").exists() || !crate::entries(&new.join("rooms")).is_empty();
-    if used || open_lock(old, false).is_err_and(|e| e.kind() != std::io::ErrorKind::NotFound) {
-        return old.to_path_buf();
-    }
-    let moved = crate::proc::wait_until(MOVE_WAIT, MOVE_GAP, || (!new.exists() || std::fs::remove_dir_all(new).is_ok()) && std::fs::rename(old, new).is_ok());
-    (if moved { new } else { old }).to_path_buf()
 }
 
 pub fn release(core: &Arc<Core>) {
@@ -514,45 +440,6 @@ mod tests {
     }
 
     #[test]
-    fn the_data_folder_moves_to_its_new_name_once_and_never_while_the_old_app_runs() {
-        use std::os::windows::fs::OpenOptionsExt;
-        let base = temp("migrate");
-        let (old, new) = (base.join("old"), base.join("new"));
-        let exclusive = |path: &Path| std::fs::OpenOptions::new().write(true).share_mode(0).open(path).unwrap();
-        let files = ["key.bin", "rooms/r/logs/a.bin", "rooms/r/sets/s/a/screen/000001.m4s.part", LOCK];
-        assert_eq!(migrate(&old, &new), new);
-        assert!(!old.exists() && !new.exists());
-        seed(&new, ["key.bin"]);
-        assert_eq!((migrate(&old, &new), tree(&new).len()), (new.clone(), 1));
-        std::fs::remove_dir_all(&new).unwrap();
-        seed(&old, files);
-        let before = tree(&old);
-        assert_eq!(migrate(&old, &new), new);
-        assert_eq!((old.exists(), tree(&new)), (false, before.clone()));
-        std::fs::rename(&new, &old).unwrap();
-        for held in [LOCK, "rooms/r/logs/a.bin"] {
-            let (file, start) = (exclusive(&old.join(held)), Instant::now());
-            assert_eq!((migrate(&old, &new), new.exists(), start.elapsed() < MOVE_WAIT), (old.clone(), false, held == LOCK));
-            drop(file);
-            assert_eq!(migrate(&old, &new), new);
-            assert_eq!((old.exists(), tree(&new)), (false, before.clone()));
-            std::fs::rename(&new, &old).unwrap();
-        }
-        seed(&new, ["log.txt", "EBWebView/Default/Cookies"]);
-        std::fs::create_dir(new.join("rooms")).unwrap();
-        assert_eq!(migrate(&old, &new), new);
-        assert_eq!((old.exists(), tree(&new)), (false, before.clone()));
-        std::fs::rename(&new, &old).unwrap();
-        put(&new, "rooms/r/logs/a.bin", b"new");
-        assert_eq!(migrate(&old, &new), old);
-        std::fs::remove_dir_all(&new).unwrap();
-        put(&new, "key.bin", b"new");
-        assert_eq!(migrate(&old, &new), old);
-        assert_eq!((tree(&old), tree(&new).len()), (before, 1));
-        let _ = std::fs::remove_dir_all(base);
-    }
-
-    #[test]
     fn a_reset_keeps_the_logs_and_the_rooms_only_when_asked() {
         let files = ["key.bin", "rooms.json", "rooms/r/logs/a.bin", "settings.json", "ffmpeg.exe", "plugins/x/m.bin", "EBWebView/x", LOCK, "log.txt", "log.old.txt", "crash.txt"];
         for keep in [true, false] {
@@ -581,7 +468,7 @@ mod tests {
     }
 
     #[test]
-    fn a_restart_removes_nothing_under_recordings_and_never_touches_old_files() {
+    fn a_restart_removes_nothing_under_recordings() {
         let dir = temp("restart");
         let (me, other) = (iroh::SecretKey::generate().public().to_string(), iroh::SecretKey::generate().public().to_string());
         let (one, two) = (fragment(&[(1, 0)], b"aaaa"), fragment(&[(1, 1000)], b"bbbb"));
@@ -596,9 +483,6 @@ mod tests {
         let (joined, logged) = (["s1", "s2", "s3"], [("1000", "v", 1), ("1000", "v", 2), ("3000", "m", 1), ("4000", "v", 1)]);
         let found = crate::record::recover_files(&dir, &me, |r| !joined.contains(&r.set.as_str()) || logged.contains(&(r.capture.as_str(), r.series, r.n)));
         clear_standby(&dir);
-        let mut older: Vec<String> = ["rooms/r/ME", "rooms/r/OT", "rooms/r/live", "rooms/r/sets", "rooms/r/recordings/s1/ME/1000/verified.json"].iter().map(|p| name(p)).collect();
-        older.sort();
-        assert_eq!(relative(&dir, old_files(&dir)), older);
         assert!(leftovers(&dir, true, SystemTime::now()).is_empty());
         for path in leftovers(&dir, false, SystemTime::now() + OLD_AFTER + Duration::from_secs(60)) {
             let _ = remove_path(&path);
@@ -610,41 +494,6 @@ mod tests {
         }
         before.insert(name("rooms/r/recordings/s2/ME/3000/v/000002.m4s"), [one, two].concat());
         assert_eq!(tree(&dir), before);
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    fn relative(dir: &Path, paths: Vec<PathBuf>) -> Vec<String> {
-        let mut out: Vec<String> = paths.iter().map(|p| p.strip_prefix(dir).unwrap().to_string_lossy().replace('\\', "/")).collect();
-        out.sort();
-        out
-    }
-
-    #[test]
-    fn old_files_are_exactly_the_older_shapes() {
-        let dir = temp("oldfiles");
-        let (me, other) = (iroh::SecretKey::generate().public().to_string(), iroh::SecretKey::generate().public().to_string());
-        let room_dir = dir.join("rooms/r");
-        let current: Vec<PathBuf> = {
-            let (live, kept) = (room::series_dir(&room_dir, None, &other, "2000", "v"), |series| room::series_dir(&room_dir, Some("s1"), &me, "1000", series));
-            let mut out = vec![room::log_file(&room_dir, &me), room::log_file(&room_dir, &other), room_dir.join(room::PENDING), crate::thumbs::path(&room_dir, "s1"), live.join(seg_name(3)), part_of(&live.join(seg_name(4)))];
-            for series in SERIES {
-                out.extend([kept(series).join(INIT), kept(series).join(seg_name(1)), part_of(&kept(series).join(seg_name(2))), part_of(&kept(series).join(INIT))]);
-            }
-            out.into_iter().map(|p| p.strip_prefix(&dir).unwrap().to_path_buf()).collect()
-        };
-        let unknown = ["key.bin.old", "legacy/x", "key.bin", "rooms.json", "settings.json", "app.lock", "rooms/r/recordings/orphan/OT/9/v/000001.m4s", "rooms/unlisted/logs/OT.bin", "rooms/solo/logs/ME.bin", "rooms/r/newer.dat", "rooms/r/newer/x", "rooms/r/logs/OT.bin.part", "rooms/r/recordings/s1/ME/1000/newer.json"];
-        let older = ["log.bin", "peer/a/log.bin", "peer.txt", "peers.txt", "running.marker", "plugins/whisper/whisper-cli.exe", "plugins/work/1/voice.wav", "rec-1700000000000.mp4", "rooms/r/ME/1000/v/init.mp4", "rooms/r/sets/s1/a.mp4", "rooms/r/live/a.mp4", "rooms/r/logs/someone.bin", "rooms/r/recordings/s1/ME/1000/verified.json", "rooms/r/recordings/s1/ME/1000/cap.json", "rooms/r/recordings/s1/ME/1000/v/open.json", "rooms/r/recordings/s1/ME/1000/m/open.json"];
-        seed(&dir, unknown.iter().chain(&older).map(|n| n.replace("ME", &me).replace("OT", &other)));
-        seed(&dir, current.iter().map(|p| p.to_string_lossy().to_string()));
-        let expected = ["log.bin", "peer", "peer.txt", "peers.txt", "running.marker", "plugins", "rec-1700000000000.mp4", "rooms/r/ME", "rooms/r/sets", "rooms/r/live", "rooms/r/logs/someone.bin", "rooms/r/recordings/s1/ME/1000/verified.json", "rooms/r/recordings/s1/ME/1000/cap.json", "rooms/r/recordings/s1/ME/1000/v/open.json", "rooms/r/recordings/s1/ME/1000/m/open.json"];
-        let mut expected: Vec<String> = expected.iter().map(|n| n.replace("ME", &me)).collect();
-        expected.sort();
-        assert_eq!(relative(&dir, old_files(&dir)), expected);
-        assert_eq!((old_bytes(&dir), remove_old(&dir, &Files::default())), (older.len() as u64, (older.len() as u64, None)));
-        let mut left: Vec<String> = unknown.iter().map(|n| n.replace("ME", &me).replace("OT", &other)).chain(current.iter().map(|p| p.to_string_lossy().replace('\\', "/"))).collect();
-        left.sort();
-        assert_eq!(tree(&dir).into_keys().collect::<Vec<_>>(), left);
-        assert_eq!((old_bytes(&dir), old_files(&dir).len()), (0, 0));
         let _ = std::fs::remove_dir_all(dir);
     }
 

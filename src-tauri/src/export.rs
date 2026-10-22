@@ -102,7 +102,6 @@ struct Items {
     notes: Vec<Note>,
     chapters: Vec<Cue>,
     matches: Vec<Cue>,
-    subtitles: Vec<(String, Vec<Cue>)>,
 }
 
 #[derive(Clone, Copy)]
@@ -164,10 +163,6 @@ fn within(out: &Output, from: f64, to: f64) -> Option<Output> {
 fn match_stem(n: usize, from_s: f64, file: &str) -> String {
     let s = from_s.max(0.0).round() as u64;
     format!("Match {n:02} {}-{:02}-{:02} {file}", s / 3600, s / 60 % 60, s % 60)
-}
-
-fn shift_cues(cues: &[Cue], from: f64, to: f64) -> Vec<Cue> {
-    cues.iter().filter(|c| c.to_s > from && c.from_s < to).map(|c| Cue { from_s: (c.from_s - from).max(0.0), to_s: c.to_s.min(to) - from, text: c.text.clone() }).collect()
 }
 
 fn cut(a: &str, delay: f64) -> String {
@@ -269,22 +264,16 @@ fn vtt_text(cues: &[Cue]) -> String {
     out
 }
 
-fn events_to_items(events: &[Value], set: &Set, owners: &[String]) -> Items {
+fn events_to_items(events: &[Value], set: &Set) -> Items {
     let start = set.start();
     let at = |us: i64| tenth((us - start) as f64 / 1e6).max(0.0);
     let (mut notes, mut chapters, mut ends): (Vec<Note>, Vec<Cue>, Vec<f64>) = (Vec::new(), Vec::new(), Vec::new());
-    let mut speech: HashMap<String, Vec<Cue>> = HashMap::new();
     for e in events.iter().filter(|e| room::covers(set, e)) {
         let Some(local) = e["local_us"].as_i64() else { continue };
         let text = e["text"].as_str().unwrap_or_default().trim().to_string();
         let tags: Vec<String> = e["tags"].as_array().into_iter().flatten().filter_map(|t| t.as_str().map(String::from)).collect();
         let plugin = !e["plugin"].is_null();
         match (e["kind"].as_str().unwrap_or_default(), e["end_us"].as_i64()) {
-            ("speech", Some(end)) => {
-                if let Some(owner) = e["file"].as_str().filter(|o| owners.iter().any(|x| x == o)) {
-                    speech.entry(owner.to_string()).or_default().push(Cue { from_s: at(local), to_s: at(end).max(at(local) + 0.1), text });
-                }
-            }
             ("drawing" | "board", _) => {}
             (_, Some(end)) if e["file"].is_null() && !text.is_empty() && at(end) > at(local) => chapters.push(Cue { from_s: at(local), to_s: at(end), text }),
             (_, Some(_)) => {}
@@ -304,11 +293,7 @@ fn events_to_items(events: &[Value], set: &Set, owners: &[String]) -> Items {
     chapters.extend(matches.iter().cloned());
     notes.sort_by(|a, b| a.at_s.total_cmp(&b.at_s));
     chapters.sort_by(|a, b| a.from_s.total_cmp(&b.from_s));
-    let mut subtitles: Vec<(String, Vec<Cue>)> = speech.into_iter().collect();
-    for (_, cues) in subtitles.iter_mut() {
-        cues.sort_by(|a, b| a.from_s.total_cmp(&b.from_s));
-    }
-    Items { notes, chapters, matches, subtitles }
+    Items { notes, chapters, matches }
 }
 
 fn feed(core: Arc<Core>, listener: TcpListener, pieces: Vec<Piece>) {
@@ -577,8 +562,7 @@ pub fn folder(core: &Arc<Core>, room_id: &str, set_id: &str, dir: &Path, opts: &
         return Err("None of this recording's files are on this PC yet.".into());
     }
     let skipped: Vec<String> = files.iter().filter(|f| !outputs.iter().any(|o| o.owner == f.owner)).map(|f| room::display_name(core, &f.owner)).collect();
-    let owners: Vec<String> = outputs.iter().map(|o| o.owner.clone()).collect();
-    let items = events_to_items(&room::events(&logs, None), &set, &owners);
+    let items = events_to_items(&room::events(&logs, None), &set);
     let names = export_names(&unique_names(&outputs.iter().map(|o| o.name.clone()).collect::<Vec<_>>()));
     let parts = parts(&outputs, &names, &items.matches, opts.range, total);
     if parts.is_empty() {
@@ -621,14 +605,6 @@ pub fn folder(core: &Arc<Core>, room_id: &str, set_id: &str, dir: &Path, opts: &
     }
     if let Some(records) = crate::party::records(&logs).remove(set_id) {
         write(WATCH, crate::party::watch_json(&records).to_string())?;
-    }
-    for (owner, cues) in &items.subtitles {
-        for part in parts.iter().filter(|p| p.out.owner == *owner) {
-            let shifted = shift_cues(cues, part.from, part.to);
-            if !shifted.is_empty() {
-                write(&format!("{}.vtt", part.stem), vtt_text(&shifted))?;
-            }
-        }
     }
     emit(core, 100.0, true, None);
     Ok(json!({"folder": dir.to_string_lossy(), "files": outputs.len(), "skipped": skipped}))
@@ -737,7 +713,6 @@ mod tests {
         assert!(a.contains("d=25.000") && a.contains("setpts=PTS-STARTPTS+10.000/TB") && a.ends_with("-t 25.000"));
         let whole = parts(&[out, other], &names, &matches, Range::Whole, 4000.0);
         assert_eq!(whole.iter().map(|p| (p.stem.as_str(), p.from, p.to)).collect::<Vec<_>>(), [("Ann", 0.0, 4000.0), ("Ben", 0.0, 4000.0)]);
-        assert_eq!(shift_cues(&[Cue { from_s: 20.0, to_s: 30.0, text: "x".into() }, Cue { from_s: 60.0, to_s: 61.0, text: "y".into() }], 25.0, 55.0), [Cue { from_s: 0.0, to_s: 5.0, text: "x".into() }]);
     }
 
     #[test]
@@ -756,34 +731,31 @@ mod tests {
         Set { id: "s1".into(), room: "r".into(), files: vec![File { set: "s1".into(), owner: "a".into(), start_us: 1_000_000_000, end_us: Some(1_100_000_000), offset_us: 0, segs: Vec::new(), caps: HashMap::new(), view: None, present: false }], stopped: false }
     }
 
-    fn event(kind: &str, local: i64, end: Option<i64>, text: &str, tags: Value, plugin: bool, file: Option<&str>) -> Value {
-        json!({"kind": kind, "local_us": local, "end_us": end, "text": text, "tags": tags, "plugin": if plugin { json!({"id": "p"}) } else { Value::Null }, "file": file})
+    fn event(kind: &str, local: i64, end: Option<i64>, text: &str, tags: Value, plugin: bool) -> Value {
+        json!({"kind": kind, "local_us": local, "end_us": end, "text": text, "tags": tags, "plugin": if plugin { json!({"id": "p"}) } else { Value::Null }})
     }
 
     #[test]
-    fn events_become_notes_chapters_and_subtitles_on_the_recording_clock() {
+    fn events_become_notes_and_chapters_on_the_recording_clock() {
         let set = fake_set();
         let s = 1_000_000_000i64;
         let events = vec![
-            event("note", s + 84_500_000, None, "Late rotate #rotate", json!(["rotate"]), false, None),
-            event("mark", s + 90_000_000, None, "", json!([]), false, None),
-            event("chapter", s, Some(s + 30_000_000), "Warm up", json!([]), false, None),
-            event("match_end", s + 60_000_000, None, "", json!(["match"]), true, None),
-            event("match_end", s + 30_000_000, None, "", json!(["match"]), true, None),
-            event("match_end", s + 30_000_000, None, "", json!(["match"]), true, None),
-            event("speech", s + 5_000_000, Some(s + 8_000_000), "Drop north", json!([]), true, Some("a")),
-            event("speech", s + 6_000_000, Some(s + 7_000_000), "Elsewhere", json!([]), true, Some("zz")),
-            event("drawing", s + 7_000_000, None, "", json!([]), false, None),
-            event("note", s + 500_000_000, None, "Outside", json!([]), false, None),
-            event("note", s + 1_000_000, None, "Plugin note", json!([]), true, None),
+            event("note", s + 84_500_000, None, "Late rotate #rotate", json!(["rotate"]), false),
+            event("mark", s + 90_000_000, None, "", json!([]), false),
+            event("chapter", s, Some(s + 30_000_000), "Warm up", json!([]), false),
+            event("match_end", s + 60_000_000, None, "", json!(["match"]), true),
+            event("match_end", s + 30_000_000, None, "", json!(["match"]), true),
+            event("match_end", s + 30_000_000, None, "", json!(["match"]), true),
+            event("drawing", s + 7_000_000, None, "", json!([]), false),
+            event("note", s + 500_000_000, None, "Outside", json!([]), false),
+            event("note", s + 1_000_000, None, "Plugin note", json!([]), true),
         ];
-        let Items { notes, chapters, matches, subtitles } = events_to_items(&events, &set, &["a".to_string()]);
+        let Items { notes, chapters, matches } = events_to_items(&events, &set);
         assert_eq!(matches.iter().map(|m| (m.from_s, m.to_s)).collect::<Vec<_>>(), [(0.0, 30.0), (30.0, 60.0)]);
         let notes: Vec<(f64, &str, &str)> = notes.iter().map(|n| (n.at_s, n.kind.as_str(), n.text.as_str())).collect();
         assert_eq!(notes, [(84.5, "note", "Late rotate #rotate"), (90.0, "mark", "")]);
         let chapters: Vec<(f64, f64, &str)> = chapters.iter().map(|c| (c.from_s, c.to_s, c.text.as_str())).collect();
         assert_eq!(chapters, [(0.0, 30.0, "Warm up"), (0.0, 30.0, "Match 1"), (30.0, 60.0, "Match 2")]);
-        assert_eq!(subtitles, vec![("a".to_string(), vec![Cue { from_s: 5.0, to_s: 8.0, text: "Drop north".into() }])]);
     }
 
     #[test]

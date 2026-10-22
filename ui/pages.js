@@ -258,10 +258,10 @@ function renderProfile() {
     press(b, i === mine);
     return b;
   }));
-  const own = image && !FACES[LEGACY[image] || image] ? [press(el("button", { className: "facebtn", ariaLabel: t("Avatar") }, picture("", colorOf(mine), image, "lg")), true)] : [];
+  const own = image && !FACES[image] ? [press(el("button", { className: "facebtn", ariaLabel: t("Avatar") }, picture("", colorOf(mine), image, "lg")), true)] : [];
   $("facegrid").replaceChildren(...own, ...PRESETS.map((name, i) => {
     const b = el("button", { className: "facebtn", ariaLabel: `${t("Avatar")} ${i + 1}`, onclick: () => run("set_profile", { avatar: name }) }, picture("", colorOf(mine), name, "lg"));
-    press(b, (LEGACY[image] || image) === name);
+    press(b, image === name);
     return b;
   }));
   $("avatarclear").hidden = !image;
@@ -282,15 +282,12 @@ function recvText(s) {
 function renderStorage() {
   const d = st.disk;
   const used = storageInfo ? storageInfo.used_bytes : 0;
-  const old = storageInfo ? storageInfo.old_bytes : 0;
   const totalBytes = d.total || 1;
   const other = Math.max(0, totalBytes - d.free - used);
   const sets = st.sets.filter((s) => !s.live);
-  const sig = [used, old, d, sets.map((s) => [s.id, s.progress.have, s.progress.total, s.shared, recvText(s)]), [...picked], lang];
+  const sig = [used, d, sets.map((s) => [s.id, s.progress.have, s.progress.total, s.shared, recvText(s)]), [...picked], lang];
   if (!changed("storage", sig)) return;
   $("storedir").textContent = storageInfo ? storageInfo.dir : "";
-  $("oldfiles").hidden = !old;
-  $("oldfiles").lastChild.textContent = t("Delete old files ({size})", { size: bytes(old) });
   const seg = (cls, n) => { const i = el("i", { className: cls }); i.style.width = (n / totalBytes) * 100 + "%"; return i; };
   $("usage").replaceChildren(seg("app", used), seg("other", other));
   const free = d.hours_left != null ? t("Free {free} · about {h} h of recording", { free: bytes(d.free), h: Math.floor(d.hours_left) }) : t("Free {free}", { free: bytes(d.free) });
@@ -422,9 +419,6 @@ $("checkupdate").onclick = () => checkUpdate(true);
 $("selnone").onclick = () => { picked.clear(); delete sigs.storage; renderStorage(); };
 $("selold").onclick = () => { picked = new Set(oldSessions(st.sets.filter((s) => !s.live))); delete sigs.storage; renderStorage(); };
 $("deletesel").onclick = () => confirmDelete([...picked]);
-$("oldfiles").onclick = async () => {
-  if (await ask(t("Delete old files?"), t("Delete"), true)) invoke("delete_old_files").catch(fail).finally(loadStorage);
-};
 $("delno").onclick = () => $("deletedlg").close();
 $("diagcopy").onclick = () => diagnosticsText().then((text) => navigator.clipboard.writeText(text)).then(() => flash(t("Copied"))).catch(fail);
 $("diagsave").onclick = () => diagnosticsText().then((text) => dialog("save_text", { name: "ez-hanseikai-diagnostics.txt", text })).then((saved) => { if (saved) flash(t("Saved")); }).catch(fail);

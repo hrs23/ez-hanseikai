@@ -134,7 +134,7 @@ fn newest(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> BTreeMap<String,
     let mut latest: BTreeMap<String, ((i64, String), Config)> = BTreeMap::new();
     for (log, records) in capped(logs, caps) {
         for r in records.iter().filter(|r| r["k"] == "plugin") {
-            let (Some(id), Some(t)) = (r["plugin"].as_str(), r["t_us"].as_i64()) else { continue };
+            let (Some(id), Some(t)) = (r["plugin"].as_str().filter(|id| plugins::find(id).is_some()), r["t_us"].as_i64()) else { continue };
             let at = (t - log.offset_us, log.owner.clone());
             if latest.get(id).is_none_or(|(old, _)| at > *old) {
                 let runner = r["runner"].as_str().filter(|m| !m.is_empty()).unwrap_or(&log.owner).to_string();
@@ -176,7 +176,7 @@ pub fn tracks(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> Tracks {
                 Some("claim") => Status::Claimed(run),
                 Some("done") => Status::Done(run),
                 Some("fail") => Status::Failed(r["error"].as_str().unwrap_or_default().to_string()),
-                Some("retry" | "yield" | "stop") => Status::Retry,
+                Some("retry" | "stop") => Status::Retry,
                 _ => continue,
             };
             let at = (r["t_us"].as_i64().unwrap_or(0) - log.offset_us, log.owner.clone());
@@ -213,8 +213,8 @@ pub fn chosen(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> HashMap<Stri
     out.into_iter().map(|(set, (_, file))| (set, file)).collect()
 }
 
-pub fn counts(plugin: &str, file: &str, chosen: &HashMap<String, String>) -> bool {
-    file.matches('/').count() == 1 && (plugins::find(plugin).is_none() || file.split('/').next().is_some_and(|set| chosen.get(set).is_some_and(|f| f == file)))
+pub fn counts(file: &str, chosen: &HashMap<String, String>) -> bool {
+    file.split('/').next().is_some_and(|set| chosen.get(set).is_some_and(|f| f == file))
 }
 
 fn winners(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> Vec<((String, i64), Value)> {
@@ -222,7 +222,7 @@ fn winners(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> Vec<((String, i
     let chosen = chosen(logs, caps);
     tracks(logs, caps)
         .into_iter()
-        .filter(|((plugin, file), _)| on.contains(plugin) && counts(plugin, file, &chosen))
+        .filter(|((plugin, file), _)| on.contains(plugin) && counts(file, &chosen))
         .filter_map(|(_, t)| t.winner().map(|w| ((w.owner.clone(), w.run), w.tags.clone())))
         .collect()
 }
@@ -255,7 +255,7 @@ pub fn next(me: &str, bundled: &[(&str, &str)], configs: &BTreeMap<String, Confi
             continue;
         }
         let prefix = prefix(id, config);
-        for (i, input) in inputs.iter().enumerate().filter(|(_, input)| input.here && counts(id, &input.file, chosen)) {
+        for (i, input) in inputs.iter().enumerate().filter(|(_, input)| input.here && counts(&input.file, chosen)) {
             let Some(resumed) = tracks.get(&(id.clone(), input.file.clone())).map_or(Some(false), |t| t.open_for(me)) else { continue };
             picks.push(((!resumed, Reverse(input.start_us), order), Pick { plugin: id.clone(), key: format!("{prefix}{}", input.file), input: i }));
         }
@@ -359,7 +359,7 @@ pub fn analysis(
         for (id, config) in configs.iter().filter(|(_, c)| c.on) {
             let phases: Vec<Phase> = finished
                 .iter()
-                .filter(|f| counts(id, &format!("{}/{}", set.id, f.owner), chosen))
+                .filter(|f| counts(&format!("{}/{}", set.id, f.owner), chosen))
                 .map(|f| phase(tracks.get(&(id.clone(), format!("{}/{}", set.id, f.owner))), config.runner.as_deref(), me, online, &holders(set, f)))
                 .collect();
             if !phases.is_empty() {
@@ -474,7 +474,7 @@ pub fn inputs(core: &Core, room: &str, logs: &[Log], locate: impl Fn(&Set, &str)
 }
 
 pub fn open(set: &Set, file: &str, me: &str, configs: &BTreeMap<String, Config>, tracks: &Tracks, chosen: &HashMap<String, String>, now: i64) -> bool {
-    configs.iter().any(|(id, c)| c.runs_on(me) && counts(id, file, chosen) && due(set, id, tracks, now) && tracks.get(&(id.clone(), file.to_string())).is_none_or(|t| t.open_for(me).is_some()))
+    configs.iter().any(|(id, c)| c.runs_on(me) && counts(file, chosen) && due(set, id, tracks, now) && tracks.get(&(id.clone(), file.to_string())).is_none_or(|t| t.open_for(me).is_some()))
 }
 
 fn snapshot(core: &Core, room: &str) -> (Vec<Log>, BTreeMap<String, Config>, Tracks) {
@@ -488,7 +488,6 @@ fn room_configs(core: &Core, room: &str, logs: &[Log]) -> BTreeMap<String, Confi
 }
 
 pub fn runnable(mut configs: BTreeMap<String, Config>, members: &[String]) -> BTreeMap<String, Config> {
-    configs.retain(|id, _| plugins::find(id).is_some());
     for c in configs.values_mut() {
         c.runner = c.runner.take().filter(|r| members.contains(r));
     }
@@ -747,7 +746,7 @@ pub fn retries(configs: &BTreeMap<String, Config>, chosen: &HashMap<String, Stri
         .filter(|(id, c)| c.on && plugin.is_none_or(|p| p == id.as_str()))
         .flat_map(|(id, c)| {
             let prefix = prefix(id, c);
-            set.files.iter().map(move |f| format!("{}/{}", set.id, f.owner)).filter(move |file| counts(id, file, chosen)).map(move |file| job_record("retry", &format!("{prefix}{file}"), 0, Value::Null))
+            set.files.iter().map(move |f| format!("{}/{}", set.id, f.owner)).filter(move |file| counts(file, chosen)).map(move |file| job_record("retry", &format!("{prefix}{file}"), 0, Value::Null))
         })
         .collect()
 }
@@ -981,9 +980,9 @@ mod tests {
     }
 
     #[test]
-    fn old_yield_and_stop_records_read_as_pending() {
+    fn stop_and_retry_records_read_as_pending() {
         let inputs = [input("s1", "a", 10, true)];
-        for state in ["yield", "stop", "retry"] {
+        for state in ["stop", "retry"] {
             let logs = base_logs(vec![timed(job_record("claim", &key("s1/a"), 5, Value::Null), 5), timed(job_record(state, &key("s1/a"), 5, Value::Null), 6)], vec![]);
             assert_eq!(pick("a", &logs, &inputs).as_deref(), Some("s1/a"), "{state}");
             let t = tracks(&logs, None);
@@ -1116,41 +1115,39 @@ mod tests {
     }
 
     #[test]
-    fn a_bundled_plugin_reads_the_longest_file_once_and_others_count_per_file() {
+    fn a_plugin_reads_the_longest_file_once() {
         let seg = |set: &str, n: u32, capture: &str| json!({"k": "seg", "series": "v", "set": set, "n": n, "capture": capture});
         let logs = vec![log("a", 0, vec![seg("s1", 1, "1"), seg("s1", 2, "1"), seg("s2", 1, "3")]), log("b", 0, vec![seg("s1", 1, "2"), seg("s1", 2, "2"), seg("s1", 3, "2"), seg("s2", 1, "4")])];
         let chosen = chosen(&logs, None);
         assert_eq!(chosen["s1"], "s1/b");
         assert_eq!(chosen["s2"], "s2/a");
-        assert!(counts(APEX, "s1/b", &chosen) && !counts(APEX, "s1/a", &chosen));
-        assert!(counts("transcribe", "s1/a", &chosen));
+        assert!(counts("s1/b", &chosen) && !counts("s1/a", &chosen));
     }
 
     #[test]
-    fn restarted_captures_of_one_person_are_one_file_and_old_keys_are_ignored() {
+    fn restarted_captures_of_one_person_are_one_file() {
         let seg = |n: u32, capture: &str| json!({"k": "seg", "series": "v", "set": "s1", "n": n, "capture": capture});
         let logs = vec![log("a", 0, vec![seg(1, "1"), seg(2, "1"), seg(1, "2")]), log("b", 0, vec![seg(1, "3"), seg(2, "3")])];
         assert_eq!(chosen(&logs, None)["s1"], "s1/a");
-        assert!(!counts("transcribe", "s1/a/1", &HashMap::new()));
-        assert!(!counts("transcribe", "s1", &HashMap::new()));
+        assert!(!counts("s1/a/1", &HashMap::new()));
+        assert!(!counts("s1", &HashMap::new()));
     }
 
     #[test]
-    fn old_speech_on_a_file_that_is_not_chosen_stays_shown() {
-        let seg = |n: u32| json!({"k": "seg", "series": "v", "set": "s1", "n": n, "capture": "1"});
-        let old = json!({"k": "plugin", "plugin": "transcribe", "on": true, "version": "1.1.0", "settings": {"model": "small", "language": "auto"}, "t_us": 1});
-        let done = json!({"k": "job", "state": "done", "job": "transcribe@1.1.0/0123456789ab/s1/a", "run": 7, "t_us": 9, "settings": {"model": "small"}});
-        let speech = json!({"k": "event", "id": 8, "kind": "speech", "plugin": {"id": "transcribe", "name": "Transcription"}, "run": 7});
-        let logs = vec![log("a", 0, vec![old, seg(1), speech, done]), log("b", 0, vec![seg(1), seg(2)])];
-        assert_eq!(chosen(&logs, None)["s1"], "s1/b");
-        let mut events = vec![json!({"author": "a", "run": 7, "plugin": {"id": "transcribe"}}), json!({"author": "a", "run": 6, "plugin": {"id": "transcribe"}})];
+    fn results_of_a_plugin_the_app_does_not_know_are_not_shown() {
+        let seg = json!({"k": "seg", "series": "v", "set": "s1", "n": 1, "capture": "1"});
+        let old = json!({"k": "plugin", "plugin": "gone", "on": true, "version": "1.1.0", "t_us": 1});
+        let done = json!({"k": "job", "state": "done", "job": "gone@1.1.0/0123456789ab/s1/a", "run": 7, "t_us": 9});
+        let logs = vec![log("a", 0, vec![old, seg, done])];
+        let mut events = vec![json!({"author": "a", "run": 7, "plugin": {"id": "gone"}}), json!({"author": "a", "run": 0, "plugin": null})];
         keep_shown(&mut events, &logs, None);
-        assert_eq!(events, vec![json!({"author": "a", "run": 7, "plugin": {"id": "transcribe"}})]);
+        assert_eq!(events, vec![json!({"author": "a", "run": 0, "plugin": null})]);
+        assert!(configs(&logs, None).is_empty());
     }
 
     #[test]
-    fn an_old_transcribe_config_runs_nothing_and_shows_no_analysis() {
-        let old = json!({"k": "plugin", "plugin": "transcribe", "on": true, "version": "1.1.0", "runner": "a", "t_us": 1});
+    fn a_plugin_the_app_does_not_know_runs_nothing_and_shows_no_analysis() {
+        let old = json!({"k": "plugin", "plugin": "gone", "on": true, "version": "1.1.0", "runner": "a", "t_us": 1});
         let rec = json!({"k": "rec", "set": "s1", "start_us": 1});
         let seg = json!({"k": "seg", "series": "v", "set": "s1", "n": 1, "capture": "1", "t_us": 1, "d_us": 1, "size": 1, "sha256": "x"});
         let logs = vec![log("a", 0, vec![old, rec, seg])];
@@ -1190,7 +1187,7 @@ mod tests {
         let all = retries(&configs(&logs, None), &chosen(&logs, None), &sets[0], None);
         assert_eq!(all.iter().map(|r| r["job"].as_str().unwrap().to_string()).collect::<Vec<_>>(), vec![key("s1/a")]);
         assert!(all.iter().all(|r| r["state"] == "retry"));
-        assert!(retries(&configs(&logs, None), &chosen(&logs, None), &sets[0], Some("transcribe")).is_empty());
+        assert!(retries(&configs(&logs, None), &chosen(&logs, None), &sets[0], Some("gone")).is_empty());
         assert_eq!(retries(&configs(&logs, None), &chosen(&logs, None), &sets[0], Some(APEX)).len(), 1);
     }
 

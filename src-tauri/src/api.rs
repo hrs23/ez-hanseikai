@@ -27,7 +27,7 @@ const TAGS_MAX: usize = 16;
 const AT_MAX_S: f64 = 7.0 * 24.0 * 3600.0;
 const LLMS: &str = include_str!("../../docs/llms.txt");
 const METHODS: [&str; 3] = ["GET ", "POST ", "PUT "];
-const DEFAULT_HIDDEN: [&str; 3] = ["speech", "drawing", "board"];
+const DEFAULT_HIDDEN: [&str; 2] = ["drawing", "board"];
 static PORT: LazyLock<u16> = LazyLock::new(|| std::env::var("EZH_API_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(DEFAULT_PORT));
 
 pub fn port() -> u16 {
@@ -409,21 +409,6 @@ fn chapters_reply(l: &Loaded, set: &Set, now_us: i64) -> Response {
     reply(200, json!({"chapters": chapters}))
 }
 
-fn transcript_reply(l: &Loaded, set: &Set, req: &Request) -> Response {
-    let member = req.query("member");
-    let mut lines: Vec<(f64, Value)> = covered(l, set)
-        .iter()
-        .filter(|e| e["kind"] == "speech" && e["file"].is_string() && member.is_none_or(|m| e["file"] == m))
-        .filter_map(|e| {
-            let (from, to) = (e["local_us"].as_i64()?, e["end_us"].as_i64().unwrap_or(e["local_us"].as_i64()?));
-            let who = e["file"].as_str()?;
-            Some((from as f64, json!({"member": who, "member_name": l.name(who), "from_s": seconds(set, Some(from)), "to_s": seconds(set, Some(to)), "text": e["text"]})))
-        })
-        .collect();
-    lines.sort_by(|a, b| a.0.total_cmp(&b.0));
-    reply(200, json!({"lines": lines.into_iter().map(|(_, v)| v).collect::<Vec<_>>()}))
-}
-
 fn board_json(l: &Loaded) -> Value {
     let cards = room::board_cards(&room::events(&l.logs, None), &[]);
     let team = cards.iter().find(|c| c["card"] == "team").unwrap_or(&Value::Null);
@@ -575,7 +560,7 @@ fn route(req: &Request, be: &dyn Backend, parts: &[&str]) -> Response {
     let allowed: &[&str] = match parts {
         ["v1", "ops", _] => &["POST"],
         ["v1"] | ["v1", "status"] | ["v1", "diagnostics"] | ["v1", "rooms"] | ["v1", "rooms", _, "recordings"] | ["v1", "rooms", _, "recordings", _] => &["GET"],
-        ["v1", "rooms", _, "recordings", _, "chapters" | "transcript"] | ["v1", "rooms", _, "recordings", _, "voices", _] | ["v1", "rooms", _, "plugins"] => &["GET"],
+        ["v1", "rooms", _, "recordings", _, "chapters"] | ["v1", "rooms", _, "recordings", _, "voices", _] | ["v1", "rooms", _, "plugins"] => &["GET"],
         ["v1", "rooms", _, "recordings", _, "events"] => &["GET", "POST"],
         ["v1", "rooms", _, "board"] => &["GET", "PUT"],
         _ => return error(404, "No such endpoint."),
@@ -616,8 +601,7 @@ fn route(req: &Request, be: &dyn Backend, parts: &[&str]) -> Response {
                 },
                 ["events"] if req.method == "POST" => add_event(be, &l, &set, req),
                 ["events"] => events_reply(&l, &set, req),
-                ["chapters"] => chapters_reply(&l, &set, be.now_us()),
-                _ => transcript_reply(&l, &set, req),
+                _ => chapters_reply(&l, &set, be.now_us()),
             }
         }
         _ => error(404, "No such endpoint."),
@@ -875,10 +859,10 @@ mod tests {
             self.logs.lock().unwrap().iter().map(|l| Log { owner: l.owner.clone(), offset_us: l.offset_us, records: l.records.clone() }).collect()
         }
         fn plugins(&self, _: &str) -> Vec<Value> {
-            vec![json!({"id": "transcribe", "name": "Transcription", "summary": "x", "version": "1", "on": true, "settings": {"model": "small"}, "ready": true, "runner": "a", "left": 1, "failed": 0, "waiting_for": "b"})]
+            vec![json!({"id": "apex-matches", "name": "Apex matches", "summary": "x", "version": "1", "on": true, "ready": true, "runner": "a", "left": 1, "failed": 0, "waiting_for": "b"})]
         }
         fn analysis(&self, _: &str) -> HashMap<String, Vec<Value>> {
-            HashMap::from([("s1".to_string(), vec![json!({"plugin": "transcribe", "state": "left", "reason": "waiting", "waiting_for": "b"})])])
+            HashMap::from([("s1".to_string(), vec![json!({"plugin": "apex-matches", "state": "left", "reason": "waiting", "waiting_for": "b"})])])
         }
         fn voice(&self, _: &str, set: &str, member: &str) -> Option<Vec<u8>> {
             (set == "s2" && member == "b").then(|| b"\0\0\0\x18ftypmp42".to_vec())
@@ -914,12 +898,9 @@ mod tests {
         ]
     }
 
-    fn plugin_event(id: &str, owner: &str, kind: &str, from: i64, to: Option<i64>, text: &str, tags: Value) -> Value {
-        let name = crate::plugins::find(id).map_or("Transcription", |p| p.name);
-        let mut target = json!({"set": "s1", "file": owner, "t_us": START + from * S});
-        if let Some(to) = to {
-            target = json!({"set": "s1", "file": owner, "from_us": START + from * S, "to_us": START + to * S});
-        }
+    fn plugin_event(id: &str, owner: &str, kind: &str, from: i64, text: &str, tags: Value) -> Value {
+        let name = crate::plugins::find(id).unwrap().name;
+        let target = json!({"set": "s1", "file": owner, "t_us": START + from * S});
         json!({"k": "event", "id": START + from * S + 1, "t_us": 1, "kind": kind, "target": target, "text": text, "values": {}, "tags": tags, "plugin": {"id": id, "name": name, "version": "1.1.0"}, "job": "j", "run": 7})
     }
 
@@ -928,7 +909,7 @@ mod tests {
             json!({"k": "rec", "set": "s1", "start_us": START}),
             json!({"k": "seg", "capture": "111", "series": "v", "n": 1, "set": "s1", "t_us": START, "d_us": 4 * S, "size": 1, "sha256": "x"}),
             json!({"k": "rec_end", "set": "s1", "t_us": START + 90 * S}),
-            json!({"k": "rec", "set": "s2", "start_us": START + 200 * S, "voice": true}),
+            json!({"k": "rec", "set": "s2", "start_us": START + 200 * S, "voice": true, "of": "s1"}),
             json!({"k": "rec_end", "set": "s2", "t_us": START + 260 * S}),
             json!({"k": "party", "set": "s2", "t_us": START + 210 * S, "shared": {"set": "s1"}}),
             room::user_event(START + 10 * S, "note", "Late rotate #rotate", json!({"t_us": START + 30 * S, "set": "s1"}), Value::Null),
@@ -940,17 +921,14 @@ mod tests {
         a.extend(plugin_records("apex-matches", "a"));
         a.extend(plugin_events_a());
         let voice = |capture: &str| json!({"k": "seg", "capture": capture, "series": "m", "n": 1, "set": "s2", "t_us": START + 200 * S, "d_us": 4 * S, "size": 1, "sha256": "x"});
-        let mut b = vec![json!({"k": "rec", "set": "s1", "start_us": START + 2 * S}), json!({"k": "rec_end", "set": "s1", "t_us": START + 88 * S}), json!({"k": "rec", "set": "s2", "start_us": START + 200 * S, "voice": true}), voice("111"), voice("222")];
-        b.extend(plugin_records("transcribe", "b"));
-        b.push(plugin_event("transcribe", "b", "speech", 20, Some(24), "Drop north", json!([])));
-        b.push(plugin_event("transcribe", "b", "speech", 5, Some(8), "Ready", json!([])));
+        let b = vec![json!({"k": "rec", "set": "s1", "start_us": START + 2 * S}), json!({"k": "rec_end", "set": "s1", "t_us": START + 88 * S}), json!({"k": "rec", "set": "s2", "start_us": START + 200 * S, "voice": true}), voice("111"), voice("222")];
         Fake::new(a, b)
     }
 
     fn plugin_events_a() -> Vec<Value> {
         vec![
-            plugin_event("apex-matches", "a", "match_end", 60, None, "", json!(["match"])),
-            plugin_event("apex-matches", "a", "match_end", 30, None, "", json!(["match"])),
+            plugin_event("apex-matches", "a", "match_end", 60, "", json!(["match"])),
+            plugin_event("apex-matches", "a", "match_end", 30, "", json!(["match"])),
         ]
     }
 
@@ -1090,8 +1068,6 @@ mod tests {
         assert_eq!(tagged["events"].as_array().unwrap().len(), 1);
         let (_, marks) = get(&fake, "/v1/rooms/r1/recordings/s1/events?kind=mark");
         assert_eq!(marks["events"].as_array().unwrap().len(), 1);
-        let (_, speech) = get(&fake, "/v1/rooms/r1/recordings/s1/events?kind=speech");
-        assert_eq!(speech["events"].as_array().unwrap().len(), 2);
         let (_, board) = get(&fake, "/v1/rooms/r1/recordings/s1/events?kind=board");
         assert_eq!(board["events"].as_array().unwrap().len(), 0);
     }
@@ -1103,18 +1079,6 @@ mod tests {
         assert_eq!(status, 200);
         assert_eq!(body["chapters"], json!([{"n": 1, "name": "Match 1", "from_s": 0.0, "to_s": 30.0}, {"n": 2, "name": "Match 2", "from_s": 30.0, "to_s": 60.0}]));
         assert_eq!(get(&fake, "/v1/rooms/r1/recordings/s2/chapters").1["chapters"], json!([]));
-    }
-
-    #[test]
-    fn the_transcript_lists_spoken_lines_in_time_order_with_the_speaker() {
-        let fake = fixture();
-        let (status, body) = get(&fake, "/v1/rooms/r1/recordings/s1/transcript");
-        assert_eq!(status, 200);
-        assert_eq!(body["lines"], json!([
-            {"member": "b", "member_name": "Ben", "from_s": 5.0, "to_s": 8.0, "text": "Ready"},
-            {"member": "b", "member_name": "Ben", "from_s": 20.0, "to_s": 24.0, "text": "Drop north"},
-        ]));
-        assert_eq!(get(&fake, "/v1/rooms/r1/recordings/s1/transcript?member=a").1["lines"], json!([]));
     }
 
     #[test]
@@ -1224,11 +1188,11 @@ mod tests {
         let (status, plugins) = get(&fake, "/v1/rooms/r1/plugins");
         assert_eq!(status, 200);
         let first = &plugins["plugins"][0];
-        assert_eq!((first["id"].as_str(), first["on"].as_bool(), first["runner_name"].as_str(), first["left"].as_u64(), first["waiting_for_name"].as_str()), (Some("transcribe"), Some(true), Some("Ann"), Some(1), Some("Ben")));
+        assert_eq!((first["id"].as_str(), first["on"].as_bool(), first["runner_name"].as_str(), first["left"].as_u64(), first["waiting_for_name"].as_str()), (Some("apex-matches"), Some(true), Some("Ann"), Some(1), Some("Ben")));
         assert!(first.get("summary").is_none() && first.get("workers").is_none());
         assert_eq!(get(&fake, "/v1/rooms/r1/jobs").0, 404);
         let (_, s1) = get(&fake, "/v1/rooms/r1/recordings/s1");
-        assert_eq!(s1["analysis"][0], json!({"plugin": "transcribe", "state": "left", "reason": "waiting", "waiting_for": "b"}));
+        assert_eq!(s1["analysis"][0], json!({"plugin": "apex-matches", "state": "left", "reason": "waiting", "waiting_for": "b"}));
         assert_eq!(get(&fake, "/v1/rooms/r1/recordings/s2").1["analysis"], json!([]));
     }
 
@@ -1308,7 +1272,7 @@ mod tests {
 
     #[test]
     fn llms_txt_describes_every_endpoint() {
-        for path in ["/v1/rooms", "recordings", "events", "chapters", "transcript", "voices", "board", "plugins", "/v1/status", "/v1/diagnostics", "/v1/ops", "create_room", "start_recording", "api.json", "--api"] {
+        for path in ["/v1/rooms", "recordings", "events", "chapters", "voices", "board", "plugins", "/v1/status", "/v1/diagnostics", "/v1/ops", "create_room", "start_recording", "api.json", "--api"] {
             assert!(LLMS.contains(path), "{path}");
         }
         assert!(LLMS.contains("Authorization: Bearer") && LLMS.contains("127.0.0.1"));

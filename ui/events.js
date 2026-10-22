@@ -5,7 +5,7 @@ const OVERLAY_MAX = 4;
 function role(e) {
   if (e.kind === "board") return "board";
   if (e.kind === "drawing") return "drawing";
-  if (e.end_us !== null && e.end_us !== undefined) return e.file && e.text ? "speech" : "chapter";
+  if (e.end_us !== null && e.end_us !== undefined) return "chapter";
   return "moment";
 }
 

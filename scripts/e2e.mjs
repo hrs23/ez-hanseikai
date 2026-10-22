@@ -248,12 +248,6 @@ function oldFiles() {
   };
 }
 
-function keptOldFiles() {
-  const room = path.join("rooms", OLD_ROOM);
-  const kept = path.join(room, "recordings", OLD_SET, OLD_OWNER, OLD_CAPTURE);
-  return [path.join("legacy", "notes.json"), path.join(kept, "v", "init.mp4"), path.join(kept, "v", "000001.m4s"), path.join(room, "recordings", "orphan", OLD_OWNER, OLD_CAPTURE, "v", "000001.m4s")];
-}
-
 const oldStandby = () => path.join("rooms", OLD_ROOM, "standby", OLD_OWNER, OLD_CAPTURE, "v", "000001.m4s");
 
 function seedOld(dir) {
@@ -1264,9 +1258,9 @@ async function library(ctx) {
 
   await step("B's chosen colour and built-in avatar and A's room icon reach everyone", async () => {
     const icon = "data:image/webp;base64,UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA==";
-    await invoke(b, "set_profile", { color: 5, avatar: "bolt" });
+    await invoke(b, "set_profile", { color: 5, avatar: "tiger" });
     await invoke(a, "set_room_icon", { icon });
-    for (const app of [a, b, c]) await waitFor(`${app.key} shows B's colour and avatar`, within(LOG_SYNC_S * 2), async () => { const s = await state(app); return s.colors[b.id] === 5 && s.avatars[b.id] === "bolt"; });
+    for (const app of [a, b, c]) await waitFor(`${app.key} shows B's colour and avatar`, within(LOG_SYNC_S * 2), async () => { const s = await state(app); return s.colors[b.id] === 5 && s.avatars[b.id] === "tiger"; });
     for (const app of [a, b, c]) await waitFor(`${app.key} shows the room icon in the room and in the list`, within(LOG_SYNC_S * 2), async () => { const s = await state(app); return s.room.icon === icon && s.rooms.find((r) => r.id === s.room.id).icon === icon; });
     await waitFor("A's sidebar shows the icon as an image", within(UI_REFRESH_S * 3), () => evaluate(a, `!!$("roomicon").querySelector("img")`));
     await invoke(b, "set_profile", { avatar: "" });
@@ -1803,31 +1797,12 @@ async function library(ctx) {
     await invoke(b, "set_hotkey", { action: "mic", keys: mic().keys });
   });
 
-  await step("C kept every file of an older version until Delete old files, which removes exactly those", async () => {
-    const data = c.data;
-    const old = Object.keys(oldFiles()).filter((name) => !keptOldFiles().includes(name));
+  await step("C keeps every file it does not know and drops only its standby segments", async () => {
     for (const [name, body] of Object.entries(oldFiles())) {
-      const file = path.join(data, name);
+      const file = path.join(c.data, name);
       check(fs.existsSync(file) && fs.readFileSync(file).equals(Buffer.from(body)), `${name} was changed or removed`);
     }
-    check(!fs.existsSync(path.join(data, oldStandby())), "C kept a live segment of an earlier run");
-    const bytesOld = old.reduce((n, name) => n + Buffer.from(oldFiles()[name]).length, 0);
-    const info = await invoke(c, "data_info");
-    check(info.old_bytes === bytesOld, `data_info counts ${info.old_bytes} B of old files, not ${bytesOld}`);
-    const rooms = path.join(data, "rooms", OLD_ROOM);
-    const rootBefore = fs.readdirSync(data);
-    const insideBefore = filesUnder(rooms).map((f) => path.relative(data, f));
-    await evaluate(c, `loadStorage(); true`);
-    await waitFor("C offers to delete the old files", within(UI_REFRESH_S * 5), () => evaluate(c, `!$("oldfiles").hidden && $("oldfiles").textContent === t("Delete old files ({size})", { size: bytes(${info.old_bytes}) })`));
-    const title = await pressAndConfirm(c, `$("oldfiles").click()`);
-    check(title === "Delete old files?", `C asked "${title}"`);
-    await waitFor("the old files are gone and the button hides", within(UI_REFRESH_S * 5), async () => old.every((name) => !fs.existsSync(path.join(data, name))) && (await invoke(c, "data_info")).old_bytes === 0 && evaluate(c, `$("oldfiles").hidden`));
-    for (const name of keptOldFiles()) check(fs.existsSync(path.join(data, name)), `${name} was removed`);
-    check(fs.existsSync(path.join(data, "key.bin")), "key.bin was removed");
-    const rootGone = rootBefore.filter((name) => !fs.existsSync(path.join(data, name))).sort().join();
-    check(rootGone === ["log.bin", "peer", "peer.txt", "peers.txt", "rec-1767225600000.mp4"].sort().join(), `the data folder lost ${rootGone}`);
-    const insideGone = insideBefore.filter((f) => !fs.existsSync(path.join(data, f))).sort().join();
-    check(insideGone === old.filter((name) => name.startsWith(path.join("rooms", OLD_ROOM))).sort().join(), `the old room lost ${insideGone}`);
+    check(!fs.existsSync(path.join(c.data, oldStandby())), "C kept a live segment of an earlier run");
     await allSee([a, b, c], "every recording still held", within(SYNC_ROUND_S), (st) => heldByAll(st, ctx.set, [a, b, c]));
   });
 }

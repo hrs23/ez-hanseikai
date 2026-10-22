@@ -39,7 +39,6 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 pub const ALPN: &[u8] = b"ez-hanseikai/0";
-pub const OLD_ALPN: &[u8] = b"ggi-hanseikai/0";
 pub const REPO: &str = "https://github.com/hrs23/ez-hanseikai";
 pub const PROTOCOL: u32 = 5;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -419,7 +418,7 @@ async fn save_text(core: State<'_, Arc<Core>>, name: String, text: String) -> Re
 fn data_dir(app: &AppHandle) -> tauri::Result<PathBuf> {
     match std::env::var_os("EZH_DIR") {
         Some(dir) => Ok(PathBuf::from(dir)),
-        None => app.path().app_local_data_dir().map(|dir| data::migrate(&dir.with_file_name("dev.ggi-hanseikai.app"), &dir)),
+        None => app.path().app_local_data_dir(),
     }
 }
 
@@ -450,7 +449,7 @@ async fn init(app: AppHandle, dir: PathBuf, left_lock: bool) -> Result<Arc<Core>
         write_whole(&key_path, &key.to_bytes())?;
         key
     };
-    let mut builder = Endpoint::builder(presets::N0).secret_key(key).alpns(vec![ALPN.to_vec(), OLD_ALPN.to_vec()]);
+    let mut builder = Endpoint::builder(presets::N0).secret_key(key).alpns(vec![ALPN.to_vec()]);
     if std::env::var_os("EZH_RELAY_ONLY").is_some() {
         builder = builder.clear_ip_transports();
     }
@@ -674,7 +673,7 @@ mod tests {
         assert_eq!(listed("session-format.md", "Records"), kinds, "docs/session-format.md Records does not match the record kinds the code writes");
         assert_eq!(listed("protocol.md", "Messages"), messages, "docs/protocol.md Messages does not match the messages the code sends");
         let protocol = std::fs::read_to_string(root.join("../docs/protocol.md")).unwrap();
-        for needle in [String::from_utf8_lossy(ALPN).to_string(), String::from_utf8_lossy(OLD_ALPN).to_string(), format!("Protocol version: {PROTOCOL}")] {
+        for needle in [String::from_utf8_lossy(ALPN).to_string(), format!("Protocol version: {PROTOCOL}")] {
             assert!(protocol.contains(&needle), "docs/protocol.md does not say {needle}");
         }
     }

@@ -362,8 +362,7 @@ fn check_hotkey(keys: &Hotkeys, index: usize, text: &str) -> Result<Shortcut, &'
 pub fn load_hotkeys(settings: &Value) -> Hotkeys {
     let mut keys = Hotkeys::default();
     for (i, (id, default, _)) in HOTKEYS.iter().enumerate() {
-        let saved = settings["hotkeys"][id].as_str().or(if i == 0 { settings["hotkey"].as_str() } else { None });
-        keys[i] = [saved, Some(*default)].into_iter().flatten().find(|k| check_hotkey(&keys, i, k).is_ok()).unwrap_or_default().to_string();
+        keys[i] = [settings["hotkeys"][id].as_str(), Some(*default)].into_iter().flatten().find(|k| check_hotkey(&keys, i, k).is_ok()).unwrap_or_default().to_string();
     }
     keys
 }
@@ -667,10 +666,10 @@ mod tests {
     }
 
     #[test]
-    fn saved_hotkeys_load_from_the_old_setting_and_never_repeat() {
-        let keys = load_hotkeys(&json!({"hotkey": "Alt+F9", "hotkeys": {"screen": "Alt+F9"}}));
+    fn saved_hotkeys_load_and_never_repeat() {
+        let keys = load_hotkeys(&json!({"hotkeys": {"mark": "Alt+F9", "screen": "Alt+F9"}}));
         assert_eq!(keys, ["Alt+F9", "Ctrl+Alt+N", "Ctrl+Alt+V"]);
-        let keys = load_hotkeys(&json!({"hotkey": "Alt+F9", "hotkeys": {"mark": "Ctrl+Alt+N", "mic": "M"}}));
+        let keys = load_hotkeys(&json!({"hotkeys": {"mark": "Ctrl+Alt+N", "mic": "M"}}));
         assert_eq!(keys, ["Ctrl+Alt+N", "", "Ctrl+Alt+V"]);
     }
 

@@ -1215,12 +1215,7 @@ fn started<'a>(logs: &'a [Log], set: &str) -> impl Iterator<Item = &'a Value> + 
 }
 
 pub fn debrief_of(set: &str, logs: &[Log]) -> Option<String> {
-    let named = started(logs, set).find_map(|r| r["of"].as_str().filter(|of| valid_id(of)));
-    let parent = match named {
-        Some(parent) => parent.to_string(),
-        None if started(logs, set).any(|r| r["voice"] == true) => party::records(logs).remove(set)?.into_iter().next()?["shared"]["set"].as_str()?.to_string(),
-        None => return None,
-    };
+    let parent = started(logs, set).find_map(|r| r["of"].as_str().filter(|of| valid_id(of)))?.to_string();
     (parent != set && started(logs, &parent).next().is_some() && !dropped(logs).contains(&parent)).then_some(parent)
 }
 
@@ -1260,11 +1255,9 @@ pub fn board_cards(events: &[Value], members: &[String]) -> Vec<Value> {
     }
     for e in events.iter().filter(|e| e["kind"] == "board") {
         let card = e["values"]["card"].as_str().filter(|c| !c.is_empty()).unwrap_or("team");
-        let card = if members.iter().any(|m| m == card) { format!("m:{card}") } else { card.to_string() };
-        if !board_card_valid(&card) {
+        if !board_card_valid(card) {
             continue;
         }
-        let card = card.as_str();
         let at = (e["at_us"].as_i64().unwrap_or(0), e["author"].as_str().unwrap_or_default().to_string());
         if cards.get(card).is_some_and(|(old, _)| *old >= at) {
             continue;
@@ -1608,8 +1601,8 @@ pub mod tests {
             json!({"k": "room_name", "name": "Squad", "t_us": 9}),
             json!({"k": "offset", "peer": "p", "t_us": 9, "rtt_us": 1, "offset_us": 2}),
             json!({"k": "layout", "set": "s1", "t_us": 9, "layout": {"order": ["a"]}}),
-            json!({"k": "plugin", "plugin": "p1", "on": true, "version": "1", "settings": {"model": "base"}, "t_us": 9}),
-            json!({"k": "job", "job": "p1@1/ab/s1/a", "state": "done", "run": 1, "plugin": "p1", "version": "1", "file": "s1/a", "tags": {}, "t_us": 9}),
+            json!({"k": "plugin", "plugin": "apex-matches", "on": true, "version": "1", "t_us": 9}),
+            json!({"k": "job", "job": "apex-matches@1/ab/s1/a", "state": "done", "run": 1, "plugin": "apex-matches", "version": "1", "file": "s1/a", "tags": {}, "t_us": 9}),
             json!({"k": "ai_del", "set": "s1", "t_us": 9}),
             json!({"k": "party", "set": "s1", "t_us": 9, "shared": {"set": "s1", "playing": false}}),
             json!({"k": "file_bad", "room": "r", "set": "s1", "file": "a/1000/000001.m4s", "size": 4, "t_us": 9}),
@@ -1639,7 +1632,7 @@ pub mod tests {
         let _ = set_layout(&logs, "s1");
         assert!(latest_name(&logs).is_some());
         assert!(crate::party::records(&logs).contains_key("s1"));
-        assert!(crate::jobs::configs(&logs, None).contains_key("p1") && crate::jobs::tracks(&logs, None).contains_key(&("p1".to_string(), "s1/a".to_string())));
+        assert!(crate::jobs::configs(&logs, None).contains_key("apex-matches") && crate::jobs::tracks(&logs, None).contains_key(&("apex-matches".to_string(), "s1/a".to_string())));
         assert!(crate::jobs::chosen(&logs, None).contains_key("s1"));
         assert!(dropped(&logs).contains("gone"));
     }
@@ -1787,9 +1780,10 @@ pub mod tests {
             json!({"k": "event", "id": 2, "kind": "note", "target": {"t_us": 700}, "text": "new", "tags": ["x"]}),
             json!({"k": "event_del", "id": 2}),
             json!({"k": "event", "id": 3, "kind": "marker", "target": {"from_us": 100, "to_us": 200}, "text": ""}),
-            json!({"k": "plugin", "plugin": "apex", "on": true, "version": "1", "settings": {}, "t_us": 1}),
-            json!({"k": "event", "id": 4, "kind": "round", "plugin": {"name": "apex", "version": "1"}, "target": {"set": "s1"}, "values": {"n": 2}, "tags": ["p"], "run": 5}),
-            json!({"k": "job", "state": "done", "job": "apex@1/44136fa355b3/s1/a", "run": 5}),
+            json!({"k": "seg", "series": "v", "set": "s1", "n": 1, "capture": "1"}),
+            json!({"k": "plugin", "plugin": "apex-matches", "on": true, "version": "1", "t_us": 1}),
+            json!({"k": "event", "id": 4, "kind": "round", "plugin": {"name": "Apex matches", "version": "1"}, "target": {"set": "s1"}, "values": {"n": 2}, "tags": ["p"], "run": 5}),
+            json!({"k": "job", "state": "done", "job": "apex-matches@1/44136fa355b3/s1/a", "run": 5}),
             json!({"k": "event_edit", "id": 4, "text": "hijack"}),
             json!({"k": "event_del", "id": 9}),
         ]);
@@ -1804,7 +1798,7 @@ pub mod tests {
         let plugin = all.iter().find(|e| e["id"] == 4).unwrap();
         assert_eq!(plugin["text"], "");
         assert_eq!(plugin["set"], "s1");
-        assert_eq!(plugin["plugin"]["name"], "apex");
+        assert_eq!(plugin["plugin"]["name"], "Apex matches");
     }
 
     #[test]
@@ -2107,13 +2101,10 @@ pub mod tests {
     }
 
     #[test]
-    fn an_old_debrief_links_through_its_first_party_record() {
-        let party = |t: i64, set: &str| json!({"k": "party", "set": "d1", "t_us": t, "shared": {"set": set, "at_us": 1}});
-        let logs = vec![log("a", 0, vec![started_by("s1", json!({})), started_by("d1", json!({"voice": true})), party(20, "s9"), party(10, "s1")]), log("b", 0, vec![started_by("s9", json!({}))])];
-        assert_eq!(debrief_of("d1", &logs), Some("s1".to_string()));
-        assert_eq!(debrief_of("s1", &logs), None);
-        let plain = vec![log("a", 0, vec![started_by("s1", json!({})), started_by("d1", json!({})), party(10, "s1")])];
-        assert_eq!(debrief_of("d1", &plain), None);
+    fn a_debrief_links_to_the_recording_it_names() {
+        let party = json!({"k": "party", "set": "d1", "t_us": 10, "shared": {"set": "s1", "at_us": 1}});
+        let unnamed = vec![log("a", 0, vec![started_by("s1", json!({})), started_by("d1", json!({"voice": true})), party])];
+        assert_eq!(debrief_of("d1", &unnamed), None);
         let named = vec![log("a", 0, vec![started_by("s1", json!({})), started_by("d2", json!({"voice": true, "of": "s1"}))])];
         assert_eq!(debrief_of("d2", &named), Some("s1".to_string()));
         let orphan = vec![log("a", 0, vec![started_by("d2", json!({"voice": true, "of": "s1"}))])];
@@ -2125,15 +2116,13 @@ pub mod tests {
 
     #[test]
     fn deleting_a_recording_deletes_only_debriefs_that_name_it_and_keeps_peers_copies() {
-        let party = json!({"k": "party", "set": "old", "t_us": 1, "shared": {"set": "s1"}});
         let logs = vec![
-            log("a", 0, vec![started_by("s1", json!({})), started_by("d1", json!({"voice": true, "of": "s1"})), started_by("old", json!({"voice": true})), party, started_by("d2", json!({"voice": true, "of": "s2"}))]),
+            log("a", 0, vec![started_by("s1", json!({})), started_by("d1", json!({"voice": true, "of": "s1"})), started_by("d2", json!({"voice": true, "of": "s2"}))]),
             log("b", 0, vec![started_by("d1", json!({"voice": true, "of": "s1"})), started_by("d3", json!({"voice": true, "of": "s1"})), json!({"k": "set_del", "set": "d3"})]),
         ];
         assert_eq!(named_debriefs(&logs, "s1"), vec!["d1".to_string()]);
-        assert_eq!(debrief_of("old", &logs), Some("s1".to_string()));
         let peers_hold = HashMap::from([("d1/abc/m".to_string(), 3u64)]);
-        assert!(others_hold("d1", &[&peers_hold]) && !others_hold("old", &[&peers_hold]));
+        assert!(others_hold("d1", &[&peers_hold]) && !others_hold("d2", &[&peers_hold]));
     }
 
     #[test]
@@ -2159,7 +2148,7 @@ pub mod tests {
     }
 
     #[test]
-    fn board_cards_newest_event_wins_and_old_team_card_reads() {
+    fn board_cards_newest_event_wins_and_a_card_without_id_is_the_team_card() {
         let card = |id: i64, author: &str, text: &str, values: Value| {
             let mut e = events(&[log(author, 0, vec![user_event(id, "board", text, json!({}), values)])], None).remove(0);
             e["at_us"] = json!(id);
@@ -2179,8 +2168,8 @@ pub mod tests {
         let sized = board_cards(&[card(14, "a", "", json!({"card": "c:2", "w": 6, "h": 3.4})), card(15, "a", "", json!({"card": "c:3", "w": 99, "h": 0})), card(16, "a", "", json!({"card": "team", "w": "wide", "h": 8}))], &members);
         let span = |id: &str| sized.iter().find(|c| c["card"] == id).map(|c| (c["w"].as_i64().unwrap(), c["h"].as_i64().unwrap()));
         assert_eq!([span("c:2"), span("c:3"), span("team")], [Some((6, 3)), Some((12, 2)), Some((12, 8))]);
-        let legacy = board_cards(&[card(12, "a", "Old", json!({"card": "b"})), card(13, "a", "Bad", json!({"card": "x y"}))], &members);
-        assert_eq!(legacy.iter().map(|c| (c["card"].as_str().unwrap(), c["text"].as_str().unwrap())).collect::<Vec<_>>(), [("team", ""), ("m:a", ""), ("m:b", "Old")]);
+        let bad = board_cards(&[card(12, "a", "Bare", json!({"card": "b"})), card(13, "a", "Bad", json!({"card": "x y"}))], &members);
+        assert_eq!(bad.iter().map(|c| (c["card"].as_str().unwrap(), c["text"].as_str().unwrap())).collect::<Vec<_>>(), [("team", ""), ("m:a", ""), ("m:b", "")]);
         assert!(board_card_valid("team") && board_card_valid(&format!("m:{}", "a".repeat(64))) && board_card_valid("m:ab12") && board_card_valid("c:0f-9") && !board_card_valid("m:") && !board_card_valid("x:1") && !board_card_valid("c:a b"));
     }
 }

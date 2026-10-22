@@ -36,7 +36,6 @@ const ROOM_FACES = {
   chevrons: "M12 2l9 8-2.3 2.6L12 6.7 5.3 12.6 3 10zM12 9.5l9 8-2.3 2.6L12 14.2 5.3 20.1 3 17.5z",
 };
 const ROOM_PRESETS = Object.keys(ROOM_FACES);
-const LEGACY = { bolt: "tiger", star: "penguin", flame: "fox", crown: "wolf", heart: "bear", diamond: "shark", shield: "crab", moon: "owl", target: "raccoon", ghost: "bunny", robot: "koala", alien: "octopus", skull: "panda", ninja: "whale", slime: "frog", cyclops: "tiger" };
 const IMAGE_SIDE = 96;
 const IMAGE_QUALITY = 0.85;
 
@@ -45,7 +44,7 @@ function initial(name) {
 }
 
 function picture(label, color, image, size, shape) {
-  const glyph = (shape === "room" && ROOM_FACES[image]) || FACES[LEGACY[image] || image];
+  const glyph = (shape === "room" && ROOM_FACES[image]) || FACES[image];
   const shown = /^data:image\/(png|jpeg|webp);base64,/.test(image) ? el("img", { src: image, alt: "" }) : glyph ? svg("svg", { viewBox: "0 0 24 24", "aria-hidden": "true" }, svg("path", { d: glyph })) : null;
   const a = el("span", { className: ["av", size, shape].filter(Boolean).join(" "), title: label }, shown || initial(label));
   a.style.background = color || "var(--muted)";

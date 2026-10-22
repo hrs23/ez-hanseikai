@@ -4,7 +4,7 @@ What two members send each other, as much as another program needs to talk to th
 
 ## Transport
 
-iroh QUIC, with the member ID (the public key) as the address. The ALPN is `ez-hanseikai/0`; `ggi-hanseikai/0` is accepted too. Connections are encrypted and authenticated to member IDs.
+iroh QUIC, with the member ID (the public key) as the address. The ALPN is `ez-hanseikai/0`. Connections are encrypted and authenticated to member IDs.
 
 Each member uses the first relay server of its own list that answers, else the public ones; members with different relays still reach each other. No picture (`v`) crosses a connection whose path is a relay: a `follow` for it ends without data.
 

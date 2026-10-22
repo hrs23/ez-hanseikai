@@ -379,8 +379,7 @@ test("every English phrase in the pages has a Japanese one, and every Japanese e
   const fixed = [...messages].filter((x) => /^[A-Z]/.test(x) && x.includes(" ") && !x.includes("{"));
   assert.ok(fixed.length > 5, `found ${fixed.length} messages`);
   assert.deepEqual([...phrases, ...fixed].filter((x) => !(x in ui$.JA)), []);
-  const oldRecordNames = ["Transcription"];
-  const strings = new Set([...files.flatMap((f) => literals(read(f))), ...marked, ...rust.flatMap(literals), ...oldRecordNames].map((x) => x.replaceAll("_", " ").toLowerCase()));
+  const strings = new Set([...files.flatMap((f) => literals(read(f))), ...marked, ...rust.flatMap(literals)].map((x) => x.replaceAll("_", " ").toLowerCase()));
   assert.deepEqual(Object.keys(ui$.JA).filter((k) => !strings.has(k.toLowerCase())), []);
 });
 
@@ -637,11 +636,11 @@ function page(files, globals = {}) {
 
 test("an avatar shows the image, a built-in shape or the initial; an unknown shape shows the initial; a room without an icon shows a preset picked from its id, and a room with no id its initial", () => {
   const image = "data:image/webp;base64,AAAA";
-  const state = { id: "me", name: "Aki", names: { ren: "Ren", koya: "Koya", mia: "Mia" }, colors: { me: 1, ren: 2, koya: 3, mia: 4 }, avatars: { me: "bolt", ren: image, koya: "gone", mia: "data:image/svg+xml;base64,AAAA" } };
+  const state = { id: "me", name: "Aki", names: { ren: "Ren", koya: "Koya", mia: "Mia" }, colors: { me: 1, ren: 2, koya: 3, mia: 4 }, avatars: { me: "tiger", ren: image, koya: "gone", mia: "data:image/svg+xml;base64,AAAA" } };
   const { ctx } = page(["util.js", "faces.js"], { st: state, nameOf: (id) => id, colorIndex: (id) => state.colors[id] || 0 });
   const draw = (code) => vm.runInContext(code, ctx);
-  const bolt = draw(`avatar("me", "sm")`);
-  assert.deepEqual([bolt.find("path").length, bolt.textContent, bolt.style.background], [1, "", "var(--member-sky)"]);
+  const tiger = draw(`avatar("me", "sm")`);
+  assert.deepEqual([tiger.find("path").length, tiger.textContent, tiger.style.background], [1, "", "var(--member-sky)"]);
   assert.equal(draw(`avatar("me", "sm")`).find("path")[0].attributes.d, draw(`FACES.tiger`));
   assert.equal(draw(`avatar("ren")`).find("img")[0].src, image);
   for (const id of ["koya", "mia"]) assert.deepEqual([draw(`avatar("${id}")`).textContent, draw(`avatar("${id}")`).find("img").length], [id === "koya" ? "K" : "M", 0]);
