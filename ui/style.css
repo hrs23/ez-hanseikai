@@ -91,7 +91,7 @@ input.switch:checked::after { left: 16px; background: var(--white); }
 .pill.warn { background: var(--warn-soft); color: var(--warn); }
 .pill.ok { background: var(--ok-soft); color: var(--ok); }
 .srow .pill, .l2 .pill { height: 18px; font-size: var(--t-xs); padding: 0 var(--s2); }
-.tag { display: inline-flex; border: 0; height: auto; color: var(--soft); background: var(--hover-bg); border-radius: var(--r-sm); padding: 0 var(--s1); font-size: var(--t-sm); line-height: 1.5; cursor: pointer; }
+.tag { display: inline-flex; align-items: center; gap: var(--s1); vertical-align: bottom; border: 0; height: auto; color: var(--soft); background: var(--hover-bg); border-radius: var(--r-sm); padding: 0 var(--s1); font-size: var(--t-sm); line-height: 1.5; cursor: pointer; }
 .link { display: inline-flex; align-items: center; gap: var(--s1); border: 0; height: auto; padding: 0 var(--s2); background: var(--hover-bg); color: var(--link); border-radius: var(--r-sm); font-weight: var(--w-semibold); font-size: .92em; cursor: pointer; }
 .link:hover:not(:disabled) { filter: brightness(1.2); }
 mark { background: var(--warn-soft); color: var(--warn); border-radius: var(--r-sm); padding: 0 var(--s1); }

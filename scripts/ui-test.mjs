@@ -738,14 +738,18 @@ test("a card shows nothing a note can write as running or navigating", () => {
 });
 test("every rendered #tag and @mention is a chip that sends its kind, value and ids to the one app-wide pick", () => {
   const picks = [];
-  const { ctx } = page(["util.js", "icons.js", "i18n.js", "layout.js", "events.js", "markdown.js"], { st: { id: "me", name: "Mia", names: { a: "Jo Smith" } }, openLink() {}, pickChip: (...a) => picks.push(a) });
+  const { ctx } = page(["util.js", "icons.js", "i18n.js", "layout.js", "events.js", "markdown.js"], { st: { id: "me", name: "Mia", names: { a: "Jo Smith", b: "Bo", c: "Bo" } }, openLink() {}, pickChip: (...a) => picks.push(a), avatar: (id, size) => Object.assign(new Fake("span"), { className: `av ${size}`, id }) });
+  const faces = (b) => b.find("span").map((a) => [a.className, a.id]);
   const chips = (code) => vm.runInContext(code, ctx).find("button").filter((b) => b.className === "tag");
   const card = chips(`cardDom("Plan @jo smith\\n- push #Rotate with @Mia", mdHooks())`);
   assert.deepEqual(card.map((b) => [b.dataset.kind, b.dataset.value, b.textContent]), [["mention", "Jo Smith", "@Jo Smith"], ["tag", "Rotate", "#Rotate"], ["mention", "Mia", "@Mia"]]);
   for (const b of card) b.onclick({ stopPropagation() {} });
   assert.deepEqual(plain(picks), [["mention", "Jo Smith", ["a"]], ["tag", "Rotate", []], ["mention", "Mia", ["me"]]]);
+  assert.deepEqual(card.map(faces), [[["av xs", "a"]], [], [["av xs", "me"]]]);
   const note = chips(`el("p", {}, ...inline("go @Jo #push", [{ id: "a", name: "Jo" }]))`);
   assert.deepEqual(note.map((b) => [b.dataset.kind, b.dataset.value]), [["mention", "Jo Smith"], ["tag", "push"]]);
+  assert.deepEqual(chips(`cardDom("@Bo @Gone", mdHooks({ names: ["Bo", "Gone"] }))`).map(faces), [[], []]);
+  assert.deepEqual(chips(`el("p", {}, ...inline("@Gone", [{ id: "z", name: "Gone" }]))`).map(faces), [[]]);
 });
 test("picking a chip filters the recording; the same chip again in the player clears it, elsewhere it filters again", () => {
   const on = { kind: "tag", value: "Rotate", ids: [], set: "s1" };

@@ -152,8 +152,10 @@ function mdParse(text) {
 
 const mdText = (nodes) => nodes.map((n) => n.text ?? n.code ?? mdText(n.strong || n.em || n.strike || n.mark || n.children || [])).join("");
 
-function chipEl(kind, value, label, ids = []) {
-  const b = el("button", { type: "button", className: "tag", textContent: label, onclick: (e) => { e.stopPropagation(); pickChip(kind, value, ids); } });
+function chipEl(kind, value, label, ids = [], face = null) {
+  const b = el("button", { type: "button", className: "tag", onclick: (e) => { e.stopPropagation(); pickChip(kind, value, ids); } });
+  if (face) b.append(avatar(face, "xs"));
+  b.append(label);
   b.dataset.kind = kind;
   b.dataset.value = value;
   return b;
@@ -161,7 +163,8 @@ function chipEl(kind, value, label, ids = []) {
 
 function mentionEl(name, hooks) {
   const who = hooks.who(name);
-  return chipEl("mention", who.value, "@" + who.value, who.ids);
+  const face = who.ids.length === 1 && memberNow()[who.ids[0]] ? who.ids[0] : null;
+  return chipEl("mention", who.value, "@" + who.value, who.ids, face);
 }
 
 function mdSpans(nodes, hooks) {
