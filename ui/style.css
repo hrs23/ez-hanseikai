@@ -220,7 +220,10 @@ body.noside .side, body.boardfull .side, body.noside .splitter, body.boardfull .
 .recdot { width: 8px; height: 8px; border-radius: 50%; background: var(--rec); flex: none; display: inline-block; animation: pulse var(--pulse) infinite; }
 .srow .l1 { flex-wrap: wrap; row-gap: var(--s1); }
 .srow .l1 b { max-width: 100%; }
-.wpn { margin-left: auto; display: inline-flex; align-items: center; gap: var(--s1); flex: none; height: 22px; padding: 0 var(--s2); border-radius: var(--r-full); font-size: var(--t-xs); font-weight: var(--w-semibold); white-space: nowrap; }
+.wpn { margin-left: auto; display: inline-flex; align-items: center; gap: var(--s1); flex: none; height: 22px; padding: 0 var(--s2); border-radius: var(--r-full); font-size: var(--t-xs); font-weight: var(--w-semibold); white-space: nowrap; max-width: 100%; min-width: 0; }
+.wpn > span:last-child { flex: none; }
+.wpn .avs { flex: 0 1 auto; min-width: 0; overflow: hidden; }
+.wpn .avs .av { flex: none; }
 .wpn.live, .wpn.on { background: color-mix(in srgb, var(--accent) 18%, transparent); border-color: transparent; color: var(--accent); }
 .wpn.live:hover { background: color-mix(in srgb, var(--accent) 28%, transparent); }
 .wpn:not(.live):not(.on):not(.wt) { padding: 0; height: auto; }

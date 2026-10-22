@@ -148,7 +148,7 @@ function liveRow() {
   return row;
 }
 function wpPill(s, here, mine, watching) {
-  const faces = watching && watching.length ? avatars(watching, "xs", 3) : null;
+  const faces = watching && watching.length ? avatars(watching.slice(0, 2), "xs") : null;
   const title = watching ? watching.map(nameOf).join(", ") : "";
   if (mine) return el("span", { className: "wpn on", title }, faces, icon("users", "sm"), el("span", { textContent: t("Watching") }));
   const join = (e) => { e.stopPropagation(); openSession(s.id); setParty(true); };
