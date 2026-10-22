@@ -69,7 +69,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - recording alone, the player follows the picture as it grows. `e2e` (`live`)
 - each ended recording gets a thumbnail, and the sidebar lists recordings with it. `e2e` (`library`)
 - A recording in HEVC and in AV1 plays on every PC; a PC that cannot play one makes the room choose another codec. `manual`
-- a far seek and an immediate Play start every tile at once, alone and in Watch Party. `e2e` (`library`)
+- a far seek and an immediate Play start every tile at once, alone and in Watch Party; a tile whose recording began within a second of the seek is not counted as apart. `e2e` (`library`)
 - playing your own recording right after it ended shows your own picture, moves on and reaches its end. `e2e` (`recover`)
 - stream: a recording folder lists its pieces from the lowest segment and the live folder its newest run, each with first times and an open tail, served whole or from a byte, and the index from a segment on; a recording plays from its own folder up to the first missing segment; ids are checked and paths decoded. `unit`
 - room: a part starts when its capture began, with the listing's size and whether its last piece is still open. `unit`

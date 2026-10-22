@@ -33,7 +33,7 @@ function cardEditor(c) {
     if (e.key === "Enter" && e.ctrlKey) { e.preventDefault(); save(); }
     if (e.key === "Escape") { e.preventDefault(); stopEditing(); }
   };
-  return el("div", { className: "cedit" }, box, el("div", { className: "row end" }, el("button", { textContent: t("Cancel"), onclick: stopEditing }), el("button", { className: "primary", onclick: save }, t("Save"), el("kbd", { textContent: "Ctrl+Enter" }))));
+  return el("div", { className: "cedit" }, box, el("div", { className: "row end" }, el("button", { className: "sm", textContent: t("Cancel"), onclick: stopEditing }), el("button", { className: "primary sm", onclick: save }, t("Save"), el("kbd", { textContent: "Ctrl+Enter" }))));
 }
 function nameInput(value, done) {
   const input = el("input", { value, maxLength: 24, ariaLabel: t("Name") });

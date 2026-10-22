@@ -634,7 +634,7 @@ function stepSet(dir) {
 
 function lineNodes(set, line, iconName, sep = "") {
   const action = line.action ? [sep, el("button", { className: "sm", textContent: line.action, onclick: (e) => { e.stopPropagation(); run("download_set", { room: set.room, set: set.id }); } })] : [];
-  return [icon(iconName, "sm"), line.text, ...action];
+  return [...(line.kind === "nopicture" ? [] : [icon(iconName, "sm")]), line.text, ...action];
 }
 function whatNodes(what, line, set) {
   if (line) return lineNodes(set, line, line.kind === "away" ? "alert" : "download");
@@ -899,7 +899,7 @@ function renderReview(shown, words) {
   const now = nowM();
   const cur = list.find((c) => c.m <= now && now < c.end);
   if (!changed("review", [shown, list, pending, cur && cur.n, grouped, lang, selected, st.colors, st.names, plugins.map((p) => p.name), scope])) return;
-  const out = pending.map((a) => el("div", { className: "ev sys analysis" }, icon(a.state === "failed" ? "alert" : "cpu", "sm"), el("span", { className: "tx " + (a.state === "failed" ? "warn" : "muted"), textContent: `${t(pluginName(a.plugin))} · ${analysisReason(a, nameOf)}` }), a.state === "failed" ? el("button", { className: "sm", textContent: t("Retry"), onclick: () => retryAnalysis(set, a.plugin) }) : null));
+  const out = pending.map((a) => el("div", { className: "ev sys analysis" }, icon(a.state === "failed" ? "alert" : "cpu", "sm"), el("span", { className: "tx " + (a.state === "failed" ? "warn" : "muted") }, `${t(pluginName(a.plugin))} · ${analysisReason(a, nameOf)}`, a.state === "failed" ? el("button", { className: "sm", textContent: t("Retry"), onclick: () => retryAnalysis(set, a.plugin) }) : null)));
   if (grouped) {
     const inside = (n, c) => n.m !== null && n.m >= c.m && n.m < c.end;
     const groups = list.map((c) => ({ title: t("Match {n}", { n: c.n }), range: `${fmt(c.m)}–${fmt(c.end)}`, m: c.m, cur: cur === c, rows: [...shown.filter((n) => inside(n, c)).map(eventRow), ...ends.filter((e) => Math.abs(e.m - c.end) < JUMP_MIN).map((e) => el("div", { className: "ev sys" }, el("button", { className: "at", textContent: fmt(e.m), onclick: () => seekTo(e.m) }), el("span", { className: "tx" }, icon("flag", "sm"), t("Match end"))))] }));

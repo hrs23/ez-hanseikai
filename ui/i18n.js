@@ -138,7 +138,7 @@ const JA = {
   "Delete {n} recordings?": "{n} 件の録画を削除しますか?",
   "This deletes it completely": "完全に消えます",
   "Others still have it": "ほかの人は持っています",
-  "Delete videos…": "動画を削除…",
+  "Delete recordings…": "録画を削除…",
   "Delete {size}": "{size} を削除",
   "Deleted": "削除しました",
   "Diagnostics": "診断",

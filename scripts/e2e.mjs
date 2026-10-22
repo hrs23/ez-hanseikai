@@ -41,6 +41,7 @@ const KEYFRAME_DECODE_SPEED = 10;
 const SEEK_TO_S = 5;
 const STAY_AT_S = 3;
 const FAR_FROM_END_S = 8;
+const JUST_ENTERED_S = 1;
 const PLAY_START_S = 8;
 const LOG_TAIL_LINES = 15;
 const APPROVAL_WAIT_S = LOG_SYNC_S * 3;
@@ -400,7 +401,7 @@ async function follow(ctx, from, others, playing, position) {
 
 const TILES_PROBE = `(() => {
   const wall = wallOf(nowM()) / 1e6;
-  return { m: nowM(), playing: clock.playing, tiles: Object.values(play.tiles).map(({ media: s }) => { const want = wall - s.base; return { has: s.base !== null && !!s.index && covers(s.index, want - s.shift), paused: s.video.paused, ready: s.video.readyState, off: s.video.currentTime - want, at: s.video.currentTime, buf: JSON.stringify(rangesOf(s.video.buffered)), dur: s.video.duration, segs: s.index ? s.index.segs.length + (s.index.open ? "+" : "") : -1, end: s.index ? endOf(s.index) : -1, shift: s.shift, seeking: s.video.seeking, err: !!s.video.error }; }) };
+  return { m: nowM(), playing: clock.playing, tiles: Object.values(play.tiles).map(({ media: s }) => { const want = wall - s.base; return { has: s.base !== null && !!s.index && covers(s.index, want - s.shift), into: s.index && s.index.segs.length ? want - s.shift - s.index.segs[0].t_us / 1e6 : -1, paused: s.video.paused, ready: s.video.readyState, off: s.video.currentTime - want, at: s.video.currentTime, buf: JSON.stringify(rangesOf(s.video.buffered)), dur: s.video.duration, segs: s.index ? s.index.segs.length + (s.index.open ? "+" : "") : -1, end: s.index ? endOf(s.index) : -1, shift: s.shift, seeking: s.video.seeking, err: !!s.video.error }; }) };
 })()`;
 
 async function together(app, [from, to]) {
@@ -410,7 +411,7 @@ async function together(app, [from, to]) {
     const x = await evaluate(app, TILES_PROBE);
     seen = x;
     if (x.m < from || x.m > to) return false;
-    const shown = x.tiles.filter((t) => t.has);
+    const shown = x.tiles.filter((t) => t.has && t.into >= JUST_ENTERED_S);
     if (!x.playing || shown.some((t) => t.paused !== shown[0].paused)) wrong.push(x);
     return shown.length > 0 && shown.every((t) => !t.paused && t.ready >= 3 && Math.abs(t.off) < 1) && x;
   }).catch((e) => { throw new Error(`${e.message} ${JSON.stringify(seen)}`); });

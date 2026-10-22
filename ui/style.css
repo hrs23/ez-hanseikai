@@ -206,6 +206,8 @@ body.noside .side, body.boardfull .side, body.noside .splitter, body.boardfull .
 .l2 > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .l2 > span:first-child:not(.r) { flex: none; }
 .srow .l2.warn { color: var(--warn); }
+.srow .l2:has(> button) { flex-wrap: wrap; }
+.srow .l2:has(> button) > span { white-space: normal; }
 .srow .prog { display: flex; flex-direction: column; gap: 4px; }
 .srow .prog svg { color: var(--accent); }
 .srow.gone { opacity: var(--opacity-dim); cursor: default; }
@@ -282,6 +284,7 @@ body.noside .side, body.boardfull .side, body.noside .splitter, body.boardfull .
 .table tr.pick:hover td { background: var(--hover-bg); }
 .table tr.sel td { background: var(--raised); }
 .table tr.dim td { color: var(--faint); }
+.roombody:has(.drawer) .table :is(th, td):nth-child(5), .roombody:has(.drawer) .table :is(th, td):nth-child(6) { display: none; }
 .table td.chev { width: 36px; color: var(--muted); text-align: right; }
 .table td .who { display: inline-flex; align-items: center; gap: 8px; }
 .table td .who b { font-weight: var(--w-semibold); }
