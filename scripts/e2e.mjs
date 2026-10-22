@@ -1334,7 +1334,7 @@ async function library(ctx) {
     check(await evaluate(a, `(() => { const e = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 60, clientY: 60 }); document.body.dispatchEvent(e); return e.defaultPrevented && $("menu").hidden; })()`), "the browser's context menu is not blocked");
     await evaluate(a, `openSettings("general"); true`);
     check(await evaluate(a, `(() => { $("name").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 300, clientY: 300 })); const labels = [...$("menu").querySelectorAll("button")].map((b) => b.textContent).join(); closeMenu(); $("settings").close(); return labels === [t("Cut"), t("Copy"), t("Paste"), t("Select all")].join(); })()`), "a text field has no edit menu");
-    check(await evaluate(a, `!$("sessions").querySelector(".liverow") && $("startbtn").textContent === t("Start recording")`), "the idle list holds a live entry or the start box does not offer Start recording");
+    check(await evaluate(a, `!$("sessions").querySelector(".liverow") && !$("startbtn").querySelector(".recdot")`), "the idle list holds a live entry or the start box says it records");
     await evaluate(a, `openLive(); true`);
     await waitFor("A shows the live tiles while idle", within(UI_REFRESH_S * 10), () => evaluate(a, `!$("livetiles").hidden && Object.keys(rec.tiles).length === 3 && navActive() === "live"`));
     await screenshot(a, "live-idle");
