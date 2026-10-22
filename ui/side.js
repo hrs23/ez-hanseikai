@@ -69,7 +69,6 @@ function roomMenu(anchor) {
   openMenu([
     { label: t("Room settings…"), icon: "gear", run: openRoomSettings },
     { label: t("Copy invite code"), icon: "user-plus", run: copyInvite },
-    { label: t("AI"), icon: "bot", more: true, run: (b) => openAiMenu(b, page === "player" ? selected : null) },
     ...(st.invites ? [{ label: t("Cancel invite"), icon: "x", run: cancelInvite }] : []),
     { separator: true },
     { label: t("Leave room"), icon: "logout", run: leaveRoom },
@@ -330,3 +329,4 @@ $("micmore").onclick = (e) => openMic(e.currentTarget);
 $("netbadge").onclick = () => openDiagnostics();
 $("apibadge").onclick = () => openSettings("api");
 $("gear").onclick = () => openSettings();
+$("aibtn").onclick = (e) => openAiMenu(e.currentTarget, page === "player" ? selected : null);

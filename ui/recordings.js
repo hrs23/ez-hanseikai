@@ -34,7 +34,7 @@ function downloadButton(s) {
 }
 
 function whereLine(s) {
-  return el("div", { className: "l2 where" }, el("span", { textContent: t(onThisPc(s) ? "On this PC" : "Not on this PC") }), el("span", { textContent: bytes(sizeOf(s)) }), downloadButton(s));
+  return el("div", { className: "l2 where" }, el("span", { textContent: bytes(sizeOf(s)) }), downloadButton(s));
 }
 
 const KEEP_NEWEST = 3;

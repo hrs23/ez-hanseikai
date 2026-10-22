@@ -48,6 +48,7 @@
         <span class="t"><b id="mename"></b><small id="meid"></small></span>
         <button id="apibadge" class="apibadge" hidden data-t-title="The local API is on" data-t-label="The local API is on"><span data-icon="terminal" data-icon-class="sm"></span>API</button>
         <button id="netbadge" class="net" hidden></button>
+        <button id="aibtn" class="icon sm" aria-haspopup="menu" data-icon="bot" data-t-label="AI" data-t-title="AI"></button>
         <button id="gear" class="icon sm" data-icon="gear" data-t-label="Settings" data-t-title="Settings (Ctrl+,)"></button>
       </div>
     </div>
@@ -143,7 +144,7 @@
 </dialog>
 <dialog id="settings" class="settings">
   <nav id="setnav" class="snav">
-    <div class="stitle"><b data-t="Settings">Settings</b><span data-t="This PC">This PC</span></div>
+    <div class="stitle"><b data-t="Settings">Settings</b></div>
     <button data-pane="general"><span data-icon="user" data-icon-class="sm"></span><span data-t="General">General</span></button>
     <button data-pane="capture"><span data-icon="monitor" data-icon-class="sm"></span><span data-t="Capture">Capture</span></button>
     <button data-pane="shortcuts"><span data-icon="keyboard" data-icon-class="sm"></span><span data-t="Shortcuts">Shortcuts</span></button>
@@ -179,7 +180,7 @@
       <div class="row"><h2 data-t="Recordings">Recordings</h2><span class="sp"></span><span id="storedir" class="mono muted small ellip"></span><button id="storeopen" class="sm"><span data-icon="folder" data-icon-class="sm"></span><span data-t="Open">Open</span></button></div>
       <div id="usage" class="usage"></div>
       <div id="legend" class="legend"></div>
-      <div class="row"><span class="h3" data-t="Recordings">Recordings</span><span class="sp"></span><span class="muted small" data-t="Select">Select</span><div class="seg"><button id="selnone" data-t="None">None</button><button id="selold"></button></div></div>
+      <div class="row"><span class="sp"></span><span class="muted small" data-t="Select">Select</span><div class="seg"><button id="selnone" data-t="None">None</button><button id="selold"></button></div></div>
       <div id="storetable" class="tablebox"></div>
       <div class="row"><span id="selsum" class="muted"></span><span class="sp"></span><button id="deletesel" class="danger"><span data-icon="trash" data-icon-class="sm"></span><span data-t="Delete recordings…">Delete recordings…</span></button></div>
     </section>

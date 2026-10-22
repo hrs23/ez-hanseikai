@@ -574,8 +574,8 @@ async function onlyOnDownload(others, holder, set) {
   for (const app of others) {
     const row = setOf(await state(app), set);
     check(row && row.progress.have === 0 && !row.wanted && row.progress.total > 0, `${app.key} fetched a finished recording nobody asked for: ${brief(row?.progress)}`);
-    const shown = await evaluate(app, `(() => { const row = [...document.querySelectorAll("#sessions .srow.gone")].find((r) => r.textContent.includes(sessionName(${JSON.stringify(set)}))); return row ? [row.textContent.includes(t("Not on this PC")), !!row.querySelector("button"), row.textContent.includes(bytes(setById(${JSON.stringify(set)}).progress.total))] : null; })()`);
-    check(shown && shown.every(Boolean), `${app.key} does not list the recording as not on this PC with its size and Download: ${brief(shown)}`);
+    const shown = await evaluate(app, `(() => { const row = [...document.querySelectorAll("#sessions .srow.gone")].find((r) => r.textContent.includes(sessionName(${JSON.stringify(set)}))); return row ? [!!row.querySelector("button"), row.textContent.includes(bytes(setById(${JSON.stringify(set)}).progress.total))] : null; })()`);
+    check(shown && shown.every(Boolean), `${app.key} does not list the recording with its size and Download: ${brief(shown)}`);
     check(!fs.existsSync(path.join(roomDir(app, (await state(app)).room.id), "recordings", set)), `${app.key} holds a folder of a recording it did not fetch`);
   }
   for (const app of others) await invoke(app, "download_set", { room: (await state(app)).room.id, set });
@@ -1245,7 +1245,7 @@ async function library(ctx) {
     await waitFor("the sidebar header shows the room name as a menu", within(UI_REFRESH_S * 5), () => evaluate(a, `$("roomname").querySelector(".nm").textContent === "Practice" && $("roomname").getAttribute("aria-haspopup") === "menu"`));
     await evaluate(a, `$("roomname").click(); true`);
     const labels = await evaluate(a, `[...$("menu").querySelectorAll("button")].map((b) => b.textContent)`);
-    check(labels.filter((l) => l !== "Cancel invite").join() === ["Room settings…", "Copy invite code", "AI", "Leave room"].join(), `the room menu lists ${labels}`);
+    check(labels.filter((l) => l !== "Cancel invite").join() === ["Room settings…", "Copy invite code", "Leave room"].join(), `the room menu lists ${labels}`);
     await evaluate(a, `[...$("menu").querySelectorAll("button")].find((b) => b.textContent === t("Room settings…")).click(); true`);
     await waitFor("A shows the room settings", within(UI_REFRESH_S * 3), () => evaluate(a, `$("roomdlg").open && $("roomnameinput").value === "Practice" && $("roomsave").disabled`));
     await screenshot(a, "room-settings");
@@ -1617,8 +1617,8 @@ async function library(ctx) {
     check(await evaluate(a, `$("settings").open && settingsPane === "api" && !$("settings").querySelector('section[data-pane="api"]').hidden`), "the badge does not open Settings > API");
     await waitFor("A lists the endpoints", within(UI_REFRESH_S * 5), () => evaluate(a, `$("apiref").querySelectorAll("details").length === ${llms.text.match(/^(GET|POST|PUT) /gm).length} && $("apiref").textContent.includes("/v1/status") && $("apiref").querySelector("pre") !== null`));
     await evaluate(a, `$("settings").close(); go("room"); true`);
-    await evaluate(a, `roomMenu($("roomname")); [...$("menu").querySelectorAll("button")].find((b) => b.textContent === t("AI")).click(); true`);
-    await waitFor("A opens the AI menu from the room menu", within(UI_REFRESH_S * 5), () => evaluate(a, `!$("menu").hidden && $("menu").querySelectorAll("button").length === 3`));
+    await evaluate(a, `$("aibtn").click(); true`);
+    await waitFor("A opens the AI menu from the AI button", within(UI_REFRESH_S * 5), () => evaluate(a, `!$("menu").hidden && $("menu").querySelectorAll("button").length === 3`));
     await evaluate(a, `$("menu").querySelector("button").click(); true`);
     await waitFor("A shows the prompt before copying", within(UI_REFRESH_S * 5), () => evaluate(a, `$("promptdlg").open && !$("prompttext").readOnly && $("prompttext").value.includes("llms.txt")`));
     check(await evaluate(a, `(() => { const v = $("prompttext").value; return !v.includes(promptToken) && v.includes("Token: ••••••••") && aiCopyText(v, promptToken).includes("Token: " + promptToken) && v.startsWith(promptPurpose.task + "\\n\\n"); })()`), "the prompt box is one text with the masked token and the task first");

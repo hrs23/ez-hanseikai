@@ -1111,15 +1111,14 @@ function openMenu(list, at, keepFocus) {
     if (it.heading) return el("div", { className: "heading", textContent: it.heading });
     if (it.element) return it.element;
     const lead = it.check !== undefined ? el("span", { className: "ck" }, it.check ? icon("check", "sm") : null) : it.icon ? icon(it.icon, "sm") : null;
-    const b = el("button", { role: "menuitem", disabled: !it.run || !!it.disabled, className: it.danger ? "danger" : "" }, lead, el("span", { className: "label", textContent: it.label }), it.right !== undefined ? el("span", { className: "right", textContent: it.right }) : null, it.more ? icon("chevron-right", "sm") : null);
-    b.onclick = (e) => { if (it.more) { it.run(b); return; } closeMenu(); it.run(e); };
+    const b = el("button", { role: "menuitem", disabled: !it.run || !!it.disabled, className: it.danger ? "danger" : "" }, lead, el("span", { className: "label", textContent: it.label }), it.right !== undefined ? el("span", { className: "right", textContent: it.right }) : null);
+    b.onclick = (e) => { closeMenu(); it.run(e); };
     return b;
   }));
   m.hidden = false;
   const r = at instanceof Event && at.clientX ? { left: at.clientX, bottom: at.clientY, top: at.clientY, right: at.clientX } : (at instanceof Event ? at.currentTarget || at.target : at).getBoundingClientRect();
-  const sideways = !(at instanceof Event) && at.closest && at.closest(".menu");
-  m.style.left = Math.max(8, Math.min(sideways ? r.right + 4 : r.left, innerWidth - m.offsetWidth - 8)) + "px";
-  const below = sideways ? r.top : r.bottom + 4;
+  m.style.left = Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8)) + "px";
+  const below = r.bottom + 4;
   m.style.top = (below + m.offsetHeight > innerHeight - 4 ? Math.max(4, r.top - m.offsetHeight - 4) : below) + "px";
   const first = m.querySelector("button:not(:disabled)");
   if (first && !keepFocus) first.focus();
@@ -1222,7 +1221,7 @@ async function exportFolder(set) {
     exporting = { set: set.id, percent: 0 };
     refresh();
     invoke("export_folder", { room: set.room, set: set.id, folder, ...options }).then((r) => {
-      if (r.skipped.length) flash(t("Exporting without {names}: not on this PC yet", { names: r.skipped.join(", ") }));
+      if (r.skipped.length) flash(t("Exporting without {names}: not downloaded yet", { names: r.skipped.join(", ") }));
     }).catch((e) => { if (exporting) { exporting = null; fail(e); refresh(); } });
   } catch (e) {
     fail(e);
