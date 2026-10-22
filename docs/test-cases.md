@@ -17,6 +17,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - C joins late through B's invite while B is cut off, approved on A once B is back. `e2e` (`live`)
 - removing C for the whole room while a recording runs stops it fetching and leaves the others recording. `e2e` (`live`)
 - B leaves the room from its menu and enters it again with its recordings and notes, A and B leave and enter again at once, a new room moves B out of it, and B deletes it from the list. `e2e` (`live`)
+- leaving a room while one of its recordings is open shows no "Join a room first." toast. `manual`
 - C removes the room from this PC while sharing and its folder does not come back. `e2e` (`live`)
 - leaving or removing a room stops its capture before the folder goes, with no "could not finish" warning; a capture stop never waits for the kill timeout; a join leaves no empty pending folder; a peer that just restarted shows its live path as soon as data flows. `manual`
 - B leaving ends only its part and rejoins, a crashed C does not keep the stopped set open, and everyone has it. `e2e` (`recover`)
@@ -171,7 +172,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - The first start shows the Windows firewall prompt and the app works after Allow. `manual`
 - The first start downloads ffmpeg, checks it and keeps retrying with no network. `manual`
 - The window, menus, dark theme and Japanese texts look right at normal and high DPI scaling. `manual`
-- the menu bar is the same near-black as the title bar and the app (also on a PC set to the light theme), its drop-down menus are dark, and the menu bar is hidden while the player or the board is full screen and back after. `manual`
+- the menu bar, with the line under it, is the same near-black as the title bar and the app on a fresh start, after a language or shortcut change (the menu is rebuilt) and after full screen (also on a PC set to the light theme), its drop-down menus are dark, and the menu bar is hidden while the player or the board is full screen and back after. `manual`
 - three members record for an hour with Live open: the app's private memory and CPU stay flat after the first minutes and the heap keeps no growing free space (Windows segment heap). `manual`
 - an hour-long recording is counted, checked for missing pieces and sized with one listing per folder, not work per segment, so a long session does not slow the app or grow its memory. `unit`
 - check: a line starts with its level. `unit`

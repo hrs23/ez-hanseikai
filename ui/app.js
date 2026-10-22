@@ -1323,7 +1323,7 @@ async function update() {
   }
   if (voice) debriefOpen = st.active_set.id;
   const roomId = st.room ? st.room.id : "";
-  if (partyRoom !== roomId) { partyRoom = roomId; editing = null; await joinParty(); st = await invoke("state"); idx = indexOf(st); }
+  if (partyRoom !== roomId) { partyRoom = roomId; editing = null; if (roomId) await joinParty(); st = await invoke("state"); idx = indexOf(st); }
   if (!drag && watchParty && st.party.on && newer(st.party.shared, partyLast)) applyParty(st.party.shared);
   for (const step of steps()) try { step(); } catch (e) { console.error(e); }
   markLive();

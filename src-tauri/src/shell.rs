@@ -256,7 +256,8 @@ unsafe extern "system" fn menu_bar_proc(hwnd: ::windows::Win32::Foundation::HWND
         WM_NCPAINT | WM_NCACTIVATE => unsafe {
             let result = DefSubclassProc(hwnd, msg, wparam, lparam);
             let mut line = bar();
-            line.bottom = line.top + 1;
+            line.top = line.bottom;
+            line.bottom += 1;
             let hdc = GetWindowDC(Some(hwnd));
             fill(hdc, &line, CAPTION);
             ReleaseDC(Some(hwnd), hdc);
@@ -285,10 +286,11 @@ fn dark_popups() {
 }
 
 pub fn dark_menu(window: &tauri::WebviewWindow) {
-    use ::windows::Win32::UI::Shell::SetWindowSubclass;
+    use ::windows::Win32::UI::Shell::{RemoveWindowSubclass, SetWindowSubclass};
     let Ok(hwnd) = window.hwnd() else { return };
     let hwnd = ::windows::Win32::Foundation::HWND(hwnd.0);
     dark_popups();
+    let _ = unsafe { RemoveWindowSubclass(hwnd, Some(menu_bar_proc), MENU_SUBCLASS) };
     let _ = unsafe { SetWindowSubclass(hwnd, Some(menu_bar_proc), MENU_SUBCLASS, 0) };
 }
 
