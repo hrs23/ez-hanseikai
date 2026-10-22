@@ -84,7 +84,7 @@ let full = false;
 let listening = false;
 
 const peerOf = (id) => st.peers.find((p) => p.id === id);
-const nameOf = (id) => (id === st.id ? st.name || t("You") : st.names[id] || shortId(id));
+const nameOf = (id) => (id === st.id ? st.name || t("You") : st.names[id] || longId(id, 2));
 const people = () => [st.id, ...st.peers.map((p) => p.id)];
 const liveSet = () => st.sets.find((s) => s.live) || null;
 const inRoom = () => !!st && !!st.room && !st.room.pending;

@@ -130,7 +130,7 @@ function renderMembers() {
   const out = [];
   for (const a of st.asks) {
     const answer = (approve) => () => run("answer_ask", { id: a.id, approve });
-    out.push(el("div", { className: "askbox" }, picture(a.name, null, "", "lg"), el("div", { className: "t" }, el("b", { textContent: t("{name} wants to join", { name: a.name || shortId(a.id) }) }), el("small", { className: "mono", textContent: shortId(a.id) })), el("span", { className: "sp" }), el("button", { className: "primary", textContent: t("Approve"), onclick: answer(true) }), el("button", { textContent: t("Decline"), onclick: answer(false) })));
+    out.push(el("div", { className: "askbox" }, picture(a.name, null, "", "lg"), el("div", { className: "t" }, el("b", { textContent: t("{name} wants to join", { name: a.name || longId(a.id, 2) }) }), el("small", { className: "mono", textContent: longId(a.id, 2) })), el("span", { className: "sp" }), el("button", { className: "primary", textContent: t("Approve"), onclick: answer(true) }), el("button", { textContent: t("Decline"), onclick: answer(false) })));
   }
   if (st.invites) out.push(el("div", { className: "invitebox" }, icon("link", "sm"), el("span", { textContent: t("An invite code is open") }), el("span", { className: "sp" }), el("button", { className: "sm", onclick: copyInvite }, icon("copy", "sm"), t("Copy")), el("button", { className: "sm", onclick: cancelInvite, textContent: t("Cancel invite") })));
   const head = el("tr", {}, ...["Name", "ID", "Status", "Connection", "Round trip", "Version", ""].map((h) => el("th", { textContent: h ? t(h) : "" })));

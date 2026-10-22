@@ -91,7 +91,7 @@ function summaryLines(s, failed) {
   const lines = [];
   const on = s.peers.filter((p) => p.connected);
   const relay = viaRelay(on);
-  const who = (p) => s.names[p.id] || shortId(p.id);
+  const who = (p) => s.names[p.id] || longId(p.id, 2);
   lines.push({ key: "Connections", level: relay.length ? "warn" : "ok", text: on.length ? on.map((p) => `${who(p)} ${p.path === "relay" ? t("relay") : t("direct")} ${p.rtt_ms} ms`).join(" · ") : t("No one else is online") });
   const c = s.capture;
   const q = c.quality;

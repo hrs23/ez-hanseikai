@@ -252,7 +252,7 @@ function renderDock() {
   if (changed("me", [st.name, st.id, look(st.id), lang])) {
     $("meav").replaceChildren(avatar(st.id, "lg", "on"));
     $("mename").textContent = st.name;
-    $("meid").textContent = shortId(st.id);
+    $("meid").textContent = longId(st.id, 2);
   }
   const relay = netState(st.peers) === "relay";
   if (changed("net", [relay, lang])) {

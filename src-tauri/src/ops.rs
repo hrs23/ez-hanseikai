@@ -65,8 +65,14 @@ pub const OPS: &[(&str, Op)] = &[
     ("set_plugin_runner", jobs::set_plugin_runner),
     ("prepare_plugin", jobs::prepare_plugin),
     ("retry_job", jobs::retry_job),
-    ("delete_set", |c, a| room::delete_set(c, &arg::<String>(&a, "room")?, &arg::<String>(&a, "set")?).map(|deleted| json!(deleted))),
-    ("download_set", |c, a| null(room::download_set(c, &arg::<String>(&a, "room")?, &arg::<String>(&a, "set")?))),
+    ("delete_set", |c, a| {
+        let (room, set) = recording_ids(c, &a)?;
+        room::delete_set(c, &room, &set).map(|deleted| json!(deleted))
+    }),
+    ("download_set", |c, a| {
+        let (room, set) = recording_ids(c, &a)?;
+        null(room::download_set(c, &room, &set))
+    }),
     ("focus_set", focus_set),
     ("export_check", |c, _| null(export::check(c))),
     ("export_folder", export_folder),

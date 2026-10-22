@@ -710,7 +710,7 @@ impl Backend for Live {
         list.into_iter()
             .map(|r| {
                 let people = r.people();
-                let names = room::names(core, &r);
+                let names = room::names(core, Some(&r), true);
                 let present = people.iter().filter(|m| core.present(m)).cloned().collect();
                 Head { active: active.as_deref() == Some(&r.id), members: r.members.iter().map(|m| (m.clone(), *m == me || online.contains(m))).collect(), id: r.id, name: r.name, names, present }
             })

@@ -281,7 +281,6 @@ const JA = {
   "Enter the room first.": "先にルームに入ってください。",
   "That is not a card.": "それはカードではありません。",
   "The plugin wrote more than the app reads in one line.": "拡張機能がアプリの読める1行の長さを超えて書き込みました。",
-  "That recording does not exist.": "その録画はありません。",
   "No such window.": "そのようなウィンドウはありません。",
   "Off": "オフ",
   "Offline": "オフライン",

@@ -83,7 +83,7 @@ Every kind the app writes. The body's field `k` holds the kind, for example {`k`
 | `offset` | `peer` (short ID), `t_us`, `rtt_us`, `offset_us` | The writer measured the peer's clock: `offset_us` is theirs minus the writer's. |
 | `layout` | `set`, `t_us`, `layout` | The writer's layout for the set; `set` is also inside `layout`. A `layout` record without `set`, written while watching, belongs to no set's default layout and is ignored. |
 | `plugin` | `plugin`, `on`, `version`, `settings`, `runner?`, `t_us` | The room's choice for a plugin. `runner` is the member who runs it; without it, the writer. |
-| `job` | `state`, `job`, `run`, `t_us`, `plugin?`, `version?`, `settings?`, `file?`, `error?`, `events?`, `tags?`, `note?` | A step of an analysis job: `state` is `claim`, `fail`, `done`, `retry` or `stop` (`yield`, written by older versions, reads as waiting). |
+| `job` | `state`, `job`, `run`, `t_us`, `plugin?`, `version?`, `settings?`, `file?`, `error?`, `events?`, `tags?`, `note?` | A step of an analysis job: `state` is `claim`, `fail`, `done`, `retry` or `stop` (`stop`, and `yield` from older versions, read as waiting). |
 | `party` | `set`, `t_us`, `shared` | The Watch Party state while a set records. |
 | `ai_del` | `set`, `t_us` | Hides every note with `source` `ai` of the set written before it, from any log. |
 | `file_bad` | `room`, `set`, `file`, `size`, `t_us` | A fetched file failed its check and was deleted (`file` is `<member id>/<capture>/<name>`). |

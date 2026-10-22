@@ -1101,16 +1101,13 @@ pub fn wants(core: &Core, room: &str, set: &str) -> Option<bool> {
 }
 
 pub fn download_set(core: &Core, room: &str, set: &str) -> Result<(), String> {
-    if !valid_id(room) || !valid_id(set) {
-        return Err("That recording does not exist.".into());
-    }
     core.want.lock().unwrap().insert(want_key(room, set), true);
     Ok(())
 }
 
 fn remove_set(core: &Core, room: &str, set: &str, complete: bool) -> Result<bool, String> {
     if !valid_id(room) || !valid_id(set) {
-        return Err("That recording does not exist.".into());
+        return Err("That recording is not on this PC.".into());
     }
     if core.is_recording(room, set) {
         return Err("This recording is still in progress.".into());
@@ -1354,12 +1351,12 @@ fn last_used(core: &Core, room: &str) -> Option<i64> {
     std::fs::metadata(core.log_path(room, &core.me())).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_micros() as i64)
 }
 
-pub fn names(core: &Core, room: &Room) -> HashMap<String, String> {
-    let people = room.people();
-    let mut names = room.names.clone();
-    names.extend(core.peers.lock().unwrap().iter().filter(|p| !p.name.is_empty() && people.contains(&p.id.to_string())).map(|p| (p.id.to_string(), p.name.clone())));
+pub fn names(core: &Core, room: Option<&Room>, only_people: bool) -> HashMap<String, String> {
+    let people = room.map(Room::people).unwrap_or_default();
+    let mut names = room.map(|r| r.names.clone()).unwrap_or_default();
+    names.extend(core.peers.lock().unwrap().iter().filter(|p| !p.name.is_empty() && (!only_people || people.contains(&p.id.to_string()))).map(|p| (p.id.to_string(), p.name.clone())));
     names.insert(core.me(), core.name.lock().unwrap().clone());
-    names.extend(imported_views(core, &room.id).into_iter().map(|(id, v)| (id, v.name)));
+    names.extend(room.into_iter().flat_map(|r| imported_views(core, &r.id)).map(|(id, v)| (id, v.name)));
     names
 }
 
@@ -1371,7 +1368,7 @@ pub fn state_json(core: &Core) -> Value {
     for p in peers.iter_mut().filter(|p| p["sharing"] == true) {
         p["live"] = json!(stream::live_json(core, &room_id, p["id"].as_str().unwrap_or_default()));
     }
-    let mut names = active.as_ref().map(|r| names(core, r)).unwrap_or_default();
+    let mut names = names(core, active.as_ref(), false);
     names.insert(my_id.clone(), "You".to_string());
     let logs = logs(core, &room_id);
     keep_room(core, &room_id, latest_name(&logs).as_deref(), Some(&latest_icon(&logs)));
