@@ -800,7 +800,7 @@ pub struct Log {
 
 pub struct Seg {
     pub capture: String,
-    pub series: String,
+    pub series: &'static str,
     pub n: u32,
     pub t_us: i64,
     pub d_us: i64,
@@ -954,9 +954,9 @@ pub fn dropped(logs: &[Log]) -> HashSet<String> {
 
 fn seg_from(r: &Value) -> Option<Seg> {
     let capture = r["capture"].as_str().filter(|c| capture_id(c))?;
-    let series = r["series"].as_str().filter(|s| SERIES.contains(s))?;
+    let series = SERIES.into_iter().find(|s| r["series"] == *s)?;
     let n = r["n"].as_u64().filter(|n| *n > 0 && *n <= u32::MAX as u64)? as u32;
-    Some(Seg { capture: capture.into(), series: series.into(), n, t_us: r["t_us"].as_i64()?, d_us: r["d_us"].as_i64().unwrap_or(0), size: r["size"].as_u64()?, sha256: r["sha256"].as_str()?.into() })
+    Some(Seg { capture: capture.into(), series, n, t_us: r["t_us"].as_i64()?, d_us: r["d_us"].as_i64().unwrap_or(0), size: r["size"].as_u64()?, sha256: r["sha256"].as_str()?.into() })
 }
 
 pub fn derive_sets(room: &str, logs: &[Log]) -> Vec<Set> {
@@ -966,7 +966,7 @@ pub fn derive_sets(room: &str, logs: &[Log]) -> Vec<Set> {
     for log in logs {
         let mut open: HashMap<&str, (usize, bool)> = HashMap::new();
         let mut caps: HashMap<&str, Value> = HashMap::new();
-        let mut seen: HashSet<(&str, String, String, u32)> = HashSet::new();
+        let mut seen: HashSet<(&str, &str, &str, u32)> = HashSet::new();
         for r in log.records.iter() {
             if r["k"] == "cap" {
                 if let Some(capture) = r["capture"].as_str() {
@@ -998,7 +998,7 @@ pub fn derive_sets(room: &str, logs: &[Log]) -> Vec<Set> {
                     }
                 }
                 Some("seg") => {
-                    if let (Some((i, _)), Some(seg)) = (open.get(id), seg_from(r).filter(|s| seen.insert((id, s.capture.clone(), s.series.clone(), s.n)))) {
+                    if let (Some((i, _)), Some(seg)) = (open.get(id), seg_from(r).filter(|s| seen.insert((id, r["capture"].as_str().unwrap_or_default(), s.series, s.n)))) {
                         sets.get_mut(id).unwrap().files[*i].segs.push(seg);
                     }
                 }
@@ -1324,7 +1324,7 @@ pub fn sets_json(core: &Core, room: &str, logs: &[Log], events: &[Value]) -> Vec
             let by: Vec<&str> = holders.iter().filter(|h| full(h.have, &set, f)).map(|h| h.id).collect();
             players.push(json!({
                 "owner": f.owner, "imported": f.view.is_some(), "start_us": f.start_us, "end_us": f.end_us, "offset_us": f.offset_us, "have": have, "total": total,
-                "recording": f.recording(), "verified_by": by, "stuck": stuck(&mine, &online, &set, f), "parts": parts_json(room, &set, f, &|capture, series| { let pieces = stream::set_pieces(core, room, f, capture, series); (stream::size(&pieces), stream::open(&pieces)) }),
+                "recording": f.recording(), "verified_by": by, "stuck": stuck(&mine, &online, &set, f), "parts": parts_json(room, &set, f, &|capture, series| stream::folder_size(&core.files, &data::seg_dir(&core.room_dir(room), f, capture, series))),
                 "last_us": {"v": last_end(f, SERIES[0]), "m": last_end(f, SERIES[1])},
             }));
         }
@@ -1613,7 +1613,7 @@ pub mod tests {
         ]);
         let sets = derive_sets("r", &[a]);
         let f = &sets[0].files[0];
-        assert_eq!(f.segs.iter().map(|s| (s.capture.as_str(), s.series.as_str(), s.n)).collect::<Vec<_>>(), [("111", "v", 2), ("111", "m", 2), ("222", "v", 1)]);
+        assert_eq!(f.segs.iter().map(|s| (s.capture.as_str(), s.series, s.n)).collect::<Vec<_>>(), [("111", "v", 2), ("111", "m", 2), ("222", "v", 1)]);
         assert_eq!(f.captures(), ["111", "222"]);
         assert_eq!(f.init("111", "m"), Some((3, "j".into())));
         assert_eq!((f.init("222", "v"), f.init("222", "m")), (Some((5, "k".into())), None));

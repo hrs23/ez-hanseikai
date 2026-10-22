@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fs::File as Disk;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 use serde_json::{json, Value};
 use tauri::http::{header, Request, Response, StatusCode};
@@ -12,7 +12,7 @@ use crate::{data, file_len, media, Core};
 
 const INDEX_MAX: usize = 1 << 16;
 
-pub type Indexes = Mutex<HashMap<PathBuf, (u64, Arc<Vec<media::Time>>)>>;
+pub type Indexes = Mutex<HashMap<PathBuf, (u64, Option<media::Time>)>>;
 
 #[derive(Clone)]
 pub struct Piece {
@@ -45,18 +45,33 @@ pub fn run_of(numbers: &[u32], live: bool) -> &[u32] {
     }
 }
 
-fn listed(files: &data::Files, dir: &Path, live: bool) -> Vec<Piece> {
+fn run(files: &data::Files, dir: &Path, live: bool) -> Option<(data::Listing, Vec<u32>)> {
     let names = data::listing(files, dir);
-    let Some(init) = names.get(INIT) else { return Vec::new() };
-    let mut numbers: Vec<u32> = names.keys().filter_map(|name| room::seg_number(name)).collect();
+    names.get(&0)?;
+    let mut numbers: Vec<u32> = names.keys().copied().filter(|n| *n > 0).collect();
     numbers.sort_unstable();
     let next = numbers.last().map_or(1, |n| n + 1);
     numbers.extend(Some(next).filter(|n| part_of(&dir.join(seg_name(*n))).exists()));
-    let segments = run_of(&numbers, live).iter().map(|n| {
-        let name = seg_name(*n);
-        names.get(&name).map_or_else(|| piece(part_of(&dir.join(&name))), |len| Piece { path: dir.join(&name), len: *len })
+    let run = run_of(&numbers, live).to_vec();
+    Some((names, run))
+}
+
+fn listed(files: &data::Files, dir: &Path, live: bool) -> Vec<Piece> {
+    let Some((names, run)) = run(files, dir, live) else { return Vec::new() };
+    let segments = run.into_iter().map(|n| {
+        let path = dir.join(seg_name(n));
+        match names.get(&n) {
+            Some(len) => Piece { path, len: *len },
+            None => piece(part_of(&path)),
+        }
     });
-    std::iter::once(Piece { path: dir.join(INIT), len: *init }).chain(segments).collect()
+    std::iter::once(Piece { path: dir.join(INIT), len: names[&0] }).chain(segments).collect()
+}
+
+pub fn folder_size(files: &data::Files, dir: &Path) -> (u64, bool) {
+    let Some((names, run)) = run(files, dir, false) else { return (0, false) };
+    let len = |n: &u32| names.get(n).copied().unwrap_or_else(|| file_len(&part_of(&dir.join(seg_name(*n)))));
+    (names[&0] + run.iter().map(len).sum::<u64>(), run.last().is_some_and(|n| !names.contains_key(n)))
 }
 
 fn live_folder(core: &Core, room: &str, owner: &str) -> Option<(PathBuf, String, Option<i64>)> {
@@ -90,55 +105,59 @@ fn target<'a>(parts: &[&'a str]) -> Option<(Target<'a>, &'a str)> {
     }
 }
 
-fn index(indexes: &Indexes, piece: &Piece) -> Arc<Vec<media::Time>> {
+fn first_time(indexes: &Indexes, piece: &Piece) -> Option<media::Time> {
     let mut cache = indexes.lock().unwrap();
-    if let Some((len, times)) = cache.get(&piece.path) {
+    if let Some((len, time)) = cache.get(&piece.path) {
         if *len == piece.len {
-            return times.clone();
+            return time.clone();
         }
     }
     if cache.len() > INDEX_MAX {
         cache.clear();
     }
-    let Ok((times, _)) = media::scan(&piece.path).or_else(|_| media::scan(&piece.path.with_extension(""))) else { return Arc::default() };
-    let times = Arc::new(times);
-    cache.insert(piece.path.clone(), (piece.len, times.clone()));
-    times
+    let (times, _) = media::scan(&piece.path).or_else(|_| media::scan(&piece.path.with_extension(""))).ok()?;
+    let time = times.into_iter().next();
+    cache.insert(piece.path.clone(), (piece.len, time.clone()));
+    time
 }
 
-pub fn open(pieces: &[Piece]) -> bool {
+fn open(pieces: &[Piece]) -> bool {
     pieces.last().is_some_and(|p| p.path.extension().is_some_and(|e| e == "part"))
 }
 
-fn index_json(indexes: &Indexes, dir: &Path, pieces: &[Piece]) -> Value {
+fn index_json(indexes: &Indexes, dir: &Path, pieces: &[Piece], from: u64) -> Value {
     let scales = media::timescales(&std::fs::read(dir.join(INIT)).unwrap_or_default());
+    let number = |p: &Piece| p.path.file_name().and_then(|name| room::seg_number(&name.to_string_lossy()));
+    let pieces = &pieces[pieces.iter().take_while(|p| number(p).is_some_and(|n| u64::from(n) < from)).count()..];
     let mut segs = Vec::new();
     for p in pieces {
-        let n = p.path.file_name().and_then(|name| room::seg_number(&name.to_string_lossy()));
-        let Some((n, time)) = n.zip(index(indexes, p).first().map(|t| media::micros(t, &scales))) else { break };
+        let Some((n, time)) = number(p).zip(first_time(indexes, p).map(|t| media::micros(&t, &scales))) else { break };
         segs.push(json!({"n": n, "len": p.len, "t_us": time}));
     }
     json!({"segs": segs, "open": segs.len() == pieces.len() && open(pieces)})
 }
 
-fn serve(files: &data::Files, indexes: &Indexes, dir: &Path, live: bool, kind: &'static str, what: &str, from: usize) -> Option<(&'static str, Vec<u8>)> {
-    let segment = |n: u32| {
-        let path = dir.join(seg_name(n));
-        std::fs::read(&path).or_else(|_| std::fs::read(part_of(&path))).ok()
+fn serve(files: &data::Files, indexes: &Indexes, dir: &Path, live: bool, kind: &'static str, what: &str, from: u64) -> Option<(&'static str, Vec<u8>)> {
+    let mut file = match what {
+        "index" => return Some(("application/json", index_json(indexes, dir, listed(files, dir, live).get(1..).unwrap_or_default(), from).to_string().into_bytes())),
+        "init" => Disk::open(dir.join(INIT)).ok()?,
+        n => {
+            let path = dir.join(seg_name(n.parse().ok()?));
+            Disk::open(&path).or_else(|_| Disk::open(part_of(&path))).ok()?
+        }
     };
-    let mut bytes = match what {
-        "index" => return Some(("application/json", index_json(indexes, dir, listed(files, dir, live).get(1..).unwrap_or_default()).to_string().into_bytes())),
-        "init" => std::fs::read(dir.join(INIT)).ok()?,
-        n => segment(n.parse().ok()?)?,
-    };
-    (from <= bytes.len()).then(|| (kind, bytes.split_off(from)))
+    let mut bytes = Vec::new();
+    (from <= file.metadata().ok()?.len()).then_some(())?;
+    file.seek(SeekFrom::Start(from)).ok()?;
+    file.read_to_end(&mut bytes).ok()?;
+    Some((kind, bytes))
 }
 
 fn decoded(path: &str) -> Option<String> {
     crate::api::decode(path.trim_start_matches('/'), false)
 }
 
-fn answer(core: &Core, path: &str, from: usize) -> Option<(&'static str, Vec<u8>)> {
+fn answer(core: &Core, path: &str, from: u64) -> Option<(&'static str, Vec<u8>)> {
     let path = decoded(path)?;
     let (found, what) = target(&path.split('/').collect::<Vec<_>>())?;
     match found {
@@ -227,6 +246,8 @@ mod tests {
         let files = data::Files::default();
         assert_eq!(names(&listed(&files, &dir, true)), [INIT, "000007.m4s", "000008.m4s.part"]);
         assert_eq!(names(&listed(&files, &dir, false)), [INIT, "000004.m4s", "000005.m4s"]);
+        assert_eq!(folder_size(&files, &dir), (size(&listed(&files, &dir, false)), false));
+        assert_eq!(folder_size(&files, &dir.join("missing")), (0, false));
         assert!(listed(&files, &dir.join("missing"), true).is_empty());
         std::fs::remove_file(dir.join(INIT)).unwrap();
         data::forget(&files, &dir);
@@ -238,9 +259,13 @@ mod tests {
     fn the_index_lists_pieces_with_their_first_time_and_marks_an_open_tail() {
         let dir = folder("index", &[(1, 0), (2, 4000), (3, 8000)], Some((4, 12000)));
         let (files, indexes) = (data::Files::default(), Indexes::default());
-        let json = |dir: &Path| index_json(&indexes, dir, &listed(&files, dir, false)[1..]);
+        let json = |dir: &Path| index_json(&indexes, dir, &listed(&files, dir, false)[1..], 0);
         let whole = fragment(&[(1, 0)], b"data").len();
         assert_eq!(json(&dir), json!({"segs": [{"n": 1, "len": whole, "t_us": 0}, {"n": 2, "len": whole, "t_us": 4_000_000}, {"n": 3, "len": whole, "t_us": 8_000_000}, {"n": 4, "len": whole, "t_us": 12_000_000}], "open": true}));
+        let tail = |from: u64| index_json(&indexes, &dir, &listed(&files, &dir, false)[1..], from);
+        assert_eq!(tail(3), json!({"segs": [{"n": 3, "len": whole, "t_us": 8_000_000}, {"n": 4, "len": whole, "t_us": 12_000_000}], "open": true}));
+        assert_eq!(tail(5), json!({"segs": [], "open": false}));
+        assert_eq!(folder_size(&files, &dir), (size(&listed(&files, &dir, false)), true));
         put(&dir, "000004.m4s.part", b"no fragment yet");
         data::forget(&files, &dir);
         assert_eq!(json(&dir)["segs"].as_array().unwrap().len(), 3);
@@ -255,15 +280,15 @@ mod tests {
     fn a_folder_serves_its_index_init_and_segments_and_a_tail_from_a_byte() {
         let dir = folder("serve", &[(1, 0)], Some((2, 4000)));
         let (files, indexes) = (data::Files::default(), Indexes::default());
-        let get = |what: &str, from: usize| serve(&files, &indexes, &dir, false, "video/mp4", what, from);
+        let get = |what: &str, from: u64| serve(&files, &indexes, &dir, false, "video/mp4", what, from);
         assert_eq!(get("index", 0).unwrap().0, "application/json");
         assert_eq!(get("init", 0).unwrap().1, init(&[(1, 1000)]));
         assert_eq!(get("1", 0).unwrap().1, fragment(&[(1, 0)], b"data"));
         let tail = fragment(&[(1, 4000)], b"open");
         assert_eq!(get("2", 0).unwrap().1, tail);
         assert_eq!(get("2", 5).unwrap().1, tail[5..]);
-        assert_eq!(get("2", tail.len()).unwrap().1, Vec::<u8>::new());
-        assert!(get("2", tail.len() + 1).is_none());
+        assert_eq!(get("2", tail.len() as u64).unwrap().1, Vec::<u8>::new());
+        assert!(get("2", tail.len() as u64 + 1).is_none());
         assert!(get("3", 0).is_none() && get("x", 0).is_none());
         let _ = std::fs::remove_dir_all(dir);
     }

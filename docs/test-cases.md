@@ -71,10 +71,11 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - A recording in HEVC and in AV1 plays on every PC; a PC that cannot play one makes the room choose another codec. `manual`
 - a far seek and an immediate Play start every tile at once, alone and in Watch Party. `e2e` (`library`)
 - playing your own recording right after it ended shows your own picture, moves on and reaches its end. `e2e` (`recover`)
-- stream: a recording folder lists its pieces from the lowest segment and the live folder its newest run, each with first times and an open tail, served whole or from a byte; a recording plays from its own folder up to the first missing segment; ids are checked and paths decoded. `unit`
+- stream: a recording folder lists its pieces from the lowest segment and the live folder its newest run, each with first times and an open tail, served whole or from a byte, and the index from a segment on; a recording plays from its own folder up to the first missing segment; ids are checked and paths decoded. `unit`
 - room: a part starts when its capture began, with the listing's size and whether its last piece is still open. `unit`
 - thumbs: the middle segment holds half of the length. `unit`
 - the player plans the segment holding the moment and the next ones, continues a grown tail, ends a part where its last piece ends, and holds every tile until all can play. `ui-test`
+- the player fetches a growing recording's index from its last known piece on, and the whole index again when that piece is no longer there. `ui-test`
 - a focused player plays its own sound; otherwise the sound is the one chosen by a click, else the viewer's own, else the first player's; the view line names the first member who blocks the playback, in one sentence, and a holder reached through a relay does not count. `ui-test`
 - live speaking leaves the player alone and a played voice lights its tile: a live `speaking` message lights no player tile and every voice moves with its media through Web Audio (`e2e`, `library`); the ring following a real voice and fading after the hang (`manual`); a voice counts as talking while loud and for the hang after (`ui-test`).
 - clicking a tile picks whose app sound plays and clicks keep no focus: the clicked tile is heard and marked, the app sound button picks the next member, and after clicks on the volume and play buttons Space and the arrows still work (`e2e`, `library`).
@@ -171,6 +172,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - The first start downloads ffmpeg, checks it and keeps retrying with no network. `manual`
 - The window, menus, dark theme and Japanese texts look right at normal and high DPI scaling. `manual`
 - the menu bar is the same near-black as the title bar and the app (also on a PC set to the light theme), its drop-down menus are dark, and the menu bar is hidden while the player or the board is full screen and back after. `manual`
+- an hour-long recording is counted, checked for missing pieces and sized with one listing per folder, not work per segment, so a long session does not slow the app or grow its memory. `unit`
 - check: a line starts with its level. `unit`
 - debug: the transfer list keeps the newest; kinds follow live series and init; a piece after a failure is a retry; a hash failure marks the last receipt or adds a row; jobs are grouped with their latest state; reports hide addresses ids and names; reports hide a user folder with spaces; a job reads as one line; addresses are hidden and the rest kept; errors keep the newest warnings; the tail starts at a whole line; the flow text names each route and hides hosts; a combined report names each member by short id. `unit`
 - hw: hardware is read from the script output; bad output gives empty hardware; the encoder names its kind and the matching gpu; the report line names the hardware encoder and capture rate; a healthy recording logs nothing until it ends; an idle screen is not a collapse; a stalled encoder is logged once until it recovers; short or voice only recordings end quietly; slow sends are logged rarely. `unit`

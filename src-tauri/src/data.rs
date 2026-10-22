@@ -22,7 +22,7 @@ pub const LIVE_KEEP: u32 = 7;
 const RESUME: &str = "resume.json";
 const RESUME_FRESH: Duration = Duration::from_secs(120);
 
-pub type Listing = Arc<HashMap<String, u64>>;
+pub type Listing = Arc<HashMap<u32, u64>>;
 pub type Files = Mutex<HashMap<PathBuf, Listing>>;
 
 const OLD_ROOT: [&str; 6] = ["log.bin", "peer", "peer.txt", "peers.txt", "running.marker", "plugins"];
@@ -312,13 +312,13 @@ pub fn matches(path: &Path, size: u64, sha: &str) -> std::io::Result<bool> {
     sha256(path).map(|(got_size, got)| got_size == size && got == sha)
 }
 
-fn names(dir: &Path) -> HashMap<String, u64> {
+fn names(dir: &Path) -> HashMap<u32, u64> {
     let mut out = HashMap::new();
     for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
-        let kept = name == INIT || room::seg_number(&name).is_some_and(|n| seg_name(n) == name);
-        if let Some(meta) = entry.metadata().ok().filter(|m| kept && m.is_file()) {
-            out.insert(name, meta.len());
+        let n = if name == INIT { Some(0) } else { room::seg_number(&name).filter(|n| *n > 0 && seg_name(*n) == name) };
+        if let Some((n, meta)) = n.zip(entry.metadata().ok().filter(std::fs::Metadata::is_file)) {
+            out.insert(n, meta.len());
         }
     }
     out
@@ -332,8 +332,8 @@ pub fn forget(files: &Files, prefix: &Path) {
     files.lock().unwrap().retain(|dir, _| !dir.starts_with(prefix));
 }
 
-pub fn has(files: &Files, dir: &Path, name: &str, size: Option<u64>) -> bool {
-    listing(files, dir).get(name).is_some_and(|len| size.is_none_or(|size| size == *len))
+pub fn has(files: &Files, dir: &Path, n: u32, size: Option<u64>) -> bool {
+    listing(files, dir).get(&n).is_some_and(|len| size.is_none_or(|size| size == *len))
 }
 
 pub fn seg_dir(room_dir: &Path, f: &File, capture: &str, series: &str) -> PathBuf {
@@ -341,11 +341,23 @@ pub fn seg_dir(room_dir: &Path, f: &File, capture: &str, series: &str) -> PathBu
 }
 
 pub fn presence(files: &Files, room_dir: &Path, f: &File, series: &str) -> Vec<(bool, bool)> {
-    let here = |seg: &&room::Seg| {
-        let dir = seg_dir(room_dir, f, &seg.capture, series);
-        (has(files, &dir, &seg_name(seg.n), Some(seg.size)), has(files, &dir, INIT, f.init(&seg.capture, series).map(|(size, _)| size)))
-    };
-    f.series(series).iter().map(here).collect()
+    let mut dirs: Vec<(&str, Listing, bool)> = Vec::new();
+    let mut out = Vec::new();
+    for seg in f.segs.iter().filter(|s| s.series == series) {
+        let i = match dirs.iter().position(|(capture, ..)| *capture == seg.capture) {
+            Some(i) => i,
+            None => {
+                let names = listing(files, &seg_dir(room_dir, f, &seg.capture, series));
+                let size = f.init(&seg.capture, series).map(|(size, _)| size);
+                let init = names.get(&0).is_some_and(|len| size.is_none_or(|size| size == *len));
+                dirs.push((&seg.capture, names, init));
+                dirs.len() - 1
+            }
+        };
+        let (_, names, init) = &dirs[i];
+        out.push((names.get(&seg.n) == Some(&seg.size), *init));
+    }
+    out
 }
 
 fn count(files: &Files, room_dir: &Path, f: &File, series: &str) -> u64 {
@@ -459,6 +471,34 @@ mod tests {
     use super::*;
     use crate::log::tests::{present, put, seed, temp, tree};
     use crate::media::tests::fragment;
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
+    struct Counting;
+
+    thread_local! {
+        static ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
+    }
+
+    unsafe impl GlobalAlloc for Counting {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            let _ = ALLOCATIONS.try_with(|n| n.set(n.get() + 1));
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(ptr, layout) }
+        }
+    }
+
+    #[global_allocator]
+    static COUNTING: Counting = Counting;
+
+    fn allocations(f: impl FnOnce()) -> u64 {
+        let before = ALLOCATIONS.with(Cell::get);
+        f();
+        ALLOCATIONS.with(Cell::get) - before
+    }
 
     #[test]
     fn one_app_holds_a_data_folder_and_a_leftover_lock_is_noticed() {
@@ -641,6 +681,29 @@ mod tests {
         assert_eq!(state(&files), (0, 4 * 4, Some((1, 0, 0, true, 0))));
         let want = expected(&f, &Run { capture: "1000".into(), init: true, from: 2, at: 0, to: 3, index: 1 }, "v");
         assert_eq!(want, [(0, (4, "i".to_string())), (2, (4, "s2".to_string())), (3, (4, "s3".to_string()))].into());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_hour_long_recording_is_counted_per_folder_not_per_segment() {
+        let dir = temp("hour");
+        let room_dir = dir.join("rooms/r");
+        let segs: u32 = 3600 / 4;
+        let mut records = vec![json!({"k": "rec", "set": "s1", "start_us": 0}), json!({"k": "cap", "capture": "1000", "start_us": 0, "init": {"v": {"size": 4, "sha256": "i"}, "m": {"size": 4, "sha256": "i"}}})];
+        records.extend((1..=segs).flat_map(|n| SERIES.map(|series| json!({"k": "seg", "capture": "1000", "series": series, "n": n, "set": "s1", "t_us": n * 4, "d_us": 4, "size": 4, "sha256": format!("s{n}")}))));
+        let f = room::derive_sets("r", &[room::Log { owner: "a".into(), offset_us: 0, records: Arc::new(records) }]).remove(0).files.remove(0);
+        for series in SERIES {
+            let folder = seg_dir(&room_dir, &f, "1000", series);
+            put(&folder, INIT, b"init");
+            (1..=segs).for_each(|n| put(&folder, &seg_name(n), b"seg!"));
+        }
+        let (files, writing) = (Files::default(), Mutex::new(HashSet::new()));
+        let poll = || SERIES.map(|series| (count(&files, &room_dir, &f, series), missing(&files, &writing, &room_dir, &f, series).is_none(), held_in(&files, &room_dir, &f)));
+        assert_eq!(poll(), [(segs as u64, true, 8 * segs as u64 + 8); 2]);
+        let made = allocations(|| {
+            poll();
+        });
+        assert!(made < segs as u64, "{made} allocations to count {segs} segments");
         let _ = std::fs::remove_dir_all(dir);
     }
 

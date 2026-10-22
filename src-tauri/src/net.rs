@@ -304,9 +304,9 @@ async fn follow(core: &Core, conn: &Connection, send: &mut SendStream, req: &Val
     let current = || core.engine.live().filter(|l| l.room == room && l.capture == capture);
     let sets = if own { Vec::new() } else { room::sets(core, &room, &room::logs(core, &room)) };
     let file = sets.iter().filter(|s| set.as_ref() == Some(&s.id)).flat_map(|s| s.files.iter()).find(|f| f.owner == owner);
-    let held = |n: u32| file.and_then(|f| f.segs_of(&capture, &series).find(|g| g.n == n)).is_some_and(|g| data::has(&core.files, &dir, &seg_name(n), Some(g.size)));
+    let held = |n: u32| file.and_then(|f| f.segs_of(&capture, &series).find(|g| g.n == n)).is_some_and(|g| data::has(&core.files, &dir, n, Some(g.size)));
     if req["init"] == true {
-        let ok = own || file.is_some_and(|f| data::has(&core.files, &dir, INIT, f.init(&capture, &series).map(|(size, _)| size)));
+        let ok = own || file.is_some_and(|f| data::has(&core.files, &dir, 0, f.init(&capture, &series).map(|(size, _)| size)));
         if !ok || !send_file(core, send, 0, &dir.join(INIT), 0, !live, &|| false, &what).await? {
             return Ok(());
         }

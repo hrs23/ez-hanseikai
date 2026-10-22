@@ -194,18 +194,19 @@ pub fn tracks(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> Tracks {
 }
 
 pub fn chosen(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> HashMap<String, String> {
-    let mut counts: HashMap<(String, String), u64> = HashMap::new();
+    let mut counts: HashMap<(&str, &str), u64> = HashMap::new();
     for (log, records) in capped(logs, caps) {
         for r in records.iter().filter(|r| r["k"] == "seg" && r["series"] == SERIES[0]) {
             let Some(set) = r["set"].as_str() else { continue };
-            *counts.entry((set.to_string(), format!("{set}/{}", log.owner))).or_default() += 1;
+            *counts.entry((set, &log.owner)).or_default() += 1;
         }
     }
     let mut out: HashMap<String, (u64, String)> = HashMap::new();
-    for ((set, file), n) in counts {
-        let better = out.get(&set).is_none_or(|(m, f)| (n, Reverse(&file)) > (*m, Reverse(f)));
+    for ((set, owner), n) in counts {
+        let file = format!("{set}/{owner}");
+        let better = out.get(set).is_none_or(|(m, f)| (n, Reverse(&file)) > (*m, Reverse(f)));
         if better {
-            out.insert(set, (n, file));
+            out.insert(set.to_string(), (n, file));
         }
     }
     out.into_iter().map(|(set, (_, file))| (set, file)).collect()
@@ -1164,7 +1165,7 @@ mod tests {
 
     #[test]
     fn a_capture_spans_its_segments_on_the_local_clock() {
-        let seg = |n, t_us| Seg { capture: "1".into(), series: "v".into(), n, t_us, d_us: 4, size: 1, sha256: String::new() };
+        let seg = |n, t_us| Seg { capture: "1".into(), series: "v", n, t_us, d_us: 4, size: 1, sha256: String::new() };
         let (a, b) = (seg(1, 100), seg(2, 104));
         assert_eq!(span(&[&a, &b], 10), Some((90, 98)));
         assert_eq!(span(&[], 0), None);

@@ -110,6 +110,10 @@ const buffer = (sb, op) => new Promise((done, failed) => {
   op();
 });
 
+function grownIndex(index, tail) {
+  return tail.segs.length && tail.segs[0].n === index.segs.at(-1).n ? { ...tail, segs: index.segs.slice(0, -1).concat(tail.segs) } : null;
+}
+
 async function advance(s) {
   const { part, rel, first, wall } = s.want;
   const ms = s.ms;
@@ -134,8 +138,9 @@ async function advance(s) {
   s.part = part;
   const cue = `${part.size}${part.open ? "+" : ""}`;
   if (!s.index || s.size !== cue) {
-    const index = await (await get("index")).json();
-    if (s.ms === ms) Object.assign(s, { index, size: cue });
+    const last = s.index && s.index.segs.at(-1);
+    const index = await (await get("index", last ? `?from=${last.n}` : "")).json();
+    if (s.ms === ms) Object.assign(s, { index: last ? grownIndex(s.index, index) : index, size: cue });
     return s.ms === ms;
   }
   const sb = s.sb;
