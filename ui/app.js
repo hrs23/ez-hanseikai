@@ -13,7 +13,6 @@ const UPDATE_CHECK_DELAY_MS = 4000;
 const UPDATE_EVERY_MS = 4 * 3600 * 1000;
 const UPDATE_RECHECK_MS = 10 * 60 * 1000;
 const DOUBLE_CLICK_MS = 250;
-const JUMP_MIN = 1;
 const NOTE_STEP_GAP = 0.5;
 const PLUGINS_MS = 5000;
 const CHIME = { start: [660, 880], end: [880, 660], join: [784, 988] };
@@ -30,6 +29,7 @@ const tileGrid = (box, kind) => ({ el: box, kind, tiles: {}, keys: [], mode: "gr
 const rec = tileGrid($("livetiles"), "record");
 const play = tileGrid($("playtiles"), "player");
 const clock = { playing: false, m: 0, at: 0 };
+const positions = new Map();
 const liveClock = { pos: null, rate: 1, held: false, late: [], at: 0 };
 let st = null;
 let idx = null;
@@ -552,6 +552,7 @@ function renderParty(set) {
   }
 }
 function setParty(on) {
+  if (!on && playSet()) store("layout/" + selected, { mode: play.mode, slots: play.slots, order: play.keys });
   watchParty = on;
   partyFrom = null;
   delete sigs.wpbox;
@@ -590,10 +591,15 @@ function openNow() {
   followNow();
   go("player");
 }
-function openSet(id, m = 0) {
+function openSet(id, m) {
   selectSet(id);
-  if (m) { setClock(false, m); share(); }
+  if (typeof m === "number") { setClock(false, m); share(); }
   refresh();
+}
+function openFromStart(id) {
+  selectSet(null);
+  positions.delete(id);
+  openSession(id);
 }
 function selectSet(id) {
   if (id === selected) return;
@@ -602,7 +608,7 @@ function selectSet(id) {
   if (id === partyFrom) partyFrom = null;
   selected = id;
   clock.playing = false;
-  clock.m = 0;
+  clock.m = positions.has(id) ? Math.max(0, (positions.get(id) - base()) / 1e6) : 0;
   live = false;
   delete sigs.events;
   delete sigs.views;
@@ -639,6 +645,7 @@ function tick() {
   const b = base(list);
   const away = page !== "player";
   const wall = b + m * 1e6;
+  if (set) positions.set(set.id, wall);
   const pinned = livePinned();
   const todo = [];
   const now = Date.now();
@@ -755,7 +762,6 @@ function joinParty() {
   partySends = partySends.then(() => invoke("party_on", args)).catch(fail);
   return partySends;
 }
-const newer = (a, b) => !b || (a.seq !== b.seq ? a.seq > b.seq : a.stamp !== b.stamp ? a.stamp > b.stamp : a.origin > b.origin);
 function applyParty(p) {
   const first = !partyLast;
   partyLast = p;
@@ -768,11 +774,9 @@ function applyParty(p) {
   if (p.rate && p.rate !== rate) setRate(p.rate);
   if (typeof p.wall_us !== "number") return;
   if (p.live && set.live) { if (!live) goLive(); return; }
-  const m = Math.max(0, (p.wall_us - base()) / 1e6 + (p.playing ? ((nowUs() - p.at_us) / 1e6) * rate : 0));
-  if (mine || first || p.seq === 0) { if (p.playing !== clock.playing || Math.abs(m - nowM()) > JUMP_MIN) setClock(p.playing, m); }
-  else if (p.playing !== clock.playing) apply(p.playing ? "play" : "pause", m, p.origin);
-  else if (Math.abs(m - nowM()) > JUMP_MIN) apply("seek", m, p.origin);
-  else setClock(p.playing, m);
+  const move = partyMove(p, { base: base(), now: nowUs(), rate, m: nowM(), playing: clock.playing, quiet: mine || first || p.seq === 0 });
+  if (move && move.quiet) setClock(p.playing, move.m);
+  else if (move) apply(move.cmd, move.m, p.origin);
 }
 function act(cmd, m, prev) {
   actedAt = nowUs();
@@ -1252,12 +1256,12 @@ async function update() {
     const ended = setById(nowSet);
     nowView = false;
     nowSet = null;
-    if (ended && !ended.of && page === "player") { selectSet(null); openSession(ended.id); }
+    if (ended && !ended.of && page === "player") openFromStart(ended.id);
   }
   if (voice) debriefOpen = st.active_set.id;
   const roomId = st.room ? st.room.id : "";
   if (partyRoom !== roomId) { partyRoom = roomId; editing = null; if (roomId) await joinParty(); st = await invoke("state"); idx = indexOf(st); }
-  if (!drag && watchParty && st.party.on && newer(st.party.shared, partyLast)) applyParty(st.party.shared);
+  if (!drag && watchParty && st.party.on && !sameParty(st.party.shared, partyLast)) applyParty(st.party.shared);
   for (const step of steps()) try { step(); } catch (e) { console.error(e); }
   markLive();
 }

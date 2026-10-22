@@ -477,7 +477,7 @@ listenMain("session", (e) => {
   chime(e.payload.action);
   if (e.payload.action === "start" && !e.payload.voice) openLive();
   const ended = e.payload.action === "end" && setById(e.payload.set);
-  if (ended && !ended.of && page === "player" && showingNow()) { selectSet(null); openSession(ended.id); }
+  if (ended && !ended.of && page === "player" && showingNow()) openFromStart(ended.id);
 });
 listenMain("flash", (e) => flash(e.payload));
 

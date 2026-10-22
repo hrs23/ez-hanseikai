@@ -11,7 +11,7 @@ const source = ["util.js", "i18n.js", "live.js", "media.js", "layout.js", "dock.
 const memory = new Map();
 const localStorage = { getItem: (k) => memory.get(k) ?? null, setItem: (k, v) => memory.set(k, v) };
 const context = vm.createContext({ localStorage, window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id, location: { search: "" } });
-const ui$ = vm.runInContext(`${source}\n({ changed, matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, memberStatus, sendsPicture, viewLine, tileProblem, livePlayers, ordered, extensionLine, analysisReason, recordingAnalysis, analysisState, cardParts, dropPos, dropSlot, boardSpan, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, talking, stillTalking, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ changed, matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, memberStatus, sendsPicture, viewLine, tileProblem, livePlayers, ordered, extensionLine, analysisReason, recordingAnalysis, analysisState, cardParts, dropPos, dropSlot, boardSpan, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, talking, stillTalking, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 test("a changed() check against a tile's own store reports again on a rebuilt tile", () => {
   const first = {};
   assert.equal(ui$.changed("what", [1], first), true);
@@ -115,6 +115,20 @@ test("the two delete confirmations read the same in both languages", () => {
     assert.equal(ui$.t(text), ja);
     ui$.setLanguage("en");
   }
+});
+
+test("a party state moves the player only when it differs, quietly on joining, and never by a repeat of what was applied", () => {
+  const here = { base: 1e6, now: 50e6, rate: 1, m: 30, playing: true, quiet: false };
+  const p = { seq: 4, stamp: 9, origin: "b", wall_us: 11e6, at_us: 50e6, playing: true };
+  assert.deepEqual(plain(ui$.partyMove(p, here)), { cmd: "seek", m: 10, quiet: false });
+  assert.deepEqual(plain(ui$.partyMove(p, { ...here, quiet: true })), { cmd: "seek", m: 10, quiet: true });
+  assert.deepEqual(plain(ui$.partyMove({ ...p, playing: false }, here)), { cmd: "pause", m: 10, quiet: false });
+  assert.deepEqual(plain(ui$.partyMove({ ...p, wall_us: 31.5e6 }, here)), { m: 30.5, quiet: true });
+  assert.equal(ui$.partyMove({ ...p, wall_us: 31.5e6 }, { ...here, quiet: true }), null);
+  assert.deepEqual(plain(ui$.partyMove({ ...p, at_us: 40e6 }, here)), { cmd: "seek", m: 20, quiet: false });
+  assert.equal(ui$.sameParty(p, { ...p }), true);
+  assert.equal(ui$.sameParty({ ...p, seq: 0, stamp: -5 }, p), false);
+  assert.equal(ui$.sameParty(p, null), false);
 });
 
 test("receiving speed and the live edge", () => {

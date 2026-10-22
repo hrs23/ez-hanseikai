@@ -1,6 +1,7 @@
 const LIVE_EDGE_S = 3;
 const RATE_WINDOW_MS = 10000;
 const RATE_MIN_MS = 1500;
+const JUMP_MIN = 1;
 
 function ordered(present, saved) {
   const keep = (saved || []).filter((k) => present.includes(k));
@@ -57,4 +58,13 @@ function rateOf(samples, now) {
   const first = recent[0], last = recent[recent.length - 1];
   if (last.t - first.t < RATE_MIN_MS) return null;
   return Math.max(0, ((last.have - first.have) * 1000) / (last.t - first.t));
+}
+
+const sameParty = (a, b) => !!b && a.seq === b.seq && a.stamp === b.stamp && a.origin === b.origin;
+
+function partyMove(p, here) {
+  const m = Math.max(0, (p.wall_us - here.base) / 1e6 + (p.playing ? ((here.now - p.at_us) / 1e6) * here.rate : 0));
+  if (p.playing !== here.playing) return { cmd: p.playing ? "play" : "pause", m, quiet: here.quiet };
+  if (Math.abs(m - here.m) > JUMP_MIN) return { cmd: "seek", m, quiet: here.quiet };
+  return here.quiet ? null : { m, quiet: true };
 }

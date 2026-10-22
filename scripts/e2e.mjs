@@ -1391,6 +1391,39 @@ async function library(ctx) {
     await waitFor("A receives B's stroke", seconds, async () => (await evaluate(a, "window.e2eDraw"))?.from === b.id);
   });
 
+  await step("leaving and joining the Watch Party, going to Live and back, and the starter leaving keep everyone's place", async () => {
+    const all = [a, b, c];
+    const at = (app) => evaluate(app, `({ set: selected, playing: clock.playing, m: nowM(), layout: [play.mode, play.keys.join()] })`);
+    await evaluate(a, `act("seek", ${SEEK_TO_S}); act("play", ${SEEK_TO_S}); true`);
+    await follow(ctx, a, [b, c], true, "nowM()");
+    const shown = await at(c);
+    await evaluate(c, `setParty(false); true`);
+    await waitFor("C leaves the party", within(UI_REFRESH_S * 3), async () => !(await state(c)).party.on);
+    await sleep(UI_REFRESH_S * 1000);
+    const left = await at(c);
+    check(left.set === ctx.set && left.playing && left.m >= shown.m && left.layout.join() === shown.layout.join(), `leaving moved C: ${brief([shown, left])}`);
+    const paused = await evaluate(c, `act("pause", nowM()); nowM()`);
+    await evaluate(c, `openLive(); true`);
+    await evaluate(c, `openSession(${JSON.stringify(ctx.set)}); true`);
+    const back = await at(c);
+    check(back.set === ctx.set && !back.playing && Math.abs(back.m - paused) < JUMP_MIN_S, `C came back to another place: ${brief([paused, back])}`);
+    const before = await Promise.all([a, b].map(at));
+    await evaluate(c, `setParty(true); true`);
+    await follow(ctx, a, [c], true, "nowM()");
+    const after = await Promise.all([a, b].map(at));
+    check(after.every((x, i) => x.playing && x.m >= before[i].m), `C joining late moved the others: ${brief([before, after])}`);
+    await evaluate(a, `setParty(false); true`);
+    await sleep(UI_REFRESH_S * 2000);
+    const going = await Promise.all([b, c].map(at));
+    check(going.every((x) => x.playing && x.m >= after[0].m), `the party stopped when A left: ${brief(going)}`);
+    await evaluate(a, `setParty(true); true`);
+    await waitFor("A takes the running party again", within(PARTY_REPEAT_S + UI_REFRESH_S * 2), async () => (await state(a)).party.shared.seq > 0);
+    await follow(ctx, a, [b, c], true, "nowM()");
+    const clocks = await Promise.all(all.map((app) => evaluate(app, "nowM()")));
+    check(Math.max(...clocks) - Math.min(...clocks) < JUMP_MIN_S && Math.min(...clocks) >= SEEK_TO_S, `clocks after the rejoins: ${brief(clocks)}`);
+    await evaluate(a, `act("pause", nowM()); true`);
+  });
+
   await step("a far seek and an immediate Play start every tile at once, alone and in Watch Party", async () => {
     const far = Math.max(0, ctx.durationS - FAR_FROM_END_S);
     await Promise.all([a, b, c].map((app) => evaluate(app, `openSession(${JSON.stringify(ctx.set)}); true`)));

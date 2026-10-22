@@ -100,10 +100,10 @@ impl Party {
         let mut shared = msg["shared"].clone();
         let heads = heads_of(&msg["heads"]);
         self.viewers.insert(from.to_string(), Viewer { set: shared["set"].clone(), heads: heads.clone(), typing: msg["typing"] == true, seen: now });
+        self.lamport = self.lamport.max(key(&shared).0);
         if !self.on {
             return false;
         }
-        self.lamport = self.lamport.max(key(&shared).0);
         self.absorb(&heads, now);
         if !self.shared["set"].is_string() || shared["set"] != self.shared["set"] || key(&shared) <= key(&self.shared) {
             return false;
@@ -370,6 +370,74 @@ mod tests {
         assert!(a.watching("a", Instant::now() + SEEN).get("s9").is_none());
         a.turn(false, "a", &Value::Null, "r", 2_000);
         assert_eq!(a.watching("a", Instant::now()).get("s1"), Some(&ids(&["b", "c"])));
+    }
+
+    #[test]
+    fn a_late_or_restarted_joiner_never_moves_the_party_back() {
+        let (mut a, mut b) = (party("a"), party("b"));
+        a.act("a", &view("s1", 900), 5_000);
+        b.receive("a", &msg(&mut a), 0, "r", Instant::now());
+        let mut restarted = Party::default();
+        restarted.turn(true, "c", &view("s1", 0), "r", 9_000);
+        for p in [&mut a, &mut b] {
+            assert!(!p.receive("c", &msg(&mut restarted), 0, "r", Instant::now()));
+            assert_eq!(p.shared["wall_us"], 900);
+        }
+        assert!(restarted.receive("a", &msg(&mut a), 0, "r", Instant::now()));
+        assert_eq!(restarted.shared["wall_us"], 900);
+    }
+
+    #[test]
+    fn leaving_moves_nobody_and_the_party_goes_on_without_the_one_who_started_it() {
+        let (mut a, mut b, mut c) = (party("a"), party("b"), party("c"));
+        a.act("a", &view("s1", 300), 2_000);
+        b.receive("a", &msg(&mut a), 0, "r", Instant::now());
+        c.receive("a", &msg(&mut a), 0, "r", Instant::now());
+        a.turn(false, "a", &view("s1", 400), "r", 3_000);
+        assert_eq!(a.shared["wall_us"], 300);
+        assert!(!a.due(&Heads::new(), Instant::now()));
+        b.act("b", &view("s1", 500), 4_000);
+        assert!(c.receive("b", &msg(&mut b), 0, "r", Instant::now()));
+        assert_eq!(c.shared["wall_us"], 500);
+    }
+
+    #[test]
+    fn a_stale_state_from_a_reconnecting_member_is_ignored() {
+        let (mut a, mut b) = (party("a"), party("b"));
+        b.act("b", &view("s1", 100), 1_000);
+        let old = msg(&mut b);
+        a.receive("b", &old, 0, "r", Instant::now());
+        a.act("a", &view("s1", 800), 2_000);
+        assert!(!a.receive("b", &old, 0, "r", Instant::now()));
+        assert_eq!(a.shared["wall_us"], 800);
+        assert!(b.receive("a", &msg(&mut a), 0, "r", Instant::now()));
+        assert_eq!(b.shared["wall_us"], 800);
+    }
+
+    #[test]
+    fn the_first_action_after_joining_wins_over_the_state_heard_before() {
+        let mut a = party("a");
+        for wall in [100, 200, 300] {
+            a.act("a", &view("s1", wall), wall);
+        }
+        let mut c = Party::default();
+        c.receive("a", &msg(&mut a), 0, "r", Instant::now());
+        c.turn(true, "c", &view("s1", 0), "r", 400);
+        c.act("c", &view("s1", 700), 500);
+        assert!(a.receive("c", &msg(&mut c), 0, "r", Instant::now()));
+        assert_eq!(a.shared["wall_us"], 700);
+    }
+
+    #[test]
+    fn opening_another_recording_takes_its_party_even_with_a_lower_count() {
+        let (mut a, mut b) = (party("a"), party("b"));
+        b.act("b", &view("s2", 250), 1_000);
+        for wall in [10, 20, 30, 40] {
+            a.act("a", &view("s1", wall), wall);
+        }
+        a.turn(true, "a", &view("s2", 0), "r", 2_000);
+        assert!(a.receive("b", &msg(&mut b), 0, "r", Instant::now()));
+        assert_eq!(a.shared["wall_us"], 250);
     }
 
     fn ids(list: &[&str]) -> Vec<String> {
