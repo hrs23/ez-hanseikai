@@ -42,19 +42,36 @@ function pairs(p) {
 }
 
 function storedStrokes(set, m) {
-  if (!set || clock.playing) return [];
+  if (!set) return [];
   if (ink.cleared && ink.cleared.set === set.id && Math.abs(ink.cleared.m - m) <= JUMP_MIN) return [];
   const sids = new Set();
   const out = [];
   for (const e of st.events) {
     if (e.kind !== "drawing" || e.set !== set.id || e.local_us === null || !e.values) continue;
-    const at = (e.local_us - set.start_us) / 1e6;
-    if (Math.abs(at - m) > JUMP_MIN) continue;
+    const alpha = strokeAlpha((e.local_us - set.start_us) / 1e6, m, clock.playing, calmMotion());
+    if (!alpha) continue;
     sids.add(e.values.sid);
-    out.push({ member: e.values.member, tool: e.values.tool, points: e.values.points || [], color: colorIndex(e.author) });
+    out.push({ member: e.values.member, tool: e.values.tool, points: e.values.points || [], color: colorIndex(e.author), alpha, sid: e.values.sid });
   }
   for (const [key, s] of ink.live) if (s.done && sids.has(s.id)) ink.live.delete(key);
   return out;
+}
+
+const calmMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+function inkTick(m) {
+  if (!clock.playing) { ink.seen = ""; return; }
+  const set = playSet();
+  const calm = calmMotion();
+  let seen = "";
+  if (set) for (const e of st.events) {
+    if (e.kind !== "drawing" || e.set !== set.id || e.local_us === null || !e.values) continue;
+    const alpha = strokeAlpha((e.local_us - set.start_us) / 1e6, m, true, calm);
+    if (alpha) seen += `${e.values.sid}:${alpha}|`;
+  }
+  if (seen === ink.seen) return;
+  ink.seen = seen;
+  renderInk();
 }
 
 function colorIndex(id) {
@@ -82,6 +99,7 @@ function renderInk() {
     tl.ink.replaceChildren(...mine.flatMap((s) => {
       const shapes = strokeShapes(s, r.w / Math.max(1, r.h));
       if (s.tool === "laser" && s !== drawing) for (const shape of shapes) shape.style.opacity = Math.max(0, 1 - (now - s.at) / LASER_MS);
+      else if (s.alpha < 1) for (const shape of shapes) shape.style.opacity = s.alpha;
       return shapes;
     }));
   }

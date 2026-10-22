@@ -84,6 +84,7 @@ input.switch:checked::after { left: 16px; background: var(--white); }
 .seg > button.on { background: var(--raised-2); color: var(--text); }
 .seg > button.ic { width: 28px; padding: 0; }
 .seg > button.ic.on { color: var(--accent); }
+#tool.on { background: var(--accent); color: var(--on-accent); }
 .seg.full { display: flex; width: 100%; }
 .seg.full > button { flex: 1; max-width: none; }
 .pill { display: inline-flex; align-items: center; gap: var(--s1); height: 22px; padding: 0 var(--s2); border-radius: var(--r-full); font-size: var(--t-sm); font-weight: var(--w-semibold); white-space: nowrap; flex: none; }

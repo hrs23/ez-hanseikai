@@ -636,6 +636,7 @@ function renderViews() {
 }
 function cycleTool() {
   ink.tool = nextInkTool(ink.tool);
+  osd(t(INK_TOOL_NAME[ink.tool || "off"]));
   renderTools();
 }
 function renderTools() {
@@ -720,6 +721,7 @@ function tick() {
   const b = base(list);
   const away = page !== "player";
   const wall = b + m * 1e6;
+  if (page === "player") inkTick(m);
   if (set) positions.set(set.id, wall);
   const pinned = livePinned();
   const todo = [];

@@ -167,6 +167,7 @@ const INK_TOOL_TITLE = {
   laser: "Laser (P): a pointer that fades and works while playing; press again to stop drawing",
   off: "Drawing off (P): press to draw with the Pen",
 };
+const INK_TOOL_NAME = { pen: "Pen", laser: "Laser", off: "Drawing off" };
 const nextInkTool = (tool) => INK_TOOLS[(INK_TOOLS.indexOf(tool) + 1) % INK_TOOLS.length];
 const POP_GAP = 4;
 const POP_EDGE = 8;
@@ -193,4 +194,13 @@ if (typeof addEventListener !== "undefined") {
   const placeOpen = () => document.querySelectorAll("[popover]:not([hidden])").forEach((box) => box.anchor && placePopup(box));
   addEventListener("resize", placeOpen);
   addEventListener("scroll", placeOpen, true);
+}
+
+const STROKE_PLAY_S = 2;
+const STROKE_FADE_S = 0.5;
+function strokeAlpha(at, m, playing, calm) {
+  if (!playing) return Math.abs(at - m) <= JUMP_MIN ? 1 : 0;
+  const age = m - at;
+  if (age < 0 || age >= STROKE_PLAY_S) return 0;
+  return calm ? 1 : Math.min(1, (STROKE_PLAY_S - age) / STROKE_FADE_S);
 }
