@@ -771,14 +771,13 @@ pub fn unused_set(logs: &[Log], room_dir: &Path, start_us: i64, tz_offset_s: i64
     (0..).map(|i| set_id_for(start_us + i * 1_000_000, tz_offset_s)).find(|id| !taken.contains(id.as_str()) && !recording_dir(room_dir, id).exists()).unwrap_or_default()
 }
 
-pub fn start_set(core: &Arc<Core>, debrief: Option<bool>) -> Result<(), String> {
+pub fn start_set(core: &Arc<Core>) -> Result<(), String> {
     let room = core.joined_room()?;
     let start_us = now_us();
     let set = unused_set(&logs(core, &room), &core.room_dir(&room), start_us, core.tz_offset_s);
     let by = core.name.lock().unwrap().clone();
-    let open = core.party.lock().unwrap().open_set();
-    let voice = debrief.unwrap_or(open.is_some());
-    let of = open.filter(|_| voice);
+    let of = core.party.lock().unwrap().open_set();
+    let voice = of.is_some();
     if !begin_set(core, &room, &set, &by, start_us, voice, of.clone())? {
         return Ok(());
     }

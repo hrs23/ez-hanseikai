@@ -83,5 +83,3 @@ async function summarizeDebrief(id) {
   if (!info.on) { flash(t("Turn on the local API")); return; }
   navigator.clipboard.writeText(aiPrompt(aiDebrief(), info, st.room, id)).then(() => flash(t("Prompt copied"))).catch(fail);
 }
-
-const newestRecording = () => { const s = st.sets.find((x) => !x.live); return s ? s.id : null; };

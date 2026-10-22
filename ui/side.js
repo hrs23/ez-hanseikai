@@ -38,7 +38,6 @@ function renderNav() {
   }
   $("askcount").hidden = !st.asks.length;
   $("askcount").textContent = String(st.asks.length);
-  for (const b of document.querySelectorAll(".apibadge")) b.hidden = !st.api.on;
 }
 function setSideWidth(px, keep = true) {
   sideWidth = clampSide(px);
@@ -70,6 +69,7 @@ function roomMenu(anchor) {
   openMenu([
     { label: t("Room settings…"), icon: "gear", run: openRoomSettings },
     { label: t("Copy invite code"), icon: "user-plus", run: copyInvite },
+    { label: t("AI"), icon: "bot", more: true, run: (b) => openAiMenu(b, page === "player" ? selected : null) },
     ...(st.invites ? [{ label: t("Cancel invite"), icon: "x", run: cancelInvite }] : []),
     { separator: true },
     { label: t("Leave room"), icon: "logout", run: leaveRoom },
@@ -84,11 +84,6 @@ function tickSide() {
   const a = st.active_set;
   const timer = $("livetimer");
   if (a && timer) timer.textContent = fmt((nowUs() - a.start_us) / 1e6);
-  if (page === "player") {
-    if (a && a.voice) $("reviewrec").replaceChildren(el("i", { className: "recdot" }), t("Recording {time}", { time: fmt((nowUs() - a.start_us) / 1e6) }));
-    const chip = $("pchips").querySelector(".pill.rec");
-    if (chip && a && playSet() && playSet().live) chip.lastChild.textContent = t("Recording {time}", { time: fmt((nowUs() - a.start_us) / 1e6) });
-  }
 }
 
 function memberDot(id) {
@@ -111,19 +106,12 @@ function renderFaces() {
 }
 
 function renderStartButton() {
-  const state = st.active_set ? "end" : "start";
-  const online = 1 + st.peers.filter((p) => p.connected).length;
-  if (!changed("startbtn", [state, lang, online])) return;
+  const state = st.active_set ? "end" : reviewing() ? "debrief" : "start";
+  if (!changed("startbtn", [state, lang])) return;
   const b = $("startbtn");
   b.className = "startbtn";
-  $("startmore").hidden = state === "end";
-  $("standby").hidden = state === "end";
-  $("standby").replaceChildren(icon("radio", "sm"), el("span", { textContent: `${t("Standby")} · ${t("{n} online", { n: online })}` }));
   if (state === "end") b.replaceChildren(el("i", { className: "recdot" }), el("span", { textContent: t("Stop recording") }), el("span", { className: "timer", id: "livetimer", textContent: fmt((nowUs() - st.active_set.start_us) / 1e6) }));
-  else b.replaceChildren(el("i", { className: "rd" }), el("span", { textContent: t("Start recording") }));
-}
-function startMenu(anchor) {
-  openMenu([{ label: t("Record debrief"), icon: "mic", run: () => toggleRecording("debrief") }], anchor);
+  else b.replaceChildren(el("i", { className: "rd" }), el("span", { textContent: state === "debrief" ? t("Record debrief") : t("Start recording") }));
 }
 
 function noteCount(s) {
@@ -242,6 +230,7 @@ function renderDock() {
     $("netbadge").hidden = !relay;
     $("netbadge").replaceChildren(icon("relay", "sm"), t("Via relay"));
   }
+  $("apibadge").hidden = !st.api.on;
 }
 
 async function stopScreen() {
@@ -323,8 +312,6 @@ listenMain("levels", (e) => {
 $("roomname").onclick = (e) => roomMenu(e.currentTarget);
 for (const b of document.querySelectorAll("[data-nav]")) b.onclick = () => navigate(b.dataset.nav);
 $("startbtn").onclick = () => toggleRecording();
-$("startmore").onclick = () => startMenu($("startbtn").parentElement);
-$("standby").onclick = openLive;
 $("splitter").onpointerdown = dragSide;
 $("splitter").ondblclick = () => setSideWidth(SIDE_DEFAULT);
 $("splitter").onkeydown = (e) => {
@@ -341,4 +328,5 @@ $("screenmore").onclick = (e) => openSource(e.currentTarget);
 $("micbtn").onclick = () => run("set_mix", { kind: "mic", volume: st.capture.mix.mic.volume, muted: !st.capture.mix.mic.muted });
 $("micmore").onclick = (e) => openMic(e.currentTarget);
 $("netbadge").onclick = () => openDiagnostics();
+$("apibadge").onclick = () => openSettings("api");
 $("gear").onclick = () => openSettings();

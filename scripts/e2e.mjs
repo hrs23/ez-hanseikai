@@ -783,7 +783,7 @@ async function live(ctx) {
   });
 
   await step("while recording the start box says Stop recording with the time and the list gets the running recording", async () => {
-    check(await evaluate(a, `$("startbtn").textContent.includes(t("Stop recording")) && !!$("startbtn").querySelector("#livetimer") && !!$("startbtn").querySelector(".recdot") && $("standby").hidden && !!$("sessions").querySelector(".liverow .thumb.live")`), "the start box or the running recording's row is wrong");
+    check(await evaluate(a, `$("startbtn").textContent.includes(t("Stop recording")) && !!$("startbtn").querySelector("#livetimer") && !!$("startbtn").querySelector(".recdot") && !!$("sessions").querySelector(".liverow .thumb.live")`), "the start box or the running recording's row is wrong");
   });
 
   await step("Live shows a tile for everyone who shares a screen, also while recording", async () => {
@@ -793,7 +793,7 @@ async function live(ctx) {
     }
     check(await evaluate(a, `$("miccap").classList.contains("off") && $("screencap").classList.contains("on") && getComputedStyle($("miccap")).borderTopStyle === "dashed" && !!$("miclvl")`), "the bottom-left buttons are not in the shared off/recording states");
     await screenshot(a, "live-recording");
-    await waitFor("A marks only Live, not the running recording, and shows the elapsed time and the free space", within(UI_REFRESH_S * 3), () => evaluate(a, `!$("sessions").querySelector(".liverow.on") && $("sidenav").querySelector("[aria-current=page]").dataset.nav === "live" && /^\\d+:\\d\\d · Free /.test($("psub").textContent)`));
+    await waitFor("A marks only Live, not the running recording", within(UI_REFRESH_S * 3), () => evaluate(a, `!$("sessions").querySelector(".liverow.on") && $("sidenav").querySelector("[aria-current=page]").dataset.nav === "live"`));
     await evaluate(a, `$("sessions").querySelector(".liverow").click(); true`);
     await waitFor("A marks only the running recording after opening it", within(UI_REFRESH_S * 3), () => evaluate(a, `!!$("sessions").querySelector(".liverow.on") && !$("sidenav").querySelector("[aria-current=page]")`));
     await evaluate(a, `openLive(); true`);
@@ -1184,7 +1184,7 @@ async function library(ctx) {
     check(file[0] === 0xff && file[1] === 0xd8 && file.length > 500, "the thumbnail file is not a JPEG");
     await waitFor("A's sidebar lists every recording with a thumbnail", within(UI_REFRESH_S * 5), () => evaluate(a, `!!$("sessions").querySelector(".srow:not(.liverow) .thumb img") && !$("recsopen") && $("sessions").querySelectorAll(".srow:not(.liverow)").length === recordingRows().length`));
     await evaluate(a, `$("sidenav").querySelector("[data-nav=members]").click(); true`);
-    await waitFor("A shows the members", within(UI_REFRESH_S * 3), () => evaluate(a, `$("homename").textContent === t("Members") && navActive() === "members"`));
+    await waitFor("A shows the members", within(UI_REFRESH_S * 3), () => evaluate(a, `navActive() === "members" && !$("roomtab").hidden`));
     await screenshot(a, "room-members");
   });
 
@@ -1241,7 +1241,7 @@ async function library(ctx) {
     for (const app of [a, b, c]) await waitFor(`${app.key} sees A as the runner`, within(LOG_SYNC_S * 3), async () => (await invoke(app, "room_plugins")).find((x) => x.id === PLUGIN).runner === a.id);
   });
 
-  await step("the room header menu lists the room commands and a rename in its settings reaches everyone", async () => {
+  await step("the room menu lists the room commands and a rename in its settings reaches everyone", async () => {
     await evaluate(a, `$("sidenav").querySelector("[data-nav=board]").click(); true`);
     await waitFor("A shows the game plan in the main area", within(UI_REFRESH_S * 3), () => evaluate(a, `!$("boardpane").hidden && !$("roompage").hidden && navActive() === "board"`));
     for (const [by, name] of [[b, "Drill room"], [a, "Practice"]]) {
@@ -1251,7 +1251,7 @@ async function library(ctx) {
     await waitFor("the sidebar header shows the room name as a menu", within(UI_REFRESH_S * 5), () => evaluate(a, `$("roomname").querySelector(".nm").textContent === "Practice" && $("roomname").getAttribute("aria-haspopup") === "menu"`));
     await evaluate(a, `$("roomname").click(); true`);
     const labels = await evaluate(a, `[...$("menu").querySelectorAll("button")].map((b) => b.textContent)`);
-    check(labels.filter((l) => l !== "Cancel invite").join() === ["Room settings…", "Copy invite code", "Leave room"].join(), `the room menu lists ${labels}`);
+    check(labels.filter((l) => l !== "Cancel invite").join() === ["Room settings…", "Copy invite code", "AI", "Leave room"].join(), `the room menu lists ${labels}`);
     await evaluate(a, `[...$("menu").querySelectorAll("button")].find((b) => b.textContent === t("Room settings…")).click(); true`);
     await waitFor("A shows the room settings", within(UI_REFRESH_S * 3), () => evaluate(a, `$("roomdlg").open && $("roomnameinput").value === "Practice" && $("roomsave").disabled`));
     await screenshot(a, "room-settings");
@@ -1334,9 +1334,9 @@ async function library(ctx) {
     check(await evaluate(a, `(() => { const e = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 60, clientY: 60 }); document.body.dispatchEvent(e); return e.defaultPrevented && $("menu").hidden; })()`), "the browser's context menu is not blocked");
     await evaluate(a, `openSettings("general"); true`);
     check(await evaluate(a, `(() => { $("name").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 300, clientY: 300 })); const labels = [...$("menu").querySelectorAll("button")].map((b) => b.textContent).join(); closeMenu(); $("settings").close(); return labels === [t("Cut"), t("Copy"), t("Paste"), t("Select all")].join(); })()`), "a text field has no edit menu");
-    check(await evaluate(a, `!$("sessions").querySelector(".liverow") && !$("standby").hidden && $("standby").textContent.includes(t("Standby"))`), "the idle list holds a live entry or the start box lacks Standby");
+    check(await evaluate(a, `!$("sessions").querySelector(".liverow") && $("startbtn").textContent === t("Start recording")`), "the idle list holds a live entry or the start box does not offer Start recording");
     await evaluate(a, `openLive(); true`);
-    await waitFor("A shows the live tiles while idle", within(UI_REFRESH_S * 10), () => evaluate(a, `!$("livetiles").hidden && Object.keys(rec.tiles).length === 3 && navActive() === "live" && $("psub").textContent.startsWith("Free ")`));
+    await waitFor("A shows the live tiles while idle", within(UI_REFRESH_S * 10), () => evaluate(a, `!$("livetiles").hidden && Object.keys(rec.tiles).length === 3 && navActive() === "live"`));
     await screenshot(a, "live-idle");
     const ownText = `(() => { const tl = rec.tiles[st.id]; return tl ? tl.what.textContent + "|" + tl.problem.textContent : null; })()`;
     const before = await evaluate(a, ownText);
@@ -1511,18 +1511,12 @@ async function library(ctx) {
   await step("a session started while watching together records voices and the Watch Party", async () => {
     const all = [a, b, c];
     await allSee(all, "watching the set together", within(PARTY_REPEAT_S + UI_REFRESH_S * 2), (st) => st.party.on && st.party.shared.set === ctx.set);
-    check(await evaluate(a, `$("startbtn").textContent === t("Start recording")`), "A's start button changed while watching together");
-    await evaluate(a, `openSession(${JSON.stringify(ctx.set)}); true`);
-    check(await evaluate(a, `!$("debrief").hidden && $("debrief").title === t("Record debrief")`), "the player does not offer to record a debrief");
-    await evaluate(a, `go("room"); true`);
-    await evaluate(a, `$("startmore").click(); true`);
-    check(await evaluate(a, `[...$("menu").querySelectorAll("button")].map((b) => b.textContent).join() === t("Record debrief")`), "the record menu does not offer the debrief");
-    await evaluate(a, `closeMenu(); true`);
+    await waitFor("A's start button offers the debrief while watching together", within(UI_REFRESH_S * 3), () => evaluate(a, `$("startbtn").textContent === t("Record debrief")`));
     for (const app of [b, c]) await evaluate(app, `window.e2eNotes = []; window.__TAURI__.event.listen("session", (e) => e2eNotes.push(sessionNotice(e.payload.action, e.payload.by))).then(() => true)`);
-    await pressAndConfirm(a, "toggleRecording('debrief')", false);
+    await pressAndConfirm(a, "toggleRecording()", false);
     await sleep(UI_REFRESH_S * 1000);
     check(!(await state(a)).active_set, "A started recording although it answered No");
-    const asked = await pressAndConfirm(a, "toggleRecording('debrief')");
+    const asked = await pressAndConfirm(a, "toggleRecording()");
     check(asked === "Record the debrief for everyone?", `A was asked "${asked}"`);
     await waitFor("B is told who started", within(LOG_SYNC_S * 2), () => evaluate(b, `e2eNotes.includes(${JSON.stringify(a.name + " started recording")})`));
     ctx.review = (await state(a)).active_set.id;
@@ -1615,20 +1609,20 @@ async function library(ctx) {
     check((await api(a, "GET", `${room}/board`, { token })).json.text === board, "the game plan reads back differently");
     await waitFor("A has the game plan as its team card", within(UI_REFRESH_S * 5), () => evaluate(a, `st.board.find((c) => c.card === "team").text === ${JSON.stringify(board)}`));
     await evaluate(a, `$("settings").close(); go("room"); true`);
-    await waitFor("A shows the API badge beside the AI button, not with the faces", within(UI_REFRESH_S * 5), () => evaluate(a, `(() => { const b = document.querySelector("#roompage .apibadge"); return !b.hidden && b.nextElementSibling === $("aibtn") && !$("roomfaces").parentElement.querySelector(".apibadge"); })()`));
-    await evaluate(a, `document.querySelector("#roompage .apibadge").click(); true`);
+    await waitFor("A shows the API badge once, beside the connection badge", within(UI_REFRESH_S * 5), () => evaluate(a, `!$("apibadge").hidden && $("apibadge").nextElementSibling === $("netbadge") && document.querySelectorAll(".apibadge").length === 1`));
+    await evaluate(a, `$("apibadge").click(); true`);
     check(await evaluate(a, `$("settings").open && settingsPane === "api" && !$("settings").querySelector('section[data-pane="api"]').hidden`), "the badge does not open Settings > API");
     await waitFor("A lists the endpoints", within(UI_REFRESH_S * 5), () => evaluate(a, `$("apiref").querySelectorAll("details").length >= 15 && $("apiref").textContent.includes("/v1/status") && $("apiref").querySelector("pre") !== null`));
     await evaluate(a, `$("settings").close(); go("room"); true`);
-    await evaluate(a, `$("aibtn").click(); true`);
-    await waitFor("A opens the AI menu", within(UI_REFRESH_S * 5), () => evaluate(a, `!$("menu").hidden && $("menu").querySelectorAll("button").length === 3`));
+    await evaluate(a, `roomMenu($("roomname")); [...$("menu").querySelectorAll("button")].find((b) => b.textContent === t("AI")).click(); true`);
+    await waitFor("A opens the AI menu from the room menu", within(UI_REFRESH_S * 5), () => evaluate(a, `!$("menu").hidden && $("menu").querySelectorAll("button").length === 3`));
     await evaluate(a, `$("menu").querySelector("button").click(); true`);
     await waitFor("A shows the prompt before copying", within(UI_REFRESH_S * 5), () => evaluate(a, `$("promptdlg").open && !$("prompttext").readOnly && $("prompttext").value.includes("llms.txt")`));
     check(await evaluate(a, `(() => { const v = $("prompttext").value; return !v.includes(promptToken) && v.includes("Token: ••••••••") && aiCopyText(v, promptToken).includes("Token: " + promptToken) && v.startsWith(promptPurpose.task + "\\n\\n"); })()`), "the prompt box is one text with the masked token and the task first");
     await screenshot(a, "ai-prompt");
     await evaluate(a, `$("promptdlg").close(); true`);
-    const prompt = await evaluate(a, `closeMenu(), invoke("api_info").then((i) => aiPrompt(aiPurposes()[0], i, st.room, newestRecording()))`);
-    for (const part of [token, `http://127.0.0.1:${API_PORTS.a}/llms.txt`, ctx.room, ctx.review]) check(prompt.includes(part), `the prompt lacks ${part === token ? "the token" : part}`);
+    const prompt = await evaluate(a, `closeMenu(), invoke("api_info").then((i) => aiPrompt(aiPurposes()[0], i, st.room, null))`);
+    for (const part of [token, `http://127.0.0.1:${API_PORTS.a}/llms.txt`, ctx.room, "the newest one"]) check(prompt.includes(part), `the prompt lacks ${part === token ? "the token" : part}`);
     await evaluate(a, `openSettings("api"); true`);
     await pressAndConfirm(a, `$("apinew").click()`);
     const fresh = await waitFor("A has a new token", within(UI_REFRESH_S * 5), () => {

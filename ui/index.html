@@ -35,7 +35,7 @@
       <button data-nav="members"><span data-icon="users" data-icon-class="sm"></span><span class="nm" data-t="Members">Members</span><span id="askcount" class="badge" hidden></span></button>
       <button data-nav="extensions"><span data-icon="puzzle" data-icon-class="sm"></span><span class="nm" data-t="Extensions">Extensions</span></button>
     </nav>
-    <div class="startbox"><div class="startgroup"><button id="startbtn" class="startbtn go"></button><button id="startmore" class="startmore go" data-icon="chevron-down" data-t-label="Recording options" data-t-title="Recording options" aria-haspopup="menu"></button></div><button id="standby" class="standby"></button></div>
+    <div class="startbox"><button id="startbtn" class="startbtn go"></button></div>
     <div id="sessions" class="sessions" role="listbox" data-t-label="Recordings"></div>
     <div id="diskbanner" class="sidebanner" role="button" tabindex="0" hidden></div>
     <div class="dock">
@@ -46,6 +46,7 @@
       <div class="me">
         <span id="meav"></span>
         <span class="t"><b id="mename"></b><small id="meid"></small></span>
+        <button id="apibadge" class="apibadge" hidden data-t-title="The local API is on" data-t-label="The local API is on"><span data-icon="terminal" data-icon-class="sm"></span>API</button>
         <button id="netbadge" class="net" hidden></button>
         <button id="gear" class="icon sm" data-icon="gear" data-t-label="Settings" data-t-title="Settings (Ctrl+,)"></button>
       </div>
@@ -55,13 +56,6 @@
 
   <section class="main">
     <div id="roompage" class="page room" hidden>
-      <div class="mhead">
-        <h1 id="homename"></h1>
-        <span id="homesub" class="sub"></span>
-        <span class="sp"></span>
-        <button class="apibadge" hidden data-t-title="The local API is on" data-t-label="The local API is on"><span data-icon="terminal" data-icon-class="sm"></span>API</button>
-        <button id="aibtn" aria-haspopup="menu"><span data-icon="bot" data-icon-class="sm"></span><span data-t="AI">AI</span></button>
-      </div>
       <div id="boardpane" class="boardpane" hidden>
         <div class="bbar">
           <button id="boardadd"><span data-icon="plus" data-icon-class="sm"></span><span data-t="Add card">Add card</span></button>
@@ -82,11 +76,7 @@
         <div class="mhead">
           <h1 id="ptitle"></h1>
           <span id="pchips" class="chips"></span>
-          <span id="psub" class="sub"></span>
           <span class="sp"></span>
-          <span id="reviewrec" class="pill rec" hidden></span>
-          <button class="apibadge" hidden data-t-title="The local API is on" data-t-label="The local API is on"><span data-icon="terminal" data-icon-class="sm"></span>API</button>
-          <button id="aiplay" aria-haspopup="menu"><span data-icon="bot" data-icon-class="sm"></span><span data-t="AI">AI</span></button>
           <button id="panelbtn" class="icon" data-icon="panel" data-t-title="Side panel" data-t-label="Side panel"></button>
         </div>
         <div class="stagewrap">
@@ -99,7 +89,6 @@
                 <button data-tool="laser" class="ic" data-icon="laser" data-icon-class="sm" data-t-title="Laser" data-t-label="Laser"></button>
                 <button id="clearink" class="ic" data-icon="eraser" data-icon-class="sm" data-t-title="Clear drawing (X)" data-t-label="Clear drawing"></button>
               </div>
-              <span id="partystatus" class="chips"></span>
               <span class="sp"></span>
             </div>
             <div id="stage" class="stage">
@@ -109,7 +98,7 @@
                 <div id="overlay" class="overlay"></div>
                 <form id="quick" class="quick" hidden onsubmit="return false"><div class="q"><button type="button" id="quicktime" class="when" data-t-title="Tab"></button><input id="quicktext" autocomplete="off" data-t-placeholder="Note" data-t-label="Note"></div><div id="taghints" class="hints" hidden></div></form>
               </div>
-              <div class="corner"><div id="wpbox" class="wpbox"></div><button id="debrief" class="icon" hidden></button></div>
+              <div id="wpbox" class="corner"></div>
               <div id="osd" class="osd" hidden><span id="osdav"></span><span id="osdtext"></span></div>
             </div>
             <div id="transport" class="transport">
@@ -124,9 +113,9 @@
                 <span class="clock"><span id="clocknow"></span><span id="clocktotal"></span></span>
                 <button id="matchchip" class="chapname" hidden></button>
                 <span class="sp"></span>
+                <button id="rate" class="txt rate" data-t-title="Speed" data-t-label="Speed" aria-haspopup="menu">1×</button>
                 <button id="live" class="livebtn"></button>
                 <button id="addnote" class="txt" data-t-title="Add note (C)"><span data-icon="note" data-icon-class="sm"></span><span data-t="Note">Note</span><kbd>C</kbd></button>
-                <button id="more" class="icon" data-icon="more" data-t-title="More" data-t-label="More" aria-haspopup="menu"></button>
                 <button id="full" class="icon" data-t-title="Full screen (F)" data-t-label="Full screen"></button>
               </div>
             </div>

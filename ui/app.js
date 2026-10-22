@@ -133,7 +133,6 @@ function tile(s, key) {
       chooseSound(key);
     };
     tl.box.ondblclick = (e) => { if (!e.target.closest(".nl")) focus(); };
-    tl.lab.onclick = (e) => { e.stopPropagation(); openReceive(key, tl.lab); };
     tl.box.oncontextmenu = (e) => { e.preventDefault(); stageMenu(e, key); };
   } else {
     tl.box.onclick = (e) => { if (e.target.closest(".choose")) return; focus(); };
@@ -434,20 +433,11 @@ function mixRow(key, kind, label) {
   save();
   return el("div", { className: "poprow" }, el("span", { textContent: label }), range, mute);
 }
-function openReceive(key, anchor) {
-  showPop([el("div", { className: "head" }, avatar(key, "sm"), el("b", { textContent: nameOf(key) })), mixRow(key, "app", t("App sound")), mixRow(key, "voice", t("Voice"))], anchor, true);
-}
 function openMix(anchor) {
   const keys = play.keys;
   const heard = soundKey(play.view, keys, st.id, gameSound);
   const pick = (key) => el("button", { className: "icon sm" + (key === heard ? " on" : ""), title: t("Hear this"), ariaLabel: t("Hear this"), onclick: () => { chooseSound(key); openMix(anchor); } }, icon("volume-2", "sm"));
   showPop([el("div", { className: "head" }, el("b", { textContent: t("Volume per member") })), el("div", { className: "mixgrid" }, ...keys.map((key) => el("div", { className: "mixm" }, el("div", { className: "who" }, avatar(key, "sm"), el("span", { className: "nm", textContent: nameOf(key) }), keys.length > 1 && !play.view ? pick(key) : null), mixRow(key, "app", t("App sound")), mixRow(key, "voice", t("Voice")))))], anchor, true, keys.length > 2 ? "wide" : "");
-}
-function openMore(anchor) {
-  openMenu([
-    ...(followingLive() ? [] : [{ label: t("Speed"), right: `${rate}×`, more: true, run: speedMenu }]),
-    { label: t("Layout"), icon: "grid", more: true, run: (b) => pickLayout(current(), b) },
-  ], anchor);
 }
 function showPop(children, anchor, above, cls = "") {
   const pop = $("pop");
@@ -491,14 +481,13 @@ function renderTransport(set, idle) {
   const edge = liveEdge(total(), nowM());
   if (set && !set.live) live = false;
   for (const id of ["play", "back", "fwd", "addnote", "seek", "lane", "chapters", "matchchip"]) $(id).classList.toggle("nodisp", idle);
-  $("more").classList.toggle("nodisp", idle);
+  $("rate").hidden = idle || followingLive();
   $("transport").classList.toggle("idle", idle);
   $("clocknow").parentElement.hidden = idle;
   $("live").hidden = !liveSetShown;
   const atLive = live;
   $("live").className = "livebtn " + (atLive ? "at" : "behind");
   if (changed("livebtn", [atLive, Math.round(edge.behind), lang])) $("live").replaceChildren(el("i"), atLive ? t("Latest") : t("Jump to latest"), atLive ? "" : el("span", { className: "lagt", textContent: "−" + fmt(edge.behind) }));
-  renderDebriefButton(set);
   $("seek").classList.toggle("onlive", liveSetShown && atLive);
   $("seek").querySelector(".grow").hidden = !liveSetShown;
   const frac = set && set.progress.total ? Math.min(1, set.progress.have / set.progress.total) : 1;
@@ -506,54 +495,20 @@ function renderTransport(set, idle) {
   $("seek").querySelector(".missing").hidden = !(set && set.progress.stuck);
   $("seek").querySelector(".missing").style.left = frac * 100 + "%";
 }
-function renderDebriefButton(set) {
-  const stopping = !!(st.active_set && st.active_set.voice);
-  const shown = !!set && !set.live && (stopping || !st.active_set);
-  const b = $("debrief");
-  b.hidden = !shown;
-  if (!changed("debriefbtn", [shown, stopping, lang])) return;
-  const label = stopping ? t("Stop recording") : t("Record debrief");
-  b.title = b.ariaLabel = label;
-  b.classList.toggle("on", stopping);
-  b.replaceChildren(icon(stopping ? "stop" : "mic"));
-}
 function viewChip(set, line) {
   return el("span", { className: "pill " + (line.kind === "away" ? "warn" : "gray") }, ...lineNodes(set, line, line.kind === "receiving" ? "spinner" : line.kind === "away" ? "alert" : "download", " · "));
 }
 function headerChips(set) {
-  const a = st.active_set;
-  if (!set) return [];
-  if (set.live) {
-    const edge = liveEdge(total(), nowM());
-    return [pill("rec", "rec", t("Recording {time}", { time: fmt((nowUs() - a.start_us) / 1e6) })), live ? null : pill("gray", null, t("Playing back · {time} behind the latest", { time: fmt(edge.behind) }))];
-  }
+  if (!set || set.live) return [];
   const line = viewLine(set, viewContext());
-  return [set.imported_by ? pill("gray", "download", t("Imported by {name}", { name: set.imported_by })) : pill("gray", "film", t("Recorded")), line ? viewChip(set, line) : null];
+  return [set.imported_by ? pill("gray", "download", t("Imported by {name}", { name: set.imported_by })) : null, line ? viewChip(set, line) : null];
 }
-function headerSub(set) {
-  if (!set) return [st.active_set ? fmt((nowUs() - st.active_set.start_us) / 1e6) : null, t("Free {free}", { free: bytes(st.disk.free) })].filter(Boolean).join(" · ");
-  const matches = matchEnds(items).length;
-  if (set.live) return [t("This recording"), matchNow(nowM())].filter(Boolean).join(" · ");
-  return [setLength(set), matches ? t(matches === 1 ? "{n} match" : "{n} matches", { n: matches }) : null].filter(Boolean).join(" · ");
-}
-function fitSub() {
-  const s = $("psub");
-  s.style.visibility = "";
-  if (s.scrollWidth > s.clientWidth) s.style.visibility = "hidden";
-}
-new ResizeObserver(fitSub).observe($("playerpage"));
 function renderHeader(set) {
   const title = !set ? t("Live") : set.live ? t("Recording") : sessionName(set.id);
   $("ptitle").textContent = title;
   const chips = headerChips(set);
   const csig = chips.map((c) => c && c.outerHTML);
   if (changed("pchips", csig)) $("pchips").replaceChildren(...chips.filter(Boolean));
-  const sub = headerSub(set);
-  if ($("psub").textContent !== sub) $("psub").textContent = sub;
-  fitSub();
-  const a = st.active_set;
-  $("reviewrec").hidden = !(a && a.voice);
-  if (a && a.voice) $("reviewrec").replaceChildren(el("i", { className: "recdot" }), t("Recording {time}", { time: fmt((nowUs() - a.start_us) / 1e6) }));
   renderParty(set);
   $("panelbtn").hidden = !set;
   $("panelbtn").classList.toggle("on", panelShown());
@@ -567,10 +522,9 @@ function renderParty(set) {
   $("shared").classList.toggle("wp", !!(on && set));
   const others = set ? watchers(set.id) : [];
   const status = on ? st.party.status || [] : [];
-  if (changed("partystatus", [status, st.names, lang])) $("partystatus").replaceChildren(...status.map((s) => pill("gray", "spinner", t("Catching up with {name}", { name: nameOf(s.who) }))));
-  if (!changed("wpbox", [on, others, st.names, lang])) return;
+  if (!changed("wpbox", [on, others, status, st.names, lang])) return;
   if (on) {
-    box.replaceChildren(el("div", { className: "wpbar" }, icon("users", "sm"), el("span", { textContent: t("Watch Party") }), avatars([st.id, ...others]), el("button", { className: "sm", onclick: () => setParty(false) }, icon("logout", "sm"), t("Leave"))));
+    box.replaceChildren(el("div", { className: "wpbar" }, icon("users", "sm"), el("span", { textContent: t("Watch Party") }), ...status.map((s) => pill("gray", "spinner", t("Catching up with {name}", { name: nameOf(s.who) }))), avatars([st.id, ...others]), el("button", { className: "sm", onclick: () => setParty(false) }, icon("logout", "sm"), t("Leave"))));
   } else {
     box.replaceChildren(el("button", { className: "wpoff", onclick: () => setParty(true) }, icon("users", "sm"), el("span", { textContent: t("Watch Party") }), others.length ? avatars(others) : null, el("span", { className: "join", textContent: t("Join") })));
   }
@@ -591,7 +545,9 @@ function renderViews() {
     b.onclick = () => setView(play, i);
     return b;
   };
-  $("views").replaceChildren(button(0, t("All")), ...names.map((n, i) => button(i + 1, n)));
+  const layout = el("button", { className: "ic", title: t("Layout"), ariaLabel: t("Layout"), ariaHasPopup: "menu" }, icon("grid", "sm"));
+  layout.onclick = () => pickLayout(play, layout);
+  $("views").replaceChildren(button(0, t("All")), ...names.map((n, i) => button(i + 1, n)), layout);
 }
 function renderTools() {
   for (const b of $("tools").querySelectorAll("[data-tool]")) press(b, ink.tool === b.dataset.tool);
@@ -1391,6 +1347,7 @@ function hold(on) {
 function setRate(r) {
   anchor();
   rate = r;
+  $("rate").textContent = `${r}×`;
   applyAudio();
 }
 const changeRate = (dir) => { setRate(SPEEDS[Math.max(0, Math.min(SPEEDS.length - 1, SPEEDS.indexOf(rate) + dir))]); osd(t("Speed {rate}×", { rate })); share(); };
@@ -1423,14 +1380,15 @@ document.addEventListener("contextmenu", (e) => {
   const field = e.target.closest ? e.target.closest(EDITABLE) : null;
   if (field || String(getSelection()).length) editMenu(e, field);
 });
-async function toggleRecording(kind) {
+const reviewing = () => !!(st.party.on && st.party.shared && st.party.shared.set);
+async function toggleRecording() {
   if (!st) return;
   const ending = !!st.active_set;
-  const debrief = !ending && kind === "debrief";
+  const debrief = !ending && reviewing();
   const title = ending ? t("Stop recording for everyone?") : debrief ? t("Record the debrief for everyone?") : t("Start recording for everyone?");
   const action = ending ? t("Stop recording") : debrief ? t("Record debrief") : t("Start recording");
   if (!(await ask(title, action, ending))) return;
-  run(ending ? "stop_recording" : "start_recording", ending ? null : { debrief });
+  run(ending ? "stop_recording" : "start_recording");
 }
 const current = () => (playSet() ? play : rec);
 
@@ -1440,9 +1398,8 @@ $("back").onclick = () => jump(-STEP.normal);
 $("fwd").onclick = () => jump(STEP.normal);
 $("addnote").onclick = openQuick;
 $("live").onclick = () => { if (!playSet()) return; goLive(); share(); renderPlayer(); };
-$("more").onclick = (e) => openMore(e.currentTarget);
+$("rate").onclick = (e) => speedMenu(e.currentTarget);
 $("matchchip").onclick = (e) => matchMenu(e.currentTarget);
-$("debrief").onclick = () => toggleRecording("debrief");
 $("volume").oninput = () => setVolume(Number($("volume").value));
 $("mute").onclick = toggleMute;
 $("panelbtn").onclick = togglePanel;

@@ -97,12 +97,8 @@ function showRoomTab(tab) {
   renderRoom();
 }
 
-const ROOM_TITLES = { members: "Members", extensions: "Extensions", board: "Game plan" };
-
 function renderRoom() {
   if (page !== "room" || !inRoom()) return;
-  $("homename").textContent = t(ROOM_TITLES[roomTab]);
-  if (roomTab !== "board") $("homesub").textContent = roomTab === "members" ? t(people().length === 1 ? "{n} member" : "{n} members", { n: people().length }) : "";
   $("boardpane").hidden = roomTab !== "board";
   $("roomtab").parentElement.hidden = roomTab === "board";
   if (roomTab === "board") renderBoard();
@@ -383,9 +379,6 @@ for (const b of $("setnav").querySelectorAll("button")) b.onclick = () => { sett
 $("prompttext").oninput = () => editPrompt(false);
 $("promptreset").onclick = () => editPrompt(true);
 $("promptcopy").onclick = () => navigator.clipboard.writeText(aiCopyText($("prompttext").value, promptToken)).then(() => { $("promptdlg").close(); flash(t("Prompt copied")); }).catch(fail);
-$("aibtn").onclick = (e) => openAiMenu(e.currentTarget, newestRecording());
-$("aiplay").onclick = (e) => openAiMenu(e.currentTarget, selected);
-for (const b of document.querySelectorAll(".apibadge")) b.onclick = () => openSettings("api");
 $("apidoc").onclick = () => dialog("open_link", { url: `${apiUrl(st.api.address)}/llms.txt` }).catch(fail);
 $("apion").onchange = () => run("set_api", { on: $("apion").checked });
 $("apicopy").onclick = () => invoke("api_info").then((info) => navigator.clipboard.writeText(info.token)).then(() => flash(t("Token copied"))).catch(fail);

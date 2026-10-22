@@ -24,7 +24,7 @@ pub const OPS: &[(&str, Op)] = &[
     ("answer_ask", answer_ask),
     ("remove_peer", remove_peer),
     ("measure_speed", |c, a| tauri::async_runtime::block_on(net::measure_speed(c, &arg::<String>(&a, "id")?)).ok_or_else(|| "No answer".into())),
-    ("start_recording", |c, a| null(room::start_set(c, arg(&a, "debrief")?))),
+    ("start_recording", |c, _| null(room::start_set(c))),
     ("stop_recording", stop_recording),
     ("mark", mark),
     ("list_sources", |_, _| Ok(json!(with_sizes(sources::list(), &display_sizes())))),
