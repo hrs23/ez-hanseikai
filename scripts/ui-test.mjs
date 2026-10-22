@@ -86,16 +86,16 @@ test("shortcuts need Ctrl or Alt and read like the native menu", () => {
 });
 
 test("each global shortcut row is named and can be reset only when it differs from its default", () => {
-  const rows = ui$.hotkeyRows([{ action: "mark", keys: "Ctrl+Alt+M", default: "Ctrl+Alt+M" }, { action: "mic", keys: "Alt+F9", default: "Ctrl+Alt+N" }, { action: "screen", keys: "", default: "Ctrl+Alt+V" }]);
+  const rows = ui$.hotkeyRows([{ action: "mark", keys: "Ctrl+Alt+K", default: "Ctrl+Alt+K" }, { action: "mic", keys: "Alt+F9", default: "Ctrl+Shift+M" }, { action: "screen", keys: "", default: "Ctrl+Shift+O" }]);
   assert.deepEqual(rows.map((r) => [r.label, r.changed]), [["Mark this moment", false], ["Microphone on / off", true], ["Screen on / off", true]]);
   for (const r of rows) assert.ok(ui$.JA[r.label], r.label);
 });
 
 test("a global shortcut another app holds shows its row in a warning state and its toast names the keys and action", () => {
-  const hotkeys = [{ action: "mark", keys: "Ctrl+Alt+M", default: "Ctrl+Alt+M", taken: true }, { action: "mic", keys: "Ctrl+Alt+N", default: "Ctrl+Alt+N", taken: false }, { action: "screen", keys: "Ctrl+Alt+V", default: "Ctrl+Alt+V", taken: false }];
+  const hotkeys = [{ action: "mark", keys: "Ctrl+Alt+K", default: "Ctrl+Alt+K", taken: true }, { action: "mic", keys: "Ctrl+Shift+M", default: "Ctrl+Shift+M", taken: false }, { action: "screen", keys: "Ctrl+Shift+O", default: "Ctrl+Shift+O", taken: false }];
   assert.deepEqual(ui$.hotkeyRows(hotkeys).map((r) => r.warning), ["In use by another app", "", ""]);
   assert.ok(ui$.JA["In use by another app"]);
-  assert.equal(ui$.takenKeys(hotkeys), "Ctrl+Alt+M (Mark this moment)");
+  assert.equal(ui$.takenKeys(hotkeys), "Ctrl+Alt+K (Mark this moment)");
   assert.equal(ui$.takenKeys(hotkeys.map((h) => ({ ...h, taken: false }))), "");
 });
 
