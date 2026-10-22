@@ -705,7 +705,8 @@ async function live(ctx) {
     await waitFor("A dropped the recording", within(UI_REFRESH_S * 5), async () => !setOf(await state(a), alone));
     await evaluate(a, "openLive(); true");
     await waitFor("A is back on Live", within(UI_REFRESH_S * 5), () => onLive(a));
-    await evaluate(a, "openLive(); true");
+    await evaluate(a, "setParty(true); openLive(); true");
+    await waitFor("A is in the Watch Party", within(UI_REFRESH_S * 5), async () => (await state(a)).party.on);
     await waitFor("A shares no recording", within(UI_REFRESH_S * 5), async () => !(await state(a)).party.shared.set);
   });
 
