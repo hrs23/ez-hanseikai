@@ -83,6 +83,8 @@ const JA = {
   "An export is already running.": "エクスポートはすでに実行中です。",
   "An invite code is open": "招待コードが有効です",
   "Another app uses that shortcut.": "そのショートカットは別のアプリが使っています。",
+  "In use by another app": "別のアプリが使用中",
+  "Shortcut {keys} is used by another app": "ショートカット {keys} は別のアプリが使っています",
   "Another action uses that shortcut.": "そのショートカットは別の操作で使っています。",
   "Unknown shortcut.": "不明なショートカットです。",
   "Microphone on / off": "マイクのオン / オフ",

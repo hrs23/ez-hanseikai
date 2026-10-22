@@ -214,7 +214,7 @@ function renderHotkeys() {
   $("hotkeys").replaceChildren(...hotkeyRows(st.hotkeys).map((h) => {
     const keys = el("button", { className: "keys w240", textContent: h.keys });
     const reset = el("button", { className: "icon sm", title: t("Reset to default"), ariaLabel: t("Reset to default"), disabled: !h.changed }, icon("rotate-ccw", "sm"));
-    const err = el("span", { className: "err", hidden: true });
+    const err = el("span", { className: "err", hidden: !h.warning, textContent: t(h.warning) });
     const save = (value) => invoke("set_hotkey", { action: h.action, keys: value }).then(refresh).then(renderHotkeys).catch((e) => { keys.textContent = h.keys; err.textContent = t(String(e)); err.hidden = false; });
     keys.onclick = () => { listening = true; keys.classList.add("listening"); keys.textContent = t("Press the keys…"); };
     keys.onblur = () => { if (listening) { listening = false; keys.classList.remove("listening"); keys.textContent = h.keys; } };
@@ -231,7 +231,7 @@ function renderHotkeys() {
       save(k);
     };
     reset.onclick = () => save(h.default);
-    return el("div", { className: "srow2" }, el("span", { className: "lab", textContent: t(h.label) }), keys, reset, err);
+    return el("div", { className: "srow2" + (h.warning ? " warn" : "") }, el("span", { className: "lab", textContent: t(h.label) }), keys, reset, err);
   }));
 }
 function renderSettings() {

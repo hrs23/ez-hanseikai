@@ -16,6 +16,7 @@ use crate::{language, Core, REPO, VERSION};
 type Action = fn(&Arc<Core>) -> Option<&'static str>;
 pub const HOTKEYS: [(&str, &str, Action); 3] = [("mark", "Ctrl+Alt+M", mark), ("mic", "Ctrl+Alt+N", toggle_mic), ("screen", "Ctrl+Alt+V", toggle_screen)];
 pub type Hotkeys = [String; 3];
+pub type Taken = [bool; 3];
 const BOARD: &str = "board";
 const STATUS_POLL: Duration = Duration::from_secs(1);
 const JA: [(&str, &str); 44] = [
@@ -367,25 +368,43 @@ pub fn load_hotkeys(settings: &Value) -> Hotkeys {
     keys
 }
 
-pub fn hotkeys_json(keys: &Hotkeys) -> Value {
-    json!(HOTKEYS.iter().zip(keys).map(|((id, default, _), keys)| json!({"action": id, "keys": keys, "default": default})).collect::<Vec<_>>())
+pub fn hotkeys_json(keys: &Hotkeys, taken: &Taken) -> Value {
+    json!(HOTKEYS.iter().zip(keys).zip(taken).map(|(((id, default, _), keys), taken)| json!({"action": id, "keys": keys, "default": default, "taken": taken})).collect::<Vec<_>>())
 }
 
-fn arm_hotkeys<S: AsRef<str>>(app: &AppHandle, keys: &[S], on: bool) -> bool {
+fn arm<S: AsRef<str>>(keys: &[S], on: bool, mut register: impl FnMut(Shortcut) -> bool) -> Vec<bool> {
+    keys.iter().map(|k| on && hotkey(k.as_ref()).is_some_and(|s| !register(s))).collect()
+}
+
+fn arm_hotkeys<S: AsRef<str>>(app: &AppHandle, keys: &[S], on: bool) -> Vec<bool> {
     let shortcuts = app.global_shortcut();
     let _ = shortcuts.unregister_all();
-    !on || keys.iter().filter_map(|k| hotkey(k.as_ref())).fold(true, |ok, s| shortcuts.register(s).is_ok() && ok)
+    arm(keys, on, |s| shortcuts.register(s).is_ok())
+}
+
+fn arm_all(core: &Core, keys: &Hotkeys) {
+    let recording = core.any_recording();
+    let taken = arm_hotkeys(&core.app, keys, recording);
+    if recording {
+        for (i, t) in taken.into_iter().enumerate() {
+            if t {
+                tracing::warn!("the {} shortcut {} is used by another app", HOTKEYS[i].0, keys[i]);
+            }
+            core.hotkeys_taken.lock().unwrap()[i] = t;
+        }
+    }
 }
 
 pub fn set_hotkey(core: &Core, action: &str, text: &str) -> Result<(), String> {
     let index = HOTKEYS.iter().position(|(id, _, _)| *id == action).ok_or("Unknown shortcut.")?;
     let mut keys = core.hotkeys.lock().unwrap().clone();
     check_hotkey(&keys, index, text)?;
-    let free = arm_hotkeys(&core.app, &[text], true);
+    let free = !arm_hotkeys(&core.app, &[text], true)[0];
     if free {
         keys[index] = text.to_string();
+        core.hotkeys_taken.lock().unwrap()[index] = false;
     }
-    arm_hotkeys(&core.app, &keys, core.any_recording());
+    arm_all(core, &keys);
     if !free {
         return Err("Another app uses that shortcut.".into());
     }
@@ -580,7 +599,7 @@ pub fn setup(app: &tauri::App, core: Arc<Core>) -> tauri::Result<()> {
             let hotkeys = core.hotkeys.lock().unwrap().clone();
             if last.as_ref() != Some(&(recording, reviewing, lang.clone(), hotkeys.clone())) {
                 last = Some((recording, reviewing, lang.clone(), hotkeys.clone()));
-                arm_hotkeys(&app, &hotkeys, recording);
+                arm_all(&core, &hotkeys);
                 let items = ITEMS.lock().unwrap();
                 if let Some(toggle) = &items.toggle {
                     let _ = toggle.set_text(tr(&lang, toggle_text(recording, reviewing)));
@@ -663,6 +682,18 @@ mod tests {
         assert_eq!(check_hotkey(&keys, 1, "Shift+M"), Err("Use Ctrl or Alt with a key."));
         assert!(check_hotkey(&keys, 0, "Ctrl+Alt+M").is_ok());
         assert!(check_hotkey(&keys, 2, "Super+F9").is_ok());
+    }
+
+    #[test]
+    fn a_shortcut_another_app_holds_is_reported_only_while_armed() {
+        let keys = ["Ctrl+Alt+M", "", "Ctrl+Alt+V"];
+        let held = hotkey("Ctrl+Alt+M").unwrap();
+        assert_eq!(arm(&keys, true, |s| s != held), [true, false, false]);
+        assert_eq!(arm(&keys, true, |_| true), [false, false, false]);
+        assert_eq!(arm(&keys, false, |_| -> bool { panic!("armed while off") }), [false, false, false]);
+        let state = hotkeys_json(&load_hotkeys(&Value::Null), &[true, false, false]);
+        assert_eq!(state[0]["taken"], true);
+        assert_eq!(state[1]["taken"], false);
     }
 
     #[test]

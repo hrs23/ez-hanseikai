@@ -572,6 +572,7 @@ dialog.settings[open] { display: flex; }
 #roomfacegrid .facebtn { width: 40px; height: 40px; border-radius: var(--r-md); display: grid; place-items: center; }
 #roomfacegrid .av { width: 32px; height: 32px; }
 button.keys { justify-content: flex-start; background: var(--bg); }
+.srow2.warn button.keys { border-color: var(--warn); color: var(--warn); }
 button.keys.listening { border-color: var(--accent); color: var(--accent); }
 dl.keys { display: grid; grid-template-columns: 1fr auto; gap: var(--s2) var(--s4); margin: 0; font-size: var(--t-sm); align-items: center; }
 dl.keys dt { color: var(--soft); }
