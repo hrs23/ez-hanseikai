@@ -1679,6 +1679,16 @@ async function library(ctx) {
     check(await invoke(a, "export_folder", { room: ctx.room, set: ctx.set, folder: out.folder }, EXPORT_FOLDER_S).then(() => false, () => true), "an export into a folder that is not empty was accepted");
   });
 
+  await step("one member's light export holds only that member's files, and a per-match export of a recording without matches is refused", async () => {
+    const out = await invoke(a, "export_folder", { room: ctx.room, set: ctx.set, folder: path.join(a.data, "bundles", `${ctx.set} light`), quality: "light", member: b.id }, EXPORT_FOLDER_S);
+    const media = fs.readdirSync(out.folder).filter((f) => /\.(mp4|m4a)$/.test(f)).sort();
+    check(out.files === 1 && media.join("|") === `${b.name} voice.m4a|${b.name}.mp4`, `light export: ${brief(out)} ${brief(media)}`);
+    const decode = ffmpeg("ffmpeg", ["-v", "error", "-i", path.join(out.folder, `${b.name}.mp4`), "-f", "null", "-"]);
+    check(decode.ok && !decode.err, `the light ${b.name}.mp4 does not decode cleanly: ${decode.err.slice(0, 300)}`);
+    const folder = path.join(a.data, "bundles", `${ctx.set} matches`);
+    check(await invoke(a, "export_folder", { room: ctx.room, set: ctx.set, folder, range: "matches" }, EXPORT_FOLDER_S).then(() => false, () => true) && !fs.existsSync(folder), "a per-match export without matches was accepted");
+  });
+
   const confirmDeletion = async (app, set, form) => {
     await evaluate(app, `confirmDelete([${JSON.stringify(set)}]); true`);
     await waitFor(`${app.key} asks before deleting`, within(UI_REFRESH_S * 5), () => evaluate(app, `$("deletedlg").open`));

@@ -65,6 +65,20 @@ function deletePreview(sets) {
   }));
 }
 
+const EXPORT_RANGES = ["whole", "matches"];
+const EXPORT_QUALITIES = ["original", "standard", "light"];
+
+function exportChoice(saved, owners) {
+  const v = saved && typeof saved === "object" ? saved : {};
+  return {
+    range: EXPORT_RANGES.includes(v.range) ? v.range : "whole",
+    quality: EXPORT_QUALITIES.includes(v.quality) ? v.quality : "standard",
+    member: owners.includes(v.member) ? v.member : "",
+  };
+}
+
+const exportArgs = (choice) => ({ range: choice.range, quality: choice.quality, member: choice.member || null });
+
 function oldSessions(sets, keep = KEEP_NEWEST) {
   return sets.filter((s) => !s.live && s.progress.have > 0).slice(keep).map((s) => s.id);
 }

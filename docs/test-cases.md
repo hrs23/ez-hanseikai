@@ -127,16 +127,17 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 ## Storage and export
 
 - the set exports to a folder of plain files lined up on its start. `e2e` (`library`)
+- one member's light export holds only that member's files, and a per-match export of a recording without matches is refused. `e2e` (`library`)
 - deleting a recording others still hold takes its debrief along and keeps both as not on this PC until Download. `e2e` (`library`)
 - deleting a recording nobody else holds removes it and its entry everywhere. `e2e` (`library`)
 - a member cut off for a whole recording lists it as not on this PC and fetches it only when asked. `e2e` (`library`)
 - A folder export opens in a video editor with every file lined up on the recording start. `manual`
 - data: hours left come from the newest sessions. `unit`
-- export: one input without delay is copied and the rest is filtered; the filter places each capture on the timeline; the encode arguments map only what exists; the folder export always starts every file at the recording start; events become notes chapters and subtitles on the recording clock; the export is sized and paced by its sources; file names are safe and distinct; exported file names never meet the files beside them; notes are written as csv; webvtt is written with numbered cues; finishing replaces the destination and leaves no part. `unit`
+- export: one input without delay is copied and the rest is filtered; the filter places each capture on the timeline; the encode arguments map only what exists; the folder export always starts every file at the recording start; events become notes chapters and subtitles on the recording clock; the export is sized and paced by its sources; file names are safe and distinct; exported file names never meet the files beside them; a match takes only its segments and cuts into the first; per match files are named by match number and start and never copied; quality sets the picture size and bitrate; notes are written as csv; webvtt is written with numbered cues; finishing replaces the destination and leaves no part. `unit`
 - log: append scan and repair a torn tail; extend takes whole records at the right offset only. `unit`
 - main: the docs name every record kind and message the code writes; notes keep line breaks and tabs and drop other control and direction characters; json files may start with a byte order mark; whole writes replace the file and leave no part. `unit`
 - room: a recording is removed completely only when no other member holds a part; deleting a recording removes only its folder and thumbnail; a recording removed completely takes its results and jobs with it; deleting a recording deletes only debriefs that name it and keeps peers copies. `unit`
-- the delete preview lists every part that is here and says whether the recording goes completely; a row is on this PC or not, always shows a size, and deleting needs media here or nobody else; the two delete confirmations read the same in both languages; an imported recording is named by its title and the others by their time; the folder export is a menu action of the page. `ui-test`
+- the delete preview lists every part that is here and says whether the recording goes completely; a row is on this PC or not, always shows a size, and deleting needs media here or nobody else; the two delete confirmations read the same in both languages; an imported recording is named by its title and the others by their time; the folder export is a menu action of the page; the export options fall back to the defaults and to everyone for a member not in the recording, and send no member for everyone. `ui-test`
 
 ## Updates and migration
 

@@ -220,6 +220,13 @@
   <textarea id="prompttext" class="prompttext" spellcheck="false" data-t-label="Prompt"></textarea>
   <div class="row end"><button id="promptreset"><span data-t="Reset to default">Reset to default</span></button><button id="promptcopy" class="primary"><span data-icon="copy" data-icon-class="sm"></span><span data-t="Copy prompt">Copy prompt</span></button></div>
 </dialog>
+<dialog id="exportdlg">
+  <h2 data-t="Export to folder…">Export to folder…</h2>
+  <label class="field"><span data-t="Range">Range</span><select id="exportrange"><option value="whole" data-t="Whole recording">Whole recording</option><option value="matches" data-t="Per match">Per match</option></select></label>
+  <label class="field"><span data-t="Quality">Quality</span><select id="exportquality"><option value="original" data-t="Original">Original</option><option value="standard" data-t="Standard">Standard</option><option value="light" data-t="Light">Light</option></select></label>
+  <label class="field"><span data-t="Members">Members</span><select id="exportmember"></select></label>
+  <div class="row end"><button id="exportno" data-t="Cancel">Cancel</button><button id="exportyes" class="primary" data-t="Choose folder…">Choose folder…</button></div>
+</dialog>
 <dialog id="confirm">
   <h2 id="confirmtitle"></h2>
   <div class="row end"><button id="confirmno" data-t="Cancel">Cancel</button><button id="confirmyes"></button></div>

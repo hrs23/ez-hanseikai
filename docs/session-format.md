@@ -131,9 +131,15 @@ Settings > Recordings > Delete old files removes exactly these paths, after one 
 
 Recording > Export to folder… writes a new folder of plain files for a video editor. Every file starts at the recording's start (a late part is padded with black and silence) and runs to its end, so the files line up with no manual syncing.
 
+Three options come first and are remembered on this PC:
+
+- Range: the whole recording, or per match (the matches in `chapters.vtt`): one set of files per match, each prefixed `Match <nn> <h-mm-ss>` (number and start), starting at the match's start and running to its end.
+- Quality: standard copies a member's single part that already spans the recording and re-encodes the rest; original also copies that part and re-encodes the rest at the source bitrate; light always re-encodes at about half the bitrate and at most 1280x720.
+- Members: everyone, or one member's files only.
+
 - `<name>.mp4`: a member's picture and app sound. A member who has only voice gets `<name>.m4a`. `<name>` is the member's name made safe for file names and unique.
 - `<name> voice.m4a`: that member's voice, when there is also a picture.
-- `notes.csv`: notes and marks, one row each, with the columns `seconds,kind,text,tags` (seconds from the start; `kind` is `note` or `mark`; `tags` are separated by spaces). Written only when there are any.
+- `notes.csv`: notes and marks, one row each, with the columns `seconds,kind,text,tags` (seconds from the recording's start, also per match; `kind` is `note` or `mark`; `tags` are separated by spaces). Written only when there are any.
 - `chapters.vtt`: chapters as WebVTT cues (chapters people made, and the matches that the Apex matches plugin found). Written only when there are any.
-- `<name>.vtt`: the spoken lines of that member as WebVTT cues, from the Transcription of older versions.
+- `<name>.vtt`: the spoken lines of that member as WebVTT cues, from the Transcription of older versions (per match, beside each match's files and on its clock).
 - `watch.json`: for a debrief, its `party` records as `[{"t_us", "by", "set", "at_us", "playing", "rate"}]`, in microseconds on the exporting PC's clock.

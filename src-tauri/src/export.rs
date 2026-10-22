@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use serde::Deserialize;
 use serde_json::{json, Value};
 use tauri::Emitter;
 
@@ -26,6 +27,30 @@ const FEED_CHUNK: u64 = 1 << 20;
 const CONNECT_WAIT: Duration = Duration::from_secs(120);
 const POLL: Duration = Duration::from_millis(50);
 const ERROR_LINES: usize = 12;
+const LIGHT: f64 = 0.5;
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum Range {
+    #[default]
+    Whole,
+    Matches,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum Quality {
+    Original,
+    #[default]
+    Standard,
+    Light,
+}
+
+pub struct Options {
+    pub range: Range,
+    pub quality: Quality,
+    pub member: Option<String>,
+}
 
 pub struct Running {
     pub set: (String, String),
@@ -41,9 +66,11 @@ struct Input {
     audio: bool,
 }
 
+#[derive(Clone)]
 struct Captured {
     input: Input,
     pieces: Vec<Piece>,
+    times: Vec<(f64, f64)>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -54,13 +81,14 @@ struct Note {
     tags: Vec<String>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct Cue {
     from_s: f64,
     to_s: f64,
     text: String,
 }
 
+#[derive(Clone)]
 struct Output {
     name: String,
     owner: String,
@@ -68,6 +96,20 @@ struct Output {
     voice: Vec<Captured>,
     size: (u32, u32),
     kbps: f64,
+}
+
+struct Items {
+    notes: Vec<Note>,
+    chapters: Vec<Cue>,
+    matches: Vec<Cue>,
+    subtitles: Vec<(String, Vec<Cue>)>,
+}
+
+#[derive(Clone, Copy)]
+struct Take {
+    total: f64,
+    quality: Quality,
+    whole: bool,
 }
 
 struct Job {
@@ -89,8 +131,51 @@ fn export_kbps(sources: &[f64], size: (u32, u32), factor: f64) -> u32 {
     (sources.iter().sum::<f64>().min(ceiling) * factor).round() as u32
 }
 
+fn fit(size: (u32, u32), limit: (u32, u32)) -> (u32, u32) {
+    let scale = (limit.0 as f64 / size.0.max(1) as f64).min(limit.1 as f64 / size.1.max(1) as f64).min(1.0);
+    ((size.0 as f64 * scale).round() as u32 & !1, (size.1 as f64 * scale).round() as u32 & !1)
+}
+
+fn picture(quality: Quality, size: (u32, u32), source: f64, factor: f64) -> ((u32, u32), u32) {
+    match quality {
+        Quality::Original => (size, (source * factor).round() as u32),
+        Quality::Standard => (size, export_kbps(&[source], size, factor)),
+        Quality::Light => {
+            let small = fit(size, DEFAULT_SIZE);
+            (small, export_kbps(&[source], small, factor * LIGHT))
+        }
+    }
+}
+
+fn clip(c: &Captured, from: f64, to: f64) -> Option<Captured> {
+    let picked: Vec<usize> = (0..c.times.len()).filter(|&i| c.times[i].1 > from && c.times[i].0 < to).collect();
+    let (first, last) = (*picked.first()?, *picked.last()?);
+    let pieces = std::iter::once(c.pieces[0].clone()).chain(picked.iter().map(|&i| c.pieces[i + 1].clone())).collect();
+    let times = picked.iter().map(|&i| (c.times[i].0 - from, c.times[i].1 - from)).collect();
+    Some(Captured { input: Input { delay_s: c.times[first].0 - from, end_s: c.times[last].1 - from, ..c.input.clone() }, pieces, times })
+}
+
+fn within(out: &Output, from: f64, to: f64) -> Option<Output> {
+    let video: Vec<Captured> = out.video.iter().filter_map(|c| clip(c, from, to)).collect();
+    let voice: Vec<Captured> = out.voice.iter().filter_map(|c| clip(c, from, to)).collect();
+    (!video.is_empty() || !voice.is_empty()).then(|| Output { name: out.name.clone(), owner: out.owner.clone(), video, voice, size: out.size, kbps: out.kbps })
+}
+
+fn match_stem(n: usize, from_s: f64, file: &str) -> String {
+    let s = from_s.max(0.0).round() as u64;
+    format!("Match {n:02} {}-{:02}-{:02} {file}", s / 3600, s / 60 % 60, s % 60)
+}
+
+fn shift_cues(cues: &[Cue], from: f64, to: f64) -> Vec<Cue> {
+    cues.iter().filter(|c| c.to_s > from && c.from_s < to).map(|c| Cue { from_s: (c.from_s - from).max(0.0), to_s: c.to_s.min(to) - from, text: c.text.clone() }).collect()
+}
+
+fn cut(a: &str, delay: f64) -> String {
+    if delay < 0.0 { format!("{a}setpts=PTS-STARTPTS,{a}trim=start={:.3},", -delay) } else { String::new() }
+}
+
 fn delayed_sound(i: usize, delay: f64) -> String {
-    format!("[{i}:a:0]asetpts=PTS-STARTPTS,adelay=delays={}:all=1[s{i}];", (delay * 1000.0).round() as u64)
+    format!("[{i}:a:0]{}asetpts=PTS-STARTPTS,adelay=delays={}:all=1[s{i}];", cut("a", delay), (delay.max(0.0) * 1000.0).round() as u64)
 }
 
 fn amix(labels: &[String]) -> String {
@@ -104,8 +189,9 @@ fn graph(inputs: &[Input], size: (u32, u32), total: f64) -> (String, bool) {
     for (i, input) in inputs.iter().enumerate() {
         if input.video {
             graph += &format!(
-                "[{i}:v]setpts=PTS-STARTPTS+{:.3}/TB,scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1[v{i}];[bg{layer}][v{i}]overlay=eof_action=pass[bg{}];",
-                input.delay_s,
+                "[{i}:v]{}setpts=PTS-STARTPTS+{:.3}/TB,scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1[v{i}];[bg{layer}][v{i}]overlay=eof_action=pass[bg{}];",
+                cut("", input.delay_s),
+                input.delay_s.max(0.0),
                 layer + 1
             );
             layer += 1;
@@ -183,7 +269,7 @@ fn vtt_text(cues: &[Cue]) -> String {
     out
 }
 
-fn events_to_items(events: &[Value], set: &Set, owners: &[String]) -> (Vec<Note>, Vec<Cue>, Vec<(String, Vec<Cue>)>) {
+fn events_to_items(events: &[Value], set: &Set, owners: &[String]) -> Items {
     let start = set.start();
     let at = |us: i64| tenth((us - start) as f64 / 1e6).max(0.0);
     let (mut notes, mut chapters, mut ends): (Vec<Note>, Vec<Cue>, Vec<f64>) = (Vec::new(), Vec::new(), Vec::new());
@@ -208,20 +294,21 @@ fn events_to_items(events: &[Value], set: &Set, owners: &[String]) -> (Vec<Note>
         }
     }
     ends.sort_by(|a, b| a.total_cmp(b));
-    let (mut from, mut n) = (0.0, 0);
+    let (mut from, mut matches) = (0.0, Vec::new());
     for end in ends {
         if end > from {
-            chapters.push(Cue { from_s: from, to_s: end, text: format!("Match {}", n + 1) });
-            (from, n) = (end, n + 1);
+            matches.push(Cue { from_s: from, to_s: end, text: format!("Match {}", matches.len() + 1) });
+            from = end;
         }
     }
+    chapters.extend(matches.iter().cloned());
     notes.sort_by(|a, b| a.at_s.total_cmp(&b.at_s));
     chapters.sort_by(|a, b| a.from_s.total_cmp(&b.from_s));
     let mut subtitles: Vec<(String, Vec<Cue>)> = speech.into_iter().collect();
     for (_, cues) in subtitles.iter_mut() {
         cues.sort_by(|a, b| a.from_s.total_cmp(&b.from_s));
     }
-    (notes, chapters, subtitles)
+    Items { notes, chapters, matches, subtitles }
 }
 
 fn feed(core: Arc<Core>, listener: TcpListener, pieces: Vec<Piece>) {
@@ -294,7 +381,17 @@ fn tracks(core: &Core, room_id: &str, set: &Set, f: &File) -> (Vec<Captured>, (u
                 let seconds = |us: i64| (us - f.offset_us - set.start()).max(0) as f64 / 1e6;
                 let video = series == SERIES[0];
                 let audio = !video || has_sound(&pieces[0]);
-                tracks.push(Captured { input: Input { delay_s: seconds(first.t_us), end_s: seconds(end_us), video, audio }, pieces });
+                let segs: HashMap<u32, (f64, f64)> = f.segs_of(capture, series).map(|s| (s.n, (seconds(s.t_us), seconds(s.t_us + s.d_us)))).collect();
+                let mut last = seconds(first.t_us);
+                let times = pieces[1..]
+                    .iter()
+                    .map(|p| {
+                        let span = p.path.file_name().and_then(|n| room::seg_number(&n.to_string_lossy())).and_then(|n| segs.get(&n).copied()).unwrap_or((last, last));
+                        last = span.1;
+                        span
+                    })
+                    .collect();
+                tracks.push(Captured { input: Input { delay_s: seconds(first.t_us), end_s: seconds(end_us), video, audio }, pieces, times });
             }
         }
     }
@@ -426,24 +523,44 @@ fn run_job(core: &Arc<Core>, set: &(String, String), job: Job, work: &Path, done
     outcome(core, tail, &job.partial, &job.path)
 }
 
-fn job(out: &Output, video: bool, path: PathBuf, work: &Path, n: usize, total: f64) -> Job {
+fn job(out: &Output, video: bool, path: PathBuf, partial: PathBuf, take: Take) -> Job {
+    let total = take.total;
     let captured = if video { &out.video } else { &out.voice };
     let inputs: Vec<Input> = captured.iter().map(|c| c.input.clone()).collect();
-    let args = if copyable(&inputs, total) {
+    let args = if take.whole && !(video && take.quality == Quality::Light) && copyable(&inputs, total) {
         ["-map", "0", "-c", "copy"].map(String::from).to_vec()
     } else if video {
-        let (graph, audio) = graph(&inputs, out.size, total);
         let chosen = ffmpeg::pick(&crate::default_codecs());
         let source = if out.kbps > 0.0 { out.kbps } else { record::bitrate_kbps(out.size.0, 1.0) as f64 };
-        encode_args(&graph, audio, Some(ffmpeg::video_args(chosen.0, export_kbps(&[source], out.size, chosen.2))), total)
+        let (size, kbps) = picture(take.quality, out.size, source, chosen.2);
+        let (graph, audio) = graph(&inputs, size, total);
+        encode_args(&graph, audio, Some(ffmpeg::video_args(chosen.0, kbps)), total)
     } else {
         encode_args(&voice_graph(&inputs), true, None, total)
     };
-    let partial = work.join(format!("part-{n}.{}", if video { "mp4" } else { "m4a" }));
     Job { feeds: captured.iter().map(|c| c.pieces.clone()).collect(), args, partial, path, total }
 }
 
-pub fn folder(core: &Arc<Core>, room_id: &str, set_id: &str, dir: &Path) -> Result<Value, String> {
+struct Part {
+    out: Output,
+    stem: String,
+    from: f64,
+    to: f64,
+}
+
+fn parts(outputs: &[Output], names: &[String], matches: &[Cue], range: Range, total: f64) -> Vec<Part> {
+    let pairs = || outputs.iter().zip(names);
+    match range {
+        Range::Whole => pairs().map(|(out, name)| Part { out: out.clone(), stem: name.clone(), from: 0.0, to: total }).collect(),
+        Range::Matches => matches
+            .iter()
+            .enumerate()
+            .flat_map(|(n, m)| pairs().filter_map(move |(out, name)| within(out, m.from_s, m.to_s).map(|out| Part { out, stem: match_stem(n + 1, m.from_s, name), from: m.from_s, to: m.to_s })))
+            .collect(),
+    }
+}
+
+pub fn folder(core: &Arc<Core>, room_id: &str, set_id: &str, dir: &Path, opts: &Options) -> Result<Value, String> {
     check(core)?;
     let logs = room::logs(core, room_id);
     let set = room::sets(core, room_id, &logs).into_iter().find(|s| s.id == set_id).ok_or("Unknown recording.")?;
@@ -451,25 +568,35 @@ pub fn folder(core: &Arc<Core>, room_id: &str, set_id: &str, dir: &Path) -> Resu
     if dir.is_file() || std::fs::read_dir(dir).is_ok_and(|mut d| d.next().is_some()) {
         return Err("Choose a new or empty folder.".into());
     }
-    let outputs: Vec<Output> = set.files.iter().filter_map(|f| view_outputs(core, room_id, &set, f)).collect();
+    let files: Vec<&File> = set.files.iter().filter(|f| opts.member.as_deref().is_none_or(|m| m == f.owner)).collect();
+    if files.is_empty() {
+        return Err("That member is not in this recording.".into());
+    }
+    let outputs: Vec<Output> = files.iter().filter_map(|f| view_outputs(core, room_id, &set, f)).collect();
     if outputs.is_empty() {
         return Err("None of this recording's files are on this PC yet.".into());
     }
-    let skipped: Vec<String> = set.files.iter().filter(|f| !outputs.iter().any(|o| o.owner == f.owner)).map(|f| room::display_name(core, &f.owner)).collect();
+    let skipped: Vec<String> = files.iter().filter(|f| !outputs.iter().any(|o| o.owner == f.owner)).map(|f| room::display_name(core, &f.owner)).collect();
+    let owners: Vec<String> = outputs.iter().map(|o| o.owner.clone()).collect();
+    let items = events_to_items(&room::events(&logs, None), &set, &owners);
+    let names = export_names(&unique_names(&outputs.iter().map(|o| o.name.clone()).collect::<Vec<_>>()));
+    let parts = parts(&outputs, &names, &items.matches, opts.range, total);
+    if parts.is_empty() {
+        return Err("This recording has no matches.".into());
+    }
     std::fs::create_dir_all(dir).map_err(|e| format!("The folder cannot be made: {e}"))?;
     let work = core.dir.join("export");
     std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
-    let files = export_names(&unique_names(&outputs.iter().map(|o| o.name.clone()).collect::<Vec<_>>()));
     let mut jobs = Vec::new();
-    for (out, file) in outputs.iter().zip(&files) {
-        let has_video = !out.video.is_empty();
-        jobs.push(job(out, has_video, dir.join(format!("{file}.{}", if has_video { "mp4" } else { "m4a" })), &work, jobs.len(), total));
-        if has_video && !out.voice.is_empty() {
-            jobs.push(job(out, false, dir.join(format!("{file} voice.m4a")), &work, jobs.len(), total));
+    for part in &parts {
+        let take = Take { total: part.to - part.from, quality: opts.quality, whole: opts.range == Range::Whole };
+        let has_video = !part.out.video.is_empty();
+        let ext = if has_video { "mp4" } else { "m4a" };
+        jobs.push(job(&part.out, has_video, dir.join(format!("{}.{ext}", part.stem)), work.join(format!("part-{}.{ext}", jobs.len())), take));
+        if has_video && !part.out.voice.is_empty() {
+            jobs.push(job(&part.out, false, dir.join(format!("{} voice.m4a", part.stem)), work.join(format!("part-{}.m4a", jobs.len())), take));
         }
     }
-    let owners: Vec<String> = outputs.iter().map(|o| o.owner.clone()).collect();
-    let (notes, chapters, subtitles) = events_to_items(&room::events(&logs, None), &set, &owners);
     let count = jobs.len();
     tracing::info!("folder export of {set_id} started: {count} files");
     let key = (room_id.to_string(), set_id.to_string());
@@ -486,18 +613,21 @@ pub fn folder(core: &Arc<Core>, room_id: &str, set_id: &str, dir: &Path) -> Resu
         return Err(e);
     }
     let write = |name: &str, text: String| std::fs::write(dir.join(name), text).map_err(|e| format!("Export failed: {e}"));
-    if !notes.is_empty() {
-        write(NOTES, notes_text(&notes))?;
+    if !items.notes.is_empty() {
+        write(NOTES, notes_text(&items.notes))?;
     }
-    if !chapters.is_empty() {
-        write(CHAPTERS, vtt_text(&chapters))?;
+    if !items.chapters.is_empty() {
+        write(CHAPTERS, vtt_text(&items.chapters))?;
     }
     if let Some(records) = crate::party::records(&logs).remove(set_id) {
         write(WATCH, crate::party::watch_json(&records).to_string())?;
     }
-    for (owner, cues) in &subtitles {
-        if let Some(i) = outputs.iter().position(|o| o.owner == *owner) {
-            write(&format!("{}.vtt", files[i]), vtt_text(cues))?;
+    for (owner, cues) in &items.subtitles {
+        for part in parts.iter().filter(|p| p.out.owner == *owner) {
+            let shifted = shift_cues(cues, part.from, part.to);
+            if !shifted.is_empty() {
+                write(&format!("{}.vtt", part.stem), vtt_text(&shifted))?;
+            }
         }
     }
     emit(core, 100.0, true, None);
@@ -550,22 +680,76 @@ mod tests {
     }
 
     fn captured(delay_s: f64, video: bool) -> Captured {
-        Captured { input: input(delay_s, video, !video), pieces: vec![Piece { path: PathBuf::from("a"), len: 1 }, Piece { path: PathBuf::from("b"), len: 1 }] }
+        Captured { input: input(delay_s, video, !video), pieces: vec![Piece { path: PathBuf::from("a"), len: 1 }, Piece { path: PathBuf::from("b"), len: 1 }], times: vec![(delay_s, 1e6)] }
+    }
+
+    const WHOLE: Take = Take { total: 120.0, quality: Quality::Standard, whole: true };
+
+    fn args(out: &Output, video: bool, take: Take) -> String {
+        job(out, video, PathBuf::from("x"), PathBuf::from("p"), take).args.join(" ")
     }
 
     #[test]
     fn the_folder_export_always_starts_every_file_at_the_recording_start() {
-        let work = Path::new("w");
         let late = Output { name: "Ann".into(), owner: "a".into(), video: vec![captured(61.5, true)], voice: vec![captured(61.5, false)], size: (1280, 720), kbps: 3000.0 };
-        let video = job(&late, true, PathBuf::from("Ann.mp4"), work, 0, 120.0).args.join(" ");
+        let video = args(&late, true, WHOLE);
         assert!(video.contains("color=c=black:s=1280x720:r=30:d=120.000") && video.contains("setpts=PTS-STARTPTS+61.500/TB") && video.ends_with("-t 120.000"));
-        let voice = job(&late, false, PathBuf::from("Ann voice.m4a"), work, 1, 120.0).args.join(" ");
+        let voice = args(&late, false, WHOLE);
         assert!(voice.contains("adelay=delays=61500:all=1") && voice.ends_with("-t 120.000"));
         let first = Output { video: vec![captured(0.0, true)], ..late };
-        assert_eq!(job(&first, true, PathBuf::from("Ann.mp4"), work, 0, 120.0).args.join(" "), "-map 0 -c copy");
+        assert_eq!(args(&first, true, WHOLE), "-map 0 -c copy");
+        assert_eq!(args(&first, true, Take { quality: Quality::Original, ..WHOLE }), "-map 0 -c copy");
+        let light = args(&first, true, Take { quality: Quality::Light, ..WHOLE });
+        assert!(light.contains("color=c=black:s=1280x720") && light.contains("-b:v "));
+        assert!(args(&first, true, Take { whole: false, ..WHOLE }).contains("-filter_complex"));
         let early = Output { video: vec![Captured { input: Input { end_s: 60.0, ..input(0.0, true, true) }, ..captured(0.0, true) }], ..first };
-        let padded = job(&early, true, PathBuf::from("Ann.mp4"), work, 0, 120.0).args.join(" ");
+        let padded = args(&early, true, WHOLE);
         assert!(padded.contains("color=c=black:s=1280x720:r=30:d=120.000") && padded.contains("duration=longest,apad[mix]") && padded.ends_with("-t 120.000"));
+    }
+
+    fn segmented(video: bool) -> Captured {
+        let piece = |n: &str| Piece { path: PathBuf::from(n), len: 1 };
+        Captured { input: input(10.0, video, !video), pieces: vec![piece("init"), piece("1"), piece("2"), piece("3")], times: vec![(10.0, 20.0), (20.0, 30.0), (30.0, 40.0)] }
+    }
+
+    #[test]
+    fn a_match_takes_only_its_segments_and_cuts_into_the_first() {
+        let c = clip(&segmented(true), 25.0, 32.0).unwrap();
+        assert_eq!(c.pieces.iter().map(|p| p.path.to_string_lossy().into_owned()).collect::<Vec<_>>(), ["init", "2", "3"]);
+        assert_eq!((c.input.delay_s, c.input.end_s), (-5.0, 15.0));
+        assert!(clip(&segmented(true), 40.0, 50.0).is_none());
+        let (g, _) = graph(&[c.input], (1280, 720), 7.0);
+        assert!(g.contains("[0:v]setpts=PTS-STARTPTS,trim=start=5.000,setpts=PTS-STARTPTS+0.000/TB"));
+        assert!(voice_graph(&[clip(&segmented(false), 25.0, 32.0).unwrap().input]).starts_with("[0:a:0]asetpts=PTS-STARTPTS,atrim=start=5.000,asetpts=PTS-STARTPTS,adelay=delays=0:all=1[s0];"));
+        let late = clip(&segmented(true), 5.0, 32.0).unwrap();
+        assert_eq!((late.input.delay_s, late.pieces.len()), (5.0, 4));
+    }
+
+    #[test]
+    fn per_match_files_are_named_by_match_number_and_start_and_never_copied() {
+        let out = Output { name: "Ann".into(), owner: "a".into(), video: vec![segmented(true)], voice: Vec::new(), size: (1920, 1080), kbps: 6000.0 };
+        let other = Output { name: "Ben".into(), owner: "b".into(), video: vec![Captured { times: vec![(50.0, 60.0)], ..segmented(true) }], ..out.clone() };
+        let matches = [Cue { from_s: 0.0, to_s: 25.0, text: "Match 1".into() }, Cue { from_s: 3725.0, to_s: 3800.0, text: "Match 2".into() }, Cue { from_s: 25.0, to_s: 55.0, text: "Match 3".into() }];
+        let names = ["Ann".to_string(), "Ben".to_string()];
+        let each = parts(&[out.clone(), other.clone()], &names, &matches, Range::Matches, 4000.0);
+        assert_eq!(each.iter().map(|p| (p.stem.as_str(), p.from, p.to)).collect::<Vec<_>>(), [("Match 01 0-00-00 Ann", 0.0, 25.0), ("Match 03 0-00-25 Ann", 25.0, 55.0), ("Match 03 0-00-25 Ben", 25.0, 55.0)]);
+        let a = args(&each[0].out, true, Take { total: 25.0, quality: Quality::Original, whole: false });
+        assert!(a.contains("d=25.000") && a.contains("setpts=PTS-STARTPTS+10.000/TB") && a.ends_with("-t 25.000"));
+        let whole = parts(&[out, other], &names, &matches, Range::Whole, 4000.0);
+        assert_eq!(whole.iter().map(|p| (p.stem.as_str(), p.from, p.to)).collect::<Vec<_>>(), [("Ann", 0.0, 4000.0), ("Ben", 0.0, 4000.0)]);
+        assert_eq!(shift_cues(&[Cue { from_s: 20.0, to_s: 30.0, text: "x".into() }, Cue { from_s: 60.0, to_s: 61.0, text: "y".into() }], 25.0, 55.0), [Cue { from_s: 0.0, to_s: 5.0, text: "x".into() }]);
+    }
+
+    #[test]
+    fn quality_sets_the_picture_size_and_bitrate() {
+        let standard = picture(Quality::Standard, (1920, 1080), 6000.0, 1.0);
+        assert_eq!(standard, ((1920, 1080), export_kbps(&[6000.0], (1920, 1080), 1.0)));
+        let (size, kbps) = picture(Quality::Light, (1920, 1080), 6000.0, 1.0);
+        assert_eq!(size, (1280, 720));
+        assert_eq!(kbps, (export_kbps(&[6000.0], (1280, 720), 1.0) as f64 * LIGHT).round() as u32);
+        assert!(kbps <= standard.1 / 2);
+        assert_eq!(picture(Quality::Light, (1280, 1024), 3000.0, 1.0).0, (900, 720));
+        assert_eq!(picture(Quality::Original, (2560, 1440), 90000.0, 0.55), ((2560, 1440), 49500));
     }
 
     fn fake_set() -> Set {
@@ -593,7 +777,8 @@ mod tests {
             event("note", s + 500_000_000, None, "Outside", json!([]), false, None),
             event("note", s + 1_000_000, None, "Plugin note", json!([]), true, None),
         ];
-        let (notes, chapters, subtitles) = events_to_items(&events, &set, &["a".to_string()]);
+        let Items { notes, chapters, matches, subtitles } = events_to_items(&events, &set, &["a".to_string()]);
+        assert_eq!(matches.iter().map(|m| (m.from_s, m.to_s)).collect::<Vec<_>>(), [(0.0, 30.0), (30.0, 60.0)]);
         let notes: Vec<(f64, &str, &str)> = notes.iter().map(|n| (n.at_s, n.kind.as_str(), n.text.as_str())).collect();
         assert_eq!(notes, [(84.5, "note", "Late rotate #rotate"), (90.0, "mark", "")]);
         let chapters: Vec<(f64, f64, &str)> = chapters.iter().map(|c| (c.from_s, c.to_s, c.text.as_str())).collect();

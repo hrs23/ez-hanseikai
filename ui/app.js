@@ -1165,20 +1165,41 @@ function renderNotices() {
     n.action ? el("button", { className: "sm" + (n.action.primary ? " primary" : ""), textContent: n.action.label, onclick: n.action.run }) : null,
     n.sticky ? null : iconButton("x", t("Close"), () => { dismissed.add(n.key); delete sigs.notices; renderNotices(); }))));
 }
-async function pickExportFolder() {
-  await invoke("export_check");
-  return dialog("pick_folder");
+function exportOptions(set) {
+  const owners = set.players.map((p) => p.owner);
+  const choice = exportChoice(stored("exportOptions", null), owners);
+  $("exportrange").value = choice.range;
+  $("exportquality").value = choice.quality;
+  $("exportmember").replaceChildren(el("option", { value: "", textContent: t("Everyone") }), ...owners.map((o) => el("option", { value: o, textContent: nameOf(o) })));
+  $("exportmember").value = choice.member;
+  const d = $("exportdlg");
+  d.showModal();
+  return new Promise((done) => {
+    $("exportyes").onclick = () => {
+      const picked = exportChoice({ range: $("exportrange").value, quality: $("exportquality").value, member: $("exportmember").value }, owners);
+      store("exportOptions", picked);
+      d.close();
+      done(exportArgs(picked));
+    };
+    $("exportno").onclick = () => d.close();
+    d.onclose = () => done(null);
+  });
 }
-function exportFolder(set) {
+async function exportFolder(set) {
   if (!set) { flash(t("Open a recording first")); return; }
-  pickExportFolder().then((folder) => {
+  try {
+    await invoke("export_check");
+    const options = noPicture(set) ? {} : await exportOptions(set);
+    const folder = options && await dialog("pick_folder");
     if (!folder) return;
     exporting = { set: set.id, percent: 0 };
     refresh();
-    return invoke("export_folder", { room: set.room, set: set.id, folder }).then((r) => {
+    invoke("export_folder", { room: set.room, set: set.id, folder, ...options }).then((r) => {
       if (r.skipped.length) flash(t("Exporting without {names}: not on this PC yet", { names: r.skipped.join(", ") }));
     }).catch((e) => { if (exporting) { exporting = null; fail(e); refresh(); } });
-  }).catch(fail);
+  } catch (e) {
+    fail(e);
+  }
 }
 listenMain("export", (e) => {
   const x = e.payload;

@@ -373,7 +373,7 @@ body.noside .side, body.boardfull .side, body.noside .splitter, body.boardfull .
 a.ext { unicode-bidi: isolate; color: var(--link); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 a.ext:hover { filter: brightness(1.2); }
 .cardmd del { color: var(--muted); }
-#roomdlg .field { margin-top: var(--s3); }
+#roomdlg .field, #exportdlg .field { margin-top: var(--s3); }
 body.boardfull .bbar { display: none; }
 body.boardfull .boardwrap { background: var(--bg); }
 body.boardwin .side, body.boardwin .splitter, body.boardwin .notices, body.boardwin .bbar, body.boardwin .roombody { display: none; }

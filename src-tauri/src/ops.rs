@@ -459,7 +459,8 @@ fn focus_set(core: &Arc<Core>, args: Value) -> Result<Value, String> {
 
 fn export_folder(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     let (room, set) = recording_ids(core, &args)?;
-    export::folder(core, &room, &set, Path::new(&arg::<String>(&args, "folder")?))
+    let opts = export::Options { range: arg::<Option<_>>(&args, "range")?.unwrap_or_default(), quality: arg::<Option<_>>(&args, "quality")?.unwrap_or_default(), member: arg(&args, "member")? };
+    export::folder(core, &room, &set, Path::new(&arg::<String>(&args, "folder")?), &opts)
 }
 
 pub fn enable_api(core: &Arc<Core>, on: bool) {
