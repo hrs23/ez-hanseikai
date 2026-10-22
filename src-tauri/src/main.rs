@@ -48,7 +48,8 @@ const NOTE_MAX: usize = 500;
 const BOARD_MAX: usize = 4000;
 const VALUES_MAX: usize = 32 << 10;
 const EVENT_KINDS: [&str; 3] = ["note", "drawing", "board"];
-const NAME_MAX: usize = 24;
+pub const NAME_MAX: usize = 24;
+const MARKS_MAX: usize = 3;
 pub const ROOM_NAME_MAX: usize = 40;
 const DISK_EVERY: Duration = Duration::from_secs(20);
 const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required";
@@ -90,20 +91,33 @@ pub fn short(id: impl std::fmt::Display) -> String {
     id.to_string().chars().take(10).collect()
 }
 
-fn unwanted(c: char) -> bool {
-    c.is_control() || matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+pub fn unwanted(c: char) -> bool {
+    c.is_control() || matches!(c, '\u{AD}' | '\u{61C}' | '\u{115F}' | '\u{1160}' | '\u{200B}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}' | '\u{2066}'..='\u{2069}' | '\u{3164}' | '\u{FEFF}' | '\u{FFA0}')
+}
+
+fn stacked(c: char) -> bool {
+    matches!(c, '\u{300}'..='\u{36F}' | '\u{1AB0}'..='\u{1AFF}' | '\u{1DC0}'..='\u{1DFF}' | '\u{20D0}'..='\u{20FF}' | '\u{FE20}'..='\u{FE2F}')
+}
+
+fn tidy(raw: &str, keep: fn(char) -> bool) -> impl Iterator<Item = char> + '_ {
+    let mut marks = 0;
+    raw.chars().filter(move |&c| {
+        marks = if stacked(c) { marks + 1 } else { 0 };
+        (!unwanted(c) || keep(c)) && marks <= MARKS_MAX
+    })
 }
 
 pub fn clean_text(raw: &str, max: usize) -> String {
-    raw.chars().filter(|&c| !unwanted(c)).collect::<String>().trim().chars().take(max).collect::<String>().trim().to_string()
+    let flat = raw.replace(['\n', '\r', '\t'], " ");
+    tidy(&flat, |_| false).collect::<String>().trim().chars().take(max).collect::<String>().trim().to_string()
 }
 
 pub fn clean_name(raw: &str) -> String {
     clean_text(raw, NAME_MAX)
 }
 
-fn clean_note(raw: &str, max: usize) -> String {
-    raw.chars().filter(|&c| !unwanted(c) || matches!(c, '\n' | '\t')).take(max).collect()
+pub fn clean_note(raw: &str, max: usize) -> String {
+    tidy(raw, |c| matches!(c, '\n' | '\t')).take(max).collect()
 }
 
 pub fn hex(bytes: &[u8]) -> String {
@@ -671,6 +685,18 @@ mod tests {
         assert_eq!(clean_note("abcdef", 3), "abc");
         assert_eq!(clean_note("[\u{202E} moc.elgoog.ac](https://moc.elgoog.ac) \u{2066}x\u{2069}\u{202A}", BOARD_MAX), "[ moc.elgoog.ac](https://moc.elgoog.ac) x");
         assert_eq!(clean_name("\u{202E}Aki\u{2067}"), "Aki");
+    }
+
+    #[test]
+    fn one_line_texts_become_one_trimmed_line_of_visible_characters() {
+        assert_eq!(clean_name("  Aki\nRen\t "), "Aki Ren");
+        assert_eq!(clean_name("\u{200B}\u{3000}\u{3164}\u{FEFF}"), "");
+        assert_eq!(clean_name("A\u{200B}k\u{AD}i"), "Aki");
+        assert_eq!(clean_name(&"あ".repeat(NAME_MAX + 5)).chars().count(), NAME_MAX);
+        assert_eq!(clean_name(&"😀".repeat(NAME_MAX + 5)).chars().count(), NAME_MAX);
+        assert_eq!(clean_name("👨\u{200D}👩\u{200D}👧"), "👨\u{200D}👩\u{200D}👧");
+        assert_eq!(clean_name(&format!("a{}", "\u{301}".repeat(30))).chars().count(), 1 + MARKS_MAX);
+        assert_eq!(clean_name("<b>Aki</b> & \"Ren\""), "<b>Aki</b> & \"Ren\"");
     }
 
     #[test]

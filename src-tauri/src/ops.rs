@@ -233,7 +233,7 @@ fn set_quality(core: &Arc<Core>, args: Value) -> Result<Value, String> {
 }
 
 fn set_limit(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    *core.limit_mbps.lock().unwrap() = arg::<Option<f64>>(&args, "mbps")?.filter(|v| *v > 0.0);
+    *core.limit_mbps.lock().unwrap() = arg::<Option<f64>>(&args, "mbps")?.filter(|v| v.is_finite() && *v > 0.0).map(|v| v.min(100_000.0));
     *core.pacer.lock().unwrap() = net::Pacer::new();
     core.save_settings();
     Ok(Value::Null)
@@ -347,7 +347,8 @@ fn add_event(core: &Arc<Core>, args: Value) -> Result<Value, String> {
         return Err(format!("not a valid {kind} event"));
     }
     let text = clean_note(&text, if kind == "board" { BOARD_MAX } else { NOTE_MAX });
-    if kind == "note" && text.trim().is_empty() {
+    let text = if kind == "board" { text } else { text.replace(['\n', '\t'], " ").trim().to_string() };
+    if kind == "note" && text.is_empty() {
         return Err("Write something first.".into());
     }
     let id = now_us();
@@ -367,7 +368,10 @@ fn event_action(core: &Arc<Core>, args: Value) -> Result<Value, String> {
         "restore" => json!({"k": "event_restore"}),
         other => return Err(format!("unknown kind {other}")),
     };
-    let text = clean_note(&arg::<String>(&args, "text")?, BOARD_MAX);
+    let text = clean_note(&arg::<String>(&args, "text")?, NOTE_MAX).replace(['\n', '\t'], " ").trim().to_string();
+    if text.is_empty() && record["k"] == "event_edit" {
+        return Err("Write something first.".into());
+    }
     merge(&mut record, &json!({"id": arg::<i64>(&args, "id")?, "t_us": now_us(), "text": text, "tags": room::tags(&text)}));
     record = room::with_mentions(record, &room::names(core, core.room(&room).as_ref(), false));
     log_and_share(core, &room, &record);

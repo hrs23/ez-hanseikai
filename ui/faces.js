@@ -41,7 +41,7 @@ const IMAGE_SIDE = 96;
 const IMAGE_QUALITY = 0.85;
 
 function initial(name) {
-  return (String(name || "?").trim().charAt(0) || "?").toUpperCase();
+  return ([...String(name || "?").trim()][0] || "?").toUpperCase();
 }
 
 function picture(label, color, image, size, shape) {

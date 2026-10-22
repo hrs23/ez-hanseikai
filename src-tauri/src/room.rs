@@ -22,6 +22,7 @@ pub const TOKEN_BYTES: usize = 8;
 pub const UNREACHABLE_AFTER: Duration = Duration::from_secs(60);
 const ROOM_ID_BYTES: usize = 4;
 const TITLE_MAX: usize = 80;
+pub const CODE_MAX: usize = 1024;
 
 pub fn seg_name(n: u32) -> String {
     format!("{n:06}.m4s")
@@ -338,13 +339,23 @@ pub fn create_room(core: &Arc<Core>, name: &str) -> Result<String, String> {
     Ok(id)
 }
 
+fn invite_parts(code: &str) -> Option<(String, String)> {
+    if code.chars().count() > CODE_MAX {
+        return None;
+    }
+    let text: String = code.chars().filter(|c| !c.is_whitespace() && !matches!(c, '\u{200C}' | '\u{200D}') && !crate::unwanted(*c)).collect::<String>().to_ascii_lowercase();
+    let text: String = text.find("ezh-").map(|at| &text[at..]).unwrap_or_default().chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
+    let (id, rest) = text.strip_prefix("ezh-")?.split_once('-')?;
+    let token: String = rest.chars().take(2 * TOKEN_BYTES).collect();
+    valid_token(&token).then(|| (id.to_string(), token))
+}
+
 pub fn join_room(core: &Arc<Core>, code: &str) -> Result<(), String> {
     let bad = || "That invite code is not valid. Ask for a new one.".to_string();
-    let text: String = code.split_whitespace().collect();
-    let (id, token) = text.strip_prefix("ezh-").and_then(|t| t.split_once('-')).filter(|(_, token)| valid_token(token)).ok_or_else(bad)?;
+    let (id, token) = invite_parts(code).ok_or_else(bad)?;
     id.parse::<EndpointId>().ok().filter(|id| *id != core.ep.id()).ok_or_else(bad)?;
-    let members = vec![core.ep.id().to_string(), id.to_string()];
-    let invite = Some((id.to_string(), token.to_string()));
+    let members = vec![core.ep.id().to_string(), id.clone()];
+    let invite = Some((id, token.clone()));
     activate(core, Room { id: format!("pending-{token}"), name: "Joining...".into(), members, invite, ..Default::default() });
     Ok(())
 }
@@ -1080,7 +1091,7 @@ fn event_tags(r: &Value, text: &str) -> Value {
 fn event_from(r: &Value, owner: &str, id: i64, offset_us: i64) -> Value {
     let target = &r["target"];
     let local = |key: &str| target[key].as_i64().map(|t| t - offset_us);
-    let text: String = r["text"].as_str().unwrap_or_default().chars().take(crate::BOARD_MAX).collect();
+    let text = crate::clean_note(r["text"].as_str().unwrap_or_default(), crate::BOARD_MAX);
     let plugin = if r["plugin"].is_object() { r["plugin"].clone() } else { Value::Null };
     let tags = event_tags(r, &text);
     let file = target["file"].as_str().map_or(Value::Null, |f| json!(f));
@@ -1128,7 +1139,7 @@ pub fn events(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> Vec<Value> {
                     list.push(event_from(r, &log.owner, id, log.offset_us));
                 }
                 (Some("event_edit"), Some(i)) => {
-                    let text: String = r["text"].as_str().unwrap_or_default().chars().take(crate::BOARD_MAX).collect();
+                    let text = crate::clean_note(r["text"].as_str().unwrap_or_default(), crate::BOARD_MAX);
                     list[i]["tags"] = event_tags(r, &text);
                     list[i]["mentions"] = event_mentions(r);
                     list[i]["text"] = json!(text);
@@ -1261,7 +1272,7 @@ pub fn board_cards(events: &[Value], members: &[String]) -> Vec<Value> {
         }
         let pos = if card == "team" { -1.0 } else { e["values"]["pos"].as_f64().or_else(|| first.get(card).copied()).unwrap_or(f64::MAX) };
         let (w, h) = board_span(card, &e["values"]["w"], &e["values"]["h"]);
-        let state = json!({"title": e["values"]["title"].as_str().filter(|t| !t.is_empty()), "text": e["text"], "pos": pos, "w": w, "h": h, "gone": e["values"]["gone"] == true, "by": e["author"], "at_us": at.0});
+        let state = json!({"title": e["values"]["title"].as_str().map(|t| crate::clean_text(t, crate::NAME_MAX)).filter(|t| !t.is_empty()), "text": e["text"], "pos": pos, "w": w, "h": h, "gone": e["values"]["gone"] == true, "by": e["author"], "at_us": at.0});
         cards.insert(card.to_string(), (at, state));
     }
     let mut out: Vec<Value> = cards.into_iter().map(|(card, (_, mut state))| { state["card"] = json!(card); state }).collect();
@@ -1918,6 +1929,14 @@ pub mod tests {
     #[test]
     fn invite_tokens_and_room_ids_cannot_leave_the_rooms_folder() {
         assert!(valid_token(&random_hex(TOKEN_BYTES)));
+        let token = random_hex(TOKEN_BYTES);
+        let good = Some(("abc".to_string(), token.clone()));
+        for code in [format!("ezh-abc-{token}"), format!("  EZH-ABC-{token}\n"), format!("ezh-abc-\u{200B}{token}\u{FEFF}"), format!("`ezh-abc-{token}`."), format!("join me: ezh-abc-{token} thanks"), format!("ezh-a bc-{}\r\n{}", &token[..8], &token[8..])] {
+            assert_eq!(invite_parts(&code), good, "{code}");
+        }
+        for code in [String::new(), "   ".into(), "ezh-".into(), "<b>ezh-abc</b>".into(), format!("ezh-abc-{}", "0".repeat(CODE_MAX)), format!("{}ezh-abc-{token}", " ".repeat(CODE_MAX)), "あ".repeat(5000)] {
+            assert_eq!(invite_parts(&code), None);
+        }
         assert!(!valid_token("0123456789abcdef/../x"));
         assert!(!valid_token("../../../../evil00"));
         assert!(!valid_id("../outside"));

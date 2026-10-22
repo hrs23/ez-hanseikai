@@ -196,3 +196,25 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - start page: an update or video-tools notice shows before any room is open; the two main actions read Join a room and Create a room. `manual` (UI walkthrough harness)
 - notes: #tags and @member names show as chips; a chip filters the recording's timeline and a second tap or the × clears it; typing # or @ suggests tags or names and Enter, Tab or a click inserts the pick; a name matches longest first, with spaces, Japanese and emoji, and never inside a word; a stored mention follows a renamed member (chip shows the current name) and filters by id, an old note without ids filters by name. `ui-test`
 - interface text (labels, buttons, menus) cannot be selected, while notes, events, cards, tables, fields and code can; the browser menu never shows and right-click offers Copy, Cut and Paste only where text is selected or editable. `manual` (UI walkthrough harness)
+- notes: #tags and @member names show as chips; a chip filters the recording's timeline and a second tap or the × clears it; typing # or @ suggests tags or names and Enter, Tab or a click inserts the pick; a name matches longest first, with spaces, Japanese and emoji, and never inside a word. `ui-test`
+
+## User input
+
+The UI cleans typed text and the app cleans it again, the same way, and counts whole characters (the page's `maxlength` counts UTF-16 units, so it never allows more than the app keeps). Limits: name 24, board card title 24, room name 40, recording title 80, note 500, board card 4000, invite code 1024, relay URL 256 and 8 URLs, tags 16 per API note.
+
+| Input | Expected result | Checked |
+| --- | --- | --- |
+| every text field is typed to its limit | the field stops at the limit; every page that shows it keeps its layout (ellipsis with the full text as tooltip on one line, wrapping on several) | `manual` (UI walkthrough harness, worst-case scenarios `w01` to `w22`) |
+| the page limits equal the app limits | one `LIMITS` object in `ui/util.js` equals the Rust constants | `ui-test` |
+| empty, whitespace-only, zero-width or direction-only name, room name, note | refused or reset to the old value, never saved blank | `unit` (main.rs), `ui-test` |
+| leading and trailing spaces, line breaks and tabs in a one-line field | one trimmed line, breaks become spaces | `unit`, `ui-test` |
+| control, zero-width, soft-hyphen and direction characters | removed | `unit`, `ui-test` |
+| emoji, joined emoji, East Asian full-width text | cut at the limit in whole characters, a joined emoji stays whole, the initial in an avatar is a whole character | `unit`, `ui-test` |
+| a letter with 30 combining marks | at most 3 marks stay | `unit`, `ui-test` |
+| HTML, Markdown or a script in a name, note or card | shown as text, never run | `ui-test` (card shows nothing a note can write as running), `manual` |
+| a note or card pasted far beyond its limit | the field keeps the first characters; the app and the API cut or refuse the same | `unit`, `manual` |
+| an invite code with spaces, line breaks, quotes, capitals, zero-width characters or text around it | joins the same room | `unit` (room.rs) |
+| an invite code that is empty, 5000 characters, has no token or is not hex | "That invite code is not valid." and nothing changes | `unit` (room.rs) |
+| a relay URL that is not https, longer than 256 characters, or more than 8 URLs | refused with a short message | `unit` (relay.rs) |
+| upload limit of 1e300 or below 0 | capped at 100000 Mbit/s, or no limit | `manual` |
+| Enter or a click twice in a row on Create room, Join a room, Save room, a note or a card | one room, one join, one rename, one note, one card | `ui-test` (a running submit ignores the next one) |

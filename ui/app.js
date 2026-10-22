@@ -19,7 +19,6 @@ const CHIME = { start: [660, 880], end: [880, 660], join: [784, 988] };
 const CHIME_NOTE_S = 0.14;
 const CHIME_GAIN = 0.15;
 const TAG_HINTS = 5;
-const ROOM_NAME_MAX = 40;
 const DRAG_START_PX = 4;
 const CODEC_PROBE = { width: 1280, height: 720, bitrate: 6000000, framerate: 30 };
 const GAP = 6;
@@ -575,7 +574,7 @@ function renderViews() {
   const names = play.keys.map(nameOf);
   if (!changed("views", [play.view, names, lang])) return;
   const button = (i, text) => {
-    const b = el("button", { className: play.view === i ? "on" : "", title: i <= MAX_KEYED ? `${text} (${i})` : text, ariaPressed: play.view === i, textContent: text });
+    const b = el("button", { className: play.view === i ? "on" : "", title: i <= MAX_KEYED ? `${text} (${i})` : text, ariaPressed: play.view === i }, el("span", { className: "ellip", textContent: text }));
     b.onclick = () => setView(play, i);
     return b;
   };
@@ -956,7 +955,7 @@ function renderMoment(m) {
   const notes = activeAt(items.filter((n) => n.role === "moment" && n.text && !n.plugin), m).slice(-OVERLAY_MAX);
   const typists = (watchParty && st.party.on ? st.party.typing || [] : []).filter((id) => id !== st.id);
   if (changed("overlay", [notes.map((n) => [n.key, n.m, n.body, n.author]), typists.map(nameOf), st.colors, lang])) $("overlay").replaceChildren(
-    ...notes.map((n) => el("p", {}, avatar(n.author, "sm"), ...inline(n.body, { mentions: n.mentions }))),
+    ...notes.map((n) => el("p", {}, avatar(n.author, "sm"), el("span", {}, ...inline(n.body, { mentions: n.mentions })))),
     ...typists.map((id) => el("p", { className: "typing", textContent: t("{name} is typing…", { name: nameOf(id) }) })));
 }
 function openLink(link) {
@@ -966,12 +965,13 @@ function openLink(link) {
   if (link.view) setTimeout(() => setView(play, play.keys.indexOf(link.view) + 1), TICK_MS);
 }
 function editNote(n, row) {
-  const input = el("input", { value: n.text, ariaLabel: t("Edit") });
+  const input = el("input", { value: n.text, maxLength: LIMITS.note, ariaLabel: t("Edit") });
   let done = false;
   const close = (save) => {
     if (done) return;
     done = true;
-    if (save && input.value.trim() && input.value !== n.text) run("event_action", { kind: "edit", id: n.id, text: input.value });
+    const text = cleanText(input.value, LIMITS.note);
+    if (save && text && text !== n.text) run("event_action", { kind: "edit", id: n.id, text });
     delete sigs.events;
     renderEvents();
   };
@@ -1044,7 +1044,7 @@ function closeQuick(resume) {
   if (resume && q.resume && !q.moved) act("play", nowM());
 }
 function submitQuick() {
-  const text = $("quicktext").value.trim();
+  const text = cleanText($("quicktext").value, LIMITS.note);
   const q = quick;
   if (!text) { closeQuick(true); return; }
   $("quicktext").value = "";
@@ -1386,6 +1386,11 @@ function setVolume(v) {
   store("volume", volume);
   applyAudio();
 }
+document.addEventListener("mouseover", (e) => {
+  for (let n = e.target; n instanceof HTMLElement && n !== document.body; n = n.parentElement) {
+    if (n.scrollWidth > n.clientWidth && getComputedStyle(n).textOverflow === "ellipsis") { n.title = n.title || n.textContent; return; }
+  }
+});
 const EDITABLE = "input:not([type=range]):not([type=checkbox]):not([type=radio]):not([type=button]), textarea";
 function editMenu(e, field) {
   const has = field ? field.selectionStart !== field.selectionEnd : String(getSelection()).length > 0;

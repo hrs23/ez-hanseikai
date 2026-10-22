@@ -1,4 +1,3 @@
-const BOARD_MAX = 4000;
 const BOARD_PAD = 28;
 
 let editing = null;
@@ -20,10 +19,10 @@ function stopEditing() {
   renderBoard();
 }
 function cardEditor(c) {
-  const box = el("textarea", { value: c.text, maxLength: BOARD_MAX, spellcheck: false, ariaLabel: cardTitle(c) });
+  const box = el("textarea", { value: c.text, maxLength: LIMITS.board, spellcheck: false, ariaLabel: cardTitle(c) });
   const save = () => {
     const input = $("canvas").querySelector(".bhead input");
-    const title = input ? input.value.trim() : c.title || "";
+    const title = input ? cleanText(input.value, LIMITS.card) : c.title || "";
     editing = null;
     putCard(c.card, title === (c.title || "") ? { text: box.value } : { text: box.value, title });
   };
@@ -36,7 +35,7 @@ function cardEditor(c) {
   return el("div", { className: "cedit" }, box, el("div", { className: "row end" }, el("button", { className: "sm", textContent: t("Cancel"), onclick: stopEditing }), el("button", { className: "primary sm", onclick: save }, t("Save"), el("kbd", { textContent: "Ctrl+Enter" }))));
 }
 function titleInput(c) {
-  const input = el("input", { value: c.title || "", placeholder: cardTitle({ ...c, title: null }), maxLength: 24, ariaLabel: t("Name") });
+  const input = el("input", { value: c.title || "", placeholder: cardTitle({ ...c, title: null }), maxLength: LIMITS.card, ariaLabel: t("Name") });
   input.onkeydown = (e) => {
     e.stopPropagation();
     if (composing(e)) return;
@@ -46,12 +45,12 @@ function titleInput(c) {
   return input;
 }
 function nameInput(value, done) {
-  const input = el("input", { value, maxLength: 24, ariaLabel: t("Name") });
+  const input = el("input", { value, maxLength: LIMITS.card, ariaLabel: t("Name") });
   let finished = false;
   const close = (save) => {
     if (finished) return;
     finished = true;
-    done(save ? input.value.trim() : null);
+    done(save ? cleanText(input.value, LIMITS.card) : null);
   };
   input.onkeydown = (e) => {
     e.stopPropagation();

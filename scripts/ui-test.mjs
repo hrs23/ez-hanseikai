@@ -11,7 +11,7 @@ const source = ["util.js", "i18n.js", "live.js", "media.js", "layout.js", "dock.
 const memory = new Map();
 const localStorage = { getItem: (k) => memory.get(k) ?? null, setItem: (k, v) => memory.set(k, v) };
 const context = vm.createContext({ localStorage, window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id, location: { search: "" } });
-const ui$ = vm.runInContext(`${source}\n({ changed, matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, memberStatus, sendsPicture, viewLine, tileProblem, livePlayers, ordered, extensionLine, analysisReason, recordingAnalysis, analysisState, cardParts, dropPos, dropSlot, boardSpan, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, talking, stillTalking, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ LIMITS, cleanText, single, changed, matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, memberStatus, sendsPicture, viewLine, tileProblem, livePlayers, ordered, extensionLine, analysisReason, recordingAnalysis, analysisState, cardParts, dropPos, dropSlot, boardSpan, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, talking, stillTalking, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 test("a changed() check against a tile's own store reports again on a rebuilt tile", () => {
   const first = {};
   assert.equal(ui$.changed("what", [1], first), true);
@@ -826,4 +826,35 @@ test("typing # or @ suggests known tags or member names and inserts the pick", (
   assert.deepEqual(plain(ui$.hintAt("", 0, tags, names, 5)).items, []);
   const h = ui$.hintAt("hi @jo tail", 6, tags, names, 5);
   assert.deepEqual(plain(ui$.applyHint("hi @jo tail", 6, h, "Jo Smith")), { text: "hi @Jo Smith  tail", caret: 13 });
+});
+
+const rustConst = (file, name) => Number(new RegExp(`const ${name}: usize = (\\d+);`).exec(fs.readFileSync(path.join(ui, "..", "src-tauri", "src", file), "utf8"))[1]);
+
+test("every text input limit in the page is the limit the app cuts at", () => {
+  const { LIMITS } = ui$;
+  assert.deepEqual([LIMITS.name, LIMITS.card, LIMITS.room, LIMITS.note, LIMITS.board, LIMITS.code, LIMITS.relay, LIMITS.relays], [rustConst("main.rs", "NAME_MAX"), rustConst("main.rs", "NAME_MAX"), rustConst("main.rs", "ROOM_NAME_MAX"), rustConst("main.rs", "NOTE_MAX"), rustConst("main.rs", "BOARD_MAX"), rustConst("room.rs", "CODE_MAX"), rustConst("relay.rs", "URL_MAX"), rustConst("relay.rs", "URLS_MAX")]);
+});
+
+test("typed text is cleaned like the app cleans it: one trimmed line, no invisible characters, counted in whole characters", () => {
+  const clean = (s, n = 24) => ui$.cleanText(s, n);
+  assert.equal(clean("  Aki\nRen\t "), "Aki Ren");
+  assert.equal(clean("\u200B\u3000\u3164\uFEFF"), "");
+  assert.equal(clean("A\u200Bk\u00ADi\u202E"), "Aki");
+  assert.equal([...clean("あ".repeat(30))].length, 24);
+  assert.equal([...clean("😀".repeat(30))].length, 24);
+  assert.equal(clean("👨\u200D👩\u200D👧"), "👨\u200D👩\u200D👧");
+  assert.equal([...clean(`a${"\u0301".repeat(30)}`)].length, 4);
+  assert.equal(clean("<b>Aki</b> & \"Ren\""), "<b>Aki</b> & \"Ren\"");
+});
+
+test("a submit that is still running ignores the next click or Enter", async () => {
+  let runs = 0;
+  let release;
+  const go = ui$.single(() => { runs++; return new Promise((done) => { release = done; }); });
+  go(); go();
+  assert.equal(runs, 1);
+  release();
+  await new Promise((done) => setTimeout(done, 0));
+  go();
+  assert.equal(runs, 2);
 });

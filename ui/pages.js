@@ -20,7 +20,6 @@ const SHORTCUTS = [
 ];
 
 let askName = false;
-let joining = false;
 let roomTab = "members";
 let drawerFor = null;
 let speed = null;
@@ -39,7 +38,7 @@ function renderStart() {
   $("nameshow").hidden = askName;
   if (!askName && changed("startname", [st.name, look(st.id)])) { $("nameav").replaceChildren(avatar(st.id, "lg")); $("nametext").textContent = st.name; }
   if (document.activeElement !== $("startname")) $("startname").value = st.name;
-  const named = !!st.name || !!$("startname").value.trim();
+  const named = !!st.name || !!cleanText($("startname").value, LIMITS.name);
   $("startpending").hidden = !pendingRoom;
   $("startform").hidden = !!pendingRoom;
   $("pendingtext").textContent = pendingRoom ? (st.room.waiting ? t("Waiting for approval") : t("Connecting…")) : "";
@@ -61,11 +60,8 @@ async function deleteRoom(room) {
   if (await ask(t("Leave {room} and delete its recordings and notes on this PC?", { room: room.name }), t("Delete"), true)) run("remove_room", { id: room.id });
 }
 const leaveRoom = () => st.room && run("close_room", { id: st.room.id }, openLive);
-function joinWith(input) {
-  if (joining) return;
-  joining = true;
-  run("join_room", { code: input.value }, () => { input.value = ""; refresh(); }).finally(() => { joining = false; });
-}
+const joinWith = (input) => run("join_room", { code: input.value }, () => { input.value = ""; refresh(); });
+const typedName = () => cleanText($("startname").value, LIMITS.name) || st.name;
 const copyInvite = () => invoke("create_invite", { reuse: true }).then((code) => navigator.clipboard.writeText(code)).then(() => { flash(t("Invite code copied")); refresh(); }).catch(fail);
 const cancelInvite = () => run("cancel_invites", null, () => { flash(t("Invite cancelled")); refresh(); });
 const createRoom = () => invoke("create_room", { name: "" }).then(() => { openLive(); return refresh().then(copyInvite); }).catch(fail);
@@ -74,7 +70,7 @@ async function removeMember(id) {
 }
 let iconDraft = "";
 function roomDirty() {
-  const name = $("roomnameinput").value.trim();
+  const name = cleanText($("roomnameinput").value, LIMITS.room);
   $("roomsave").disabled = !name || (name === st.room.name && iconDraft === st.room.icon);
 }
 function showIconDraft() {
@@ -85,7 +81,6 @@ function showIconDraft() {
 function openRoomSettings() {
   if (!st.room) return;
   $("roomnameinput").value = st.room.name;
-  $("roomnameinput").maxLength = ROOM_NAME_MAX;
   iconDraft = st.room.icon;
   showIconDraft();
   $("roomdlg").showModal();
@@ -355,12 +350,14 @@ function renderOpenDialogs() {
   renderDiagnostics();
 }
 
+for (const [id, max] of [["startname", LIMITS.name], ["name", LIMITS.name], ["roomnameinput", LIMITS.room], ["joincode", LIMITS.code], ["quicktext", LIMITS.note], ["relays", LIMITS.relays * (LIMITS.relay + 1)]]) $(id).maxLength = max;
+$("limit").max = 100000;
 $("startname").oninput = () => renderStart();
-$("startname").onchange = () => { run("set_name", { name: $("startname").value }); if ($("startname").value.trim()) askName = false; };
+$("startname").onchange = () => { run("set_name", { name: cleanText($("startname").value, LIMITS.name) }); if (cleanText($("startname").value, LIMITS.name)) askName = false; };
 $("nameedit").onclick = () => { askName = true; renderStart(); $("startname").focus(); };
-$("newroom").onclick = () => run("set_name", { name: $("startname").value || st.name }, createRoom);
+$("newroom").onclick = single(() => run("set_name", { name: typedName() }, createRoom));
 $("joincode").oninput = () => renderStart();
-$("join").onclick = () => run("set_name", { name: $("startname").value || st.name }, () => joinWith($("joincode")));
+$("join").onclick = single(() => run("set_name", { name: typedName() }, () => joinWith($("joincode"))));
 $("joincode").onkeydown = (e) => { if (e.key === "Enter" && !composing(e) && !$("join").disabled) $("join").click(); };
 $("pendingcancel").onclick = () => st.room && run("remove_room", { id: st.room.id });
 $("roomnameinput").oninput = showIconDraft;
@@ -368,15 +365,16 @@ $("roomiconpick").onclick = () => pickImage((image) => { iconDraft = image; show
 $("roomfacegrid").replaceChildren(...ROOM_PRESETS.map((name, i) => el("button", { className: "facebtn", ariaLabel: `${t("Room icon")} ${i + 1}`, onclick: () => { iconDraft = presetImage(name); showIconDraft(); } }, presetTile(name, "lg"))));
 $("roomiconclear").onclick = () => { iconDraft = ""; showIconDraft(); };
 $("roomnameinput").onkeydown = (e) => { if (e.key === "Enter" && !composing(e) && !$("roomsave").disabled) $("roomsave").click(); };
-$("roomsave").onclick = async () => {
+$("roomsave").onclick = single(async () => {
+  const name = cleanText($("roomnameinput").value, LIMITS.room);
   $("roomdlg").close();
   try {
-    if ($("roomnameinput").value.trim() !== st.room.name) await invoke("rename_room", { name: $("roomnameinput").value });
+    if (name !== st.room.name) await invoke("rename_room", { name });
     if (iconDraft !== st.room.icon) await invoke("set_room_icon", { icon: iconDraft });
     flash(t("Saved"));
     refresh();
   } catch (e) { fail(e); }
-};
+});
 $("roomno").onclick = () => $("roomdlg").close();
 for (const b of $("setnav").querySelectorAll("button")) b.onclick = () => { settingsPane = b.dataset.pane; showPane(); };
 $("prompttext").oninput = () => editPrompt(false);
@@ -391,7 +389,7 @@ $("apicopy").onclick = () => invoke("api_info").then((info) => navigator.clipboa
 $("apinew").onclick = async () => {
   if (await ask(t("Make a new token?"), t("New token"), false)) run("new_api_token", null, () => flash(t("New token made")));
 };
-$("name").onchange = () => run("set_name", { name: $("name").value });
+$("name").onchange = () => { const name = cleanText($("name").value, LIMITS.name); run("set_name", { name: name || st.name }); };
 $("avatarimage").onclick = () => pickImage((image) => run("set_profile", { avatar: image }));
 $("avatarclear").onclick = () => run("set_profile", { avatar: "" });
 $("language").onchange = () => run("set_language", { language: $("language").value });
@@ -399,7 +397,7 @@ $("sessionsound").onchange = () => { sessionSound = $("sessionsound").checked; s
 $("copyid").onclick = () => navigator.clipboard.writeText(st.id).then(() => flash(t("ID copied")));
 $("opendata").onclick = $("storeopen").onclick = () => dialog("open_data_folder").catch(fail);
 for (const b of $("quality").children) b.onclick = () => run("set_quality", { id: b.dataset.q });
-$("relays").onchange = () => run("set_relays", { urls: $("relays").value.split("\n") });
+$("relays").onchange = () => run("set_relays", { urls: $("relays").value.split("\n").map((u) => cleanText(u, LIMITS.relay)) });
 $("limit").onchange = () => run("set_limit", { mbps: $("limit").value ? Number($("limit").value) : null });
 $("checkupdate").onclick = () => checkUpdate(true);
 $("selnone").onclick = () => { picked.clear(); delete sigs.storage; renderStorage(); };

@@ -451,6 +451,7 @@ const PATTERNS = [
   [/^The folder cannot be made: (.+)$/, "フォルダを作成できません: {1}"],
   [/^Export failed: (.+)$/, "エクスポートに失敗しました: {1}"],
   [/^Delete failed: (.+)$/, "削除に失敗しました: {1}"],
+  [/^Use at most (\d+) relay servers\.$/, "中継サーバーは {1} 件までです。"],
   [/^Not a relay URL: (.+)$/, "中継サーバーの URL ではありません: {1}"],
 ];
 
