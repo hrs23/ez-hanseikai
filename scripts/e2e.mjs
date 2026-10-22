@@ -796,7 +796,7 @@ async function live(ctx) {
   await step("connections stay up while live tiles stay in step, a member stalls, and the others stop waiting for one too far behind", async () => {
     const inStep = async (view) => {
       for (const x of [a, b, c]) await evaluate(x, `${view}; if (playSet()) { act("play", nowM()); goLive(); } true`);
-      await waitFor(`A's live tiles in step after ${view}`, within(SEGMENT_S * 3), async () => { const x = await evaluate(a, LIVE_PROBE); check(x.pos !== null && x.at.length === 3 && Math.max(...x.at) - Math.min(...x.at) < 1, brief(x)); return true; });
+      await waitFor(`A's live tiles in step after ${view}`, within(SEGMENT_S * 3), async () => { const x = await evaluate(a, LIVE_PROBE); check(x.pos !== null && x.at.length === 3 && Math.max(...x.at) - Math.min(...x.at) < 1 && !x.wait, brief(x)); return true; });
     };
     const all = [a, b, c];
     const since = Object.fromEntries(all.map((x) => [x.key, logLines(x).length]));
