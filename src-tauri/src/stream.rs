@@ -146,8 +146,7 @@ fn serve(files: &data::Files, indexes: &Indexes, dir: &Path, live: bool, kind: &
             Disk::open(&path).or_else(|_| Disk::open(part_of(&path))).ok()?
         }
     };
-    let mut bytes = Vec::new();
-    (from <= file.metadata().ok()?.len()).then_some(())?;
+    let mut bytes = Vec::with_capacity(file.metadata().ok()?.len().checked_sub(from)? as usize);
     file.seek(SeekFrom::Start(from)).ok()?;
     file.read_to_end(&mut bytes).ok()?;
     Some((kind, bytes))

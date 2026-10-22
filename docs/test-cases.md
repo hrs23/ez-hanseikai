@@ -172,6 +172,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - The first start downloads ffmpeg, checks it and keeps retrying with no network. `manual`
 - The window, menus, dark theme and Japanese texts look right at normal and high DPI scaling. `manual`
 - the menu bar is the same near-black as the title bar and the app (also on a PC set to the light theme), its drop-down menus are dark, and the menu bar is hidden while the player or the board is full screen and back after. `manual`
+- three members record for an hour with Live open: the app's private memory and CPU stay flat after the first minutes and the heap keeps no growing free space (Windows segment heap). `manual`
 - an hour-long recording is counted, checked for missing pieces and sized with one listing per folder, not work per segment, so a long session does not slow the app or grow its memory. `unit`
 - check: a line starts with its level. `unit`
 - debug: the transfer list keeps the newest; kinds follow live series and init; a piece after a failure is a retry; a hash failure marks the last receipt or adds a row; jobs are grouped with their latest state; reports hide addresses ids and names; reports hide a user folder with spaces; a job reads as one line; addresses are hidden and the rest kept; errors keep the newest warnings; the tail starts at a whole line; the flow text names each route and hides hosts; a combined report names each member by short id. `unit`
