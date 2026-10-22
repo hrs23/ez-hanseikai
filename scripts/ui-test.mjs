@@ -11,7 +11,7 @@ const source = ["util.js", "i18n.js", "live.js", "media.js", "layout.js", "dock.
 const memory = new Map();
 const localStorage = { getItem: (k) => memory.get(k) ?? null, setItem: (k, v) => memory.set(k, v) };
 const context = vm.createContext({ localStorage, window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id, location: { search: "" } });
-const ui$ = vm.runInContext(`${source}\n({ LIMITS, escapeStep, cleanText, single, changed, matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, groupDrawings, formatWhen, fullWhen, sessionWhen, keysOf, hotkeyRows, memberStatus, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, cardParts, dropPos, dropSlot, boardSpan, boardFont, cellSpan, fitFont, deletePreview, cleanupAsk, cleanupDone, exportChoice, exportArgs, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, voiceTone, known, VOICE_SIDES, VOICE_TONES, VOICE_SIDE_DEFAULT, VOICE_TONE_DEFAULT, minimapRect, talking, stillTalking, markSpeak, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, nextChip, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ LIMITS, escapeStep, cleanText, single, changed, matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, groupDrawings, formatWhen, fullWhen, sessionWhen, keysOf, hotkeyRows, memberStatus, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, cardParts, dropPos, dropSlot, boardSpan, boardFont, cellSpan, fitFont, deletePreview, cleanupPicked, cleanupTotal, cleanupHead, cleanupDone, exportChoice, exportArgs, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, voiceTone, known, VOICE_SIDES, VOICE_TONES, VOICE_SIDE_DEFAULT, VOICE_TONE_DEFAULT, minimapRect, talking, stillTalking, markSpeak, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, nextChip, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 test("a changed() check against a tile's own store reports again on a rebuilt tile", () => {
   const first = {};
   assert.equal(ui$.changed("what", [1], first), true);
@@ -179,16 +179,21 @@ test("the two delete confirmations read the same in both languages", () => {
   }
 });
 
-test("the clean up dialog says what goes to the Recycle Bin and what is deleted, in both languages", () => {
-  const plan = (files, bytes, temp_files, temp_bytes) => ({ files, bytes, temp_files, temp_bytes });
-  assert.deepEqual(plain(ui$.cleanupAsk(plan(3, 3000, 0, 0))), { title: "Move 3 files (3.0 KB) to the Recycle Bin?", action: "Move to Recycle Bin" });
-  assert.equal(ui$.cleanupAsk(plan(2, 2000, 1, 1000)).title, "Move 1 file (1.0 KB) to the Recycle Bin and delete 1 file?");
-  assert.deepEqual(plain(ui$.cleanupAsk(plan(2, 10, 2, 10))), { title: "Delete 2 files (10 B)?", action: "Delete" });
+test("the clean up review picks every group and each old folder without an ID key, and totals what is picked, in both languages", () => {
+  const plan = { groups: [{ id: "temp", count: 2, bytes: 10 }, { id: "orphan", count: 1, bytes: 3000 }], folders: [{ path: "C:/a", bytes: 1000, key: true }, { path: "C:/b", bytes: 1000, key: false }], kept: [] };
+  const picked = ui$.cleanupPicked(plan);
+  assert.deepEqual([[...picked.groups], [...picked.folders]], [["temp", "orphan"], ["C:/b"]]);
+  assert.deepEqual(plain(ui$.cleanupTotal(plan, picked)), { n: 4, text: "Move 4 items (4.0 KB) to the Recycle Bin" });
+  picked.groups.delete("temp");
+  picked.groups.delete("orphan");
+  picked.folders.add("C:/a");
+  assert.equal(ui$.cleanupTotal(plan, picked).text, "Move 2 items (2.0 KB) to the Recycle Bin");
+  assert.equal(ui$.cleanupHead("Old folders", 1, 1000), "Old folders · 1 item · 1.0 KB");
   assert.equal(ui$.cleanupDone({ moved: 3, deleted: 1, skipped: 2 }), "Moved 3 files to the Recycle Bin · Deleted 1 file · 2 files could not be moved");
   assert.equal(ui$.cleanupDone({ moved: 0, deleted: 0, skipped: 0 }), "Nothing to clean up");
   ui$.setLanguage("ja");
-  assert.equal(ui$.cleanupAsk(plan(3, 3000, 0, 0)).title, "3 ファイル(3.0 KB)をごみ箱に移動しますか?");
-  assert.equal(ui$.cleanupDone({ moved: 1, deleted: 0, skipped: 1 }), "1 ファイルをごみ箱に移動しました · 1 ファイルは移動できませんでした");
+  assert.equal(ui$.cleanupTotal(plan, ui$.cleanupPicked(plan)).text, "4 件(4.0 KB)をごみ箱に移動");
+  assert.equal(ui$.cleanupHead("Old folders", 2, 10), "古いフォルダ · 2 件 · 10 B");
   ui$.setLanguage("en");
 });
 

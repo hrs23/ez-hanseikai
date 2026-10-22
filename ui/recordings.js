@@ -56,11 +56,26 @@ function fileCount(n) {
   return t(n === 1 ? "1 file" : "{n} files", { n });
 }
 
-function cleanupAsk(plan) {
-  const [bin, binBytes] = [plan.files - plan.temp_files, plan.bytes - plan.temp_bytes];
-  if (!bin) return { title: t("Delete {files} ({size})?", { files: fileCount(plan.temp_files), size: bytes(plan.temp_bytes) }), action: t("Delete") };
-  const title = plan.temp_files ? t("Move {files} ({size}) to the Recycle Bin and delete {temp}?", { files: fileCount(bin), size: bytes(binBytes), temp: fileCount(plan.temp_files) }) : t("Move {files} ({size}) to the Recycle Bin?", { files: fileCount(bin), size: bytes(binBytes) });
-  return { title, action: t("Move to Recycle Bin") };
+const CLEANUP_GROUPS = { temp: "Temporary files", orphan: "Leftovers of deleted recordings", old: "Files of older formats" };
+
+function itemCount(n) {
+  return t(n === 1 ? "1 item" : "{n} items", { n });
+}
+
+function cleanupPicked(plan) {
+  return { groups: new Set(plan.groups.map((g) => g.id)), folders: new Set(plan.folders.filter((f) => !f.key).map((f) => f.path)) };
+}
+
+function cleanupTotal(plan, picked) {
+  const groups = plan.groups.filter((g) => picked.groups.has(g.id));
+  const folders = plan.folders.filter((f) => picked.folders.has(f.path));
+  const n = groups.reduce((s, g) => s + g.count, 0) + folders.length;
+  const size = groups.reduce((s, g) => s + g.bytes, 0) + folders.reduce((s, f) => s + f.bytes, 0);
+  return { n, text: t("Move {items} ({size}) to the Recycle Bin", { items: itemCount(n), size: bytes(size) }) };
+}
+
+function cleanupHead(label, count, size) {
+  return `${t(label)} · ${itemCount(count)} · ${bytes(size)}`;
 }
 
 function cleanupDone(r) {

@@ -11,7 +11,8 @@ use crate::room::{self, seg_name, INIT, LOGS, PENDING, SERIES};
 use crate::{data, debug, jobs, log, Core};
 
 pub const MIN_AGE: Duration = Duration::from_secs(86_400);
-const EXAMPLES: usize = 5;
+const LISTED: usize = 200;
+const FOLDERS: &str = "folders";
 const BUSY: &str = "Try again when no recording, export or analysis is running.";
 const NEVER: [&str; 12] = ["key.bin", "rooms.json", "settings.json", "app.lock", "EBWebView", "crash.txt", "log.txt", "log.old.txt", "log.older.txt", "export", "ffmpeg.exe", "api.json"];
 const WHOLE: [&str; 4] = ["rooms.json", "settings.json", "resume.json", "encoders.json"];
@@ -20,7 +21,7 @@ const OLD_ROOT: [&str; 5] = ["log.bin", "peer", "peer.txt", "peers.txt", "runnin
 const OLD_ROOM: [&str; 2] = ["sets", "live"];
 const OLD_CAPTURE: [&str; 2] = ["verified.json", "cap.json"];
 
-static SHOWN: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+static SHOWN: Mutex<Vec<(&str, PathBuf)>> = Mutex::new(Vec::new());
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Way {
@@ -36,24 +37,34 @@ pub struct Spot<'a> {
 
 pub struct Rule {
     pub what: &'static str,
-    pub way: Way,
+    pub group: &'static str,
     test: fn(&Spot) -> bool,
 }
 
+impl Rule {
+    pub fn way(&self) -> Way {
+        if self.group == TEMP { Way::Delete } else { Way::Bin }
+    }
+}
+
+pub const TEMP: &str = "temp";
+pub const ORPHAN: &str = "orphan";
+pub const OLD: &str = "old";
+
 pub const RULES: &[Rule] = &[
-    Rule { what: "unfinished thumbnail: rooms/<room>/thumbs/*.tmp.*", way: Way::Delete, test: |s| matches!(s.parts, ["rooms", _, "thumbs", name] if name.contains(".tmp.")) },
-    Rule { what: "unfinished write beside its finished file: rooms.json.part, settings.json.part, resume.json.part, encoders.json.part", way: Way::Delete, test: |s| matches!(s.parts, [name] if name.strip_suffix(".part").is_some_and(|whole| WHOLE.contains(&whole) && s.dir.join(whole).is_file())) },
-    Rule { what: "unfinished ffmpeg download: ffmpeg.exe.part, ffmpeg*.zip.part", way: Way::Delete, test: |s| matches!(s.parts, [name] if *name == "ffmpeg.exe.part" || name.starts_with("ffmpeg") && name.ends_with(".zip.part")) },
-    Rule { what: "thumbnail of a recording no log names: rooms/<room>/thumbs/<set>.16x9.jpg", way: Way::Bin, test: |s| matches!(s.parts, ["rooms", _, "thumbs", name] if name.strip_suffix(THUMB).is_some_and(|set| room::valid_id(set) && s.refs.is_some_and(|r| !r.sets.contains(set)))) },
-    Rule { what: "recording media no log names: rooms/<room>/recordings/<set>/<member>/<capture>/<v|m>/<init.mp4|NNNNNN.m4s>[.part]", way: Way::Bin, test: unlogged_media },
-    Rule { what: "live piece of an earlier run: rooms/<room>/standby/<member>/<capture>/<v|m>/<init.mp4|NNNNNN.m4s>[.part]", way: Way::Bin, test: |s| matches!(s.parts, ["rooms", _, "standby", owner, capture, series, name] if media(owner, capture, series, name).is_some()) },
-    Rule { what: "older version files: log.bin, peer/, peer.txt, peers.txt, running.marker", way: Way::Bin, test: |s| s.parts.first().is_some_and(|name| OLD_ROOT.contains(name)) },
-    Rule { what: "extension work of older versions, such as transcription: plugins/", way: Way::Bin, test: |s| matches!(s.parts, ["plugins", _, ..]) },
-    Rule { what: "recording of the first versions: rec-<digits>.mp4", way: Way::Bin, test: |s| matches!(s.parts, [name] if name.strip_prefix("rec-").and_then(|rest| rest.strip_suffix(".mp4")).is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))) },
-    Rule { what: "room folders of older versions: rooms/<room>/sets/, live/, <member>/", way: Way::Bin, test: |s| matches!(s.parts, ["rooms", _, top, _, ..] if OLD_ROOM.contains(top) || room::member_id(top)) },
-    Rule { what: "log under an older name: rooms/<room>/logs/<not a member ID>.bin", way: Way::Bin, test: |s| matches!(s.parts, ["rooms", _, "logs", name] if name.strip_suffix(".bin").is_some_and(|stem| !room::member_id(stem))) },
-    Rule { what: "capture records of older versions: verified.json, cap.json, <v|m>/open.json in a capture folder", way: Way::Bin, test: |s| matches!(s.parts, ["rooms", _, "recordings", _, _, _, name] if OLD_CAPTURE.contains(name)) || matches!(s.parts, ["rooms", _, "recordings", _, _, _, series, "open.json"] if SERIES.contains(series)) },
-    Rule { what: "thumbnail of the size before 16:9: rooms/<room>/thumbs/<set>.jpg", way: Way::Bin, test: |s| matches!(s.parts, ["rooms", _, "thumbs", name] if name.strip_suffix(".jpg").is_some_and(room::valid_id)) },
+    Rule { what: "unfinished thumbnail: rooms/<room>/thumbs/*.tmp.*", group: TEMP, test: |s| matches!(s.parts, ["rooms", _, "thumbs", name] if name.contains(".tmp.")) },
+    Rule { what: "unfinished write beside its finished file: rooms.json.part, settings.json.part, resume.json.part, encoders.json.part", group: TEMP, test: |s| matches!(s.parts, [name] if name.strip_suffix(".part").is_some_and(|whole| WHOLE.contains(&whole) && s.dir.join(whole).is_file())) },
+    Rule { what: "unfinished ffmpeg download: ffmpeg.exe.part, ffmpeg*.zip.part", group: TEMP, test: |s| matches!(s.parts, [name] if *name == "ffmpeg.exe.part" || name.starts_with("ffmpeg") && name.ends_with(".zip.part")) },
+    Rule { what: "thumbnail of a recording no log names: rooms/<room>/thumbs/<set>.16x9.jpg", group: ORPHAN, test: |s| matches!(s.parts, ["rooms", _, "thumbs", name] if name.strip_suffix(THUMB).is_some_and(|set| room::valid_id(set) && s.refs.is_some_and(|r| !r.sets.contains(set)))) },
+    Rule { what: "recording media no log names: rooms/<room>/recordings/<set>/<member>/<capture>/<v|m>/<init.mp4|NNNNNN.m4s>[.part]", group: ORPHAN, test: unlogged_media },
+    Rule { what: "live piece of an earlier run: rooms/<room>/standby/<member>/<capture>/<v|m>/<init.mp4|NNNNNN.m4s>[.part]", group: ORPHAN, test: |s| matches!(s.parts, ["rooms", _, "standby", owner, capture, series, name] if media(owner, capture, series, name).is_some()) },
+    Rule { what: "older version files: log.bin, peer/, peer.txt, peers.txt, running.marker", group: OLD, test: |s| s.parts.first().is_some_and(|name| OLD_ROOT.contains(name)) },
+    Rule { what: "extension work of older versions, such as transcription: plugins/", group: OLD, test: |s| matches!(s.parts, ["plugins", _, ..]) },
+    Rule { what: "recording of the first versions: rec-<digits>.mp4", group: OLD, test: |s| matches!(s.parts, [name] if name.strip_prefix("rec-").and_then(|rest| rest.strip_suffix(".mp4")).is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))) },
+    Rule { what: "room folders of older versions: rooms/<room>/sets/, live/, <member>/", group: OLD, test: |s| matches!(s.parts, ["rooms", _, top, _, ..] if OLD_ROOM.contains(top) || room::member_id(top)) },
+    Rule { what: "log under an older name: rooms/<room>/logs/<not a member ID>.bin", group: OLD, test: |s| matches!(s.parts, ["rooms", _, "logs", name] if name.strip_suffix(".bin").is_some_and(|stem| !room::member_id(stem))) },
+    Rule { what: "capture records of older versions: verified.json, cap.json, <v|m>/open.json in a capture folder", group: OLD, test: |s| matches!(s.parts, ["rooms", _, "recordings", _, _, _, name] if OLD_CAPTURE.contains(name)) || matches!(s.parts, ["rooms", _, "recordings", _, _, _, series, "open.json"] if SERIES.contains(series)) },
+    Rule { what: "thumbnail of the size before 16:9: rooms/<room>/thumbs/<set>.jpg", group: OLD, test: |s| matches!(s.parts, ["rooms", _, "thumbs", name] if name.strip_suffix(".jpg").is_some_and(room::valid_id)) },
 ];
 
 fn media(owner: &str, capture: &str, series: &str, name: &str) -> Option<Option<u32>> {
@@ -151,7 +162,7 @@ impl Walk<'_> {
             let rule = self.classify(parts).filter(|_| old);
             let bytes = meta.len();
             let items = rule.map(|rule| Item { path: path.to_path_buf(), rule, files: 1, bytes }).into_iter().collect();
-            return Node { items, whole: rule.is_some_and(|r| RULES[r].way == Way::Bin), files: 1, bytes };
+            return Node { items, whole: rule.is_some_and(|r| RULES[r].way() == Way::Bin), files: 1, bytes };
         }
         let mut names: Vec<(String, PathBuf)> = crate::entries(path);
         names.sort();
@@ -164,7 +175,7 @@ impl Walk<'_> {
             out.bytes += node.bytes;
             out.items.extend(node.items);
         }
-        out.whole &= out.files > 0 && out.items.iter().all(|i| RULES[i.rule].way == Way::Bin);
+        out.whole &= out.files > 0 && out.items.iter().all(|i| RULES[i.rule].way() == Way::Bin && RULES[i.rule].group == RULES[out.items[0].rule].group);
         let floor = matches!(parts, [] | ["rooms"] | ["rooms", _] | ["rooms", _, "recordings" | "standby" | "thumbs" | "logs"]);
         if out.whole && !floor {
             let rule = out.items[0].rule;
@@ -186,8 +197,104 @@ fn walker<'a>(dir: &'a Path, settled: &'a HashSet<String>, now: SystemTime) -> W
     Walk { dir, settled, now, refs: HashMap::new() }
 }
 
-pub fn plan(dir: &Path, settled: &HashSet<String>, now: SystemTime) -> Vec<Item> {
-    walker(dir, settled, now).node(dir, &[]).items
+#[derive(Clone, Copy, PartialEq)]
+pub enum Root {
+    Local,
+    Roaming,
+}
+
+const KNOWN_DATA: &[&str] = &["key.bin", "key.bin.part", "rooms.json", "rooms.json.part", "settings.json", "settings.json.part", "resume.json", "resume.json.part", "encoders.json", "encoders.json.part", "app.lock", "id.txt", "version.txt", "api.json", "ffmpeg.exe", "ffmpeg.exe.part", "ffmpeg*.zip.part", "log.txt", "log.old.txt", "log.older.txt", "crash.txt", "report.txt", "export", "EBWebView", "rooms", "plugins", "log.bin", "peer", "peer.txt", "peers.txt", "running.marker", "rec-*.mp4"];
+
+pub const LEGACY: &[(Root, &str, &[&str])] = &[
+    (Root::Local, "dev.ggi-hanseikai.app", KNOWN_DATA),
+    (Root::Roaming, "dev.ggi-hanseikai.app", &[".window-state.json"]),
+    (Root::Local, "GGI Hanseikai", &["ggi-hanseikai.exe", "uninstall.exe", "ffmpeg.exe"]),
+];
+
+fn known(name: &str, names: &[&str]) -> bool {
+    names.iter().any(|known| match known.split_once('*') {
+        Some((head, tail)) => name.len() > head.len() + tail.len() && name.starts_with(head) && name.ends_with(tail),
+        None => name.eq_ignore_ascii_case(known),
+    })
+}
+
+pub struct Places {
+    pub dir: PathBuf,
+    pub settled: HashSet<String>,
+    pub local: PathBuf,
+    pub roaming: PathBuf,
+    pub protect: Vec<PathBuf>,
+}
+
+impl Places {
+    fn root(&self, root: Root) -> &Path {
+        if root == Root::Local { &self.local } else { &self.roaming }
+    }
+
+    fn protected(&self, path: &Path) -> bool {
+        let plain = |p: &Path| PathBuf::from(p.to_string_lossy().trim_start_matches(r"\\?\").replace('/', "\\").to_lowercase());
+        let path = plain(path);
+        self.protect.iter().chain([&self.dir]).map(|p| plain(p)).any(|p| p.starts_with(&path) || path.starts_with(&p))
+    }
+}
+
+pub struct Folder {
+    pub path: PathBuf,
+    pub files: u64,
+    pub bytes: u64,
+    pub key: bool,
+}
+
+enum Old {
+    None,
+    Kept,
+    Go(Folder),
+}
+
+fn newest(path: &Path) -> Option<SystemTime> {
+    crate::entries(path).into_iter().filter_map(|(_, p)| std::fs::symlink_metadata(&p).ok().map(|m| (p, m))).filter_map(|(p, m)| if m.is_dir() { newest(&p) } else { m.modified().ok() }).max()
+}
+
+fn count(path: &Path) -> u64 {
+    crate::entries(path).into_iter().map(|(_, p)| if p.is_dir() { count(&p) } else { 1 }).sum()
+}
+
+fn in_use(path: &Path) -> bool {
+    use std::os::windows::fs::OpenOptionsExt;
+    let lock = path.join(data::LOCK);
+    lock.exists() && std::fs::OpenOptions::new().write(true).share_mode(0).open(lock).is_err()
+}
+
+fn old_folder(places: &Places, root: Root, name: &str, names: &[&str], now: SystemTime) -> Old {
+    let path = places.root(root).join(name);
+    let Ok(meta) = std::fs::symlink_metadata(&path) else { return Old::None };
+    if !meta.is_dir() || places.protected(&path) || in_use(&path) || newest(&path).or(meta.modified().ok()).is_none_or(|t| now.duration_since(t).map_or(true, |age| age < MIN_AGE)) {
+        return Old::None;
+    }
+    let inside = crate::entries(&path);
+    if !inside.iter().all(|(entry, _)| known(entry, names)) {
+        return Old::Kept;
+    }
+    Old::Go(Folder { files: count(&path), bytes: data::used_bytes(&path), key: path.join("key.bin").exists(), path })
+}
+
+pub struct Plan {
+    pub items: Vec<Item>,
+    pub folders: Vec<Folder>,
+    pub kept: Vec<PathBuf>,
+}
+
+pub fn plan(places: &Places, now: SystemTime) -> Plan {
+    let items = walker(&places.dir, &places.settled, now).node(&places.dir, &[]).items;
+    let (mut folders, mut kept) = (Vec::new(), Vec::new());
+    for (root, name, names) in LEGACY {
+        match old_folder(places, *root, name, names, now) {
+            Old::Go(folder) => folders.push(folder),
+            Old::Kept => kept.push(places.root(*root).join(name)),
+            Old::None => {}
+        }
+    }
+    Plan { items, folders, kept }
 }
 
 #[derive(Default, Debug, PartialEq)]
@@ -199,63 +306,90 @@ pub struct Done {
     pub paths: Vec<PathBuf>,
 }
 
-pub fn run(dir: &Path, settled: &HashSet<String>, shown: &[PathBuf], now: SystemTime, busy: &dyn Fn() -> bool, mover: &mut dyn FnMut(&Path, Way) -> bool) -> Result<Done, String> {
+pub fn run(places: &Places, shown: &[PathBuf], now: SystemTime, busy: &dyn Fn() -> bool, mover: &mut dyn FnMut(&Path, Way) -> bool) -> Result<Done, String> {
     if busy() {
         return Err(BUSY.into());
     }
-    let mut walk = walker(dir, settled, now);
+    let mut walk = walker(&places.dir, &places.settled, now);
     let mut done = Done::default();
     for path in shown {
         if busy() {
             break;
         }
-        let Some(item) = walk.at(path) else { continue };
-        let way = RULES[item.rule].way;
-        if mover(&item.path, way) && std::fs::symlink_metadata(&item.path).is_err() {
-            *(if way == Way::Bin { &mut done.moved } else { &mut done.deleted }) += item.files;
-            done.freed += item.bytes;
-            done.paths.push(item.path);
+        let found = if path.starts_with(&places.dir) {
+            walk.at(path).map(|item| (item.files, item.bytes, RULES[item.rule].way()))
         } else {
-            done.skipped += item.files;
+            LEGACY.iter().filter(|(root, name, _)| places.root(*root).join(name) == *path).find_map(|(root, name, names)| match old_folder(places, *root, name, names, now) {
+                Old::Go(f) => Some((f.files, f.bytes, Way::Bin)),
+                _ => None,
+            })
+        };
+        let Some((files, bytes, way)) = found else { continue };
+        if mover(path, way) && std::fs::symlink_metadata(path).is_err() {
+            *(if way == Way::Bin { &mut done.moved } else { &mut done.deleted }) += files;
+            done.freed += bytes;
+            done.paths.push(path.clone());
+        } else {
+            done.skipped += files;
         }
     }
     Ok(done)
 }
 
-pub fn summary(dir: &Path, items: &[Item]) -> Value {
-    let sum = |way: Way| items.iter().filter(|i| RULES[i.rule].way == way).fold((0, 0), |(f, b), i| (f + i.files, b + i.bytes));
-    let ((bin_files, bin_bytes), (temp_files, temp_bytes)) = (sum(Way::Bin), sum(Way::Delete));
-    let examples: Vec<String> = items.iter().take(EXAMPLES).map(|i| i.path.strip_prefix(dir).unwrap_or(&i.path).to_string_lossy().replace('\\', "/")).collect();
-    json!({"files": bin_files + temp_files, "bytes": bin_bytes + temp_bytes, "temp_files": temp_files, "temp_bytes": temp_bytes, "examples": examples})
+pub fn summary(places: &Places, plan: &Plan) -> Value {
+    let groups: Vec<Value> = [TEMP, ORPHAN, OLD]
+        .into_iter()
+        .filter_map(|group| {
+            let mut items: Vec<&Item> = plan.items.iter().filter(|i| RULES[i.rule].group == group).collect();
+            if items.is_empty() {
+                return None;
+            }
+            items.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.path.cmp(&b.path)));
+            let rel = |i: &Item| i.path.strip_prefix(&places.dir).unwrap_or(&i.path).to_string_lossy().replace('\\', "/");
+            let listed: Vec<Value> = items.iter().take(LISTED).map(|i| json!({"path": rel(i), "bytes": i.bytes})).collect();
+            Some(json!({"id": group, "count": items.len(), "files": items.iter().map(|i| i.files).sum::<u64>(), "bytes": items.iter().map(|i| i.bytes).sum::<u64>(), "items": listed, "more": items.len().saturating_sub(LISTED)}))
+        })
+        .collect();
+    let mut folders: Vec<&Folder> = plan.folders.iter().collect();
+    folders.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+    let folders: Vec<Value> = folders.iter().map(|f| json!({"path": f.path, "files": f.files, "bytes": f.bytes, "key": f.key})).collect();
+    json!({"groups": groups, "folders": folders, "kept": plan.kept})
 }
 
 fn busy(core: &Core) -> bool {
     core.any_recording() || core.export.lock().unwrap().is_some() || jobs::busy()
 }
 
-fn settled(core: &Core) -> HashSet<String> {
+fn places(core: &Core) -> Places {
     let ids: Vec<String> = core.rooms.lock().unwrap().list.iter().filter(|r| r.invite.is_none()).map(|r| r.id.clone()).collect();
-    ids.into_iter().filter(|id| core.log_ready(id)).collect()
+    let env = |name: &str| std::env::var_os(name).map(PathBuf::from).unwrap_or_default();
+    let exe = std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf));
+    Places { dir: core.dir.clone(), settled: ids.into_iter().filter(|id| core.log_ready(id)).collect(), local: env("LOCALAPPDATA"), roaming: env("APPDATA"), protect: exe.into_iter().collect() }
 }
 
 pub fn plan_op(core: &Arc<Core>, _: Value) -> Result<Value, String> {
     if busy(core) {
         return Err(BUSY.into());
     }
-    let items = plan(&core.dir, &settled(core), SystemTime::now());
-    *SHOWN.lock().unwrap() = items.iter().map(|i| i.path.clone()).collect();
-    Ok(summary(&core.dir, &items))
+    let places = places(core);
+    let plan = plan(&places, SystemTime::now());
+    let mut shown: Vec<(&'static str, PathBuf)> = plan.items.iter().map(|i| (RULES[i.rule].group, i.path.clone())).collect();
+    shown.extend(plan.folders.iter().map(|f| (FOLDERS, f.path.clone())));
+    *SHOWN.lock().unwrap() = shown;
+    Ok(summary(&places, &plan))
 }
 
-pub fn run_op(core: &Arc<Core>, _: Value) -> Result<Value, String> {
+pub fn run_op(core: &Arc<Core>, args: Value) -> Result<Value, String> {
+    let groups: Vec<String> = crate::ops::arg(&args, "groups")?;
+    let folders: Vec<PathBuf> = crate::ops::arg::<Option<Vec<PathBuf>>>(&args, "folders")?.unwrap_or_default();
     if busy(core) {
         return Err(BUSY.into());
     }
-    let shown = std::mem::take(&mut *SHOWN.lock().unwrap());
-    let (c, settled) = (core.clone(), settled(core));
+    let shown: Vec<PathBuf> = std::mem::take(&mut *SHOWN.lock().unwrap()).into_iter().filter(|(group, path)| if *group == FOLDERS { folders.contains(path) } else { groups.iter().any(|g| g == group) }).map(|(_, path)| path).collect();
+    let (c, places) = (core.clone(), places(core));
     let done = std::thread::spawn(move || {
         let _com = Com::new();
-        run(&c.dir, &settled, &shown, SystemTime::now(), &|| busy(&c), &mut move_away)
+        run(&places, &shown, SystemTime::now(), &|| busy(&c), &mut move_away)
     })
     .join()
     .map_err(|_| "Clean up failed.".to_string())??;
@@ -373,16 +507,16 @@ mod tests {
 
     const LATER: Duration = Duration::from_secs(2 * 86_400);
 
-    struct Folder {
+    struct Tree {
         dir: PathBuf,
         me: String,
         other: String,
     }
 
-    impl Folder {
+    impl Tree {
         fn new(name: &str) -> Self {
             let (me, other) = (iroh::SecretKey::generate().public().to_string(), iroh::SecretKey::generate().public().to_string());
-            Folder { dir: temp(name), me, other }
+            Tree { dir: temp(name), me, other }
         }
 
         fn name(&self, p: &str) -> String {
@@ -398,9 +532,16 @@ mod tests {
             crate::log::tests::put(&self.dir, &self.name(path), &bytes);
         }
 
+        fn places(&self) -> Places {
+            Places { dir: self.dir.clone(), settled: ["r".to_string()].into(), local: self.dir.with_extension("none"), roaming: self.dir.with_extension("none"), protect: Vec::new() }
+        }
+
         fn plan(&self, now: SystemTime) -> Vec<(String, &'static str, u64)> {
-            let rooms: HashSet<String> = ["r".to_string()].into();
-            plan(&self.dir, &rooms, now).into_iter().map(|i| (self.rel(&i.path), RULES[i.rule].what, i.files)).collect()
+            plan(&self.places(), now).items.into_iter().map(|i| (self.rel(&i.path), RULES[i.rule].what, i.files)).collect()
+        }
+
+        fn shown(&self, now: SystemTime) -> Vec<PathBuf> {
+            plan(&self.places(), now).items.into_iter().map(|i| i.path).collect()
         }
 
         fn rel(&self, path: &Path) -> String {
@@ -447,8 +588,8 @@ mod tests {
         "rooms/unlisted/recordings/gone/ME/1/v/000001.m4s",
     ];
 
-    fn seeded(name: &str) -> Folder {
-        let f = Folder::new(name);
+    fn seeded(name: &str) -> Tree {
+        let f = Tree::new(name);
         f.seed(&KEPT);
         f.log("rooms/r/logs/ME.bin", &[json!({"k": "rec", "set": "s1", "start_us": 0}), seg("s1", "1000", "v", 1), seg("s1", "1000", "v", 2)]);
         f.log("rooms/r/logs/OT.bin", &[json!({"k": "rec", "set": "s1", "start_us": 0}), seg("s1", "2000", "m", 1), json!({"k": "rec", "set": "d1", "of": "s9"})]);
@@ -511,17 +652,19 @@ mod tests {
         ];
         assert_eq!(got, want.map(|(p, r, n)| (p.to_string(), r, n)));
         assert!((0..RULES.len()).all(|r| got.iter().any(|g| g.1 == r)), "a rule has no case");
-        let summary = summary(&f.dir, &plan(&f.dir, &["r".to_string()].into(), SystemTime::now() + LATER));
-        assert_eq!((summary["files"].as_u64(), summary["bytes"].as_u64(), summary["temp_files"].as_u64(), summary["temp_bytes"].as_u64()), (Some(24), Some(24), Some(4), Some(4)));
-        assert_eq!(summary["examples"].as_array().map(Vec::len), Some(EXAMPLES));
+        let summary = summary(&f.places(), &plan(&f.places(), SystemTime::now() + LATER));
+        let groups: Vec<(&str, u64, u64, u64)> = summary["groups"].as_array().unwrap().iter().map(|g| (g["id"].as_str().unwrap(), g["count"].as_u64().unwrap(), g["files"].as_u64().unwrap(), g["bytes"].as_u64().unwrap())).collect();
+        assert_eq!(groups, [(TEMP, 4, 4, 4), (ORPHAN, 5, 8, 8), (OLD, 11, 12, 12)]);
+        let orphans = &summary["groups"][1]["items"];
+        assert_eq!((orphans[0]["path"].as_str(), orphans[0]["bytes"].as_u64()), (Some("rooms/r/recordings/gone"), Some(3)));
         let _ = std::fs::remove_dir_all(&f.dir);
     }
 
     #[test]
     fn a_run_moves_exactly_the_plan_through_the_mover_and_keeps_everything_else() {
         let f = seeded("cleanrun");
-        let (rooms, later) = (["r".to_string()].into(), SystemTime::now() + LATER);
-        let shown: Vec<PathBuf> = plan(&f.dir, &rooms, later).into_iter().map(|i| i.path).collect();
+        let later = SystemTime::now() + LATER;
+        let shown = f.shown(later);
         f.seed(&["rooms/r/recordings/gone2/ME/1/v/000001.m4s"]);
         let bin = f.dir.with_extension("bin");
         let _ = std::fs::remove_dir_all(&bin);
@@ -535,7 +678,7 @@ mod tests {
             std::fs::create_dir_all(&bin).unwrap();
             std::fs::rename(path, to).is_ok()
         };
-        let done = run(&f.dir, &rooms, &shown, later, &|| false, &mut mover).unwrap();
+        let done = run(&f.places(), &shown, later, &|| false, &mut mover).unwrap();
         assert_eq!((done.moved, done.deleted, done.skipped, done.freed), (19, 4, 1, 23));
         assert_eq!(ways.iter().filter(|(_, w)| *w == Way::Delete).map(|(p, _)| p.as_str()).collect::<Vec<_>>(), ["ffmpeg-8.1-essentials_build.zip.part", "resume.json.part", "rooms/r/thumbs/s1.tmp.mp4", "settings.json.part"]);
         let mut left: Vec<String> = f.left().into_keys().collect();
@@ -551,15 +694,15 @@ mod tests {
     #[test]
     fn a_run_checks_again_before_each_move_and_refuses_while_busy() {
         let f = seeded("cleancheck");
-        let (rooms, later) = (["r".to_string()].into(), SystemTime::now() + LATER);
-        let shown: Vec<PathBuf> = plan(&f.dir, &rooms, later).into_iter().map(|i| i.path).collect();
+        let later = SystemTime::now() + LATER;
+        let shown = f.shown(later);
         let mut moved = 0;
         let mut mover = |path: &Path, _: Way| {
             moved += 1;
             std::fs::remove_dir_all(path).or_else(|_| std::fs::remove_file(path)).is_ok()
         };
-        assert_eq!(run(&f.dir, &rooms, &shown, later, &|| true, &mut mover), Err(BUSY.to_string()));
-        let fresh = run(&f.dir, &rooms, &shown, SystemTime::now(), &|| false, &mut mover).unwrap();
+        assert_eq!(run(&f.places(), &shown, later, &|| true, &mut mover), Err(BUSY.to_string()));
+        let fresh = run(&f.places(), &shown, SystemTime::now(), &|| false, &mut mover).unwrap();
         assert_eq!((fresh.moved, fresh.skipped), (0, 0));
         f.log("rooms/r/logs/ME.bin", &[json!({"k": "rec", "set": "s1", "start_us": 0}), seg("s1", "1000", "v", 1), seg("s1", "1000", "v", 2), seg("s1", "1000", "v", 3), seg("gone", "3000", "v", 1)]);
         crate::log::tests::put(&f.dir, "rooms/r/pending.bin", b"");
@@ -568,7 +711,7 @@ mod tests {
             calls.set(calls.get() + 1);
             calls.get() > 4
         };
-        let done = run(&f.dir, &rooms, &shown, later, &busy_later, &mut mover).unwrap();
+        let done = run(&f.places(), &shown, later, &busy_later, &mut mover).unwrap();
         assert_eq!((done.moved + done.deleted, moved), (3, 3));
         let left = f.left();
         for p in ["rooms/r/recordings/gone/ME/3000/v/000001.m4s", "rooms/r/recordings/s1/ME/1000/v/000003.m4s", "rooms/r/thumbs/gone.16x9.jpg", "rooms/r/sets/s1/a.mp4"] {
@@ -578,8 +721,46 @@ mod tests {
     }
 
     #[test]
+    fn old_folders_go_whole_only_by_exact_name_with_known_entries_and_never_the_current_ones() {
+        let base = temp("cleanold");
+        let (local, roaming) = (base.join("local"), base.join("roaming"));
+        seed(&local, ["dev.ggi-hanseikai.app/key.bin", "dev.ggi-hanseikai.app/rooms/r/logs/a.bin", "dev.ggi-hanseikai.app/log.txt", "dev.ggi-hanseikai.app/rec-1.mp4", "GGI Hanseikai/ffmpeg.exe", "GGI Hanseikai/notes.txt", "dev.ggi-hanseikai.apps/x", "dev.ez-hanseikai.app/key.bin", "EZ Hanseikai/ez-hanseikai.exe"]);
+        std::fs::create_dir_all(roaming.join("dev.ggi-hanseikai.app")).unwrap();
+        let mut places = Places { dir: local.join("dev.ez-hanseikai.app"), settled: HashSet::new(), local: local.clone(), roaming: roaming.clone(), protect: vec![local.join("EZ Hanseikai")] };
+        let later = SystemTime::now() + LATER;
+        let found = |places: &Places, now| {
+            let plan = plan(places, now);
+            let folders: Vec<(String, u64, bool)> = plan.folders.iter().map(|f| (f.path.strip_prefix(&base).unwrap().to_string_lossy().replace('\\', "/"), f.files, f.key)).collect();
+            (folders, plan.kept.iter().map(|p| p.strip_prefix(&base).unwrap().to_string_lossy().replace('\\', "/")).collect::<Vec<_>>())
+        };
+        assert_eq!(found(&places, SystemTime::now()), (vec![], vec![]));
+        let (folders, kept) = found(&places, later);
+        assert_eq!(folders, [("local/dev.ggi-hanseikai.app".to_string(), 4, true), ("roaming/dev.ggi-hanseikai.app".to_string(), 0, false)]);
+        assert_eq!(kept, ["local/GGI Hanseikai"]);
+        let summary = summary(&places, &plan(&places, later));
+        assert_eq!((summary["folders"][0]["key"].as_bool(), summary["folders"].as_array().unwrap().len(), summary["kept"].as_array().unwrap().len()), (Some(true), 2, 1));
+        places.protect.push(local.join("GGI Hanseikai"));
+        places.dir = local.join("dev.ggi-hanseikai.app").join("inner");
+        assert_eq!(found(&places, later), (vec![("roaming/dev.ggi-hanseikai.app".to_string(), 0, false)], vec![]));
+        places.dir = local.join("dev.ez-hanseikai.app");
+        let shown = vec![local.join("dev.ggi-hanseikai.app"), roaming.join("dev.ggi-hanseikai.app"), local.join("GGI Hanseikai"), local.join("dev.ez-hanseikai.app")];
+        let mut moved = Vec::new();
+        let mut mover = |path: &Path, way: Way| {
+            moved.push((path.to_path_buf(), way));
+            std::fs::remove_dir_all(path).is_ok()
+        };
+        let done = run(&places, &shown, later, &|| false, &mut mover).unwrap();
+        assert_eq!(moved, [(shown[0].clone(), Way::Bin), (shown[1].clone(), Way::Bin)]);
+        assert_eq!((done.moved, done.skipped), (4, 0));
+        for left in ["local/GGI Hanseikai/notes.txt", "local/dev.ggi-hanseikai.apps/x", "local/dev.ez-hanseikai.app/key.bin", "local/EZ Hanseikai/ez-hanseikai.exe"] {
+            assert!(base.join(left).exists(), "{left} went");
+        }
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
     fn every_pattern_names_what_it_removes() {
         assert!(RULES.iter().all(|r| r.what.contains(':')));
-        assert_eq!(RULES.iter().filter(|r| r.way == Way::Delete).count(), 3);
+        assert_eq!(RULES.iter().filter(|r| r.way() == Way::Delete).count(), 3);
     }
 }

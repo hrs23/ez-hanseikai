@@ -428,15 +428,35 @@ $("checkupdate").onclick = () => checkUpdate(true);
 $("selnone").onclick = () => { picked.clear(); delete sigs.storage; renderStorage(); };
 $("selold").onclick = () => { picked = new Set(oldSessions(st.sets.filter((s) => !s.live))); delete sigs.storage; renderStorage(); };
 $("deletesel").onclick = () => confirmDelete([...picked]);
+function renderCleanup(plan, picked) {
+  const path = (p) => el("div", { className: "row small" }, el("span", { className: "mono ellip", textContent: p.path }), el("span", { className: "sp" }), el("span", { className: "muted", textContent: bytes(p.bytes) }));
+  const box = (on, flip) => { const b = el("input", { type: "checkbox", checked: on }); b.onchange = () => { flip(b.checked); renderCleanup(plan, picked); }; return b; };
+  const pick = (set, id) => (on) => { if (on) set.add(id); else set.delete(id); };
+  const groups = plan.groups.map((g) => el("details", { className: "delcard" },
+    el("summary", {}, box(picked.groups.has(g.id), pick(picked.groups, g.id)), " ", el("b", { textContent: cleanupHead(CLEANUP_GROUPS[g.id], g.count, g.bytes) }), g.id === "temp" ? el("div", { className: "small muted", textContent: t("Deleted, not moved to the Recycle Bin") }) : null),
+    ...g.items.map(path), g.more ? el("div", { className: "small muted", textContent: t("+{n} more", { n: g.more }) }) : null));
+  const folders = plan.folders.length || plan.kept.length ? [el("div", { className: "delcard" },
+    el("b", { textContent: cleanupHead("Old folders", plan.folders.length, plan.folders.reduce((s, f) => s + f.bytes, 0)) }),
+    ...plan.folders.map((f) => el("label", { className: "row small" }, box(picked.folders.has(f.path), pick(picked.folders, f.path)), el("span", { className: "mono ellip", textContent: f.path }), f.key ? el("span", { className: "warn", textContent: t("Contains an old ID key") }) : null, el("span", { className: "sp" }), el("span", { className: "muted", textContent: bytes(f.bytes) }))),
+    ...plan.kept.map((p) => el("div", { className: "row small muted" }, el("span", { className: "mono ellip", textContent: p }), el("span", { className: "sp" }), el("span", { textContent: t("Kept: it holds files the app did not make") }))))] : [];
+  $("cleanlist").replaceChildren(...groups, ...folders);
+  const total = cleanupTotal(plan, picked);
+  $("cleantotal").textContent = total.text;
+  $("cleanyes").disabled = !total.n;
+}
 $("cleanup").onclick = async () => {
   const plan = await invoke("cleanup_plan").catch(fail);
   if (!plan) return;
-  if (!plan.files) { flash(t("Nothing to clean up")); return; }
-  const { title, action } = cleanupAsk(plan);
-  if (!(await ask(title, action, true))) return;
-  const done = await invoke("cleanup_run").catch(fail);
-  if (done) flash(cleanupDone(done));
-  loadStorage();
+  if (!plan.groups.length && !plan.folders.length && !plan.kept.length) { flash(t("Nothing to clean up")); return; }
+  const picked = cleanupPicked(plan);
+  renderCleanup(plan, picked);
+  $("cleanyes").onclick = async () => {
+    $("cleandlg").close();
+    const done = await invoke("cleanup_run", { groups: [...picked.groups], folders: [...picked.folders] }).catch(fail);
+    if (done) flash(cleanupDone(done));
+    loadStorage();
+  };
+  $("cleandlg").showModal();
 };
 $("diagcopy").onclick = () => diagnosticsText().then((text) => navigator.clipboard.writeText(text)).then(() => flash(t("Copied"))).catch(fail);
 $("diagsave").onclick = () => diagnosticsText().then((text) => dialog("save_text", { name: "ez-hanseikai-diagnostics.txt", text })).then((saved) => { if (saved) flash(t("Saved")); }).catch(fail);
