@@ -127,7 +127,7 @@ function pill(cls, iconName, text) {
 
 function tile(s, key) {
   if (s.tiles[key]) return s.tiles[key];
-  const tl = { key, sigs: {}, media: slot(el("video", { muted: true, preload: "auto" })), mic: null, loud: -Infinity, name: el("span", { className: "nm" }), av: el("span"), imp: el("span", { className: "imp", hidden: true }), who: el("div", { className: "who" }), what: el("div", { className: "what" }), problem: el("div", { className: "problem", hidden: true }) };
+  const tl = { key, sigs: {}, media: slot(el("video", { muted: true, preload: "auto" }), key.slice(0, 4)), mic: null, loud: -Infinity, name: el("span", { className: "nm" }), av: el("span"), imp: el("span", { className: "imp", hidden: true }), who: el("div", { className: "who" }), what: el("div", { className: "what" }), problem: el("div", { className: "problem", hidden: true }) };
   tl.snd = el("span", { className: "snd", hidden: true }, icon("volume-2"));
   tl.lab = el("div", { className: "nl" }, tl.av, tl.name, tl.imp, tl.snd, el("span", { className: "moff" }, icon("mic-off", "sm")));
   tl.pic = el("div", { className: "pic" }, tl.media.video, el("div", { className: "waitbox" }, tl.who, tl.what), tl.problem);
@@ -373,7 +373,7 @@ function tickLive() {
     const step = edge ? liveFollow(bufferedEnd(s.video), s.video.currentTime) : { target: liveClock.pos - s.base, playing: !liveClock.held };
     aim(s, step.target);
     pace(s, step.target, step.playing);
-    s.video.playbackRate = edge ? 1 : liveClock.rate;
+    setRate(s, edge ? 1 : liveClock.rate);
   }
 }
 function liveWhat(p) {
@@ -480,7 +480,7 @@ function applyAudio() {
     if (tl.snd) tl.snd.hidden = key !== heard || play.keys.length < 2;
     for (const [s, on, mix] of [[tl.media, key === heard, mine.app], [tl.mic, true, mine.voice]]) if (s) {
       setLevel(s, level(on, mix));
-      s.video.playbackRate = livePinned() ? liveClock.rate : rate;
+      setRate(s, livePinned() ? liveClock.rate : rate);
     }
     if (tl.mic && tl.mic.tap) setTone(tl.mic.tap, tone);
   });
@@ -691,6 +691,7 @@ function selectSet(id) {
   ink.press = null;
   play.view = 0;
   prune(play, []);
+  probed.clear();
   if (id) quiet("focus_set", { set: id });
   if (watchParty && st.party.on) joinParty();
 }
@@ -1642,7 +1643,7 @@ $("seek").onpointerdown = (e) => {
     bezel(fmt(nowM()));
   };
 };
-const peek = { slot: slot(el("video", { muted: true, preload: "auto" })), at: null };
+const peek = { slot: slot(el("video", { muted: true, preload: "auto" }), "peek"), at: null };
 peek.slot.video.onseeked = () => {
   const c = $("peek").querySelector("canvas");
   c.getContext("2d").drawImage(peek.slot.video, 0, 0, c.width, c.height);
@@ -1740,6 +1741,12 @@ document.addEventListener("keydown", (e) => {
   e.preventDefault();
   action(e);
 });
+
+function probeTiles() {
+  if (document.hidden) return;
+  const slots = [...Object.values(play.tiles), ...Object.values(rec.tiles)].map((tl) => tl.media).filter((x) => x.video.isConnected && !x.video.paused);
+  playerProbe(slots, slots.length, !!(play.mini && play.mini.box && !play.mini.box.hidden));
+}
 
 async function reportCodecs() {
   const types = { av1: CODECS.av01, hevc: CODECS.hvc1, h264: CODECS.avc1 };

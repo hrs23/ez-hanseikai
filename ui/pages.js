@@ -535,6 +535,8 @@ if (boardWindow) {
   setInterval(() => { if (!document.hidden) tick(); }, TICK_MS);
   setInterval(() => { if (!document.hidden) refresh().catch(warn); }, REFRESH_MS);
   setInterval(pollPlugins, PLUGINS_MS);
+  setInterval(probeTiles, PROBE_MS);
+  watchLongTasks();
   refresh();
   setTimeout(() => checkUpdate(false), UPDATE_CHECK_DELAY_MS);
   setInterval(() => checkUpdate(false), UPDATE_EVERY_MS);

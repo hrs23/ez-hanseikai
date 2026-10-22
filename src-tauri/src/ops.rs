@@ -84,6 +84,11 @@ pub const OPS: &[(&str, Op)] = &[
     ("state", |c, _| Ok(room::state_json(c))),
     ("debug_flow", debug::debug_flow),
     ("debug_report", debug::debug_report),
+    ("player_log", |_, a| {
+        let text: String = arg(&a, "text")?;
+        tracing::info!("player: {}", text.chars().filter(|c| !c.is_control()).take(300).collect::<String>());
+        Ok(Value::Null)
+    }),
 ];
 
 pub fn find(name: &str) -> Option<Op> {

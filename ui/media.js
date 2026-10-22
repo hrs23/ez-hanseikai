@@ -4,7 +4,15 @@ const PROBE_S = 0.01;
 const RETRY_MS = 3000;
 const HOLD_MAX_MS = 1000;
 const SEEK_TOLERANCE = 0.05;
-const DRIFT_MAX = 0.4;
+const DRIFT_NUDGE_MIN = 0.15;
+const DRIFT_NUDGE_MAX = 1.5;
+const DRIFT_FAR = 4;
+const DRIFT_HOLD_MS = 1000;
+const DRIFT_QUIET_MS = 1500;
+const NUDGE_RATE = 0.08;
+const LOG_LINES_PER_MIN = 20;
+const LONG_TASK_MS = 100;
+const PROBE_MS = 1000;
 const HAVE_FUTURE_DATA = 3;
 const SPEAK_LEVEL = 0.02;
 const SPEAK_HANG_MS = 300;
@@ -21,9 +29,10 @@ const audio = () => (context ||= new AudioContext());
 const talking = (last, peak, now) => (peak >= SPEAK_LEVEL ? now : last);
 const stillTalking = (last, now) => now - last < SPEAK_HANG_MS;
 
-const slot = (video) => {
-  const s = { video, ms: null, sb: null, part: null, index: null, size: -1, base: null, shift: 0, got: new Map(), tail: 0, want: null, job: null, failedAt: 0, waitSince: 0 };
+const slot = (video, label = "") => {
+  const s = { video, label, nudge: 1, rate: 1, drift: { high: 0, seekedAt: 0, target: null }, dropped: 0, ms: null, sb: null, part: null, index: null, size: -1, base: null, shift: 0, got: new Map(), tail: 0, want: null, job: null, failedAt: 0, waitSince: 0 };
   video.onerror = () => broken(s);
+  for (const type of ["waiting", "stalled", "seeking"]) video.addEventListener(type, () => videoEvent(s, type));
   return s;
 };
 const srcOf = (path) => convertFileSrc(path, "ezh");
@@ -153,8 +162,10 @@ async function advance(s) {
   if (pathOf(s.part) !== part.path) {
     const init = await (await get("init")).arrayBuffer();
     if (s.ms !== ms) return false;
-    if (s.sb) s.sb.changeType(typeOf(s, init));
-    else s.sb = ms.addSourceBuffer(typeOf(s, init));
+    const type = typeOf(s, init);
+    if (s.sb) s.sb.changeType(type);
+    else s.sb = ms.addSourceBuffer(type);
+    probeDecode(s, type);
     s.sb.timestampOffset = shift;
     await buffer(s.sb, () => s.sb.appendBuffer(init));
     Object.assign(s, { part, shift, index: null, size: -1, got: new Map(), tail: 0 });
@@ -199,15 +210,97 @@ function feed(s, part, off, wall, first = part) {
 }
 const feedSeries = (s, p, series, wall) => feed(s, partFor(p, series, wall), p.off, wall, partFor(p, series, -Infinity));
 
+function driftStep(drift, state, hist, now) {
+  const off = Math.abs(drift);
+  const seek = (reason) => ({ act: "seek", nudge: 1, high: 0, reason });
+  if (state.paused) return off > SEEK_TOLERANCE ? seek("paused") : { act: "none", nudge: 1, high: 0 };
+  if (state.jumped) return seek("jump");
+  if (state.seeking || state.readyState < HAVE_FUTURE_DATA || now - hist.seekedAt < DRIFT_QUIET_MS) return { act: "none", nudge: 1, high: 0 };
+  if (off > DRIFT_FAR) return seek("far");
+  const high = off > DRIFT_NUDGE_MAX ? hist.high || now : 0;
+  if (high && now - high > DRIFT_HOLD_MS) return seek("held");
+  if (off <= DRIFT_NUDGE_MIN) return { act: "none", nudge: 1, high };
+  return { act: "nudge", nudge: drift < 0 ? 1 + NUDGE_RATE : 1 - NUDGE_RATE, high };
+}
+
+function setRate(s, rate) {
+  s.rate = rate;
+  const next = rate * s.nudge;
+  if (s.video.playbackRate !== next) s.video.playbackRate = next;
+}
+
 function aim(s, t) {
   const v = s.video;
   const to = Math.min(t, isFinite(v.duration) ? v.duration : t);
-  const off = Math.abs(v.currentTime - to);
-  if (to >= 0 && isFinite(to) && off > (v.paused ? SEEK_TOLERANCE : DRIFT_MAX)) {
-    v.currentTime = to;
-    if (off > JUMP_MIN) s.waitSince = 0;
+  if (to >= 0 && isFinite(to)) {
+    const now = Date.now();
+    const hist = s.drift;
+    const jumped = hist.target !== null && Math.abs(to - hist.target) > JUMP_MIN;
+    hist.target = to;
+    const drift = v.currentTime - to;
+    const step = driftStep(drift, { paused: v.paused, seeking: v.seeking, readyState: v.readyState, jumped }, hist, now);
+    hist.high = step.high;
+    if (step.act === "seek") {
+      if (!v.paused) playerLog(`${s.label} seek ${drift > 0 ? "+" : ""}${drift.toFixed(2)} s ${step.reason} ahead=${aheadOf(v)} rs=${v.readyState}`);
+      v.currentTime = to;
+      hist.seekedAt = now;
+      if (Math.abs(drift) > JUMP_MIN) s.waitSince = 0;
+    }
+    if (step.nudge !== s.nudge) {
+      s.nudge = step.nudge;
+      setRate(s, s.rate);
+    }
   }
   return !v.seeking && v.readyState >= HAVE_FUTURE_DATA;
+}
+
+const aheadOf = (v) => Math.max(0, bufferedEnd(v) - v.currentTime).toFixed(1);
+const logBudget = { from: 0, n: 0, skipped: 0 };
+function playerLog(text) {
+  const now = Date.now();
+  if (now - logBudget.from >= 60000) {
+    const skipped = logBudget.skipped;
+    Object.assign(logBudget, { from: now, n: 0, skipped: 0 });
+    if (skipped) playerLog(`${skipped} lines skipped`);
+  }
+  if (logBudget.n >= LOG_LINES_PER_MIN) { logBudget.skipped++; return; }
+  logBudget.n++;
+  quiet("player_log", { text });
+}
+function videoEvent(s, type) {
+  const v = s.video;
+  if (type === "seeking" && Date.now() - s.drift.seekedAt < 200) return;
+  playerLog(`${s.label} ${type} t=${v.currentTime.toFixed(2)} ahead=${aheadOf(v)} rs=${v.readyState}`);
+}
+function playerProbe(slots, tiles, minimap) {
+  const lost = [];
+  for (const s of slots) {
+    const q = s.video.getVideoPlaybackQuality && s.video.getVideoPlaybackQuality();
+    if (!q) continue;
+    if (q.droppedVideoFrames > s.dropped) lost.push(`${s.label}+${q.droppedVideoFrames - s.dropped}`);
+    s.dropped = q.droppedVideoFrames;
+  }
+  if (lost.length) playerLog(`dropped ${lost.join(" ")} tiles=${tiles} minimap=${minimap ? "on" : "off"}`);
+}
+function watchLongTasks() {
+  if (typeof PerformanceObserver !== "function") return;
+  const types = ["longtask", "long-animation-frame"].filter((x) => (PerformanceObserver.supportedEntryTypes || []).includes(x));
+  if (!types.length) return;
+  const seen = new PerformanceObserver((list) => {
+    for (const e of list.getEntries()) if (e.duration > LONG_TASK_MS) playerLog(`${e.entryType} ${Math.round(e.duration)} ms`);
+  });
+  for (const type of types) seen.observe({ type });
+}
+const probed = new Set();
+async function probeDecode(s, type) {
+  if (s.video.tagName !== "VIDEO" || probed.has(type) || !navigator.mediaCapabilities) return;
+  probed.add(type);
+  try {
+    const info = await navigator.mediaCapabilities.decodingInfo({ type: "media-source", video: { contentType: type, ...CODEC_PROBE } });
+    playerLog(`decode ${type.replace(/^.*codecs=/, "")} supported=${info.supported} smooth=${info.smooth} powerEfficient=${info.powerEfficient}`);
+  } catch (e) {
+    warn(e);
+  }
 }
 
 function pace(s, t, playing) {
@@ -234,7 +327,7 @@ function feedParts(tl, p, m, b) {
   const wall = b + m * 1e6;
   const mic = partFor(p, "m", wall);
   if (mic && !tl.mic) {
-    tl.mic = slot(tl.box.appendChild(el("audio", { preload: "auto" })));
+    tl.mic = slot(tl.box.appendChild(el("audio", { preload: "auto" })), tl.key.slice(0, 4) + "/m");
     tl.mic.tap = voiceTap(tl.mic.video);
     applyAudio();
   }
