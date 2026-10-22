@@ -261,7 +261,7 @@ const JA = {
   "Ready": "準備完了",
   "Received": "受信",
   "Receiving": "受け取り中",
-  "Recent rooms": "最近のルーム",
+  "Your rooms": "参加しているルーム",
   "Recorded": "録画",
   "Recorded files": "録画ファイル",
   "Recording": "録画中",
