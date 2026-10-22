@@ -88,6 +88,8 @@ const JA = {
   "Unknown shortcut.": "不明なショートカットです。",
   "Microphone / screen while recording": "録画中のマイク / 画面",
   "Apex matches": "Apex の試合終了検知",
+  "Apex minimap": "Apex のミニマップ",
+  "Adds a tile with the minimap of the member whose app sound plays.": "アプリ音を再生中のメンバーのミニマップをタイルで表示します。",
   "App sound": "アプリの音",
   "{name} app sound is playing": "{name} のアプリの音を再生中",
   "◀◀ {n} s": "◀◀ {n}秒",

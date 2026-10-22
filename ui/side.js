@@ -193,7 +193,7 @@ function sessionMenu(id, anchor) {
     { label: t("Export to folder…"), icon: "upload", disabled: set.live || !onThisPc(set), run: () => exportFolder(set) },
     { label: t("Open folder"), icon: "folder", disabled: set.live || set.progress.have === 0, run: () => dialog("open_set_folder", { room: set.room, set: set.id }).catch(fail) },
     { label: t("Copy link"), icon: "link", run: () => navigator.clipboard.writeText(momentLink(set.id, 0, null)).then(() => flash(t("Link copied"))).catch(fail) },
-    { label: t("Re-run analysis"), icon: "rotate-cw", disabled: set.live || !onThisPc(set) || !plugins.some((p) => p.on), run: () => retryAnalysis(set) },
+    { label: t("Re-run analysis"), icon: "rotate-cw", disabled: set.live || !onThisPc(set) || !plugins.some((p) => p.on && !p.view), run: () => retryAnalysis(set) },
     { label: t("Delete AI notes"), icon: "trash", disabled: !hasAi, run: () => ask(t("Delete AI notes?"), t("Delete"), true).then((yes) => yes && run("delete_ai_notes", { room: set.room, set: set.id })) },
     { separator: true },
     { label: t("Delete…"), icon: "trash", danger: true, disabled: !canDelete(set), run: () => confirmDelete([set.id]) },

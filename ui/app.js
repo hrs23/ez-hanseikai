@@ -45,7 +45,6 @@ let rate = 1;
 let volume = stored("volume", 1);
 let sessionSound = stored("sessionSound", true);
 let gameSound = stored("gameSound", null);
-let minimap = stored("minimap", false);
 let seekRun = null;
 const BEZEL_MS = 500;
 let muted = false;
@@ -210,7 +209,7 @@ function place(s) {
   if (s === play && st) renderInk();
 }
 function miniKey() {
-  const key = minimap && st && !play.view && soundKey(0, play.keys, st.id, gameSound);
+  const key = st && !play.view && plugins.some((p) => p.view === "minimap" && p.on) && soundKey(0, play.keys, st.id, gameSound);
   return key && play.tiles[key] && play.tiles[key].media.video.videoWidth ? key : null;
 }
 function showMini(key) {
@@ -1132,7 +1131,7 @@ function pickLayout(s, anchor) {
       return b;
     }));
     box.append(counts, kinds);
-    openMenu([{ element: box }, { separator: true }, { label: t("Minimap"), check: minimap, run: () => { minimap = !minimap; store("minimap", minimap); place(play); } }], anchor, true);
+    openMenu([{ element: box }], anchor, true);
   };
   show(Math.max(present, s.slots || 0));
 }

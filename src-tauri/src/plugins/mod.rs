@@ -21,7 +21,18 @@ pub struct Plugin {
     pub summary: &'static str,
     pub sample: &'static str,
     pub version: &'static str,
-    pub run: fn(&Job, &mut dyn FnMut(f64)) -> Result<Output, String>,
+    pub kind: Kind,
+}
+
+pub enum Kind {
+    Analysis(fn(&Job, &mut dyn FnMut(f64)) -> Result<Output, String>),
+    View(&'static str),
+}
+
+impl Plugin {
+    pub fn analyzes(&self) -> bool {
+        matches!(self.kind, Kind::Analysis(_))
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Default, Debug, PartialEq)]
@@ -65,14 +76,18 @@ pub enum Reply {
     Failed(String),
 }
 
-pub const ALL: [Plugin; 1] = [apex::PLUGIN];
+pub const ALL: [Plugin; 2] = [apex::PLUGIN, apex::MINIMAP];
 
 pub fn find(id: &str) -> Option<&'static Plugin> {
     ALL.iter().find(|p| p.id == id)
 }
 
 pub fn manifest(plugin: &Plugin) -> Value {
-    json!({"id": plugin.id, "name": plugin.name, "summary": plugin.summary, "sample": plugin.sample, "version": plugin.version})
+    let view = match plugin.kind {
+        Kind::View(view) => Some(view),
+        Kind::Analysis(_) => None,
+    };
+    json!({"id": plugin.id, "name": plugin.name, "summary": plugin.summary, "sample": plugin.sample, "version": plugin.version, "view": view})
 }
 
 pub fn child() -> Option<i32> {
@@ -82,9 +97,9 @@ pub fn child() -> Option<i32> {
     let mut text = String::new();
     let _ = std::io::stdin().read_to_string(&mut text);
     let result = serde_json::from_str::<Job>(&text).map_err(|e| e.to_string()).and_then(|job| {
-        let plugin = find(&job.plugin).ok_or("unknown plugin")?;
+        let Some(Kind::Analysis(run)) = find(&job.plugin).map(|p| &p.kind) else { return Err("unknown plugin".to_string()) };
         let mut stdout = std::io::stdout();
-        (plugin.run)(&job, &mut |p| {
+        run(&job, &mut |p| {
             if writeln!(stdout, "{}", json!({"progress": p})).and_then(|_| stdout.flush()).is_err() {
                 std::process::exit(1);
             }

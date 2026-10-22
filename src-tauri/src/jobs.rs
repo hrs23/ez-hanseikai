@@ -147,6 +147,10 @@ fn newest(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> BTreeMap<String,
 }
 
 pub fn configs(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> BTreeMap<String, Config> {
+    every_config(logs, caps).into_iter().filter(|(id, _)| plugins::find(id).is_some_and(Plugin::analyzes)).collect()
+}
+
+fn every_config(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> BTreeMap<String, Config> {
     newest(logs, caps).into_iter().map(|(id, (_, c))| (id, c)).collect()
 }
 
@@ -681,7 +685,7 @@ pub fn room_analysis(core: &Core, room: &str, logs: &[Log]) -> HashMap<String, V
 
 pub fn plugins_json(core: &Core, room: &str) -> Vec<Value> {
     let logs = room::logs(core, room);
-    let configs = room_configs(core, room, &logs);
+    let configs = runnable(every_config(&logs, None), &room_members(core, room));
     let by_set = room_analysis(core, room, &logs);
     let count = |id: &str, states: &[&str]| by_set.values().filter(|list| list.iter().any(|a| a["plugin"] == id && states.contains(&a["state"].as_str().unwrap_or_default()))).count();
     plugins::ALL
@@ -709,8 +713,8 @@ pub fn set_room_plugin(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     let room = core.joined_room()?;
     let plugin = plugins::find(&arg::<String>(&args, "id")?).ok_or("Unknown extension.")?;
     let logs = room::logs(core, &room);
-    let runner = room_configs(core, &room, &logs).remove(plugin.id).and_then(|c| c.runner).unwrap_or_else(|| core.me());
-    let config = Config::new(plugin, arg(&args, "on")?, Some(runner));
+    let runner = plugin.analyzes().then(|| room_configs(core, &room, &logs).remove(plugin.id).and_then(|c| c.runner).unwrap_or_else(|| core.me()));
+    let config = Config::new(plugin, arg(&args, "on")?, runner);
     core.append_log(&room, &plugin_record(plugin.id, &config, change_time(now_us(), &logs, plugin.id)));
     Ok(Value::Null)
 }
@@ -730,7 +734,7 @@ fn runner_record(plugin: &Plugin, runner: String, logs: &[Log], now: i64) -> Val
 
 pub fn set_plugin_runner(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     let room = core.joined_room()?;
-    let plugin = plugins::find(&arg::<String>(&args, "id")?).ok_or("Unknown extension.")?;
+    let plugin = plugins::find(&arg::<String>(&args, "id")?).filter(|p| p.analyzes()).ok_or("Unknown extension.")?;
     let logs = room::logs(core, &room);
     let runner: String = arg(&args, "runner")?;
     if !room_members(core, &room).contains(&runner) {
@@ -882,6 +886,16 @@ mod tests {
         assert!(configs(&logs, None)[APEX].on);
         let logs = vec![log("a", 0, vec![config_record(100, true)]), log("b", -50, vec![config_record(120, false)])];
         assert!(!configs(&logs, None)[APEX].on);
+    }
+
+    #[test]
+    fn a_view_extension_is_on_for_the_room_but_never_a_job() {
+        let view = json!({"k": "plugin", "plugin": "apex-minimap", "on": true, "version": "1.0.0", "t_us": 1});
+        let logs = vec![log("a", 0, vec![config_record(1, true), view])];
+        assert!(every_config(&logs, None)["apex-minimap"].on);
+        assert_eq!(configs(&logs, None).keys().collect::<Vec<_>>(), [APEX]);
+        assert_eq!(plugins::manifest(plugins::find("apex-minimap").unwrap())["view"], "minimap");
+        assert!(plugins::manifest(plugins::find(APEX).unwrap())["view"].is_null());
     }
 
     #[test]

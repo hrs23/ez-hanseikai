@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
-use super::{keyframes, planes, Found, Job, Output, Plane, Plugin};
+use super::{keyframes, planes, Found, Job, Kind, Output, Plane, Plugin};
 
-pub const PLUGIN: Plugin = Plugin { id: "apex-matches", name: "Apex matches", summary: "Marks where each match ends as chapters on the seek bar.", sample: "chapters", version: "1.1.0", run };
+pub const PLUGIN: Plugin = Plugin { id: "apex-matches", name: "Apex matches", summary: "Marks where each match ends as chapters on the seek bar.", sample: "chapters", version: "1.1.0", kind: Kind::Analysis(run) };
+pub const MINIMAP: Plugin = Plugin { id: "apex-minimap", name: "Apex minimap", summary: "Adds a tile with the minimap of the member whose app sound plays.", sample: "", version: "1.0.0", kind: Kind::View("minimap") };
 
 const W: usize = 64;
 const H: usize = 36;

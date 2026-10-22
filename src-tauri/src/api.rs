@@ -425,7 +425,7 @@ fn plugins_json(l: &Loaded, list: Vec<Value>) -> Value {
     let plugins: Vec<Value> = list
         .iter()
         .map(|p| {
-            let mut out = pick(p, &["id", "name", "version", "on", "settings", "ready", "runner", "left", "failed", "waiting_for"]);
+            let mut out = pick(p, &["id", "name", "version", "view", "on", "settings", "ready", "runner", "left", "failed", "waiting_for"]);
             out["runner_name"] = name(&p["runner"]);
             out["waiting_for_name"] = name(&p["waiting_for"]);
             out

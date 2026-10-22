@@ -54,8 +54,8 @@ GET /v1/rooms/{room}/board
   The team card. text is "" when nobody has written it. Other cards are written with put_board_card.
 
 GET /v1/rooms/{room}/plugins
-  {"plugins": [{"id": "apex-matches", "name": "Apex matches", "version": "1.1.0", "on": true, "runner": "...", "runner_name": "Ren", "left": 2, "failed": 0, "waiting_for": null, "waiting_for_name": null}]}
-  runner is the one member whose PC analyses every recording for the extension (null when that member left the room); left and failed count recordings.
+  {"plugins": [{"id": "apex-matches", "name": "Apex matches", "version": "1.1.0", "view": null, "on": true, "runner": "...", "runner_name": "Ren", "left": 2, "failed": 0, "waiting_for": null, "waiting_for_name": null}]}
+  runner is the one member whose PC analyses every recording for the extension (null when that member left the room); left and failed count recordings. An extension with a view (such as "minimap" for Apex minimap) runs no analysis: it only changes what the player shows.
 
 GET /v1/diagnostics[?everyone=true]
   {"text": "ez-hanseikai 0.16.2 on windows ...\n\nrecent errors\n..."}
