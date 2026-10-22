@@ -67,9 +67,12 @@ function avatar(id, size, dot, grey) {
   return a;
 }
 
+const CREST_BOTTOM = "#14171d";
 const presetTile = (name, size) => {
-  const a = picture("", colorOf(ROOM_PRESETS.indexOf(name)), name, size, "room");
-  a.style.color = "var(--on-member)";
+  const color = colorOf(ROOM_PRESETS.indexOf(name));
+  const a = picture("", `linear-gradient(var(--raised-3), ${CREST_BOTTOM})`, name, size, "room");
+  a.style.color = color;
+  a.style.border = `1px solid ${color}`;
   return a;
 };
 const defaultPreset = (id) => ROOM_PRESETS[[...id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % ROOM_PRESETS.length];
@@ -82,12 +85,19 @@ function presetImage(name) {
   const css = getComputedStyle(document.documentElement);
   const canvas = el("canvas", { width: IMAGE_SIDE, height: IMAGE_SIDE });
   const g = canvas.getContext("2d");
-  g.fillStyle = css.getPropertyValue(`--member-${MEMBER_COLORS[ROOM_PRESETS.indexOf(name) % MEMBER_COLORS.length]}`).trim();
+  const color = css.getPropertyValue(`--member-${MEMBER_COLORS[ROOM_PRESETS.indexOf(name) % MEMBER_COLORS.length]}`).trim();
+  const fade = g.createLinearGradient(0, 0, 0, IMAGE_SIDE);
+  fade.addColorStop(0, css.getPropertyValue("--raised-3").trim());
+  fade.addColorStop(1, CREST_BOTTOM);
+  g.fillStyle = fade;
   g.fillRect(0, 0, IMAGE_SIDE, IMAGE_SIDE);
+  g.strokeStyle = color;
+  g.lineWidth = 4;
+  g.strokeRect(2, 2, IMAGE_SIDE - 4, IMAGE_SIDE - 4);
   const scale = IMAGE_SIDE * 0.8 / 24;
   g.translate(IMAGE_SIDE * 0.1, IMAGE_SIDE * 0.1);
   g.scale(scale, scale);
-  g.fillStyle = g.strokeStyle = css.getPropertyValue("--deep").trim();
+  g.fillStyle = g.strokeStyle = color;
   g.lineWidth = 0.5;
   g.lineJoin = "round";
   const path = new Path2D(ROOM_FACES[name]);
