@@ -11,7 +11,7 @@ const source = ["util.js", "i18n.js", "live.js", "media.js", "layout.js", "dock.
 const memory = new Map();
 const localStorage = { getItem: (k) => memory.get(k) ?? null, setItem: (k, v) => memory.set(k, v) };
 const context = vm.createContext({ localStorage, window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id, location: { search: "" } });
-const ui$ = vm.runInContext(`${source}\n({ matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, memberStatus, sendsPicture, viewLine, tileProblem, livePlayers, ordered, extensionLine, analysisReason, recordingAnalysis, cardParts, dropPos, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, talking, stillTalking, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, memberStatus, sendsPicture, viewLine, tileProblem, livePlayers, ordered, extensionLine, analysisReason, recordingAnalysis, analysisState, cardParts, dropPos, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, talking, stillTalking, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 const plain = (v) => JSON.parse(JSON.stringify(v));
 
 const moment = (m, extra = {}) => ({ role: "moment", m, plugin: { id: "apex-matches" }, tags: ["match"], ...extra });
@@ -707,11 +707,14 @@ test("an extension row says one thing: no runner, what failed, who it waits for,
   assert.equal(ui$.analysisReason({ state: "failed" }, name), "Failed");
   assert.equal(ui$.analysisReason({ state: "failed", reason: "missing" }, name), "File missing");
   assert.equal(ui$.analysisReason({ state: "running", progress: 0.424 }, name), "Analyzing 42%");
-  assert.equal(ui$.recordingAnalysis({ analysis: [{ state: "done" }, { state: "running", progress: 0.42 }, { state: "left" }] }), null);
-  assert.equal(ui$.recordingAnalysis({ analysis: [{ state: "running" }, { state: "failed" }] }).text, "Analysis failed");
   assert.equal(ui$.analysisReason({ state: "running", progress: null }, name), "Analyzing");
-  assert.equal(ui$.recordingAnalysis({ analysis: [{ state: "running", progress: 0.1 }, { state: "failed" }] }).text, "Analysis failed");
-  assert.equal(ui$.recordingAnalysis({ analysis: [{ state: "done" }, { state: "left" }] }), null);
+  assert.equal(ui$.recordingAnalysis({ analysis: [] }), null);
+  assert.equal(ui$.recordingAnalysis({ analysis: [{ state: "done" }] }).icon, "check");
+  assert.equal(ui$.recordingAnalysis({ analysis: [{ state: "done" }, { state: "left" }] }).icon, "cpu");
+  assert.equal(ui$.recordingAnalysis({ analysis: [{ state: "running" }, { state: "failed" }] }).icon, "alert");
+  assert.equal(ui$.analysisState({ state: "running", progress: 0.42 }, "a", name), "Analyzing 42% · Ren's PC");
+  assert.equal(ui$.analysisState({ state: "left", reason: "receiving" }, "a", name), "Receiving");
+  assert.equal(ui$.analysisState({ state: "done" }, "a", name), "Done");
   ui$.setLanguage("ja");
   assert.equal(line({ left: 3 }), "残り 3 件 · Ren のPC");
   ui$.setLanguage("en");

@@ -491,7 +491,8 @@ body.nopanel .panel { display: none; }
 .phd { padding: var(--s4) 12px var(--s1); font-weight: var(--w-semibold); flex: none; }
 .debriefs { flex: none; border-top: 1px solid var(--line); padding: 0 12px var(--s2); max-height: 30%; overflow-y: auto; }
 .drow { display: flex; align-items: center; gap: var(--s2); padding: 2px 0; font-size: var(--t-sm); }
-.drow svg { color: var(--muted); }
+.drow svg { color: var(--muted); flex: none; }
+.drow.warn, .drow.warn svg { color: var(--warn); }
 .list { flex: 1; overflow-y: auto; padding: 8px 10px 12px; min-height: 0; }
 .ev { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; gap: 0 var(--s2); padding: 4px var(--s2) 4px 12px; border-radius: var(--r-sm); position: relative; align-items: start; }
 .ev:hover, .ev:focus-within { background: var(--hover-bg); }
@@ -503,8 +504,6 @@ body.nopanel .panel { display: none; }
 .ev.sys .tx { color: var(--soft); }
 .ev.chapter .tx { font-weight: var(--w-semibold); }
 .ev .by { display: flex; align-self: center; }
-.ev.analysis .tx { white-space: normal; }
-.ev.analysis .tx button { margin-left: var(--s2); }
 .ev .by .dt { width: 6px; height: 6px; border-radius: 50%; flex: none; }
 .ev .acts { position: absolute; right: var(--s1); top: var(--s1); display: flex; gap: var(--s0); padding: var(--s0); border-radius: var(--r-sm); background: var(--raised); visibility: hidden; }
 .ev:hover .acts, .ev:focus-within .acts { visibility: visible; }

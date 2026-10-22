@@ -20,8 +20,16 @@ function analysisReason(a, name) {
   return a.waiting_for ? t("Waiting for {name}'s PC", { name: name(a.waiting_for) }) : t("Waiting");
 }
 function recordingAnalysis(s) {
-  const failed = (s.analysis || []).find((a) => a.state === "failed");
-  return failed ? { kind: "line", icon: "alert", cls: "warn", text: t("Analysis failed") } : null;
+  const list = s.analysis || [];
+  if (!list.length) return null;
+  if (list.some((a) => a.state === "failed")) return { icon: "alert", cls: "warn", title: t("Analysis failed") };
+  if (list.some((a) => a.state !== "done")) return { icon: "cpu", cls: "", title: t("Analyzing") };
+  return { icon: "check", cls: "", title: t("Analysis done") };
+}
+function analysisState(a, runner, name) {
+  if (a.state === "done") return t("Done");
+  const who = a.state === "running" && runner ? t("{name}'s PC", { name: name(runner) }) : null;
+  return [analysisReason(a, name), who].filter(Boolean).join(" · ");
 }
 function sampleOf(kind) {
   return kind === "chapters" ? el("div", { className: "sample chapters" }, el("i", { className: "fill" }), ...[24, 52, 81].map((x) => el("b", { style: `left:${x}%` }))) : null;

@@ -26,7 +26,7 @@ function thumbBox(set, faces, size, max, live) {
 
 function rowSignature(r) {
   const s = r.s;
-  return [r.id, setLength(s), sessionState(s), s.imported_by, s.title, s.thumb, matchCount(s), noteCount(s), s.players.map((p) => p.owner), onThisPc(s), sizeOf(s), s.shared, s.analysis, debriefsOf(s.id).length, st.party.watching[s.id]];
+  return [r.id, setLength(s), sessionState(s), recordingAnalysis(s), s.imported_by, s.title, s.thumb, matchCount(s), noteCount(s), s.players.map((p) => p.owner), onThisPc(s), sizeOf(s), s.shared, s.analysis, debriefsOf(s.id).length, st.party.watching[s.id]];
 }
 
 function whereLine(s) {

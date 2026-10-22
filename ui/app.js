@@ -831,6 +831,7 @@ function renderEvents() {
   items = setItems(set);
   renderTimeline(Math.round(total()));
   renderReview(groupDrawings(items.filter((n) => listed(n.role)).sort((x, y) => (x.m ?? -1) - (y.m ?? -1))));
+  renderAnalysis(set);
   renderDebriefs(set);
 }
 function renderTimeline(tot) {
@@ -842,14 +843,19 @@ function renderReview(shown) {
   const set = playSet();
   if (!set || $("reviewlist").querySelector("input")) return;
   const list = matchChapters(matchEnds(items), total(), !!set.live);
-  const failed = (set.analysis || []).filter((a) => a.state === "failed");
-  if (!changed("review", [shown, list, failed, lang, selected, st.colors, st.names, plugins.map((p) => p.name)])) return;
-  const out = failed.map((a) => el("div", { className: "ev sys analysis" }, icon("alert", "sm"), el("span", { className: "tx warn" }, `${t(pluginName(a.plugin))} · ${analysisReason(a, nameOf)}`, el("button", { className: "sm", textContent: t("Retry"), onclick: () => retryAnalysis(set, a.plugin) }))));
+  if (!changed("review", [shown, list, lang, selected, st.colors, st.names, plugins.map((p) => p.name)])) return;
   const starts = list.map((c) => ({ m: c.m, row: el("div", { className: "ev sys" }, el("button", { className: "at", textContent: fmt(c.m), onclick: () => seekTo(c.m) }), el("span", { className: "tx" }, icon("flag", "sm"), t("Match {n}", { n: c.n }))) }));
-  const rows = [...shown.map((n) => ({ m: n.m ?? -1, row: eventRow(n) })), ...starts].sort((a, b) => a.m - b.m);
-  out.push(...rows.map((r) => r.row));
-  if (!rows.length) out.push(el("div", { className: "none", textContent: t("No notes yet") }));
-  $("reviewlist").replaceChildren(...out);
+  const rows = [...shown.map((n) => ({ m: n.m ?? -1, row: eventRow(n) })), ...starts].sort((a, b) => a.m - b.m).map((r) => r.row);
+  $("reviewlist").replaceChildren(...(rows.length ? rows : [el("div", { className: "none", textContent: t("No notes yet") })]));
+}
+function renderAnalysis(set) {
+  const list = set ? set.analysis || [] : [];
+  $("analysis").hidden = !list.length;
+  if (!changed("analysis", [list, plugins.map((p) => [p.id, p.name, p.runner]), st.names, lang])) return;
+  $("analysis").replaceChildren(el("div", { className: "h3", textContent: t("Analysis") }), ...list.map((a) => el("div", { className: "drow" + (a.state === "failed" ? " warn" : "") },
+    icon(a.state === "done" ? "check" : a.state === "failed" ? "alert" : "cpu", "sm"), el("span", { textContent: t(pluginName(a.plugin)) }), el("span", { className: "sp" }),
+    el("span", { className: a.state === "failed" ? "" : "muted", textContent: analysisState(a, (plugins.find((p) => p.id === a.plugin) || {}).runner, nameOf) }),
+    a.state === "failed" ? el("button", { className: "sm", textContent: t("Retry"), onclick: () => retryAnalysis(set, a.plugin) }) : null)));
 }
 function renderDebriefs(set) {
   const list = set ? debriefsOf(set.id) : [];
