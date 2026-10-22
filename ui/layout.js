@@ -47,35 +47,29 @@ const seekSum = (run, delta) => (Math.sign(run) === Math.sign(delta) ? run + del
 
 const BOARD_COLS = 12;
 const BOARD_ROWS = 16;
-const BOARD_WIDTH = 1080;
-const BOARD_ROW = 48;
-const BOARD_FONT_MIN = 12;
+const BOARD_ROW_EM = 1.5;
+const BOARD_WIDTH = 1800;
+const BOARD_GROW = 1.15;
+const BOARD_FONT_MIN = 10;
 
 function boardSpan(start, dx, dy, colStep, rowStep) {
   const span = (n, max) => Math.min(max, Math.max(2, n));
   return { w: span(start.w + Math.round(dx / colStep), BOARD_COLS), h: span(start.h + Math.round(dy / rowStep), BOARD_ROWS) };
 }
 
-function boardRows(sizes) {
-  const used = new Set();
-  const cells = (r, c, w, h) => Array.from({ length: w * h }, (_, i) => `${r + Math.floor(i / w)},${c + (i % w)}`);
-  let rows = 0;
-  for (const size of sizes) {
-    const w = Math.min(size.w, BOARD_COLS);
-    let r = 0;
-    let c;
-    while ((c = [...Array(BOARD_COLS - w + 1).keys()].find((x) => cells(r, x, w, size.h).every((k) => !used.has(k)))) === undefined) r++;
-    cells(r, c, w, size.h).forEach((k) => used.add(k));
-    rows = Math.max(rows, r + size.h);
-  }
-  return rows;
-}
+const boardFont = (base, width) => Math.round(base * Math.min(BOARD_GROW, Math.max(1, width / BOARD_WIDTH)) * 2) / 2;
 
-function boardFit(sizes, width, height, gap, base) {
-  const rows = Math.max(1, boardRows(sizes));
-  const fill = Math.floor((height - (rows - 1) * gap) / rows);
-  const font = Math.max(BOARD_FONT_MIN, base * Math.min(width / BOARD_WIDTH, fill / BOARD_ROW));
-  return { row: Math.max(fill, Math.ceil((BOARD_ROW * font) / base)), font: Math.round(font * 10) / 10 };
+const cellSpan = (px, unit, gap) => Math.max(1, Math.ceil((px + gap) / unit));
+
+function fitFont(fits, high, low = BOARD_FONT_MIN) {
+  let lo = 0;
+  let hi = Math.max(0, Math.round((high - low) * 2));
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (fits(low + mid / 2)) lo = mid;
+    else hi = mid - 1;
+  }
+  return low + lo / 2;
 }
 
 function dropSlot(rects, x, y) {

@@ -1294,7 +1294,7 @@ async function library(ctx) {
     for (const app of [a, b, c]) await waitFor(`${app.key} sees the card renamed and moved up with its text`, within(LOG_SYNC_S * 2), async () => { const x = await card(app, id); return x?.title === "Calls" && x.text === "north" && (await state(app)).board[1].card === id; });
     await invoke(c, "put_board_card", { room: ctx.room, card: id, w: 6, h: 3 });
     for (const app of [a, b, c]) await waitFor(`${app.key} sees the card resized with its title, text and place`, within(LOG_SYNC_S * 2), async () => { const x = await card(app, id); return x?.w === 6 && x.h === 3 && x.title === "Calls" && x.text === "north" && (await state(app)).board[1].card === id; });
-    await waitFor("A shows the card six columns wide and three rows high", within(UI_REFRESH_S * 5), () => evaluate(a, `(() => { const box = $("canvas").querySelectorAll(".brow > .bcard")[1]; return box.style.gridColumn === "span 6" && box.style.gridRow === "span 3"; })()`));
+    await waitFor("A shows the card six columns wide and at least three rows high", within(UI_REFRESH_S * 5), () => evaluate(a, `(() => { const box = $("canvas").querySelectorAll(".brow > .bcard")[1]; return box.style.gridColumn === "span 6" && box.style.minHeight.includes("4.5"); })()`));
     await invoke(b, "put_board_card", { room: ctx.room, card: id, gone: true });
     for (const app of [a, b, c]) await waitFor(`${app.key} no longer shows the deleted card`, within(LOG_SYNC_S * 2), async () => !(await card(app, id)));
     check((await invoke(a, "put_board_card", { room: ctx.room, card: "elsewhere", text: "x" }).catch((e) => e.message || "refused")) !== "elsewhere", "an invalid card id was accepted");

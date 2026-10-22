@@ -102,7 +102,7 @@ const shownSize = (c) => (editing && editing.card === c.card ? { w: Math.max(c.w
 const NEW_CARD = { w: 4, h: 2 };
 function spanCard(box, size) {
   box.style.gridColumn = `span ${size.w}`;
-  box.style.gridRow = `span ${size.h}`;
+  box.style.minHeight = `calc(var(--bfont) * ${size.h * BOARD_ROW_EM})`;
 }
 function resizeCard(c, down) {
   if (down.button !== 0) return;
@@ -110,16 +110,17 @@ function resizeCard(c, down) {
   const grid = box.parentElement;
   const css = getComputedStyle(grid);
   const col = (grid.offsetWidth + parseFloat(css.columnGap)) / BOARD_COLS;
-  const row = parseFloat(css.gridAutoRows) + parseFloat(css.rowGap);
+  const row = BOARD_ROW_EM * parseFloat(css.fontSize);
   let size = { w: c.w, h: c.h };
   box.classList.add("sizing");
   track(down.currentTarget, down, (e) => {
     size = boardSpan(c, e.clientX - down.clientX, e.clientY - down.clientY, col, row);
     spanCard(box, size);
+    boardAt(boardFontNow);
   }, (e) => {
     box.classList.remove("sizing");
     if (e.type === "pointerup" && (size.w !== c.w || size.h !== c.h)) putCard(c.card, size);
-    else spanCard(box, c);
+    else { spanCard(box, c); boardAt(boardFontNow); }
   });
 }
 function cardEl(c) {
@@ -149,16 +150,23 @@ function newCardEl() {
   spanCard(box, NEW_CARD);
   return box;
 }
-function placeBoard() {
+let boardFontNow = 0;
+function boardAt(font) {
   const wrap = $("boardwrap");
   const canvas = $("canvas");
   const grid = canvas.firstElementChild;
-  if (!grid) return;
-  const pad = parseFloat(getComputedStyle(wrap).paddingTop);
-  const sizes = [...st.board.map(shownSize), editing && editing.adding ? NEW_CARD : null].filter(Boolean);
-  const fit = boardFit(sizes, wrap.clientWidth - 2 * pad, wrap.clientHeight - 2 * pad, parseFloat(getComputedStyle(grid).rowGap), parseFloat(getComputedStyle(document.body).fontSize));
-  canvas.style.setProperty("--brow", fit.row + "px");
-  canvas.style.setProperty("--bfont", fit.font + "px");
+  canvas.style.setProperty("--bfont", font + "px");
+  const css = getComputedStyle(grid);
+  const gap = parseFloat(css.columnGap);
+  const cards = [...grid.children];
+  cards.map((x) => cellSpan(x.offsetHeight, parseFloat(css.gridAutoRows), gap)).forEach((n, i) => { cards[i].style.gridRow = `span ${n}`; });
+  boardFontNow = font;
+  return grid.offsetHeight <= wrap.clientHeight - 2 * parseFloat(getComputedStyle(wrap).paddingTop);
+}
+function placeBoard() {
+  const wrap = $("boardwrap");
+  if (!$("canvas").firstElementChild || !wrap.clientWidth) return;
+  boardAt(fitFont(boardAt, boardFont(parseFloat(getComputedStyle(document.body).fontSize), wrap.clientWidth)));
 }
 function renderBoard() {
   if (!onBoard() || !inRoom()) return;
@@ -173,6 +181,7 @@ function toggleBoardFull() {
   setFull(boardFull);
 }
 new ResizeObserver(() => { if (onBoard()) placeBoard(); }).observe($("boardpane"));
+document.fonts.addEventListener("loadingdone", () => { if (onBoard()) placeBoard(); });
 $("boardadd").onclick = addCard;
 $("boardmore").onclick = (e) => openMenu([
   { label: t("Board window"), icon: "window", run: () => invoke("open_board_window").catch(fail) },
