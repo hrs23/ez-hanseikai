@@ -968,7 +968,7 @@ test("a submit that is still running ignores the next click or Enter", async () 
   assert.equal(runs, 2);
 });
 
-test("Esc closes a menu or dialog first, then a popup, then leaves a text field, then full screen, then the panel", () => {
+test("Esc closes a menu or dialog first, then a popup, then leaves a text field, then full screen, then closes the Board window, then the panel", () => {
   const step = (o) => ui$.escapeStep({ menu: false, dialog: false, pop: false, typing: false, full: false, panel: false, ...o });
   assert.equal(step({ full: true, menu: true }), "none");
   assert.equal(step({ full: true, dialog: true }), "none");
@@ -976,5 +976,9 @@ test("Esc closes a menu or dialog first, then a popup, then leaves a text field,
   assert.equal(step({ full: true, typing: true }), "blur");
   assert.equal(step({ full: true, panel: true }), "full");
   assert.equal(step({ panel: true }), "panel");
+  assert.equal(step({ window: true, full: true }), "full");
+  assert.equal(step({ window: true, typing: true }), "blur");
+  assert.equal(step({ window: true, dialog: true }), "none");
+  assert.equal(step({ window: true }), "close");
   assert.equal(step({}), "none");
 });

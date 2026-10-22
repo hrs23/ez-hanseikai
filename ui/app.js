@@ -1594,10 +1594,11 @@ function menuKey(e) {
   else if ((e.key === "ArrowDown" || e.key === "ArrowUp") && list.length) { e.preventDefault(); const down = e.key === "ArrowDown"; list[i < 0 ? (down ? 0 : list.length - 1) : (i + (down ? 1 : -1) + list.length) % list.length].focus(); }
 }
 function escapeKey() {
-  const step = escapeStep({ menu: !$("menu").hidden, dialog: !!document.querySelector("dialog[open]"), pop: !$("pop").hidden, typing: !!typing(), full: full || boardFull, panel: panelOpen });
+  const step = escapeStep({ menu: !$("menu").hidden, dialog: !!document.querySelector("dialog[open]"), pop: !$("pop").hidden, typing: !!typing(), full: full || boardFull, window: boardWindow, panel: panelOpen });
   if (step === "pop") closePop();
   else if (step === "blur") document.activeElement.blur();
   else if (step === "full") (full ? toggleFull : toggleBoardFull)();
+  else if (step === "close") quiet("close_board_window");
   else if (step === "panel") showPanel(false);
 }
 document.addEventListener("focusin", (e) => {

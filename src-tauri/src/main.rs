@@ -555,7 +555,7 @@ fn main() {
     }
     let app = builder
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(tauri_plugin_window_state::Builder::default().with_state_flags(tauri_plugin_window_state::StateFlags::all() - tauri_plugin_window_state::StateFlags::DECORATIONS).build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(
@@ -576,6 +576,12 @@ fn main() {
                     Some(core) if window.label() == "main" => {
                         let (app, core) = (window.app_handle().clone(), core.inner().clone());
                         std::thread::spawn(move || shell::exit_app(&app, &core));
+                    }
+                    _ if window.label() == "board" => {
+                        let board = window.clone();
+                        let _ = window.app_handle().run_on_main_thread(move || {
+                            let _ = board.destroy();
+                        });
                     }
                     _ => {
                         let _ = window.hide();

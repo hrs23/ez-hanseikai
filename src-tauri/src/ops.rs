@@ -54,6 +54,7 @@ pub const OPS: &[(&str, Op)] = &[
     ("delete_ai_notes", delete_ai_notes),
     ("put_board_card", put_board_card),
     ("open_board_window", open_board_window),
+    ("close_board_window", |c, _| { shell::close_board(&c.app); Ok(Value::Null) }),
     ("set_fullscreen", |c, a| null(shell::set_fullscreen(&c.app, &arg::<String>(&a, "window")?, arg(&a, "on")?))),
     ("party_on", party_on),
     ("party_act", party_act),

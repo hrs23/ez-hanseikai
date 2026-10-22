@@ -64,6 +64,7 @@ function escapeStep(s) {
   if (s.pop) return "pop";
   if (s.typing) return "blur";
   if (s.full) return "full";
+  if (s.window) return "close";
   return s.panel ? "panel" : "none";
 }
 const typing = () => { const a = document.activeElement; return a && (a.tagName === "SELECT" || a.tagName === "TEXTAREA" || (a.tagName === "INPUT" && a.type !== "range" && a.type !== "checkbox") || a.isContentEditable); };
