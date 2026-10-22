@@ -462,7 +462,6 @@ const menuActions = {
   "page-extensions": () => navigate("extensions"),
   "sidebar": toggleSidebar,
   "fullscreen": toggleFull,
-  "all-players": () => setView(current(), 0),
   "shortcuts": () => openSettings("shortcuts"),
   "update": () => checkUpdate(true),
   "diagnostics": () => openDiagnostics(),

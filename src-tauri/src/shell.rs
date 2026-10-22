@@ -16,7 +16,7 @@ use crate::{language, Core, REPO, VERSION};
 pub const DEFAULT_HOTKEY: &str = "Ctrl+Alt+M";
 const BOARD: &str = "board";
 const STATUS_POLL: Duration = Duration::from_secs(1);
-const JA: [(&str, &str); 41] = [
+const JA: [(&str, &str); 40] = [
     ("Already running with this data folder.", "このデータフォルダですでに動いています。"),
     ("EZ Hanseikai", "EZ反省会"),
     ("File", "ファイル"),
@@ -44,7 +44,6 @@ const JA: [(&str, &str); 41] = [
     ("Game plan", "作戦ボード"),
     ("Sidebar", "サイドバー"),
     ("Full screen", "全画面"),
-    ("All players", "全員"),
     ("Keyboard shortcuts", "キーボードショートカット"),
     ("Diagnostics", "診断"),
     ("Check for updates", "アップデートを確認"),
@@ -177,6 +176,122 @@ fn colorref(rgb: u32) -> u32 {
     ((rgb & 0xff) << 16) | (rgb & 0xff00) | (rgb >> 16)
 }
 
+const MENU_HOT: u32 = 0x22262f;
+const MENU_DIM: u32 = 0x788091;
+const MENU_SUBCLASS: usize = 0x4747;
+
+fn fill(hdc: ::windows::Win32::Graphics::Gdi::HDC, rect: &::windows::Win32::Foundation::RECT, rgb: u32) {
+    use ::windows::Win32::Graphics::Gdi::{CreateSolidBrush, DeleteObject, FillRect};
+    unsafe {
+        let brush = CreateSolidBrush(::windows::Win32::Foundation::COLORREF(colorref(rgb)));
+        FillRect(hdc, rect, brush);
+        let _ = DeleteObject(brush.into());
+    }
+}
+
+#[repr(C)]
+struct MenuDraw {
+    hmenu: ::windows::Win32::UI::WindowsAndMessaging::HMENU,
+    hdc: ::windows::Win32::Graphics::Gdi::HDC,
+    flags: u32,
+}
+
+#[repr(C)]
+struct MenuItemDraw {
+    item: ::windows::Win32::UI::Controls::DRAWITEMSTRUCT,
+    menu: MenuDraw,
+    position: u32,
+}
+
+unsafe extern "system" fn menu_bar_proc(hwnd: ::windows::Win32::Foundation::HWND, msg: u32, wparam: ::windows::Win32::Foundation::WPARAM, lparam: ::windows::Win32::Foundation::LPARAM, _id: usize, _data: usize) -> ::windows::Win32::Foundation::LRESULT {
+    use ::windows::Win32::Foundation::{LRESULT, RECT};
+    use ::windows::Win32::Graphics::Gdi::{DrawTextW, GetWindowDC, ReleaseDC, SetBkMode, SetTextColor, DT_CENTER, DT_HIDEPREFIX, DT_SINGLELINE, DT_VCENTER, TRANSPARENT};
+    use ::windows::Win32::UI::Shell::DefSubclassProc;
+    use ::windows::Win32::UI::WindowsAndMessaging::{GetMenuBarInfo, GetMenuItemInfoW, GetWindowRect, MENUBARINFO, MENUITEMINFOW, MIIM_STRING, OBJID_MENU, WM_NCACTIVATE, WM_NCPAINT};
+    const DRAW_MENU: u32 = 0x91;
+    const DRAW_ITEM: u32 = 0x92;
+    const ODS_SELECTED: u32 = 1;
+    const ODS_GRAYED: u32 = 2;
+    const ODS_DISABLED: u32 = 4;
+    const ODS_NOACCEL: u32 = 0x100;
+    const ODS_HOTLIGHT: u32 = 0x40;
+    let bar = || unsafe {
+        let mut info = MENUBARINFO { cbSize: std::mem::size_of::<MENUBARINFO>() as u32, ..Default::default() };
+        let _ = GetMenuBarInfo(hwnd, OBJID_MENU, 0, &mut info);
+        let mut window = RECT::default();
+        let _ = GetWindowRect(hwnd, &mut window);
+        RECT { left: info.rcBar.left - window.left, right: info.rcBar.right - window.left, top: info.rcBar.top - window.top - 1, bottom: info.rcBar.bottom - window.top }
+    };
+    match msg {
+        DRAW_MENU => {
+            let hdc = unsafe { (*(lparam.0 as *const MenuDraw)).hdc };
+            fill(hdc, &bar(), CAPTION);
+            LRESULT(0)
+        }
+        DRAW_ITEM => unsafe {
+            let draw = &mut *(lparam.0 as *mut MenuItemDraw);
+            let hdc = draw.menu.hdc;
+            let mut info = MENUITEMINFOW { cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32, fMask: MIIM_STRING, ..Default::default() };
+            if GetMenuItemInfoW(draw.menu.hmenu, draw.position, true, &mut info).is_err() {
+                return LRESULT(0);
+            }
+            let mut label = vec![0u16; info.cch as usize + 1];
+            info.dwTypeData = ::windows::core::PWSTR(label.as_mut_ptr());
+            info.cch += 1;
+            if GetMenuItemInfoW(draw.menu.hmenu, draw.position, true, &mut info).is_err() {
+                return LRESULT(0);
+            }
+            let lit = draw.item.itemState.0 & (ODS_HOTLIGHT | ODS_SELECTED) != 0;
+            let dim = draw.item.itemState.0 & (ODS_GRAYED | ODS_DISABLED) != 0;
+            fill(hdc, &draw.item.rcItem, if lit { MENU_HOT } else { CAPTION });
+            SetBkMode(hdc, TRANSPARENT);
+            SetTextColor(hdc, ::windows::Win32::Foundation::COLORREF(colorref(if dim { MENU_DIM } else { CAPTION_TEXT })));
+            let mut flags = DT_CENTER | DT_SINGLELINE | DT_VCENTER;
+            if draw.item.itemState.0 & ODS_NOACCEL != 0 {
+                flags |= DT_HIDEPREFIX;
+            }
+            DrawTextW(hdc, &mut label[..info.cch as usize], &mut draw.item.rcItem, flags);
+            LRESULT(0)
+        },
+        WM_NCPAINT | WM_NCACTIVATE => unsafe {
+            let result = DefSubclassProc(hwnd, msg, wparam, lparam);
+            let mut line = bar();
+            line.bottom = line.top + 1;
+            let hdc = GetWindowDC(Some(hwnd));
+            fill(hdc, &line, CAPTION);
+            ReleaseDC(Some(hwnd), hdc);
+            result
+        },
+        _ => unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) },
+    }
+}
+
+fn dark_popups() {
+    use ::windows::core::w;
+    use ::windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+    const SET_PREFERRED_APP_MODE: usize = 135;
+    const FLUSH_MENU_THEMES: usize = 136;
+    const FORCE_DARK: i32 = 2;
+    unsafe {
+        let Ok(uxtheme) = LoadLibraryW(w!("uxtheme.dll")) else { return };
+        let ordinal = |n: usize| GetProcAddress(uxtheme, ::windows::core::PCSTR(n as *const u8));
+        if let (Some(set), Some(flush)) = (ordinal(SET_PREFERRED_APP_MODE), ordinal(FLUSH_MENU_THEMES)) {
+            let set: unsafe extern "system" fn(i32) -> i32 = std::mem::transmute(set);
+            let flush: unsafe extern "system" fn() = std::mem::transmute(flush);
+            set(FORCE_DARK);
+            flush();
+        }
+    }
+}
+
+pub fn dark_menu(window: &tauri::WebviewWindow) {
+    use ::windows::Win32::UI::Shell::SetWindowSubclass;
+    let Ok(hwnd) = window.hwnd() else { return };
+    let hwnd = ::windows::Win32::Foundation::HWND(hwnd.0);
+    dark_popups();
+    let _ = unsafe { SetWindowSubclass(hwnd, Some(menu_bar_proc), MENU_SUBCLASS, 0) };
+}
+
 pub fn match_caption(window: &tauri::WebviewWindow) {
     use ::windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR};
     let Ok(hwnd) = window.hwnd() else { return };
@@ -300,8 +415,6 @@ fn build_menu(app: &AppHandle, lang: &str, toggle: &MenuItem<Wry>, mark: &MenuIt
         .item(&it("sidebar", "Sidebar", Some("CmdOrCtrl+B"))?)
         .item(&it("fullscreen", "Full screen", Some("F11"))?)
         .separator()
-        .item(&it("all-players", "All players", None)?)
-        .separator()
         .item(&it("shortcuts", "Keyboard shortcuts", None)?)
         .build()?;
     let help = SubmenuBuilder::new(app, tr(lang, "Help"))
@@ -310,7 +423,6 @@ fn build_menu(app: &AppHandle, lang: &str, toggle: &MenuItem<Wry>, mark: &MenuIt
         .separator()
         .item(&it("reset", "Reset app…", None)?)
         .separator()
-        .item(&it("github", "GitHub", None)?)
         .item(&it("issues", "Report a problem", None)?)
         .item(&it("releases", "Release notes", None)?)
         .separator()
@@ -331,6 +443,8 @@ pub fn install_menus(app: &AppHandle, core: &Core) -> tauri::Result<()> {
     if let Some(window) = app.get_webview_window("main") {
         window.set_theme(Some(tauri::Theme::Dark))?;
         window.set_menu(menu)?;
+        let styled = window.clone();
+        window.run_on_main_thread(move || dark_menu(&styled))?;
     }
     *ITEMS.lock().unwrap() = Items { toggle: Some(toggle), mark: Some(mark) };
     Ok(())
@@ -380,7 +494,6 @@ pub fn setup(app: &tauri::App, core: Arc<Core>) -> tauri::Result<()> {
             "open-folder" => crate::data::open_folder(&core.dir),
             "exit" => dialog(exit_app),
             "mark" => marked(core),
-            "github" => open_link(REPO),
             "issues" => open_link(&format!("{REPO}/issues/new")),
             "releases" => open_link(&format!("{REPO}/releases")),
             "about" => dialog(|app, core| { let lang = language(core); tell(app, &lang, &format!("{} {VERSION}\nMIT or Apache-2.0\n{REPO}", tr(&lang, "Version"))) }),
