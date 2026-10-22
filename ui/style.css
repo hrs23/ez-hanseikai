@@ -227,6 +227,10 @@ body.noside .side, body.boardfull .side, body.noside .splitter, body.boardfull .
 .wpn.live, .wpn.on { background: color-mix(in srgb, var(--accent) 18%, transparent); border-color: transparent; color: var(--accent); }
 .wpn.live:hover { background: color-mix(in srgb, var(--accent) 28%, transparent); }
 .wpn:not(.live):not(.on) { padding: 0; height: auto; }
+.srow .arun { position: absolute; top: var(--s2); right: var(--s2); width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; color: var(--accent); border-radius: var(--r-full); animation: runglow 2s ease-in-out infinite; }
+.srow .arun svg { width: 12px; height: 12px; }
+.srow.run .l1 { padding-right: 20px; }
+@keyframes runglow { 0%, 100% { box-shadow: 0 0 0 0 transparent; } 50% { box-shadow: 0 0 6px 2px color-mix(in srgb, var(--accent) 45%, transparent); } }
 .srow.wp { box-shadow: inset 2px 0 0 var(--accent); }
 .srow .wt { visibility: hidden; margin-left: auto; flex: none; height: 18px; font-size: var(--t-xs); padding: 0 var(--s2); }
 .srow:hover .wt, .srow:focus-within .wt { visibility: visible; }

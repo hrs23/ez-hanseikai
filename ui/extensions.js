@@ -19,6 +19,7 @@ function analysisReason(a, name) {
   if (a.reason === "no_runner") return t("No runner");
   return a.waiting_for ? t("Waiting for {name}'s PC", { name: name(a.waiting_for) }) : t("Waiting");
 }
+const runningMark = (s) => { const a = (s.analysis || []).find((x) => x.state === "running"); return a ? analyzing(a) : null; };
 function analysisState(a, runner, name) {
   if (a.state === "done") return t("Done");
   if (a.state === "idle") return t("Not analyzed");

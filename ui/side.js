@@ -164,13 +164,14 @@ function sessionRow(s) {
   const here = onThisPc(s);
   const state = sessionState(s);
   const watching = st.party.watching[s.id];
+  const running = runningMark(s);
   let l2;
   if (state && state.kind === "bar") l2 = el("div", { className: "prog", title: state.title || "" }, el("div", { className: "l2" }, icon(state.icon, "sm"), el("span", { textContent: state.text })), el("div", { className: "bar" }, el("i", { style: `width:${Math.round(state.frac * 100)}%` })));
   else l2 = el("div", { className: "l2" }, el("span", { textContent: setLength(s) }), titles[s.id] ? el("span", { className: "muted", textContent: `· ${sessionWhen(s.id)}`, title: fullWhen(sessionStart(s.id)) }) : null, s.imported_by ? importedPill(s) : null, here && !(watching && watching.length) ? wtButton(s) : null);
   const mine = !!watching && watching.includes(st.id);
-  const row = el("div", { className: "srow" + (on ? " on" : "") + (mine ? " wp" : "") + (here ? "" : " gone"), role: "option", tabIndex: 0, ariaSelected: on },
+  const row = el("div", { className: "srow" + (on ? " on" : "") + (running ? " run" : "") + (mine ? " wp" : "") + (here ? "" : " gone"), role: "option", tabIndex: 0, ariaSelected: on },
     thumbBox(s, false),
-    el("div", { className: "txt" }, el("div", { className: "l1" }, el("b", { textContent: sessionName(s.id), title: fullWhen(sessionStart(s.id)) }), wpPill(s, here, mine, watching), partyFrom === s.id && watching && watching.length ? el("button", { className: "sm", textContent: t("Back"), onclick: (e) => { e.stopPropagation(); openSession(s.id); } }) : null), l2, whereLine(s)));
+    el("div", { className: "txt" }, el("div", { className: "l1" }, el("b", { textContent: sessionName(s.id), title: fullWhen(sessionStart(s.id)) }), wpPill(s, here, mine, watching), partyFrom === s.id && watching && watching.length ? el("button", { className: "sm", textContent: t("Back"), onclick: (e) => { e.stopPropagation(); openSession(s.id); } }) : null), l2, whereLine(s)), running ? el("span", { className: "arun", title: running }, icon("cpu", "sm")) : null);
   row.onclick = () => { if (onThisPc(s)) openSession(s.id); };
   row.onkeydown = (e) => { if (e.key === "Enter" && onThisPc(s)) openSession(s.id); };
   row.oncontextmenu = (e) => { e.preventDefault(); sessionMenu(s.id, e); };
