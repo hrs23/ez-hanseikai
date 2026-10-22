@@ -1676,6 +1676,24 @@ async function library(ctx) {
     await evaluate(a, `$("settings").close(); true`);
   });
 
+  await step("the local API opens a recording in the player, seeks it and reads the player state back", async () => {
+    const operation = (name, body) => api(a, "POST", `/v1/ops/${name}`, { token: a.token, body });
+    const commands = (await operation("ui_commands")).json;
+    check(commands?.open_recording?.args?.set?.includes(ctx.set) && commands.seek?.args?.seconds === "number", `ui_commands: ${brief(commands)}`);
+    for (const [body, error] of [[{ cmd: "jump" }, "unknown cmd jump"], [{ cmd: "seek", args: { seconds: "5" } }, "seconds is missing"], [{ cmd: "open_recording", args: { set: "nope" } }, "set is missing"], [{ cmd: "play", args: { now: true } }, "play takes no argument now."]]) {
+      const r = await operation("ui_do", body);
+      check(r.status === 400 && r.json?.error?.startsWith(error), `ui_do ${brief(body)}: ${r.status} ${brief(r.text)}`);
+    }
+    const opened = await operation("ui_do", { cmd: "open_recording", args: { set: ctx.set } });
+    check(opened.status === 200 && opened.json === null, `open_recording: ${opened.status} ${brief(opened.text)}`);
+    await waitFor("A reports the recording open in the player", within(UI_REFRESH_S * 5), async () => { const s = (await operation("ui_state")).json; return s?.page === "player" && s.set === ctx.set && s.tiles.length >= 2; });
+    await operation("ui_do", { cmd: "pause" });
+    await operation("ui_do", { cmd: "seek", args: { seconds: SEEK_TO_S } });
+    const seen = await waitFor("A reports the seek", within(UI_REFRESH_S * 5), async () => { const s = (await operation("ui_state")).json; return !s.playing && Math.abs(s.position_s - SEEK_TO_S) < 0.5 && s; });
+    check(seen.tiles.every((t) => typeof t.member === "string" && typeof t.readyState === "number" && typeof t.currentTime === "number" && t.buffered_ahead_s >= 0), `the tiles: ${brief(seen.tiles)}`);
+    check(await evaluate(a, `page === "player" && selected === ${JSON.stringify(ctx.set)} && !clock.playing && Math.abs(nowM() - ${SEEK_TO_S}) < 0.5`), "the window is not where ui_state says");
+  });
+
   await step("Diagnostics opens on where data goes and copies a masked report", async () => {
     await evaluate(a, `openDiagnostics(); true`);
     await waitFor("Diagnostics shows where data goes", within(UI_REFRESH_S * 5), () => evaluate(a, `!!$("diagbody").querySelector(".flowmap") && $("diagbody").textContent.includes(t("Time check"))`));

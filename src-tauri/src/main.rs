@@ -261,6 +261,7 @@ pub struct Core {
     pub bad: Mutex<HashSet<(String, PathBuf)>>,
     pub removed_rooms: Mutex<HashSet<String>>,
     pub indexes: stream::Indexes,
+    pub ui: Mutex<Value>,
 }
 
 impl Core {
@@ -385,6 +386,13 @@ async fn call(core: State<'_, Arc<Core>>, name: String, args: Value) -> Result<V
     let op = ops::find(&name).ok_or("No such operation.")?;
     let core = core.inner().clone();
     off_thread(move || op(&core, args)).await?
+}
+
+#[tauri::command]
+fn ui_report(core: State<Arc<Core>>, window: tauri::WebviewWindow, report: Value) {
+    if window.label() == "main" {
+        *core.ui.lock().unwrap() = report;
+    }
 }
 
 #[tauri::command]
@@ -536,6 +544,7 @@ async fn init(app: AppHandle, dir: PathBuf, left_lock: bool) -> Result<Arc<Core>
         bad: Mutex::new(HashSet::new()),
         removed_rooms: Mutex::new(HashSet::new()),
         indexes: Mutex::new(HashMap::new()),
+        ui: Mutex::new(Value::Null),
     }))
 }
 
@@ -660,7 +669,7 @@ fn main() {
             std::thread::spawn(move || thumbs::keeper(c));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![call, open_set_folder, open_data_folder, open_link, open_folder, pick_export_base, save_text, show_main])
+        .invoke_handler(tauri::generate_handler![call, ui_report, open_set_folder, open_data_folder, open_link, open_folder, pick_export_base, save_text, show_main])
         .build(tauri::generate_context!())
         .expect("failed to start");
     app.run(|app, event| {

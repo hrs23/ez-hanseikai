@@ -84,6 +84,9 @@ pub const OPS: &[(&str, Op)] = &[
     ("state", |c, _| Ok(room::state_json(c))),
     ("debug_flow", debug::debug_flow),
     ("debug_report", debug::debug_report),
+    ("ui_commands", |c, _| Ok(c.ui.lock().unwrap()["commands"].clone())),
+    ("ui_state", |c, _| Ok(c.ui.lock().unwrap()["state"].clone())),
+    ("ui_do", ui_do),
     ("player_log", |_, a| {
         let text: String = arg(&a, "text")?;
         tracing::info!("player: {}", text.chars().filter(|c| !c.is_control()).take(300).collect::<String>());
@@ -485,6 +488,47 @@ fn target(core: &Core, args: &Value, room: &str, set: &str) -> Result<PathBuf, S
     export::target(core, room, set, arg::<Option<String>>(args, "base")?.map(PathBuf::from), arg::<Option<String>>(args, "name")?)
 }
 
+fn ui_do(core: &Arc<Core>, args: Value) -> Result<Value, String> {
+    use tauri::{Emitter, Manager};
+    if core.app.get_webview_window("main").is_none() {
+        return Ok(Value::Null);
+    }
+    let cmd: String = arg(&args, "cmd")?;
+    let given = if args["args"].is_null() { json!({}) } else { args["args"].clone() };
+    check_ui_args(&core.ui.lock().unwrap()["commands"], &cmd, &given)?;
+    core.app.emit_to("main", "ui_command", json!({"cmd": cmd, "args": given})).map_err(|e| e.to_string())?;
+    Ok(Value::Null)
+}
+
+fn check_ui_args(commands: &Value, cmd: &str, args: &Value) -> Result<(), String> {
+    if commands.is_null() {
+        return Err("the window has not reported its commands yet".into());
+    }
+    let spec = commands.get(cmd).and_then(|c| c["args"].as_object()).ok_or_else(|| format!("unknown cmd {cmd}; ui_commands lists them"))?;
+    let given = args.as_object().ok_or("args is not an object.")?;
+    if let Some(extra) = given.keys().find(|k| !spec.contains_key(*k)) {
+        return Err(format!("{cmd} takes no argument {extra}."));
+    }
+    for (name, kind) in spec {
+        let v = given.get(name).unwrap_or(&Value::Null);
+        let ok = match kind {
+            Value::Array(allowed) => allowed.iter().any(|a| a == v || (a.is_number() && a.as_f64() == v.as_f64())),
+            Value::String(t) => match t.as_str() {
+                "number" => v.is_number(),
+                "integer" => v.is_i64() || v.is_u64(),
+                "boolean" => v.is_boolean(),
+                "string" => v.is_string(),
+                _ => false,
+            },
+            _ => false,
+        };
+        if !ok {
+            return Err(format!("{name} is missing or not valid."));
+        }
+    }
+    Ok(())
+}
+
 pub fn enable_api(core: &Arc<Core>, on: bool) {
     *core.api_on.lock().unwrap() = on;
     if on && core.api_token.lock().unwrap().is_empty() {
@@ -523,7 +567,7 @@ mod tests {
     use crate::names;
     use std::path::Path;
 
-    const WINDOW_COMMANDS: [&str; 7] = ["open_set_folder", "open_data_folder", "open_link", "open_folder", "pick_export_base", "save_text", "show_main"];
+    const WINDOW_COMMANDS: [&str; 8] = ["ui_report", "open_set_folder", "open_data_folder", "open_link", "open_folder", "pick_export_base", "save_text", "show_main"];
 
     fn files(dir: &str, ext: &str) -> Vec<(String, String)> {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join(dir);
@@ -569,6 +613,30 @@ mod tests {
         assert_eq!(arg::<String>(&args, "n"), Err("n is missing or not valid.".into()));
         assert_eq!(arg::<bool>(&args, "absent"), Err("absent is missing or not valid.".into()));
         assert_eq!(arg::<String>(&Value::Null, "id"), Err("id is missing or not valid.".into()));
+    }
+
+    #[test]
+    fn ui_commands_take_only_the_arguments_the_window_reported() {
+        let commands = json!({"play": {"about": "Play", "args": {}}, "seek": {"args": {"seconds": "number"}}, "set_rate": {"args": {"rate": [0.5, 1, 2]}}, "set_view": {"args": {"index": "integer"}}, "full_screen": {"args": {"on": "boolean"}}, "open_recording": {"args": {"set": ["a", "b"]}}, "odd": {"args": {"x": {}}}});
+        let check = |cmd: &str, args: Value| check_ui_args(&commands, cmd, &args);
+        assert_eq!(check("play", json!({})), Ok(()));
+        assert_eq!(check("seek", json!({"seconds": 12.5})), Ok(()));
+        assert_eq!(check("set_rate", json!({"rate": 1.0})), Ok(()));
+        assert_eq!(check("set_view", json!({"index": 2})), Ok(()));
+        assert_eq!(check("full_screen", json!({"on": false})), Ok(()));
+        assert_eq!(check("open_recording", json!({"set": "b"})), Ok(()));
+        assert_eq!(check("jump", json!({})), Err("unknown cmd jump; ui_commands lists them".into()));
+        assert_eq!(check("toString", json!({})), Err("unknown cmd toString; ui_commands lists them".into()));
+        assert_eq!(check("play", json!({"now": true})), Err("play takes no argument now.".into()));
+        assert_eq!(check("play", json!([])), Err("args is not an object.".into()));
+        assert_eq!(check("seek", json!({})), Err("seconds is missing or not valid.".into()));
+        assert_eq!(check("seek", json!({"seconds": "5"})), Err("seconds is missing or not valid.".into()));
+        assert_eq!(check("set_rate", json!({"rate": 1.1})), Err("rate is missing or not valid.".into()));
+        assert_eq!(check("set_view", json!({"index": 1.5})), Err("index is missing or not valid.".into()));
+        assert_eq!(check("full_screen", json!({"on": 1})), Err("on is missing or not valid.".into()));
+        assert_eq!(check("open_recording", json!({"set": "c"})), Err("set is missing or not valid.".into()));
+        assert_eq!(check("odd", json!({"x": {}})), Err("x is missing or not valid.".into()));
+        assert_eq!(check_ui_args(&Value::Null, "play", &json!({})), Err("the window has not reported its commands yet".into()));
     }
 
     #[test]

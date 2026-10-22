@@ -11,7 +11,7 @@ const source = ["util.js", "i18n.js", "live.js", "media.js", "layout.js", "dock.
 const memory = new Map();
 const localStorage = { getItem: (k) => memory.get(k) ?? null, setItem: (k, v) => memory.set(k, v) };
 const context = vm.createContext({ localStorage, window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id, location: { search: "" } });
-const ui$ = vm.runInContext(`${source}\n({ strokeAlpha, INK_TOOLS, INK_TOOL_TITLE, nextInkTool, LIMITS, escapeStep, editKey, cleanText, single, changed, matchEnds, matchLabel, labelMatchEnds, shownTags, noteMoments, progressText, matchChapters, stepTarget, matchTargets, rowHit, rowActions, authorOf, noteCount, matchCount, formatWhen, fullWhen, sessionWhen, keysOf, hotkeyRows, memberStatus, windowTitle, longId, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, analysisPill, analysisSub, analysisActions, analysisDetails, analysisDetailText, runningMark, cardParts, dropPos, dropSlot, boardSpan, boardFont, cellSpan, fitFont, deletePreview, cleanupPicked, cleanupTotal, cleanupHead, cleanupDone, exportChoice, exportArgs, exportView, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, voiceTone, known, VOICE_SIDES, VOICE_TONES, VOICE_SIDE_DEFAULT, VOICE_TONE_DEFAULT, minimapRect, talking, stillTalking, markSpeak, seekSum, osdSeek, osdVolume, osdSpeed, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, nextChip, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, popupSpot, POP_GAP, POP_EDGE, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ uiCommands, uiState, uiRun, strokeAlpha, INK_TOOLS, INK_TOOL_TITLE, nextInkTool, LIMITS, escapeStep, editKey, cleanText, single, changed, matchEnds, matchLabel, labelMatchEnds, shownTags, noteMoments, progressText, matchChapters, stepTarget, matchTargets, rowHit, rowActions, authorOf, noteCount, matchCount, formatWhen, fullWhen, sessionWhen, keysOf, hotkeyRows, memberStatus, windowTitle, longId, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, analysisPill, analysisSub, analysisActions, analysisDetails, analysisDetailText, runningMark, cardParts, dropPos, dropSlot, boardSpan, boardFont, cellSpan, fitFont, deletePreview, cleanupPicked, cleanupTotal, cleanupHead, cleanupDone, exportChoice, exportArgs, exportView, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, voiceTone, known, VOICE_SIDES, VOICE_TONES, VOICE_SIDE_DEFAULT, VOICE_TONE_DEFAULT, minimapRect, talking, stillTalking, markSpeak, seekSum, osdSeek, osdVolume, osdSpeed, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, nextChip, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, popupSpot, POP_GAP, POP_EDGE, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 test("a changed() check against a tile's own store reports again on a rebuilt tile", () => {
   const first = {};
   assert.equal(ui$.changed("what", [1], first), true);
@@ -1063,6 +1063,22 @@ test("an extension row says one thing: no runner, what failed, who it waits for,
   assert.equal(ui$.analysisReason({ state: "left", reason: "recording" }, name), "録画が終わるのを待っています");
   assert.equal(ui$.analysisReason({ state: "left", reason: "ffmpeg" }, name), "動画ツールを待っています");
   ui$.setLanguage("en");
+});
+
+test("one UI command registry describes its commands with their current arguments, runs a command by name and builds the state from its readers", () => {
+  const ran = [];
+  let sets = ["a"];
+  const registry = {
+    seek: { about: "Seek", args: { seconds: "number" }, run: ({ seconds }) => ran.push(["seek", seconds]), reads: { position_s: () => 4 } },
+    open_recording: { about: "Open", args: { set: () => sets }, run: ({ set }) => ran.push(["open", set]), reads: { set: () => "a" } },
+    pause: { about: "Pause", run: (args) => ran.push(["pause", plain(args)]) },
+  };
+  assert.deepEqual(plain(ui$.uiCommands(registry)), { seek: { about: "Seek", args: { seconds: "number" } }, open_recording: { about: "Open", args: { set: ["a"] } }, pause: { about: "Pause", args: {} } });
+  sets = ["a", "b"];
+  assert.deepEqual(plain(ui$.uiCommands(registry).open_recording.args.set), ["a", "b"]);
+  assert.deepEqual([ui$.uiRun(registry, "seek", { seconds: 12 }), ui$.uiRun(registry, "open_recording", { set: "b" }), ui$.uiRun(registry, "pause"), ui$.uiRun(registry, "jump", {}), ui$.uiRun(registry, "toString", {})], [true, true, true, false, false]);
+  assert.deepEqual(ran, [["seek", 12], ["open", "b"], ["pause", {}]]);
+  assert.deepEqual(plain(ui$.uiState(registry, { tiles: () => [] })), { position_s: 4, set: "a", tiles: [] });
 });
 
 test("every end-to-end step is named in docs/test-cases.md", () => {

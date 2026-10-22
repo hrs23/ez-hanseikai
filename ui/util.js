@@ -105,6 +105,15 @@ function escapeStep(s) {
   if (s.window) return "close";
   return s.panel ? "panel" : "none";
 }
+const UI_REPORT_MS = 1000;
+const uiValue = (v) => (typeof v === "function" ? v() : v);
+const uiCommands = (registry) => Object.fromEntries(Object.entries(registry).map(([cmd, c]) => [cmd, { about: c.about, args: Object.fromEntries(Object.entries(c.args || {}).map(([k, v]) => [k, uiValue(v)])) }]));
+const uiState = (registry, readers) => Object.fromEntries(Object.entries(Object.assign({}, ...Object.values(registry).map((c) => c.reads || {}), readers)).map(([k, read]) => [k, read()]));
+function uiRun(registry, cmd, args) {
+  if (!Object.hasOwn(registry, cmd)) return false;
+  registry[cmd].run(args || {});
+  return true;
+}
 const typing = () => { const a = document.activeElement; return a && (a.tagName === "SELECT" || a.tagName === "TEXTAREA" || (a.tagName === "INPUT" && a.type !== "range" && a.type !== "checkbox") || a.isContentEditable); };
 function stored(key, fallback) {
   try { const v = JSON.parse(localStorage.getItem(key)); return v === null ? fallback : v; } catch { return fallback; }

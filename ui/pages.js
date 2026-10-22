@@ -509,6 +509,42 @@ const menuActions = {
   "reset": openReset,
   "toggle-recording": toggleRecording,
 };
+const UI_PAGES = ["live", "board", "members", "extensions", "player"];
+const UI_COMMANDS = {
+  navigate: { about: "Go to a page", args: { page: UI_PAGES }, run: ({ page: p }) => (p === "player" ? go("player") : navigate(p)), reads: { page: () => (page === "room" ? roomTab : playSet() ? "player" : "live") } },
+  open_recording: { about: "Open a recording in the player", args: { set: () => (st ? st.sets.map((s) => s.id) : []) }, run: ({ set }) => openSession(set), reads: { set: () => selected } },
+  play: { about: "Play", run: () => act("play", nowM()), reads: { playing: () => clock.playing } },
+  pause: { about: "Pause", run: () => act("pause", nowM()) },
+  seek: { about: "Move to a position in seconds from the recording's start", args: { seconds: "number" }, run: ({ seconds }) => seekTo(seconds), reads: { position_s: () => (playSet() ? nowM() : null) } },
+  set_rate: { about: "Set the playback speed", args: { rate: SPEEDS }, run: ({ rate: r }) => { setRate(r); share(); }, reads: { rate: () => rate } },
+  set_view: { about: "Show all tiles (0) or one member's tile (1 and up)", args: { index: "integer" }, run: ({ index }) => setView(play, index), reads: { view: () => play.view } },
+  full_screen: { about: "Turn full screen on or off", args: { on: "boolean" }, run: ({ on }) => { if (on !== (full || boardFull)) toggleFull(); }, reads: { full_screen: () => full || boardFull } },
+  join_party: { about: "Join the Watch Party", run: () => setParty(true), reads: { party: () => watchParty && !!st && st.party.on } },
+  leave_party: { about: "Leave the Watch Party", run: () => setParty(false) },
+  open_settings: { about: "Open Settings at a pane", args: { pane: () => [...$("setnav").querySelectorAll("button")].map((b) => b.dataset.pane) }, run: ({ pane }) => openSettings(pane), reads: { settings: () => ($("settings").open ? settingsPane : null) } },
+};
+const UI_READERS = {
+  tiles: () => players().flatMap((p) => {
+    const tl = play.tiles[p.key];
+    if (!tl || !tl.media) return [];
+    const v = tl.media.video;
+    const q = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality() : {};
+    return [{ member: p.key, readyState: v.readyState, paused: v.paused, currentTime: v.currentTime, buffered_ahead_s: Math.max(0, bufferedEnd(v) - v.currentTime), dropped_frames: q.droppedVideoFrames ?? null, total_frames: q.totalVideoFrames ?? null }];
+  }),
+};
+let uiSent = { sig: "", at: 0 };
+function reportUi() {
+  const report = { commands: uiCommands(UI_COMMANDS), state: uiState(UI_COMMANDS, UI_READERS) };
+  const sig = JSON.stringify(report);
+  const now = Date.now();
+  if (sig === uiSent.sig || now - uiSent.at < UI_REPORT_MS) return;
+  uiSent = { sig, at: now };
+  dialog("ui_report", { report }).catch(warn);
+}
+listenMain("ui_command", (e) => {
+  try { uiRun(UI_COMMANDS, e.payload.cmd, e.payload.args); } catch (err) { warn(err); }
+  uiSent.at = 0;
+});
 listenMain("menu", (e) => { if (menuActions[e.payload]) menuActions[e.payload](); });
 listenMain("joined", (e) => { flash(t("{name} joined", { name: e.payload })); if (document.hasFocus()) chime("join"); });
 listenMain("session", (e) => {
@@ -536,6 +572,7 @@ if (boardWindow) {
   setInterval(() => { if (!document.hidden) refresh().catch(warn); }, REFRESH_MS);
   setInterval(pollPlugins, PLUGINS_MS);
   setInterval(probeTiles, PROBE_MS);
+  setInterval(reportUi, TICK_MS);
   watchLongTasks();
   refresh();
   setTimeout(() => checkUpdate(false), UPDATE_CHECK_DELAY_MS);
