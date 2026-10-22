@@ -1784,22 +1784,21 @@ async function library(ctx) {
     await allSee(all, "the set ended", within(LOG_SYNC_S * 3), (st) => !st.active_set && setOf(st, winner) && !setOf(st, winner).live);
   });
 
-  await step("the microphone, the mix and the hotkeys are kept in the settings", async () => {
+  await step("the microphone, the mix and the hotkey are kept in the settings", async () => {
     const { capture, hotkeys } = await state(b);
-    const mic = () => hotkeys.find((h) => h.action === "mic");
+    const mark = () => hotkeys.find((h) => h.action === "mark");
     await invoke(b, "set_mic", { id: "none" });
     await invoke(b, "set_mix", { kind: "mic", volume: 0.5, muted: true });
-    await invoke(b, "set_hotkey", { action: "mic", keys: "Ctrl+Alt+F11" });
+    await invoke(b, "set_hotkey", { action: "mark", keys: "Ctrl+Alt+F11" });
     const now = await state(b);
-    const nowMic = now.hotkeys.find((h) => h.action === "mic");
-    check(now.capture.mic === "none" && now.capture.mix.mic.volume === 0.5 && now.capture.mix.mic.muted === true && nowMic.keys === "Ctrl+Alt+F11" && nowMic.default === mic().default, `settings read back as ${brief({ mic: now.capture.mic, mix: now.capture.mix.mic, hotkeys: now.hotkeys })}`);
+    const nowMark = now.hotkeys.find((h) => h.action === "mark");
+    check(now.capture.mic === "none" && now.capture.mix.mic.volume === 0.5 && now.capture.mix.mic.muted === true && nowMark.keys === "Ctrl+Alt+F11" && nowMark.default === mark().default, `settings read back as ${brief({ mic: now.capture.mic, mix: now.capture.mix.mic, hotkeys: now.hotkeys })}`);
     const saved = readJson(path.join(b.data, "settings.json"));
-    check(saved.mic === "none" && saved.mix.mic.muted === true && saved.hotkeys.mic === "Ctrl+Alt+F11", "settings.json does not keep them");
+    check(saved.mic === "none" && saved.mix.mic.muted === true && saved.hotkeys.mark === "Ctrl+Alt+F11", "settings.json does not keep them");
     check(await invoke(b, "set_hotkey", { action: "mark", keys: "K" }).then(() => false, () => true), "a hotkey without Ctrl or Alt was accepted");
-    check(await invoke(b, "set_hotkey", { action: "screen", keys: "Ctrl+Alt+F11" }).then(() => false, () => true), "two actions got the same hotkey");
     await invoke(b, "set_mic", { id: capture.mic });
     await invoke(b, "set_mix", { kind: "mic", ...capture.mix.mic });
-    await invoke(b, "set_hotkey", { action: "mic", keys: mic().keys });
+    await invoke(b, "set_hotkey", { action: "mark", keys: mark().keys });
   });
 
   await step("C keeps every file it does not know and drops only its standby segments", async () => {

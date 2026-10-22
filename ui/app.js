@@ -1571,6 +1571,7 @@ document.addEventListener("keydown", (e) => {
   if (e.ctrlKey) action = player && (key === "ArrowLeft" || key === "ArrowRight") ? () => jump(key === "ArrowLeft" ? -STEP.huge : STEP.huge) : null;
   else if (key === "?") action = () => openSettings("shortcuts");
   else if (onBoard() && k === "f") action = toggleBoardFull;
+  else if (st.recording && !player && (k === "m" || k === "v")) action = once(() => $(k === "m" ? "micbtn" : "screenbtn").click());
   else if (page === "player") action = stageKey(e, key) || (player && (PLAYER_KEYS[(e.shiftKey ? "Shift+" : "") + k] || PLAYER_KEYS[k])) || null;
   if (!action) return;
   e.preventDefault();

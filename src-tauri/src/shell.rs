@@ -14,13 +14,13 @@ use tauri_plugin_notification::NotificationExt;
 use crate::{language, Core, REPO, VERSION};
 
 type Action = fn(&Arc<Core>) -> Option<&'static str>;
-pub const HOTKEYS: [(&str, &str, Action); 3] = [("mark", "Ctrl+Alt+K", mark), ("mic", "Ctrl+Shift+M", toggle_mic), ("screen", "Ctrl+Shift+O", toggle_screen)];
-const OLD_DEFAULTS: [&str; 3] = ["Ctrl+Alt+M", "Ctrl+Alt+N", "Ctrl+Alt+V"];
-pub type Hotkeys = [String; 3];
-pub type Taken = [bool; 3];
+pub const HOTKEYS: [(&str, &str, Action); 1] = [("mark", "Ctrl+Alt+K", mark)];
+const OLD_DEFAULTS: [&str; 1] = ["Ctrl+Alt+M"];
+pub type Hotkeys = [String; 1];
+pub type Taken = [bool; 1];
 const BOARD: &str = "board";
 const STATUS_POLL: Duration = Duration::from_secs(1);
-const JA: [(&str, &str); 44] = [
+const JA: [(&str, &str); 40] = [
     ("Already running with this data folder.", "このデータフォルダですでに動いています。"),
     ("EZ Hanseikai", "EZ反省会"),
     ("File", "ファイル"),
@@ -60,10 +60,6 @@ const JA: [(&str, &str); 44] = [
     ("Cancel", "キャンセル"),
     ("Version", "バージョン"),
     ("Moment marked", "マークしました"),
-    ("Microphone on", "マイクオン"),
-    ("Microphone off", "マイクオフ"),
-    ("Screen on", "画面オン"),
-    ("Screen off", "画面オフ"),
     ("{name} wants to join", "{name} が参加を希望しています"),
 ];
 
@@ -353,19 +349,15 @@ pub fn hotkey(text: &str) -> Option<Shortcut> {
     shortcut.mods.intersects(Modifiers::CONTROL | Modifiers::ALT | Modifiers::SUPER).then_some(shortcut)
 }
 
-fn check_hotkey(keys: &Hotkeys, index: usize, text: &str) -> Result<Shortcut, &'static str> {
-    let shortcut = hotkey(text).ok_or("Use Ctrl or Alt with a key.")?;
-    if keys.iter().enumerate().any(|(i, k)| i != index && hotkey(k) == Some(shortcut)) {
-        return Err("Another action uses that shortcut.");
-    }
-    Ok(shortcut)
+fn check_hotkey(text: &str) -> Result<Shortcut, &'static str> {
+    hotkey(text).ok_or("Use Ctrl or Alt with a key.")
 }
 
 pub fn load_hotkeys(settings: &Value) -> Hotkeys {
     let mut keys = Hotkeys::default();
     for (i, (id, default, _)) in HOTKEYS.iter().enumerate() {
         let saved = settings["hotkeys"][id].as_str().filter(|k| hotkey(k) != hotkey(OLD_DEFAULTS[i]));
-        keys[i] = [saved, Some(*default)].into_iter().flatten().find(|k| check_hotkey(&keys, i, k).is_ok()).unwrap_or_default().to_string();
+        keys[i] = [saved, Some(*default)].into_iter().flatten().find(|k| check_hotkey(k).is_ok()).unwrap_or_default().to_string();
     }
     keys
 }
@@ -400,7 +392,7 @@ fn arm_all(core: &Core, keys: &Hotkeys) {
 pub fn set_hotkey(core: &Core, action: &str, text: &str) -> Result<(), String> {
     let index = HOTKEYS.iter().position(|(id, _, _)| *id == action).ok_or("Unknown shortcut.")?;
     let mut keys = core.hotkeys.lock().unwrap().clone();
-    check_hotkey(&keys, index, text)?;
+    check_hotkey(text)?;
     let free = !arm_hotkeys(&core.app, &[text], true)[0];
     if free {
         keys[index] = text.to_string();
@@ -418,23 +410,6 @@ pub fn set_hotkey(core: &Core, action: &str, text: &str) -> Result<(), String> {
 
 fn mark(core: &Arc<Core>) -> Option<&'static str> {
     crate::ops::mark(core, Value::Null).ok().map(|_| "Moment marked")
-}
-
-fn toggle_mic(core: &Arc<Core>) -> Option<&'static str> {
-    let mic = core.engine.mix.lock().unwrap()["mic"].clone();
-    let muted = mic["muted"] != true;
-    crate::ops::find("set_mix")?(core, json!({"kind": "mic", "volume": mic["volume"], "muted": muted})).ok()?;
-    Some(if muted { "Microphone off" } else { "Microphone on" })
-}
-
-fn toggle_screen(core: &Arc<Core>) -> Option<&'static str> {
-    let on = !core.engine.source.lock().unwrap().is_null();
-    let next = if on { Value::Null } else { core.engine.last_source.lock().unwrap().clone() };
-    if !on && next.is_null() {
-        return None;
-    }
-    crate::ops::find("set_source")?(core, json!({"source": next})).ok()?;
-    Some(if on { "Screen off" } else { "Screen on" })
 }
 
 pub fn run_hotkey(core: &Arc<Core>, index: usize) {
@@ -669,7 +644,7 @@ mod tests {
     }
 
     #[test]
-    fn hotkeys_need_ctrl_or_alt_and_differ() {
+    fn hotkeys_need_ctrl_or_alt() {
         for (_, default, _) in HOTKEYS {
             assert!(hotkey(default).is_some());
         }
@@ -680,32 +655,30 @@ mod tests {
         assert!(hotkey("Ctrl+Nonsense").is_none());
         let keys = load_hotkeys(&Value::Null);
         assert_eq!(keys, HOTKEYS.map(|(_, default, _)| default.to_string()));
-        assert_eq!(check_hotkey(&keys, 1, "ctrl+alt+k"), Err("Another action uses that shortcut."));
-        assert_eq!(check_hotkey(&keys, 1, "Shift+M"), Err("Use Ctrl or Alt with a key."));
-        assert!(check_hotkey(&keys, 0, "Ctrl+Alt+K").is_ok());
-        assert!(check_hotkey(&keys, 2, "Super+F9").is_ok());
+        assert_eq!(check_hotkey("Shift+M"), Err("Use Ctrl or Alt with a key."));
+        assert!(check_hotkey("Ctrl+Alt+K").is_ok());
+        assert!(check_hotkey("Super+F9").is_ok());
     }
 
     #[test]
     fn a_shortcut_another_app_holds_is_reported_only_while_armed() {
-        let keys = ["Ctrl+Alt+K", "", "Ctrl+Shift+O"];
+        let keys = ["Ctrl+Alt+K"];
         let held = hotkey("Ctrl+Alt+K").unwrap();
-        assert_eq!(arm(&keys, true, |s| s != held), [true, false, false]);
-        assert_eq!(arm(&keys, true, |_| true), [false, false, false]);
-        assert_eq!(arm(&keys, false, |_| -> bool { panic!("armed while off") }), [false, false, false]);
-        let state = hotkeys_json(&load_hotkeys(&Value::Null), &[true, false, false]);
+        assert_eq!(arm(&keys, true, |s| s != held), [true]);
+        assert_eq!(arm(&keys, true, |_| true), [false]);
+        assert_eq!(arm(&keys, false, |_| -> bool { panic!("armed while off") }), [false]);
+        let state = hotkeys_json(&load_hotkeys(&Value::Null), &[true]);
         assert_eq!(state[0]["taken"], true);
-        assert_eq!(state[1]["taken"], false);
     }
 
     #[test]
-    fn saved_hotkeys_load_and_never_repeat() {
-        let keys = load_hotkeys(&json!({"hotkeys": {"mark": "Alt+F9", "screen": "Alt+F9"}}));
-        assert_eq!(keys, ["Alt+F9", "Ctrl+Shift+M", "Ctrl+Shift+O"]);
-        let keys = load_hotkeys(&json!({"hotkeys": {"mark": "Ctrl+Shift+M", "mic": "M"}}));
-        assert_eq!(keys, ["Ctrl+Shift+M", "", "Ctrl+Shift+O"]);
-        let keys = load_hotkeys(&json!({"hotkeys": {"mark": "Ctrl+Alt+M", "mic": "Ctrl+Alt+N", "screen": "Ctrl+Alt+M"}}));
-        assert_eq!(keys, ["Ctrl+Alt+K", "Ctrl+Shift+M", "Ctrl+Alt+M"]);
+    fn saved_hotkeys_load_and_an_old_default_moves_to_the_new_one() {
+        let keys = load_hotkeys(&json!({"hotkeys": {"mark": "Alt+F9", "screen": "Ctrl+Shift+O"}}));
+        assert_eq!(keys, ["Alt+F9"]);
+        let keys = load_hotkeys(&json!({"hotkeys": {"mark": "M"}}));
+        assert_eq!(keys, ["Ctrl+Alt+K"]);
+        let keys = load_hotkeys(&json!({"hotkeys": {"mark": "Ctrl+Alt+M"}}));
+        assert_eq!(keys, ["Ctrl+Alt+K"]);
     }
 
     #[test]

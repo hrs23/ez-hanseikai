@@ -197,10 +197,7 @@ fn set_source(core: &Arc<Core>, args: Value) -> Result<Value, String> {
         return Err("That capture source is not available.".into());
     }
     tracing::info!("capture source chosen: {}", if source.is_null() { "none" } else { source["kind"].as_str().unwrap_or_default() });
-    let old = std::mem::replace(&mut *core.engine.source.lock().unwrap(), source);
-    if !old.is_null() {
-        *core.engine.last_source.lock().unwrap() = old;
-    }
+    *core.engine.source.lock().unwrap() = source;
     Ok(Value::Null)
 }
 

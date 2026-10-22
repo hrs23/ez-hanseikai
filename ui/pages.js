@@ -12,6 +12,7 @@ const SHORTCUTS = [
   ["All players / one player", ["0", "1–6", "Tab"]],
   ["Previous / next recording", ["Shift+P", "Shift+N"]],
   ["Add note", ["C"]],
+  ["Microphone / screen while recording", ["M", "V"]],
   ["Previous / next note", ["Q", "E"]],
   ["Previous / next match (or event)", ["A", "D"]],
   ["Clear drawing", ["X"]],

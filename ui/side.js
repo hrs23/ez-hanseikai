@@ -211,13 +211,13 @@ function renderDock() {
     $("screenicon").replaceChildren(icon(!c.source ? "monitor-off" : c.source.kind === "display" ? "monitor" : "window"));
     $("screentitle").textContent = sourceLabel(c);
     $("screensub").textContent = $("screensub").title = sub;
-    $("screenbtn").title = c.source && !c.source_lost ? t("Stop sending your screen") : t("Choose what to send");
+    $("screenbtn").title = `${c.source && !c.source_lost ? t("Stop sending your screen") : t("Choose what to send")} (V)`;
   }
   const mute = c.mix.mic.muted;
   if (changed("miccap", [mute, micState, lang])) {
     $("miccap").className = "cap mic " + micState;
     $("micbtn").firstElementChild.replaceChildren(icon(mute ? "mic-off" : "mic"));
-    $("micbtn").title = mute ? t("Unmute microphone") : t("Mute microphone");
+    $("micbtn").title = `${mute ? t("Unmute microphone") : t("Mute microphone")} (M)`;
     $("micbtn").setAttribute("aria-pressed", String(!mute));
   }
   if (changed("me", [st.name, st.id, look(st.id), lang])) {
