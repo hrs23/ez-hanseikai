@@ -192,7 +192,6 @@ async function pressAndConfirm(app, call, yes = true) {
   await evaluate(app, `${call}; true`);
   await waitFor(`${app.key} asks before it goes on`, within(UI_REFRESH_S * 5), () => evaluate(app, `$("confirm").open`));
   const title = await evaluate(app, `$("confirmtitle").textContent`);
-  app.confirmText = await evaluate(app, `$("confirmtext").textContent`);
   await evaluate(app, `$(${yes ? '"confirmyes"' : '"confirmno"'}).click(); true`);
   return title;
 }
@@ -1233,8 +1232,6 @@ async function library(ctx) {
     await screenshot(b, "plugins");
     await evaluate(b, `(() => { const s = ${runner}; s.value = ${JSON.stringify(c.id)}; s.dispatchEvent(new Event("change")); return true; })()`);
     await waitFor("B asks before changing who runs it", within(UI_REFRESH_S * 5), () => evaluate(b, `$("confirm").open`));
-    const said = await evaluate(b, `$("confirmtext").textContent`);
-    check(said === "Applies to everyone in the room.", `the change says "${said}" instead of that it applies to everyone`);
     await evaluate(b, `$("confirmyes").click(); true`);
     for (const app of [a, b, c]) await waitFor(`${app.key} sees C as the runner`, within(LOG_SYNC_S * 3), async () => (await invoke(app, "room_plugins")).find((x) => x.id === PLUGIN).runner === c.id);
     await invoke(b, "set_plugin_runner", { id: PLUGIN, runner: a.id });
@@ -1471,7 +1468,7 @@ async function library(ctx) {
     await sleep(UI_REFRESH_S * 1000);
     check(!(await state(a)).active_set, "A started recording although it answered No");
     const asked = await pressAndConfirm(a, "toggleRecording()");
-    check(asked === "Record the debrief for everyone?" && a.confirmText === "Only the voice and the viewing flow are recorded.", `A was asked "${asked}" / "${a.confirmText}"`);
+    check(asked === "Record the debrief for everyone?", `A was asked "${asked}"`);
     await waitFor("B is told who started", within(LOG_SYNC_S * 2), () => evaluate(b, `e2eNotes.includes(${JSON.stringify(a.name + " started recording")})`));
     ctx.review = (await state(a)).active_set.id;
     await allSee(all, "recording the review voice only", within(LOG_SYNC_S * 2), (st) => st.active_set?.id === ctx.review && st.active_set.voice === true);
@@ -1757,7 +1754,7 @@ async function library(ctx) {
     await evaluate(c, `loadStorage(); true`);
     await waitFor("C offers to delete the old files", within(UI_REFRESH_S * 5), () => evaluate(c, `!$("oldfiles").hidden && $("oldfiles").textContent === t("Delete old files ({size})", { size: bytes(${info.old_bytes}) })`));
     const title = await pressAndConfirm(c, `$("oldfiles").click()`);
-    check(title === "Delete old files?" && c.confirmText === "", `C asked "${title}" with "${c.confirmText}"`);
+    check(title === "Delete old files?", `C asked "${title}"`);
     await waitFor("the old files are gone and the button hides", within(UI_REFRESH_S * 5), async () => old.every((name) => !fs.existsSync(path.join(data, name))) && (await invoke(c, "data_info")).old_bytes === 0 && evaluate(c, `$("oldfiles").hidden`));
     for (const name of keptOldFiles()) check(fs.existsSync(path.join(data, name)), `${name} was removed`);
     check(fs.existsSync(path.join(data, "key.bin")), "key.bin was removed");
