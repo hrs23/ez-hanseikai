@@ -121,7 +121,7 @@ mark { background: var(--warn-soft); color: var(--warn); border-radius: 3px; pad
 .av.xl { width: 44px; height: 44px; font-size: 18px; }
 .av.dim { opacity: var(--opacity-dim); }
 .av > img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
-.av > svg { width: 62%; height: 62%; fill: currentColor; stroke: currentColor; stroke-width: 1.5; stroke-linejoin: round; fill-rule: evenodd; }
+.av > svg { width: 62%; height: 62%; fill: currentColor; stroke: currentColor; stroke-width: 0.5; stroke-linejoin: round; fill-rule: evenodd; }
 .av.room { border-radius: var(--r-sm); color: var(--soft); }
 button.plain { background: none; border: 0; padding: 0; height: auto; border-radius: 50%; }
 .av { transition: box-shadow var(--fast); }

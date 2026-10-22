@@ -41,6 +41,10 @@
   --member-violet: #c099ff;
   --member-pink: #ff8cbc;
   --member-blue: #8ca8ff;
+  --member-teal: #4fd1b0;
+  --member-tan: #d2a679;
+  --member-silver: #c4cad6;
+  --member-peach: #ffb7a0;
   --on-member: var(--deep);
   --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px #23272f;
 }

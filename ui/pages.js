@@ -78,7 +78,7 @@ function roomDirty() {
   $("roomsave").disabled = !name || (name === st.room.name && iconDraft === st.room.icon);
 }
 function showIconDraft() {
-  $("roomiconshow").replaceChildren(roomIcon({ name: $("roomnameinput").value, icon: iconDraft }, "xl"));
+  $("roomiconshow").replaceChildren(roomIcon({ id: st.room.id, name: $("roomnameinput").value, icon: iconDraft }, "xl"));
   $("roomiconclear").hidden = !iconDraft;
   roomDirty();
 }
@@ -242,10 +242,10 @@ function renderProfile() {
     press(b, i === mine);
     return b;
   }));
-  const own = image && !FACES[image] ? [press(el("button", { className: "facebtn", ariaLabel: t("Avatar") }, picture("", colorOf(mine), image, "lg")), true)] : [];
-  $("facegrid").replaceChildren(...own, ...Object.keys(FACES).map((name, i) => {
+  const own = image && !FACES[LEGACY[image] || image] ? [press(el("button", { className: "facebtn", ariaLabel: t("Avatar") }, picture("", colorOf(mine), image, "lg")), true)] : [];
+  $("facegrid").replaceChildren(...own, ...PRESETS.map((name, i) => {
     const b = el("button", { className: "facebtn", ariaLabel: `${t("Avatar")} ${i + 1}`, onclick: () => run("set_profile", { avatar: name }) }, picture("", colorOf(mine), name, "lg"));
-    press(b, image === name);
+    press(b, (LEGACY[image] || image) === name);
     return b;
   }));
   $("avatarclear").hidden = !image;
@@ -365,6 +365,7 @@ $("joincode").onkeydown = (e) => { if (e.key === "Enter" && !composing(e) && !$(
 $("pendingcancel").onclick = () => st.room && run("remove_room", { id: st.room.id });
 $("roomnameinput").oninput = showIconDraft;
 $("roomiconpick").onclick = () => pickImage((image) => { iconDraft = image; showIconDraft(); });
+$("roomfacegrid").replaceChildren(...PRESETS.map((name, i) => el("button", { className: "facebtn", ariaLabel: `${t("Room icon")} ${i + 1}`, onclick: () => { iconDraft = presetImage(name); showIconDraft(); } }, presetTile(name, "lg"))));
 $("roomiconclear").onclick = () => { iconDraft = ""; showIconDraft(); };
 $("roomnameinput").onkeydown = (e) => { if (e.key === "Enter" && !composing(e) && !$("roomsave").disabled) $("roomsave").click(); };
 $("roomsave").onclick = async () => {

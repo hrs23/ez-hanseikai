@@ -79,7 +79,7 @@ Every kind the app writes. The body's field `k` holds the kind, for example {`k`
 | `admit` | `member`, `t_us` | The member is let in (again). |
 | `room_name` | `name`, `t_us` | The room is renamed. |
 | `room_icon` | `icon`, `t_us` | The room's icon: an image data URL (PNG, JPEG or WebP, base64, at most 16384 characters), or "" for none. |
-| `profile` | `color?`, `avatar?`, `t_us` | The writer's colour (0 to 7, an index into the member palette) and avatar (an image data URL as above, or a built-in name of 1 to 16 lowercase letters). A full snapshot; a missing field is none. |
+| `profile` | `color?`, `avatar?`, `t_us` | The writer's colour (0 to 11, an index into the member palette) and avatar (an image data URL as above, or a built-in name of 1 to 16 lowercase letters). A full snapshot; a missing field is none. |
 | `offset` | `peer` (short ID), `t_us`, `rtt_us`, `offset_us` | The writer measured the peer's clock: `offset_us` is theirs minus the writer's. |
 | `layout` | `set`, `t_us`, `layout` | The writer's layout for the set; `set` is also inside `layout`. A `layout` record without `set`, written while watching, belongs to no set's default layout and is ignored. |
 | `plugin` | `plugin`, `on`, `version`, `runner?`, `t_us` | The room's choice for a plugin. `runner` is the member who runs it; without it, the writer. Older versions also wrote `settings`, which is ignored. |

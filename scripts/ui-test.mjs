@@ -551,17 +551,21 @@ function page(files, globals = {}) {
   return { ctx, boxes };
 }
 
-test("an avatar shows the image, a built-in shape or the initial; an unknown shape shows the initial; a room without an icon shows its initial", () => {
+test("an avatar shows the image, a built-in shape or the initial; an unknown shape shows the initial; a room without an icon shows a preset picked from its id, and a room with no id its initial", () => {
   const image = "data:image/webp;base64,AAAA";
   const state = { id: "me", name: "Aki", names: { ren: "Ren", koya: "Koya", mia: "Mia" }, colors: { me: 1, ren: 2, koya: 3, mia: 4 }, avatars: { me: "bolt", ren: image, koya: "gone", mia: "data:image/svg+xml;base64,AAAA" } };
   const { ctx } = page(["util.js", "faces.js"], { st: state, nameOf: (id) => id, colorIndex: (id) => state.colors[id] || 0 });
   const draw = (code) => vm.runInContext(code, ctx);
   const bolt = draw(`avatar("me", "sm")`);
   assert.deepEqual([bolt.find("path").length, bolt.textContent, bolt.style.background], [1, "", "var(--member-sky)"]);
+  assert.equal(draw(`avatar("me", "sm")`).find("path")[0].attributes.d, draw(`FACES.robot`));
   assert.equal(draw(`avatar("ren")`).find("img")[0].src, image);
   for (const id of ["koya", "mia"]) assert.deepEqual([draw(`avatar("${id}")`).textContent, draw(`avatar("${id}")`).find("img").length], [id === "koya" ? "K" : "M", 0]);
   const room = draw(`roomIcon({ name: "Practice", icon: "" }, "sm")`);
   assert.deepEqual([room.textContent, room.className], ["P", "av sm room"]);
+  const preset = draw(`roomIcon({ id: "ab12", name: "Practice", icon: "" }, "sm")`);
+  assert.deepEqual([preset.textContent, preset.find("path").length, preset.className], ["", 1, "av sm room"]);
+  assert.equal(draw(`roomIcon({ id: "ab12", name: "Other", icon: "" }, "sm")`).style.background, preset.style.background);
   assert.equal(draw(`roomIcon({ name: "Practice", icon: "${image}" }, "sm")`).find("img").length, 1);
   assert.deepEqual(plain(draw(`look("ren")`)), [2, image.length, image.slice(-16)]);
 });
