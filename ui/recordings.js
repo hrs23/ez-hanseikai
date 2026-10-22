@@ -102,11 +102,16 @@ function exportChoice(saved, owners) {
     range: EXPORT_RANGES.includes(v.range) ? v.range : "whole",
     quality: EXPORT_QUALITIES.includes(v.quality) ? v.quality : "standard",
     member: owners.includes(v.member) ? v.member : "",
+    notes: v.notes !== false,
+    marks: v.marks !== false,
+    matches: v.matches !== false,
   };
 }
 
-const exportView = (set, folder) => ({ options: !noPicture(set), path: folder || "", ready: !!folder });
-const exportArgs = (choice) => ({ range: choice.range, quality: choice.quality, member: choice.member || null });
+const exportView = (set, folder, video) => ({ options: video || !noPicture(set), video: !!video, path: folder || "", ready: !!folder });
+const exportArgs = (choice, video) => video
+  ? { kind: "debrief_video", quality: choice.quality, member: choice.member || null, notes: choice.notes, marks: choice.marks, matches: choice.matches }
+  : { range: choice.range, quality: choice.quality, member: choice.member || null };
 
 function oldSessions(sets, keep = KEEP_NEWEST) {
   return sets.filter((s) => !s.live && s.progress.have > 0).slice(keep).map((s) => s.id);

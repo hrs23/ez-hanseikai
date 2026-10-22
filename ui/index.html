@@ -227,11 +227,16 @@
   <div class="row end"><button id="promptreset"><span data-t="Reset to default">Reset to default</span></button><button id="promptcopy" class="primary"><span data-icon="copy" data-icon-class="sm"></span><span data-t="Copy prompt">Copy prompt</span></button></div>
 </dialog>
 <dialog id="exportdlg">
-  <h2 data-t="Export to folder">Export to folder</h2>
+  <h2 id="exporttitle" data-t="Export to folder">Export to folder</h2>
   <div id="exportopts">
-  <label class="field"><span data-t="Range">Range</span><select id="exportrange"><option value="whole" data-t="Whole recording">Whole recording</option><option value="matches" data-t="Per match">Per match</option></select></label>
+  <label id="exportrangerow" class="field"><span data-t="Range">Range</span><select id="exportrange"><option value="whole" data-t="Whole recording">Whole recording</option><option value="matches" data-t="Per match">Per match</option></select></label>
   <label class="field"><span data-t="Quality">Quality</span><select id="exportquality"><option value="original" data-t="Original">Original</option><option value="standard" data-t="Standard">Standard</option><option value="light" data-t="Light">Light</option></select></label>
   <label class="field"><span data-t="Members">Members</span><select id="exportmember"></select></label>
+  <div id="exportburn">
+  <label class="check"><input id="exportnotes" type="checkbox"><span data-t="Notes">Notes</span></label>
+  <label class="check"><input id="exportmarks" type="checkbox"><span data-t="Marks">Marks</span></label>
+  <label class="check"><input id="exportmatches" type="checkbox"><span data-t="Matches">Matches</span></label>
+  </div>
   </div>
   <div class="field"><span data-t="Save to">Save to</span><div class="row"><span id="exportpath" class="exportpath"></span><button id="exportpick" class="sm" data-t="Change…">Change…</button></div></div>
   <div class="row end"><button id="exportno" class="close" data-t="Cancel">Cancel</button><button id="exportyes" class="primary" data-t="Export">Export</button></div>

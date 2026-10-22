@@ -569,15 +569,17 @@ test("the export dialog shows the full path it saves to, offers the options only
   const video = { players: [{ owner: "a", parts: [{ v: true }] }] };
   const voice = { players: [{ owner: "a", parts: [{ v: false }] }] };
   const folder = "C:\\Users\\Ann\\Videos\\EZ Hanseikai\\Team debrief 2026-10-23 14-05 13 min (2)";
-  assert.deepEqual(plain(ui$.exportView(voice, folder)), { options: false, path: folder, ready: true });
-  assert.deepEqual(plain(ui$.exportView(video, null)), { options: true, path: "", ready: false });
+  assert.deepEqual(plain(ui$.exportView(voice, folder)), { options: false, video: false, path: folder, ready: true });
+  assert.deepEqual(plain(ui$.exportView(video, null)), { options: true, video: false, path: "", ready: false });
+  assert.deepEqual(plain(ui$.exportView(voice, folder, true)), { options: true, video: true, path: folder, ready: true });
 });
 
-test("the export options fall back to the defaults and to everyone for a member not in the recording, and send no member for everyone", () => {
-  const defaults = { range: "whole", quality: "standard", member: "" };
+test("the export options fall back to the defaults (burn-ins on) and to everyone for a member not in the recording, send no member for everyone, and the debrief video sends its kind and burn-ins without a range", () => {
+  const defaults = { range: "whole", quality: "standard", member: "", notes: true, marks: true, matches: true };
   assert.deepEqual(plain(ui$.exportChoice(null, ["a"])), defaults);
-  assert.deepEqual(plain(ui$.exportChoice({ range: "x", quality: 3, member: "gone" }, ["a"])), defaults);
-  assert.deepEqual(plain(ui$.exportChoice({ range: "matches", quality: "light", member: "a" }, ["a", "b"])), { range: "matches", quality: "light", member: "a" });
+  assert.deepEqual(plain(ui$.exportChoice({ range: "x", quality: 3, member: "gone", notes: "no" }, ["a"])), defaults);
+  assert.deepEqual(plain(ui$.exportChoice({ range: "matches", quality: "light", member: "a", marks: false }, ["a", "b"])), { range: "matches", quality: "light", member: "a", notes: true, marks: false, matches: true });
+  assert.deepEqual(plain(ui$.exportArgs({ ...defaults, member: "a", notes: false }, true)), { kind: "debrief_video", quality: "standard", member: "a", notes: false, marks: true, matches: true });
   assert.deepEqual(plain(ui$.exportArgs(defaults)), { range: "whole", quality: "standard", member: null });
   assert.deepEqual(plain(ui$.exportArgs({ range: "matches", quality: "original", member: "b" })), { range: "matches", quality: "original", member: "b" });
 });

@@ -978,10 +978,17 @@ function renderDebriefs(set) {
   const list = set ? debriefsOf(set.id) : [];
   $("debriefs").hidden = !list.length;
   if (!changed("debriefs", [list.map((d) => [d.id, d.end_us, onThisPc(d)]), lang])) return;
-  $("debriefs").replaceChildren(sectionHead("mic", t("Debrief recordings"), list.length), ...list.map((d) => el("div", { className: "prow" },
+  $("debriefs").replaceChildren(sectionHead("mic", t("Debrief recordings"), list.length), ...list.map((d) => el("div", { className: "prow", tabIndex: 0, oncontextmenu: (e) => { e.preventDefault(); debriefMenu(d, e); } },
     el("span", { className: "pic" }, icon("mic", "sm")),
     el("div", { className: "ptx" }, el("div", { className: "nm" }, el("span", { textContent: t("{m} min", { m: Math.max(1, Math.round(((d.end_us || nowUs()) - d.start_us) / 6e7)) }) }), el("span", { className: "muted", textContent: ` · ${sessionWhen(d.id)}`, title: fullWhen(sessionStart(d.id)) }))),
     downloadButton(d) || el("button", { className: "sm", textContent: t("Save"), onclick: () => exportFolder(d) }))));
+}
+function debriefMenu(d, at) {
+  const here = onThisPc(d);
+  openMenu([
+    { label: t("Export as video…"), icon: "film", disabled: !here, run: () => exportFolder(d, true) },
+    { label: t("Save voices…"), icon: "mic", disabled: !here, run: () => exportFolder(d) },
+  ], at);
 }
 function timeText(n) {
   if (n.m === null) return "";
@@ -1320,21 +1327,27 @@ function renderNotices() {
     n.action ? el("button", { className: "sm" + (n.action.primary ? " primary" : ""), textContent: n.action.label, onclick: n.action.run }) : null,
     n.sticky ? null : iconButton("x", t("Close"), () => { dismissed.add(n.key); delete sigs.notices; renderNotices(); }))));
 }
-function exportOptions(set) {
-  const owners = set.players.map((p) => p.owner);
+function exportOptions(set, video) {
+  const shown = video ? setById(set.of) : set;
+  const owners = shown ? shown.players.map((p) => p.owner) : [];
   const choice = exportChoice(stored("exportOptions", null), owners);
   let folder = null;
   const show = () => {
-    const v = exportView(set, folder);
+    const v = exportView(set, folder, video);
     $("exportopts").hidden = !v.options;
+    $("exportrangerow").hidden = v.video;
+    $("exportburn").hidden = !v.video;
     $("exportpath").textContent = v.path;
     $("exportyes").disabled = !v.ready;
   };
   const where = () => invoke("export_target", { room: set.room, set: set.id }).then((f) => { folder = f; show(); });
+  $("exporttitle").dataset.t = video ? "Export as video" : "Export to folder";
+  $("exporttitle").textContent = t($("exporttitle").dataset.t);
   $("exportrange").value = choice.range;
   $("exportquality").value = choice.quality;
-  $("exportmember").replaceChildren(el("option", { value: "", textContent: t("Everyone") }), ...owners.map((o) => el("option", { value: o, textContent: nameOf(o) })));
+  $("exportmember").replaceChildren(el("option", { value: "", textContent: t(video ? "As shown" : "Everyone") }), ...owners.map((o) => el("option", { value: o, textContent: nameOf(o) })));
   $("exportmember").value = choice.member;
+  for (const k of ["notes", "marks", "matches"]) $("export" + k).checked = choice[k];
   $("exportpick").onclick = () => dialog("pick_export_base").then((base) => base && where()).catch(fail);
   show();
   const d = $("exportdlg");
@@ -1342,19 +1355,20 @@ function exportOptions(set) {
   where().catch((e) => { d.close(); fail(e); });
   return new Promise((done) => {
     $("exportyes").onclick = () => {
-      const picked = exportChoice({ range: $("exportrange").value, quality: $("exportquality").value, member: $("exportmember").value }, owners);
-      if (exportView(set, folder).options) store("exportOptions", picked);
+      const picked = exportChoice({ range: $("exportrange").value, quality: $("exportquality").value, member: $("exportmember").value, notes: $("exportnotes").checked, marks: $("exportmarks").checked, matches: $("exportmatches").checked }, owners);
+      const v = exportView(set, folder, video);
+      if (v.options) store("exportOptions", picked);
       d.close();
-      done({ folder, ...(exportView(set, folder).options ? exportArgs(picked) : {}) });
+      done({ folder, ...(v.options ? exportArgs(picked, video) : {}) });
     };
     d.onclose = () => done(null);
   });
 }
-async function exportFolder(set) {
+async function exportFolder(set, video = false) {
   if (!set) { flash(t("Open a recording first")); return; }
   try {
     await invoke("export_check");
-    const options = await exportOptions(set);
+    const options = await exportOptions(set, video);
     if (!options) return;
     exporting = { set: set.id, percent: 0, folder: options.folder };
     refresh();
