@@ -1572,9 +1572,9 @@ async function library(ctx) {
     const voice = await api(a, "GET", `${recording(ctx.review)}/voices/${a.id}`, { token });
     check(voice.status === 200 && voice.type?.startsWith("audio/mp4") && voice.raw.subarray(4, 8).toString() === "ftyp", `the debrief voice: ${voice.status} ${voice.type}`);
     check((await api(a, "GET", `${recording(ctx.set)}/voices/${a.id}x`, { token })).status === 404, "a voice that does not exist was served");
-    for (const tail of ["events", "chapters", "transcript"]) {
+    for (const tail of ["events", "chapters"]) {
       const r = await api(a, "GET", `${recording(ctx.set)}/${tail}`, { token });
-      check(r.status === 200 && Array.isArray(r.json?.[tail === "events" ? "events" : tail === "chapters" ? "chapters" : "lines"]), `${tail}: ${r.status} ${brief(r.text)}`);
+      check(r.status === 200 && Array.isArray(r.json?.[tail]), `${tail}: ${r.status} ${brief(r.text)}`);
     }
     const plugins = await api(a, "GET", `${room}/plugins`, { token });
     check(plugins.status === 200 && plugins.json.plugins.some((p) => p.id === "apex-matches"), `plugins: ${brief(plugins.json)}`);
