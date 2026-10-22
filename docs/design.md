@@ -9,6 +9,7 @@ How the app is built and why. The principles are in the [README](../README.md#ke
 - Capture and Settings stay apart, as in Discord, OBS and Zoom: what is touched every evening (the screen, the app sound, the microphone) sits in small menus on the Screen and Microphone buttons, and what is set once is in Settings. One page holding both would put the meters next to rarely used settings and take the user away from the player to change the microphone.
 - Every English string is looked up in one dictionary (`ui/i18n.js`), also the fixed messages from the core; the core sends codes for notices that carry values. The native menu, message boxes and notifications have their own table in `shell.rs`. A test keeps the dictionary and the code in step both ways: every phrase used has Japanese and every entry is used.
 - Each member has one of eight colours, the same on every PC: the one they chose, else one taken from a hash of their ID with the next free colour when it clashes. It marks their face, notes and drawings.
+- A member's avatar shows when they speak, wherever it is drawn: a ring in their colour, with a glow and a light pulse from 24px up. Avatars in dense lists (members table, notes, watcher pills, volume popup, diagnostics) are drawn still and never light.
 - One app runs per data folder (a lock file); a second start brings the running window to the front. Closing the window quits, asking only while files arrive or an export runs.
 
 ## Data flow

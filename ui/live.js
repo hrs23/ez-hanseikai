@@ -23,6 +23,14 @@ function livePlayers(s) {
   });
 }
 
+function markSpeak(nodes, speakingIds, selfId, selfMuted) {
+  for (const e of nodes) {
+    const off = e.dataset.speak === selfId && selfMuted;
+    e.classList.toggle("speaking", speakingIds.has(e.dataset.speak) && !off);
+    e.classList.toggle("micoff", off);
+  }
+}
+
 const LIVE_LAG_MAX_S = 12;
 const LIVE_HEADROOM_S = 2;
 const LIVE_SHRINK_GAP_S = 3;

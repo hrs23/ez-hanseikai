@@ -11,7 +11,7 @@ const source = ["util.js", "i18n.js", "live.js", "media.js", "layout.js", "dock.
 const memory = new Map();
 const localStorage = { getItem: (k) => memory.get(k) ?? null, setItem: (k, v) => memory.set(k, v) };
 const context = vm.createContext({ localStorage, window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id, location: { search: "" } });
-const ui$ = vm.runInContext(`${source}\n({ LIMITS, escapeStep, cleanText, single, changed, matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, hotkeyRows, memberStatus, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, cardParts, dropPos, dropSlot, boardSpan, boardFont, cellSpan, fitFont, deletePreview, cleanupAsk, cleanupDone, exportChoice, exportArgs, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, voiceTone, known, VOICE_SIDES, VOICE_TONES, VOICE_SIDE_DEFAULT, VOICE_TONE_DEFAULT, minimapRect, talking, stillTalking, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, nextChip, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ LIMITS, escapeStep, cleanText, single, changed, matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, hotkeyRows, memberStatus, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, cardParts, dropPos, dropSlot, boardSpan, boardFont, cellSpan, fitFont, deletePreview, cleanupAsk, cleanupDone, exportChoice, exportArgs, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, voiceTone, known, VOICE_SIDES, VOICE_TONES, VOICE_SIDE_DEFAULT, VOICE_TONE_DEFAULT, minimapRect, talking, stillTalking, markSpeak, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, nextChip, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 test("a changed() check against a tile's own store reports again on a rebuilt tile", () => {
   const first = {};
   assert.equal(ui$.changed("what", [1], first), true);
@@ -41,6 +41,21 @@ test("recorded voices take the chosen side and tone, Auto goes left only in a Wa
   assert.deepEqual([ui$.known("right", ui$.VOICE_SIDES, "auto"), ui$.known("mild", ui$.VOICE_SIDES, "auto"), ui$.known(null, ui$.VOICE_TONES, "clear"), ui$.known("toString", ui$.VOICE_TONES, "clear")], ["right", "auto", "clear", "clear"]);
   const html = read("index.html");
   for (const [id, table] of [["voiceside", ui$.VOICE_SIDES], ["voicetone", ui$.VOICE_TONES]]) assert.deepEqual([...html.match(new RegExp(`id="${id}"[^]*?</div>`))[0].matchAll(/data-v="(\w+)"/g)].map((m) => m[1]), Object.keys(table));
+});
+
+test("a speaking id marks every element that carries it and not the others, and the own muted mic never lights", () => {
+  const node = (id) => { const c = new Set(); return { dataset: { speak: id }, classList: { toggle: (n, on) => (on ? c.add(n) : c.delete(n)), has: (n) => c.has(n) } }; };
+  const nodes = [node("a"), node("b"), node("a"), node("me")];
+  const lit = () => nodes.map((n) => n.classList.has("speaking"));
+  ui$.markSpeak(nodes, new Set(["a"]), "me", false);
+  assert.deepEqual(lit(), [true, false, true, false]);
+  ui$.markSpeak(nodes, new Set(["a", "me"]), "me", false);
+  assert.deepEqual(lit(), [true, false, true, true]);
+  ui$.markSpeak(nodes, new Set(["a", "me"]), "me", true);
+  assert.deepEqual(lit(), [true, false, true, false]);
+  assert.equal(nodes[3].classList.has("micoff"), true);
+  ui$.markSpeak(nodes, new Set(), "me", false);
+  assert.deepEqual(lit(), [false, false, false, false]);
 });
 
 test("the minimap crop is a square of the frame height at the top left for any resolution", () => {
@@ -675,7 +690,7 @@ class Text {
   get textContent() { return this.text; }
 }
 class Fake {
-  constructor(tag) { this.tag = tag; this.children = []; this.dataset = {}; this.style = {}; this.attributes = {}; this.classList = { toggle() {}, add() {}, remove() {}, contains: () => false }; }
+  constructor(tag) { this.tag = tag; this.children = []; this.dataset = {}; this.style = { setProperty(k, v) { this[k] = v; } }; this.attributes = {}; this.classList = { toggle() {}, add() {}, remove() {}, contains: () => false }; }
   append(...items) { for (const x of items) this.children.push(typeof x === "object" && x !== null ? x : new Text(String(x))); }
   replaceChildren(...items) { this.children = []; this.append(...items); }
   setAttribute(k, v) { this.attributes[k] = v; }
@@ -693,8 +708,8 @@ function page(files, globals = {}) {
 
 test("an avatar shows the image, a built-in shape or the initial; an unknown shape shows the initial; a room without an icon shows a preset picked from its id, and a room with no id its initial", () => {
   const image = "data:image/webp;base64,AAAA";
-  const state = { id: "me", name: "Aki", names: { ren: "Ren", koya: "Koya", mia: "Mia" }, colors: { me: 1, ren: 2, koya: 3, mia: 4 }, avatars: { me: "tiger", ren: image, koya: "gone", mia: "data:image/svg+xml;base64,AAAA" } };
-  const { ctx } = page(["util.js", "faces.js"], { st: state, nameOf: (id) => id, colorIndex: (id) => state.colors[id] || 0 });
+  const state = { id: "me", name: "Aki", names: { ren: "Ren", koya: "Koya", mia: "Mia" }, colors: { me: 1, ren: 2, koya: 3, mia: 4 }, capture: { mix: { mic: { muted: false } } }, avatars: { me: "tiger", ren: image, koya: "gone", mia: "data:image/svg+xml;base64,AAAA" } };
+  const { ctx } = page(["util.js", "faces.js", "live.js"], { speaking: new Set(), st: state, nameOf: (id) => id, colorIndex: (id) => state.colors[id] || 0 });
   const draw = (code) => vm.runInContext(code, ctx);
   const tiger = draw(`avatar("me", "sm")`);
   assert.deepEqual([tiger.find("path").length, tiger.textContent, tiger.style.background], [1, "", "var(--member-sky)"]);

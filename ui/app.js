@@ -98,13 +98,18 @@ function markVoice(e, on, off) {
   e.classList.toggle("speaking", on && !off);
   e.classList.toggle("micoff", off);
 }
-function markLive() {
+function markLive(id) {
   if (!st) return;
-  for (const e of document.querySelectorAll("[data-speak]")) markVoice(e, speaking.has(e.dataset.speak), e.dataset.speak === st.id && st.capture.mix.mic.muted);
+  markSpeak(document.querySelectorAll(id ? `[data-speak="${CSS.escape(id)}"]` : "[data-speak]"), speaking, st.id, st.capture.mix.mic.muted);
+}
+
+function ownVoice(box, a) {
+  if (!box.dataset.speak) delete a.dataset.speak;
+  return a;
 }
 
 function avatars(ids, size = "sm", max = ids.length) {
-  return el("span", { className: "avs" }, ...ids.slice(0, max).map((id) => avatar(id, size)), ids.length > max ? el("span", { className: "more", textContent: `+${ids.length - max}` }) : null);
+  return el("span", { className: "avs" }, ...ids.slice(0, max).map((id) => avatar(id, size, null, false, true)), ids.length > max ? el("span", { className: "more", textContent: `+${ids.length - max}` }) : null);
 }
 
 function iconButton(name, label, onclick, cls = "icon sm") {
@@ -156,7 +161,7 @@ function voiceChip(s, key) {
 function nameVoice(c, key, online = true) {
   c.name.textContent = nameOf(key);
   c.box.classList.toggle("off", !online);
-  if (changed("av", [nameOf(key), look(key), online], c.sigs)) c.av.replaceChildren(avatar(key, "sm", null, !online));
+  if (changed("av", [nameOf(key), look(key), online], c.sigs)) c.av.replaceChildren(ownVoice(c.box, avatar(key, "sm", null, !online)));
 }
 function showVoices(s, shown) {
   const boxes = s.voice.map((k) => s.chips[k].box);
@@ -169,7 +174,7 @@ function nameTile(tl, key) {
   tl.who.textContent = nameOf(key);
   tl.imp.hidden = !importedIds.has(key);
   tl.imp.textContent = t("Imported");
-  if (changed("av", [nameOf(key), look(key)], tl.sigs)) tl.av.replaceChildren(avatar(key, "sm"));
+  if (changed("av", [nameOf(key), look(key)], tl.sigs)) tl.av.replaceChildren(ownVoice(tl.box, avatar(key, "sm")));
 }
 function prune(s, keys, voice = []) {
   for (const [key, tl] of Object.entries(s.tiles)) if (!keys.includes(key)) { drop(tl.media); drop(tl.mic); tl.box.remove(); delete s.tiles[key]; }
@@ -492,7 +497,7 @@ function openMix(anchor) {
   const keys = [...play.keys, ...play.voice];
   const heard = soundKey(play.view, play.keys, st.id, gameSound);
   const pick = (key) => el("button", { className: "icon sm" + (key === heard ? " on" : ""), title: t("Switch app sound"), ariaLabel: t("Switch app sound"), onclick: () => { chooseSound(key); openMix(anchor); } }, icon("volume-2", "sm"));
-  showPop([el("div", { className: "head" }, el("b", { textContent: t("Volume per member") })), el("div", { className: "mixgrid" }, ...keys.map((key) => el("div", { className: "mixm" }, el("div", { className: "who" }, avatar(key, "sm"), el("span", { className: "nm", textContent: nameOf(key) }), play.keys.length > 1 && !play.view && play.tiles[key] ? pick(key) : null), play.tiles[key] ? mixRow(key, "app", t("App sound")) : null, mixRow(key, "voice", t("Voice"))))), el("button", { className: "poplink", onclick: openVoiceSettings }, icon("sliders", "sm"), t("Recorded voices position and tone…"))], anchor, true, keys.length > 2 ? "wide" : "");
+  showPop([el("div", { className: "head" }, el("b", { textContent: t("Volume per member") })), el("div", { className: "mixgrid" }, ...keys.map((key) => el("div", { className: "mixm" }, el("div", { className: "who" }, avatar(key, "sm", null, false, true), el("span", { className: "nm", textContent: nameOf(key) }), play.keys.length > 1 && !play.view && play.tiles[key] ? pick(key) : null), play.tiles[key] ? mixRow(key, "app", t("App sound")) : null, mixRow(key, "voice", t("Voice"))))), el("button", { className: "poplink", onclick: openVoiceSettings }, icon("sliders", "sm"), t("Recorded voices position and tone…"))], anchor, true, keys.length > 2 ? "wide" : "");
 }
 function openVoiceSettings() {
   closePop();
@@ -1001,7 +1006,7 @@ function renderMoment(m) {
   const notes = activeAt(items.filter((n) => n.role === "moment" && n.text && !n.plugin), m).slice(-OVERLAY_MAX);
   const typists = (watchParty && st.party.on ? st.party.typing || [] : []).filter((id) => id !== st.id);
   if (changed("overlay", [notes.map((n) => [n.key, n.m, n.body, n.author]), typists.map(nameOf), st.colors, lang])) $("overlay").replaceChildren(
-    ...notes.map((n) => el("p", {}, avatar(n.author, "sm"), el("span", {}, ...inline(n.body, n.mentions)))),
+    ...notes.map((n) => el("p", {}, avatar(n.author, "sm", null, false, true), el("span", {}, ...inline(n.body, n.mentions)))),
     ...typists.map((id) => el("p", { className: "typing", textContent: t("{name} is typing…", { name: nameOf(id) }) })));
 }
 function openLink(link) {
@@ -1434,7 +1439,7 @@ function chime(action) {
 }
 function setSpeaking(id, on) {
   if (on) speaking.add(id); else speaking.delete(id);
-  markLive();
+  markLive(id);
 }
 listenMain("speaking", (e) => setSpeaking(e.payload.from, e.payload.on));
 function anchor() {

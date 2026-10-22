@@ -55,9 +55,14 @@ const stamp = (image) => [image.length, image.slice(-16)];
 const look = (id) => [colorIndex(id), ...stamp(st.avatars[id] || "")];
 const looks = () => Object.keys(st.colors).map(look);
 
-function avatar(id, size, dot, grey) {
+function avatar(id, size, dot, grey, still) {
   const a = picture(id === st.id ? st.name : st.names[id], grey ? "var(--raised-3)" : colorOf(colorIndex(id)), st.avatars[id], size);
   a.title = nameOf(id);
+  if (!still) {
+    a.dataset.speak = id;
+    a.style.setProperty("--mc", colorOf(colorIndex(id)));
+    markSpeak([a], speaking, st.id, st.capture.mix.mic.muted);
+  }
   if (grey) {
     a.style.color = "var(--muted)";
     a.classList.add("dim");

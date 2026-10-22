@@ -124,7 +124,9 @@ mark { background: var(--warn-soft); color: var(--warn); border-radius: var(--r-
 .av.room { border-radius: 22%; color: var(--soft); }
 button.plain { background: none; border: 0; padding: 0; height: auto; border-radius: 50%; }
 .av { transition: box-shadow var(--fast); }
-.av.speaking, .avs .av.speaking { box-shadow: 0 0 0 2px var(--ring, var(--surface)), 0 0 0 4px var(--ok); }
+.av.speaking, .avs .av.speaking, .tile.speaking .nl .av { box-shadow: 0 0 0 2px var(--ring, var(--surface)), 0 0 0 3px var(--mc, var(--ok)); }
+.av.lg.speaking, .av.xl.speaking { box-shadow: 0 0 0 2px var(--ring, var(--surface)), 0 0 0 3px var(--mc, var(--ok)), 0 0 9px 3px color-mix(in srgb, var(--mc, var(--ok)) 60%, transparent); animation: speakglow var(--pulse) ease-in-out infinite; }
+@keyframes speakglow { 50% { box-shadow: 0 0 0 2px var(--ring, var(--surface)), 0 0 0 3px var(--mc, var(--ok)), 0 0 5px 1px color-mix(in srgb, var(--mc, var(--ok)) 40%, transparent); } }
 .av > i { position: absolute; right: -2px; bottom: -2px; width: 9px; height: 9px; border-radius: 50%; box-shadow: 0 0 0 2px var(--surface); }
 .av > i.on { background: var(--ok); }
 .av > i.warn { background: var(--warn); }
@@ -411,8 +413,6 @@ body.boardwin .side, body.boardwin .splitter, body.boardwin .notices, body.board
 .vchip.off { color: var(--muted); }
 .vchip .moff { display: none; }
 .vchip.micoff .moff { display: inline-flex; }
-.vchip .av { transition: box-shadow var(--fast); }
-.vchip.speaking .av { box-shadow: 0 0 0 2px var(--ring), 0 0 0 4px var(--ok); }
 .tile { position: absolute; border-radius: var(--r-sm); background: var(--black); overflow: hidden; transition: outline-color var(--fast); }
 .tile video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
 .tile.active { outline: 2px solid var(--accent); outline-offset: -2px; }
@@ -423,7 +423,6 @@ body.boardwin .side, body.boardwin .splitter, body.boardwin .notices, body.board
 .tile.mini .nl { cursor: default; }
 .tile::after { content: ""; position: absolute; inset: 0; border: 2px solid var(--ok); border-radius: inherit; opacity: 0; transition: opacity var(--fast); pointer-events: none; z-index: 3; }
 .tile.speaking::after { opacity: 1; }
-.tile.speaking .nl .av { box-shadow: 0 0 0 2px var(--ok); }
 .nl .moff { display: none; }
 .tile.micoff .nl .moff { display: inline-flex; }
 .waitbox { display: none; }

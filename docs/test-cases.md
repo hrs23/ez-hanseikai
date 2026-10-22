@@ -35,7 +35,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 
 ## Recording
 
-- Record on A starts the set on B. `e2e` (`live`)
+- Record on A starts the set on B; the app then opens the Game plan, Live stays one click away in the sidebar, and starting a debrief changes nothing. `e2e` (`live`)
 - leaving Live for another page and coming back shows the same text on the own live tile; a rebuilt tile always redraws its text. `e2e` (`live`), `ui-test`
 - while the own live file exists and capture stalls, the live tile shows the capture problem as its small overlay line. `manual`
 - a debrief row in the side panel offers Download when its audio is not on this PC, and Save once it is. `manual`
@@ -87,6 +87,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - the player plans the segment holding the moment and the next ones, continues a grown tail, ends a part where its last piece ends, and holds every tile until all can play. `ui-test`
 - the player fetches a growing recording's index from its last known piece on, and the whole index again when that piece is no longer there. `ui-test`
 - a focused player plays its own sound; otherwise the sound is the one chosen by a click, else the viewer's own, else the first player's; the view line names the first member who blocks the playback, in one sentence, and a holder reached through a relay does not count. `ui-test`
+- every avatar outside dense lists (sidebar faces, board chips, dialogs, dock, tiles, voice chips) carries its member id and shows the speaking ring in that member's colour (with a glow and a light pulse from 24px up, unless motion is reduced), except the quiet ones in dense lists (members table, notes, watcher pills, volume popup, diagnostics); an avatar rebuilt while the member talks is lit at once, and your own muted mic lights nothing. `ui-test`, `manual`
 - live speaking leaves the player alone and a played voice lights its tile: a live `speaking` message lights no player tile and every voice moves with its media through Web Audio (`e2e`, `library`); the ring following a real voice and fading after the hang (`manual`); a voice counts as talking while loud and for the hang after (`ui-test`).
 - clicking a tile, or Switch app sound in its right-click menu, picks whose app sound plays and clicks keep no focus: the chosen tile is heard and marked, the view buttons show their shortcut numbers up to the sixth member, the app sound button opens one popup with each member's app sound and voice volumes and a button that picks whose app sound is heard; speed is a button in the transport row, hidden while following Live, layout is the last button of the view switcher, and after clicks on the volume and play buttons Space and the arrows still work (`e2e`, `library`).
 - the Apex minimap extension, off by default and chosen per room on the Extensions page without a runner, analysis or job, adds a tile in the All view that redraws the top-left minimap corner of the heard member's video (scaled from the frame height and anchored at the top left so it holds for 720p to 4K and 16:10, 21:9 and 4:3); it takes the free cell of the grid or adds one, follows the heard member, and is not shown in a focused view or while that video has no picture. `ui-test` (the crop), `unit` (no job), `manual` (layout at 2, 3 and 4 members)

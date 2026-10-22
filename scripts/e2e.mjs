@@ -203,6 +203,7 @@ async function invoke(app, name, args = {}, seconds = CALL_S) {
   return r.status === 200 ? r.json : fail(r.json?.error || r.text);
 }
 const state = (app) => invoke(app, "state");
+const onBoard = (app) => evaluate(app, `page === "room" && roomTab === "board" && navActive() === "board"`);
 const onLive = (app) => evaluate(app, `page === "player" && navActive() === "live" && $("sidenav").querySelector("[aria-current=page]").dataset.nav === "live"`);
 
 function frame(record) {
@@ -687,7 +688,9 @@ async function live(ctx) {
     await allSee([a], "encoding its test source", within(COLD_START_S), (st) => st.capture.live);
     await pressAndConfirm(a, "toggleRecording()");
     const alone = (await waitFor("A records", within(UI_REFRESH_S * 5), async () => (await state(a)).active_set?.id)) || "";
-    await waitFor("A opens Live when the recording starts", within(UI_REFRESH_S * 5), () => onLive(a));
+    await waitFor("A opens the Game plan when the recording starts", within(UI_REFRESH_S * 5), () => onBoard(a));
+    await evaluate(a, "openLive(); true");
+    await waitFor("A opens Live from the sidebar", within(UI_REFRESH_S * 5), () => onLive(a));
     await evaluate(a, "openNow(); true");
     await waitFor("A's player holds the growing recording still while this PC records", within(SEGMENT_S * 4), () => evaluate(a, `selected === ${JSON.stringify(alone)} && !clock.playing && liveClock.pos === null`));
     await evaluate(a, "act('play', nowM()); true");
