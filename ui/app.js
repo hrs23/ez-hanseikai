@@ -481,10 +481,10 @@ function renderTransport(set, idle) {
   $("speed").classList.toggle("nodisp", idle || followingLive());
   $("transport").classList.toggle("idle", idle);
   $("clocknow").parentElement.hidden = idle;
-  $("live").hidden = !(idle || liveSetShown);
-  const atLive = idle || live;
+  $("live").hidden = !liveSetShown;
+  const atLive = live;
   $("live").className = "livebtn " + (atLive ? "at" : "behind");
-  if (changed("livebtn", [idle, atLive, idle ? 0 : Math.round(edge.behind), lang])) $("live").replaceChildren(el("i"), idle ? t("Live") : atLive ? t("Latest") : t("Jump to latest"), atLive ? "" : el("span", { className: "lagt", textContent: "−" + fmt(edge.behind) }));
+  if (changed("livebtn", [atLive, Math.round(edge.behind), lang])) $("live").replaceChildren(el("i"), atLive ? t("Latest") : t("Jump to latest"), atLive ? "" : el("span", { className: "lagt", textContent: "−" + fmt(edge.behind) }));
   renderDebriefButton(set);
   $("seek").classList.toggle("onlive", liveSetShown && atLive);
   $("seek").querySelector(".grow").hidden = !liveSetShown;
