@@ -11,7 +11,7 @@ const source = ["util.js", "i18n.js", "live.js", "media.js", "layout.js", "dock.
 const memory = new Map();
 const localStorage = { getItem: (k) => memory.get(k) ?? null, setItem: (k, v) => memory.set(k, v) };
 const context = vm.createContext({ localStorage, window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id, location: { search: "" } });
-const ui$ = vm.runInContext(`${source}\n({ matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, memberStatus, sendsPicture, viewLine, viewText, tileProblem, livePlayers, ordered, extensionLine, analysisReason, recordingAnalysis, cardParts, dropPos, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, talking, stillTalking, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, memberStatus, sendsPicture, viewLine, tileProblem, livePlayers, ordered, extensionLine, analysisReason, recordingAnalysis, cardParts, dropPos, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, talking, stillTalking, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 const plain = (v) => JSON.parse(JSON.stringify(v));
 
 const moment = (m, extra = {}) => ({ role: "moment", m, plugin: { id: "apex-matches" }, tags: ["match"], ...extra });
@@ -631,13 +631,12 @@ test("the view line names the first member who blocks the playback, in one sente
   assert.equal(line(finishedSet([view("me"), view("ren")])), null);
   const missing = line(finishedSet([view("me"), view("ren", { verified_by: ["ren"], have: 0 })]));
   assert.deepEqual(plain({ text: missing.text, action: missing.action }), { text: "Ren's video missing", action: "Download" });
-  assert.equal(ui$.viewText(missing), "Ren's video missing · Download");
   assert.equal(line(finishedSet([view("me"), view("ren", { verified_by: ["ren"] })])).text, "Receiving Ren's video");
   assert.equal(line(finishedSet([view("me"), view("ren", { verified_by: ["ren"], have: 0 })], { wanted: true })).text, "Receiving Ren's video");
-  assert.equal(line(finishedSet([view("koya", { verified_by: ["koya"] })])).text, "Koya's video is only on Koya's PC");
-  assert.equal(line(finishedSet([view("koya", { verified_by: ["ren", "koya"] })]), ctx({ online: () => false })).text, "Koya's video is only on Ren's PC");
+  assert.equal(line(finishedSet([view("koya", { verified_by: ["koya"] })])).text, "Koya's video hasn't arrived");
+  assert.equal(line(finishedSet([view("koya", { verified_by: ["ren", "koya"] })]), ctx({ online: () => false })).text, "Koya's video hasn't arrived");
   const peers = { ren: { connected: true, path: "relay" }, koya: { connected: true, path: "direct" } };
-  assert.equal(line(finishedSet([view("koya", { verified_by: ["ren"] })]), ctx({ online: (id) => ui$.sendsPicture(peers[id]) })).text, "Koya's video is only on Ren's PC");
+  assert.equal(line(finishedSet([view("koya", { verified_by: ["ren"] })]), ctx({ online: (id) => ui$.sendsPicture(peers[id]) })).text, "Koya's video hasn't arrived");
   assert.equal(line(finishedSet([view("ren", { verified_by: ["koya"] })]), ctx({ online: (id) => ui$.sendsPicture(peers[id]) })).text, "Receiving Ren's video");
   const silent = finishedSet([view("me", { parts: [{ m: {} }] })]);
   assert.equal(line(silent), null);
@@ -646,7 +645,7 @@ test("the view line names the first member who blocks the playback, in one sente
   assert.equal(line({ ...finishedSet([view("ren", { verified_by: ["ren"] })]), live: true }), null);
   assert.equal(line(finishedSet([view("ren", { verified_by: ["ren"], have: 0 }), view("koya", { verified_by: ["koya"] })])).text, "Ren's video missing");
   ui$.setLanguage("ja");
-  assert.equal(line(finishedSet([view("koya", { verified_by: ["koya"] })])).text, "Koya の映像は Koya のPCにしかありません");
+  assert.equal(line(finishedSet([view("koya", { verified_by: ["koya"] })])).text, "Koya の映像はまだ届いていません");
   ui$.setLanguage("en");
 });
 

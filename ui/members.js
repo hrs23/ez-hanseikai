@@ -21,7 +21,7 @@ function playerLine(set, p, ctx) {
   const name = ctx.name(p.owner);
   if (p.verified_by.includes(ctx.me)) return noScreen(p) ? { kind: "nopicture", text: t("{name} didn't record a screen", { name }) } : null;
   const holders = p.verified_by.filter((id) => id !== ctx.me);
-  if (!holders.some(ctx.online)) return { kind: "away", text: t("{name}'s video is only on {holder}'s PC", { name, holder: ctx.name(holders[0] || p.owner) }) };
+  if (!holders.some(ctx.online)) return { kind: "away", text: t("{name}'s video hasn't arrived", { name }) };
   if (set.wanted || p.have > 0) {
     return { kind: "receiving", text: t("Receiving {name}'s video", { name }) };
   }
@@ -33,8 +33,6 @@ function viewLine(set, ctx, key) {
   const lines = set.players.filter((p) => !key || p.owner === key).map((p) => playerLine(set, p, ctx));
   return lines.find((line) => line && (key || line.kind !== "nopicture")) || null;
 }
-
-const viewText = (line) => (line.action ? `${line.text} · ${line.action}` : line.text);
 
 const ageOf = (now, ...ends) => {
   const at = ends.find((e) => e !== null && e !== undefined);

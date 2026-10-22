@@ -13,7 +13,7 @@ const JA = {
   "Not recording screen": "画面を録画していません",
   "{name}'s video missing": "{name} の映像がありません",
   "Receiving {name}'s video": "{name} の映像を受信中",
-  "{name}'s video is only on {holder}'s PC": "{name} の映像は {holder} のPCにしかありません",
+  "{name}'s video hasn't arrived": "{name} の映像はまだ届いていません",
   "{name} didn't record a screen": "{name} は画面を録画していません",
   "Not sharing": "共有していません",
   "Runner": "担当",
