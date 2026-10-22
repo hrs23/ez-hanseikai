@@ -390,21 +390,16 @@ fn events_reply(l: &Loaded, set: &Set, req: &Request) -> Response {
 }
 
 fn chapters_reply(l: &Loaded, set: &Set, now_us: i64) -> Response {
-    let mut ends: Vec<f64> = covered(l, set)
-        .iter()
-        .filter_map(|e| room::match_end(e))
-        .map(|us| (us - set.start()) as f64 / 1e6)
-        .collect();
-    ends.sort_by(|a, b| a.total_cmp(b));
-    let mut chapters = Vec::new();
-    let mut from = 0.0;
-    for (i, end) in ends.iter().enumerate() {
-        chapters.push(json!({"n": i + 1, "name": format!("Match {}", i + 1), "from_s": tenth(from), "to_s": tenth(*end)}));
-        from = *end;
-    }
+    let events = covered(l, set);
+    let times = |pick: fn(&Value) -> Option<i64>| events.iter().filter_map(pick).map(|us| (us - set.start()) as f64 / 1e6).collect::<Vec<f64>>();
+    let starts = times(room::match_start);
+    let matches = room::match_chapters(&times(room::match_end), &starts);
+    let chapter = |n: usize, from: f64, to: Option<f64>| json!({"n": n, "name": format!("Match {n}"), "from_s": tenth(from), "to_s": to.map(tenth)});
+    let mut chapters: Vec<Value> = matches.iter().enumerate().map(|(i, (from, to))| chapter(i + 1, *from, Some(*to))).collect();
+    let last = matches.last().map(|(_, to)| *to);
     let total = (set.end_shown().unwrap_or(now_us) - set.start()) as f64 / 1e6;
-    if set.recording() && !ends.is_empty() && total > from {
-        chapters.push(json!({"n": ends.len() + 1, "name": format!("Match {}", ends.len() + 1), "from_s": tenth(from), "to_s": null}));
+    if let Some(last) = last.filter(|last| set.recording() && total > *last) {
+        chapters.push(chapter(matches.len() + 1, room::match_begin(&starts, last, None), None));
     }
     reply(200, json!({"chapters": chapters}))
 }

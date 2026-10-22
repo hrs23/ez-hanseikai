@@ -320,7 +320,7 @@ fn vtt_text(cues: &[Cue]) -> String {
 fn events_to_items(events: &[Value], set: &Set) -> Items {
     let start = set.start();
     let at = |us: i64| tenth((us - start) as f64 / 1e6).max(0.0);
-    let (mut notes, mut chapters, mut ends): (Vec<Note>, Vec<Cue>, Vec<f64>) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut notes, mut chapters, mut ends, mut starts): (Vec<Note>, Vec<Cue>, Vec<f64>, Vec<f64>) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for e in events.iter().filter(|e| room::covers(set, e)) {
         let Some(local) = e["local_us"].as_i64() else { continue };
         let text = e["text"].as_str().unwrap_or_default().trim().to_string();
@@ -332,17 +332,11 @@ fn events_to_items(events: &[Value], set: &Set) -> Items {
             (_, Some(_)) => {}
             (kind @ ("note" | "mark"), None) if !plugin && (kind == "mark" || !text.is_empty()) => notes.push(Note { at_s: at(local), kind: kind.into(), text, tags }),
             (_, None) if room::match_end(e).is_some() => ends.push(at(local)),
+            (_, None) if room::match_start(e).is_some() => starts.push(at(local)),
             _ => {}
         }
     }
-    ends.sort_by(|a, b| a.total_cmp(b));
-    let (mut from, mut matches) = (0.0, Vec::new());
-    for end in ends {
-        if end > from {
-            matches.push(Cue { from_s: from, to_s: end, text: format!("Match {}", matches.len() + 1) });
-            from = end;
-        }
-    }
+    let matches: Vec<Cue> = room::match_chapters(&ends, &starts).into_iter().enumerate().map(|(i, (from_s, to_s))| Cue { from_s, to_s, text: format!("Match {}", i + 1) }).collect();
     chapters.extend(matches.iter().cloned());
     notes.sort_by(|a, b| a.at_s.total_cmp(&b.at_s));
     chapters.sort_by(|a, b| a.from_s.total_cmp(&b.from_s));
@@ -809,6 +803,17 @@ mod tests {
         assert_eq!(notes, [(84.5, "note", "Late rotate #rotate"), (90.0, "mark", "")]);
         let chapters: Vec<(f64, f64, &str)> = chapters.iter().map(|c| (c.from_s, c.to_s, c.text.as_str())).collect();
         assert_eq!(chapters, [(0.0, 30.0, "Warm up"), (0.0, 30.0, "Match 1"), (30.0, 60.0, "Match 2")]);
+    }
+
+    #[test]
+    fn a_match_found_to_start_runs_from_its_start() {
+        let s = 1_000_000_000i64;
+        let at = |secs: i64| s + secs * 1_000_000;
+        let events = vec![event("match_start", at(40), None, "", json!(["match", "start"]), true), event("match_end", at(300), None, "", json!(["match"]), true), event("match_end", at(500), None, "", json!(["match"]), true)];
+        let mut set = fake_set();
+        set.files[0].end_us = Some(at(600));
+        let matches = events_to_items(&events, &set).matches;
+        assert_eq!(matches.iter().map(|m| (m.from_s, m.to_s, m.text.as_str())).collect::<Vec<_>>(), [(40.0, 300.0, "Match 1"), (300.0, 500.0, "Match 2")]);
     }
 
     #[test]

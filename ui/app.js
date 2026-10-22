@@ -902,13 +902,14 @@ function setItems(set) {
   return idx.items.get(set.id);
 }
 const listed = (r) => r === "moment" || r === "chapter";
+const matchesNow = (tot, live) => matchChapters(matchEnds(items), tot, live, matchStarts(items));
 function chapters(tot) {
   const set = playSet();
-  const matchList = matchChapters(matchEnds(items), tot, !!(set && set.live)).map((c) => ({ key: "match" + c.n, m: c.m, end: c.end, body: matchLabel(c.n), match: true, n: c.n }));
+  const matchList = matchesNow(tot, !!(set && set.live)).map((c) => ({ key: "match" + c.n, m: c.m, end: c.end, body: matchLabel(c.n), match: true, n: c.n }));
   return [...matchList, ...chaptersOf(items)].sort((a, b) => a.m - b.m);
 }
 function matchNow(m) {
-  const c = matchChapters(matchEnds(items), total(), !!(playSet() && playSet().live)).find((x) => x.m <= m && m < x.end);
+  const c = matchesNow(total(), !!(playSet() && playSet().live)).find((x) => x.m <= m && m < x.end);
   return c ? matchLabel(c.n) : "";
 }
 function renderEvents() {
@@ -928,7 +929,8 @@ function renderReview(shown) {
   const set = playSet();
   if (!set || $("reviewlist").querySelector("input")) return;
   if (chip && chip.set !== selected) chip = null;
-  const list = chip ? [] : matchChapters(matchEnds(items), total(), !!set.live);
+  const found = matchStarts(items);
+  const list = chip ? [] : matchesNow(total(), !!set.live).filter((c) => !found.includes(c.m));
   if (!changed("review", [shown, list, lang, selected, st.colors, st.names, plugins.map((p) => p.name), chip])) return;
   shown = shown.filter((n) => chipMatches(n, chip));
   const starts = list.map((c) => ({ m: c.m, row: clickable(el("div", { className: "ev sys" }, el("span"), el("button", { className: "at", textContent: fmt(c.m), onclick: () => seekTo(c.m) }), el("span", { className: "tx" }, icon("flag", "sm"), matchLabel(c.n))), () => seekTo(c.m)) }));

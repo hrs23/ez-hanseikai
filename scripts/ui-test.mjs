@@ -11,7 +11,7 @@ const source = ["util.js", "i18n.js", "live.js", "media.js", "layout.js", "dock.
 const memory = new Map();
 const localStorage = { getItem: (k) => memory.get(k) ?? null, setItem: (k, v) => memory.set(k, v) };
 const context = vm.createContext({ localStorage, window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id, location: { search: "" } });
-const ui$ = vm.runInContext(`${source}\n({ uiCommands, uiState, uiRun, strokeAlpha, INK_TOOLS, INK_TOOL_TITLE, nextInkTool, LIMITS, escapeStep, editKey, cleanText, single, changed, matchEnds, matchLabel, labelMatchEnds, shownTags, noteMoments, progressText, matchChapters, stepTarget, matchTargets, rowHit, rowActions, authorOf, noteCount, matchCount, formatWhen, fullWhen, sessionWhen, keysOf, hotkeyRows, memberStatus, windowTitle, longId, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, analysisPill, analysisSub, analysisActions, analysisDetails, analysisDetailText, runningMark, cardParts, dropPos, dropSlot, boardSpan, boardFont, cellSpan, fitFont, deletePreview, cleanupPicked, cleanupTotal, cleanupHead, cleanupDone, exportChoice, exportArgs, exportView, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, voiceTone, known, VOICE_SIDES, VOICE_TONES, VOICE_SIDE_DEFAULT, VOICE_TONE_DEFAULT, minimapRect, talking, stillTalking, markSpeak, seekSum, osdSeek, osdVolume, osdSpeed, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, nextChip, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, popupSpot, POP_GAP, POP_EDGE, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ uiCommands, uiState, uiRun, strokeAlpha, INK_TOOLS, INK_TOOL_TITLE, nextInkTool, LIMITS, escapeStep, editKey, cleanText, single, changed, matchEnds, matchStarts, matchLabel, labelMatchEnds, shownTags, noteMoments, progressText, matchChapters, stepTarget, matchTargets, rowHit, rowActions, authorOf, noteCount, matchCount, formatWhen, fullWhen, sessionWhen, keysOf, hotkeyRows, memberStatus, windowTitle, longId, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, analysisPill, analysisSub, analysisActions, analysisDetails, analysisDetailText, runningMark, cardParts, dropPos, dropSlot, boardSpan, boardFont, cellSpan, fitFont, deletePreview, cleanupPicked, cleanupTotal, cleanupHead, cleanupDone, exportChoice, exportArgs, exportView, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, voiceTone, known, VOICE_SIDES, VOICE_TONES, VOICE_SIDE_DEFAULT, VOICE_TONE_DEFAULT, minimapRect, talking, stillTalking, markSpeak, seekSum, osdSeek, osdVolume, osdSpeed, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, nextChip, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, popupSpot, POP_GAP, POP_EDGE, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 test("a changed() check against a tile's own store reports again on a rebuilt tile", () => {
   const first = {};
   assert.equal(ui$.changed("what", [1], first), true);
@@ -115,24 +115,26 @@ test("the page scripts together declare no name twice", () => {
   assert.doesNotThrow(() => new vm.Script(files.map(read).join("\n")));
 });
 
-test("match ends come only from plugin moments tagged match", () => {
-  const list = [moment(300), moment(100), moment(200, { tags: ["other"] }), moment(250, { plugin: null }), { role: "chapter", m: 50, tags: ["match"], plugin: {} }];
+test("match ends and starts come only from plugin moments tagged match, told apart by the start tag", () => {
+  const list = [moment(300), moment(100), moment(200, { tags: ["other"] }), moment(250, { plugin: null }), { role: "chapter", m: 50, tags: ["match"], plugin: {} }, moment(20, { tags: ["match", "start"] }), moment(30, { tags: ["start"] })];
   assert.deepEqual([...ui$.matchEnds(list)], [100, 300]);
+  assert.deepEqual([...ui$.matchStarts(list)], [20]);
 });
 
 test("a match end reads as the end of the match it closes and the chapters as the match, in English and Japanese", () => {
   const list = [moment(300, { text: "Match end" }), moment(100, { text: "Match end" }), moment(200, { kind: "note", text: "push", plugin: null, tags: [] })];
   const read = () => plain(ui$.labelMatchEnds(list).map((n) => [n.m, n.body ?? null, n.text]));
-  assert.deepEqual(read(), [[300, "Match 2 end", "Match 2 end"], [100, "Match 1 end", "Match 1 end"], [200, null, "push"]]);
+  list.push(moment(140, { text: "Match start", tags: ["match", "start"] }));
+  assert.deepEqual(read(), [[300, "Match 2 end", "Match 2 end"], [100, "Match 1 end", "Match 1 end"], [200, null, "push"], [140, "Match 2 start", "Match 2 start"]]);
   assert.equal(ui$.matchLabel(2), "Match 2");
   ui$.setLanguage("ja");
-  assert.deepEqual(read().map((r) => r[1]), ["試合 2 終了", "試合 1 終了", null]);
+  assert.deepEqual(read().map((r) => r[1]), ["試合 2 終了", "試合 1 終了", null, "試合 2 開始"]);
   assert.equal(ui$.matchLabel(2), "試合 2");
   ui$.setLanguage("en");
 });
 
-test("a plugin's match tag is not shown as a chip and other tags are", () => {
-  assert.deepEqual([...ui$.shownTags(moment(100, { tags: ["match", "win"] }))], ["win"]);
+test("a plugin's match and start tags are not shown as chips and other tags are", () => {
+  assert.deepEqual([...ui$.shownTags(moment(100, { tags: ["match", "start", "win"] }))], ["win"]);
   assert.deepEqual([...ui$.shownTags({ role: "moment", m: 1, plugin: null, tags: ["match"] })], ["match"]);
 });
 
@@ -150,6 +152,12 @@ test("matches run between consecutive ends, with the open one only while recordi
   assert.deepEqual(plain(ui$.matchChapters([100, 300], 500, false)), [{ m: 0, end: 100, n: 1 }, { m: 100, end: 300, n: 2 }]);
   assert.deepEqual(plain(ui$.matchChapters([100, 300], 500, true)).at(-1), { m: 300, end: 500, n: 3 });
   assert.equal(ui$.matchChapters([], 500, true).length, 0);
+});
+
+test("a match runs from its detected start, and from the previous end when the start is missing or implausible", () => {
+  assert.deepEqual(plain(ui$.matchChapters([300, 700], 900, true, [20, 400, 760])), [{ m: 20, end: 300, n: 1 }, { m: 400, end: 700, n: 2 }, { m: 760, end: 900, n: 3 }]);
+  assert.deepEqual(plain(ui$.matchChapters([300, 700], 900, false, [250, 650])), [{ m: 0, end: 300, n: 1 }, { m: 300, end: 700, n: 2 }]);
+  assert.deepEqual(plain(ui$.matchChapters([300], 900, false, [900])), [{ m: 0, end: 300, n: 1 }]);
 });
 
 test("A and D land a minute before the previous or next match end", () => {
@@ -183,8 +191,8 @@ test("a timeline row shows the member's avatar, or the extension's icon for an e
 });
 
 test("counts leave out drawings, deleted notes and events that are gone", () => {
-  const byKey = new Map([["a", { kind: "note" }], ["b", { kind: "drawing" }], ["c", { kind: "note" }], ["d", { kind: "note", plugin: { id: "p" }, tags: ["match"] }]]);
-  const set = { events: ["a", "b", "c", "d", "gone"] };
+  const byKey = new Map([["a", { kind: "note" }], ["b", { kind: "drawing" }], ["c", { kind: "note" }], ["d", { kind: "note", plugin: { id: "p" }, tags: ["match"] }], ["e", { kind: "match_start", plugin: { id: "p" }, tags: ["match", "start"] }]]);
+  const set = { events: ["a", "b", "c", "d", "e", "gone"] };
   assert.equal(ui$.noteCount(set, byKey), 3);
   assert.equal(ui$.matchCount(set, byKey), 1);
   byKey.delete("c");

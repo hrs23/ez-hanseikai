@@ -27,7 +27,7 @@ function noteCount(s, byKey = idx.byKey) {
 }
 
 function matchCount(s, byKey = idx.byKey) {
-  return s.events.filter((k) => { const e = byKey.get(k); return e && e.plugin && (e.tags || []).includes(MATCH_TAG); }).length;
+  return s.events.filter((k) => { const e = byKey.get(k); return e && e.plugin && (e.tags || []).includes(MATCH_TAG) && !(e.tags || []).includes(START_TAG); }).length;
 }
 
 function authorOf(n) {
@@ -135,33 +135,45 @@ function activeAt(list, m) {
 }
 
 const MATCH_TAG = "match";
+const START_TAG = "start";
 const MATCH_LEAD_S = 60;
+const MATCH_MIN_S = 120;
 
-const isMatchEnd = (n) => n.role === "moment" && !!n.plugin && n.m !== null && (n.tags || []).includes(MATCH_TAG);
+const isMatchMoment = (n, start) => n.role === "moment" && !!n.plugin && n.m !== null && (n.tags || []).includes(MATCH_TAG) && (n.tags || []).includes(START_TAG) === start;
+const isMatchEnd = (n) => isMatchMoment(n, false);
+const isMatchStart = (n) => isMatchMoment(n, true);
 const matchLabel = (n) => t("Match {n}", { n });
-const shownTags = (n) => (n.tags || []).filter((tg) => !(n.plugin && tg === MATCH_TAG));
+const shownTags = (n) => (n.tags || []).filter((tg) => !(n.plugin && (tg === MATCH_TAG || tg === START_TAG)));
 
 function matchEnds(list) {
   return list.filter(isMatchEnd).map((n) => n.m).sort((a, b) => a - b);
+}
+
+function matchStarts(list) {
+  return list.filter(isMatchStart).map((n) => n.m).sort((a, b) => a - b);
 }
 
 function labelMatchEnds(list) {
   const order = list.filter(isMatchEnd).sort((a, b) => a.m - b.m);
   return list.map((n) => {
     const i = order.indexOf(n);
-    if (i < 0) return n;
-    const text = t("Match {n} end", { n: i + 1 });
-    return { ...n, body: text, text };
+    const text = i >= 0 ? t("Match {n} end", { n: i + 1 }) : isMatchStart(n) ? t("Match {n} start", { n: order.filter((e) => e.m < n.m).length + 1 }) : null;
+    return text ? { ...n, body: text, text } : n;
   });
 }
 
 const noteMoments = (list) => list.filter((n) => (n.kind === "note" || n.kind === "mark") && n.role === "moment" && n.m !== null).sort((a, b) => a.m - b.m);
 
-function matchChapters(ends, total, live) {
+function matchBegin(starts, from, end) {
+  const s = starts.filter((x) => x >= from && (end === null || end - x >= MATCH_MIN_S));
+  return s.length ? Math.min(...s) : from;
+}
+
+function matchChapters(ends, total, live, starts = []) {
   const out = [];
   let from = 0;
-  ends.forEach((end, i) => { out.push({ m: from, end, n: i + 1 }); from = end; });
-  if (live && ends.length && total > from) out.push({ m: from, end: total, n: ends.length + 1 });
+  ends.forEach((end, i) => { out.push({ m: matchBegin(starts, from, end), end, n: i + 1 }); from = end; });
+  if (live && ends.length && total > from) out.push({ m: matchBegin(starts, from, null), end: total, n: ends.length + 1 });
   return out;
 }
 

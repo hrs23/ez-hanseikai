@@ -153,10 +153,37 @@ fn civil_time(secs: i64) -> (i64, i64, i64, i64, i64, i64) {
 }
 
 const MATCH_TAG: &str = "match";
+const START_TAG: &str = "start";
+const MATCH_MIN_S: f64 = 120.0;
+
+fn match_moment(event: &Value, start: bool) -> Option<i64> {
+    let tagged = |tag: &str| event["tags"].as_array().into_iter().flatten().any(|t| t == tag);
+    event["local_us"].as_i64().filter(|_| !event["plugin"].is_null() && event["end_us"].is_null() && tagged(MATCH_TAG) && tagged(START_TAG) == start)
+}
 
 pub fn match_end(event: &Value) -> Option<i64> {
-    let tagged = event["tags"].as_array().into_iter().flatten().any(|t| t == MATCH_TAG);
-    event["local_us"].as_i64().filter(|_| !event["plugin"].is_null() && event["end_us"].is_null() && tagged)
+    match_moment(event, false)
+}
+
+pub fn match_start(event: &Value) -> Option<i64> {
+    match_moment(event, true)
+}
+
+pub fn match_begin(starts: &[f64], from: f64, end: Option<f64>) -> f64 {
+    starts.iter().copied().filter(|s| *s >= from && end.is_none_or(|e| e - s >= MATCH_MIN_S)).reduce(f64::min).unwrap_or(from)
+}
+
+pub fn match_chapters(ends: &[f64], starts: &[f64]) -> Vec<(f64, f64)> {
+    let mut sorted = ends.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let (mut from, mut out) = (0.0, Vec::new());
+    for end in sorted {
+        if end > from {
+            out.push((match_begin(starts, from, Some(end)), end));
+            from = end;
+        }
+    }
+    out
 }
 
 pub fn wall_clock(now_us: i64, tz_offset_s: i64) -> String {
@@ -2179,5 +2206,25 @@ pub mod tests {
         let bad = board_cards(&[card(12, "a", "Bare", json!({"card": "b"})), card(13, "a", "Bad", json!({"card": "x y"}))], &members);
         assert_eq!(bad.iter().map(|c| (c["card"].as_str().unwrap(), c["text"].as_str().unwrap())).collect::<Vec<_>>(), [("team", ""), ("m:a", ""), ("m:b", "")]);
         assert!(board_card_valid("team") && board_card_valid(&format!("m:{}", "a".repeat(64))) && board_card_valid("m:ab12") && board_card_valid("c:0f-9") && !board_card_valid("m:") && !board_card_valid("x:1") && !board_card_valid("c:a b"));
+    }
+
+    #[test]
+    fn match_starts_and_ends_are_plugin_moments_tagged_match_and_told_apart_by_the_start_tag() {
+        let moment = |tags: Value, plugin: Value| json!({"local_us": 5, "end_us": null, "tags": tags, "plugin": plugin});
+        let p = json!({"id": "apex-matches"});
+        assert_eq!((match_end(&moment(json!(["match"]), p.clone())), match_start(&moment(json!(["match"]), p.clone()))), (Some(5), None));
+        assert_eq!((match_end(&moment(json!(["match", "start"]), p.clone())), match_start(&moment(json!(["match", "start"]), p.clone()))), (None, Some(5)));
+        assert_eq!(match_start(&moment(json!(["start"]), p)), None);
+        assert_eq!(match_start(&moment(json!(["match", "start"]), Value::Null)), None);
+    }
+
+    #[test]
+    fn a_match_runs_from_its_start_and_from_the_previous_end_without_a_plausible_one() {
+        assert_eq!(match_chapters(&[300.0, 100.0, 300.0], &[]), [(0.0, 100.0), (100.0, 300.0)]);
+        assert_eq!(match_chapters(&[300.0, 700.0], &[20.0, 400.0]), [(20.0, 300.0), (400.0, 700.0)]);
+        assert_eq!(match_chapters(&[300.0, 700.0], &[250.0, 650.0]), [(0.0, 300.0), (300.0, 700.0)]);
+        assert_eq!(match_chapters(&[300.0], &[900.0]), [(0.0, 300.0)]);
+        assert_eq!(match_chapters(&[300.0, 700.0], &[50.0, 200.0, 350.0]), [(50.0, 300.0), (350.0, 700.0)]);
+        assert_eq!((match_begin(&[350.0], 300.0, None), match_begin(&[], 300.0, None)), (350.0, 300.0));
     }
 }
