@@ -31,7 +31,7 @@ function bytes(n) {
 }
 let clockShift = 0;
 const nowUs = () => Date.now() * 1000 + clockShift;
-const MEMBER_COLORS = ["orange", "sky", "lime", "magenta", "yellow", "violet", "pink", "blue", "teal", "tan", "silver", "peach"];
+const MEMBER_COLORS = ["orange", "sky", "lime", "magenta", "yellow", "violet", "pink", "blue"];
 const colorOf = (index) => `var(--member-${MEMBER_COLORS[(index || 0) % MEMBER_COLORS.length]})`;
 const sigs = {};
 function changed(name, value) {

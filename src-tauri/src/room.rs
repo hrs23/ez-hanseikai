@@ -440,8 +440,7 @@ fn keep_room(core: &Core, room: &str, name: Option<&str>, icon: Option<&str>) {
     }
 }
 
-pub const COLORS: usize = 12;
-const AUTO_COLORS: usize = 8;
+pub const COLORS: usize = 8;
 pub const IMAGE_MAX: usize = 16384;
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -520,17 +519,17 @@ pub fn share_profile(core: &Core) {
 
 fn preferred_color(id: &str) -> usize {
     let hash = id.bytes().fold(0u64, |h, b| h.wrapping_mul(31).wrapping_add(b as u64));
-    (hash % AUTO_COLORS as u64) as usize
+    (hash % COLORS as u64) as usize
 }
 
 pub fn colors(people: &[String], chosen: &HashMap<String, usize>) -> HashMap<String, usize> {
     let mut sorted: Vec<(usize, &String)> = people.iter().map(|id| (preferred_color(id), id)).collect();
     sorted.sort();
     sorted.dedup();
-    let mut taken = [false; AUTO_COLORS];
+    let mut taken = [false; COLORS];
     let mut out = HashMap::new();
     for (preferred, id) in sorted {
-        let color = (0..AUTO_COLORS).map(|step| (preferred + step) % AUTO_COLORS).find(|c| !taken[*c]).unwrap_or(preferred);
+        let color = (0..COLORS).map(|step| (preferred + step) % COLORS).find(|c| !taken[*c]).unwrap_or(preferred);
         taken[color] = true;
         out.insert(id.clone(), chosen.get(id).copied().unwrap_or(color));
     }
@@ -1956,7 +1955,7 @@ pub mod tests {
         assert_eq!(own(vec![json!({"k": "rec"})]), None);
         assert_eq!(own(vec![record(json!({"color": 2})), record(json!({"avatar": "bolt"}))]), look(None, "bolt"));
         assert_eq!(own(vec![record(json!({"color": 2, "avatar": image}))]), look(Some(2), image));
-        for bad in [json!({"color": 12}), json!({"color": "1"}), json!({"avatar": 5}), json!({"avatar": "data:image/svg+xml;base64,AAAA"}), json!({"avatar": "data:image/png;base64,<svg>"}), json!({"avatar": "Bolt"}), json!({"avatar": format!("data:image/png;base64,{}", "A".repeat(IMAGE_MAX))})] {
+        for bad in [json!({"color": 8}), json!({"color": "1"}), json!({"avatar": 5}), json!({"avatar": "data:image/svg+xml;base64,AAAA"}), json!({"avatar": "data:image/png;base64,<svg>"}), json!({"avatar": "Bolt"}), json!({"avatar": format!("data:image/png;base64,{}", "A".repeat(IMAGE_MAX))})] {
             assert_eq!(own(vec![record(json!({"color": 4})), record(bad.clone())]), look(Some(4), ""), "{bad}");
         }
     }
