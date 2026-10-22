@@ -135,7 +135,7 @@ function tile(s, key) {
     };
     tl.box.ondblclick = (e) => { if (!e.target.closest(".nl")) focus(); };
     tl.lab.onclick = (e) => { e.stopPropagation(); openReceive(key, tl.lab); };
-    tl.box.oncontextmenu = (e) => { e.preventDefault(); stageMenu(e); };
+    tl.box.oncontextmenu = (e) => { e.preventDefault(); stageMenu(e, key); };
   } else {
     tl.box.onclick = (e) => { if (e.target.closest(".choose")) return; focus(); };
     tl.box.ondblclick = toggleFull;
@@ -574,7 +574,7 @@ function renderViews() {
   const names = play.keys.map(nameOf);
   if (!changed("views", [play.view, names, lang])) return;
   const button = (i, text) => {
-    const b = el("button", { className: play.view === i ? "on" : "", title: i <= MAX_KEYED ? `${text} (${i})` : text, ariaPressed: play.view === i }, el("span", { className: "ellip", textContent: text }));
+    const b = el("button", { className: play.view === i ? "on" : "", title: i <= MAX_KEYED ? `${text} (${i})` : text, ariaPressed: play.view === i }, i <= MAX_KEYED ? el("span", { className: "key", textContent: i }) : null, el("span", { className: "ellip", textContent: text }));
     b.onclick = () => setView(play, i);
     return b;
   };
@@ -1149,10 +1149,12 @@ function closePop() {
   if (popClosed) { const f = popClosed; popClosed = null; f(); }
 }
 let popClosed = null;
-function stageMenu(e) {
+function stageMenu(e, key) {
   const set = playSet();
   if (!set) return;
+  const pick = !play.view && play.keys.length > 1;
   openMenu([
+    ...(pick ? [{ label: t("Hear this"), icon: "volume-2", check: soundKey(0, play.keys, st.id, gameSound) === key, run: () => chooseSound(key) }, { separator: true }] : []),
     { label: t("Add note"), icon: "note", right: "C", run: openQuick },
     { label: t("Copy link to this moment"), icon: "link", run: () => navigator.clipboard.writeText(momentLink(set.id, nowM(), play.view ? play.keys[play.view - 1] : null)).then(() => osd(t("Link copied"))).catch(fail) },
     { label: t("Clear drawing"), icon: "eraser", right: "X", run: () => clearInk(false) },

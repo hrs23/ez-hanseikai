@@ -74,6 +74,7 @@ input.switch:checked::after { left: 16px; background: var(--white); }
 .seg { display: inline-flex; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-sm); padding: var(--s0); gap: var(--s0); min-width: 0; flex: none; }
 .seg > button { height: 24px; padding: 0 var(--s2); border: 0; border-radius: var(--r-sm); background: transparent; color: var(--muted); max-width: 160px; min-width: 0; overflow: hidden; font-size: var(--t-sm); }
 #views > :first-child { flex: none; }
+#views .key { flex: none; color: var(--muted); font-size: var(--t-xs); font-variant-numeric: tabular-nums; }
 .seg > button:hover:not(:disabled) { background: var(--hover-bg); color: var(--text); }
 .seg > button.on { background: var(--raised-2); color: var(--text); }
 .seg > button.ic { width: 28px; padding: 0; }

@@ -1467,14 +1467,18 @@ async function library(ctx) {
     await evaluate(a, `act("pause", nowM()); true`);
   });
 
-  await step("clicking a tile picks whose app sound plays and clicks keep no focus", async () => {
+  await step("clicking a tile, or Hear this in its right-click menu, picks whose app sound plays and clicks keep no focus", async () => {
     await openTiles(a);
     const pick = await evaluate(a, `play.keys.find((k) => k !== soundKey(0, play.keys, st.id, gameSound))`);
     await clickAt(a, `play.tiles[${JSON.stringify(pick)}].box`);
     await waitFor("the clicked tile's sound plays", within(UI_REFRESH_S * 3), () => evaluate(a, `soundKey(0, play.keys, st.id, gameSound) === ${JSON.stringify(pick)} && play.keys.every((k) => (k === ${JSON.stringify(pick)}) === !play.tiles[k].media.video.muted && (k === ${JSON.stringify(pick)}) === !play.tiles[k].snd.hidden) && $("gamesound").title === t("App sound: {name}", { name: nameOf(${JSON.stringify(pick)}) })`));
+    check(await evaluate(a, `[...$("views").children].every((b, i) => (b.querySelector(".key") === null) === (i > MAX_KEYED) && (i > MAX_KEYED || b.querySelector(".key").textContent === String(i)))`), "the view buttons show their shortcut numbers");
     const next = await evaluate(a, `play.keys[(play.keys.indexOf(${JSON.stringify(pick)}) + 1) % play.keys.length]`);
+    await evaluate(a, `play.tiles[${JSON.stringify(next)}].box.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 80, clientY: 120 })); true`);
+    await clickAt(a, `[...$("menu").querySelectorAll("button")].find((b) => b.textContent === t("Hear this"))`);
+    await waitFor("Hear this in the tile menu picks that member", within(UI_REFRESH_S * 3), () => evaluate(a, `soundKey(0, play.keys, st.id, gameSound) === ${JSON.stringify(next)}`));
     await clickAt(a, `$("gamesound")`);
-    await waitFor("the app sound button picks the next member", within(UI_REFRESH_S * 3), () => evaluate(a, `soundKey(0, play.keys, st.id, gameSound) === ${JSON.stringify(next)}`));
+    await waitFor("the app sound button picks the next member", within(UI_REFRESH_S * 3), () => evaluate(a, `soundKey(0, play.keys, st.id, gameSound) === play.keys[(play.keys.indexOf(${JSON.stringify(next)}) + 1) % play.keys.length]`));
     for (const id of ["volume", "play"]) {
       await clickAt(a, `$(${JSON.stringify(id)})`);
       check(await evaluate(a, `document.activeElement === document.body`), `a click on ${id} kept the keyboard focus`);

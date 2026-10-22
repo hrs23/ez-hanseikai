@@ -70,6 +70,7 @@ const JA = {
   "Summarize a recording into the game plan": "録画を作戦ボードにまとめる",
   "Find the mistakes in a match": "試合のミスを探す",
   "Active": "実行中・待ち",
+  "Hear this": "この音を聞く",
   "Add note": "メモを追加",
   "Add note (C)": "メモを追加 (C)",
   "Address lookup": "アドレスの検索",
