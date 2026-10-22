@@ -161,7 +161,7 @@ function liveRow() {
   const detail = a.voice ? null : matchNow(nowM()) || t("by {name}", { name: a.by || "" });
   const row = el("div", { className: "srow liverow" + (on ? " on" : ""), role: "option", tabIndex: 0, ariaSelected: on },
     thumbBox(null, who, "xs", THUMB_FACES, true),
-    el("div", { className: "txt" }, el("div", { className: "l1" }, icon("rec", "sm"), el("b", { textContent: t("Recording") })), el("div", { className: "l2" }, a.voice ? pill("accent", "mic", t("Debrief")) : null, detail ? el("span", { textContent: detail }) : null)));
+    el("div", { className: "txt" }, el("div", { className: "l1" }, icon("rec", "sm"), el("b", { textContent: t(a.voice ? "Recording audio" : "Recording") })), el("div", { className: "l2" }, a.voice ? pill("accent", "mic", t("Debrief")) : null, detail ? el("span", { textContent: detail }) : null)));
   row.onclick = openNow;
   row.onkeydown = (e) => { if (e.key === "Enter") openNow(); };
   return row;
