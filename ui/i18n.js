@@ -443,6 +443,7 @@ const JA = {
   "Downloading {what} from {host}": "{host} から {what} をダウンロード中",
   "Video tools": "動画ツール",
   "Recorded voices": "録画の声",
+  "Recorded voices position and tone…": "録画の声の位置と音色…",
   "Side": "位置",
   "Auto": "自動",
   "Left": "左",

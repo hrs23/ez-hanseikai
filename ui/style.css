@@ -656,6 +656,8 @@ dialog.diag .dlghead { padding: var(--s3) var(--s3) var(--s3) var(--s4); margin:
 .pop .who { display: flex; align-items: center; gap: var(--s2); font-size: var(--t-sm); font-weight: var(--w-semibold); margin-top: var(--s1); }
 .pop .who .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .pop .poprow { display: grid; grid-template-columns: 76px 1fr auto; align-items: center; gap: var(--s2); font-size: var(--t-sm); color: var(--muted); }
+.pop .poplink { display: flex; align-items: center; justify-content: flex-start; gap: var(--s2); height: auto; padding: var(--s2) 0 0; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: transparent; color: var(--accent); font-size: var(--t-sm); cursor: pointer; }
+.pop .poplink:hover { text-decoration: underline; }
 .pop .ph { padding: var(--s2) var(--s3) var(--s1); font-size: var(--t-xs); color: var(--faint); font-weight: var(--w-semibold); letter-spacing: .04em; text-transform: uppercase; }
 :lang(ja) .pop .ph { text-transform: none; }
 .pop .pi { display: flex; align-items: center; gap: var(--s2); height: 36px; padding: 0 var(--s3); border: 0; border-radius: 0; background: transparent; justify-content: flex-start; width: 100%; flex: none; }
