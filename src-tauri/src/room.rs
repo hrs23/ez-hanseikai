@@ -1185,7 +1185,7 @@ pub fn named_debriefs(logs: &[Log], parent: &str) -> Vec<String> {
 }
 
 pub fn board_card_valid(card: &str) -> bool {
-    card.len() <= 60 && (card == "team" || card.strip_prefix("m:").or_else(|| card.strip_prefix("c:")).is_some_and(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')))
+    card.len() <= 80 && (card == "team" || card.strip_prefix("m:").or_else(|| card.strip_prefix("c:")).is_some_and(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')))
 }
 
 pub fn board_cards(events: &[Value], members: &[String]) -> Vec<Value> {
@@ -2081,6 +2081,6 @@ pub mod tests {
         assert_eq!(more.iter().map(|c| c["card"].as_str().unwrap()).collect::<Vec<_>>(), ["team", "c:1", "m:b", "m:a"]);
         assert_eq!((more[1]["text"].as_str(), more[1]["title"].as_str(), more[1]["pos"].as_f64()), (Some("Moved"), Some("Drops"), Some(0.5)));
         assert_eq!(more[2]["gone"], true);
-        assert!(board_card_valid("team") && board_card_valid("m:ab12") && board_card_valid("c:0f-9") && !board_card_valid("m:") && !board_card_valid("x:1") && !board_card_valid("c:a b"));
+        assert!(board_card_valid("team") && board_card_valid(&format!("m:{}", "a".repeat(64))) && board_card_valid("m:ab12") && board_card_valid("c:0f-9") && !board_card_valid("m:") && !board_card_valid("x:1") && !board_card_valid("c:a b"));
     }
 }
