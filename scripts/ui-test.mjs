@@ -11,7 +11,7 @@ const source = ["util.js", "i18n.js", "live.js", "media.js", "layout.js", "dock.
 const memory = new Map();
 const localStorage = { getItem: (k) => memory.get(k) ?? null, setItem: (k, v) => memory.set(k, v) };
 const context = vm.createContext({ localStorage, window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id, location: { search: "" } });
-const ui$ = vm.runInContext(`${source}\n({ LIMITS, cleanText, single, changed, matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, memberStatus, sendsPicture, viewLine, tileProblem, livePlayers, ordered, extensionLine, analysisReason, analysisState, cardParts, dropPos, dropSlot, boardSpan, deletePreview, exportChoice, exportArgs, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, talking, stillTalking, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ LIMITS, cleanText, single, changed, matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, memberStatus, sendsPicture, viewLine, tileProblem, livePlayers, ordered, extensionLine, analysisReason, analysisState, cardParts, dropPos, dropSlot, boardSpan, boardRows, boardFit, deletePreview, exportChoice, exportArgs, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, talking, stillTalking, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 test("a changed() check against a tile's own store reports again on a rebuilt tile", () => {
   const first = {};
   assert.equal(ui$.changed("what", [1], first), true);
@@ -572,6 +572,19 @@ test("a resized card snaps to whole grid cells within the limits", () => {
   assert.deepEqual(plain(ui$.boardSpan({ w: 4, h: 5 }, 130, -70, 100, 64)), { w: 5, h: 4 });
   assert.deepEqual(plain(ui$.boardSpan({ w: 4, h: 5 }, -900, 2000, 100, 64)), { w: 2, h: 16 });
   assert.deepEqual(plain(ui$.boardSpan({ w: 10, h: 2 }, 900, -200, 100, 64)), { w: 12, h: 2 });
+});
+
+test("the board fills its space: rows follow the dense 12-column layout, text grows with the space and scrolls only below the smallest size", () => {
+  const cards = [{ w: 12, h: 3 }, { w: 4, h: 4 }, { w: 4, h: 4 }, { w: 4, h: 4 }, { w: 6, h: 3 }, { w: 6, h: 3 }];
+  assert.equal(ui$.boardRows(cards), 10);
+  assert.equal(ui$.boardRows([{ w: 4, h: 2 }, { w: 12, h: 2 }, { w: 8, h: 2 }]), 4);
+  assert.equal(ui$.boardRows([{ w: 20, h: 2 }]), 2);
+  assert.deepEqual(plain(ui$.boardFit(cards, 1080, 624, 16, 13)), { row: 48, font: 13 });
+  assert.deepEqual(plain(ui$.boardFit(cards, 2160, 1248, 16, 13)), { row: 110, font: 26 });
+  assert.deepEqual(plain(ui$.boardFit(cards, 500, 624, 16, 13)), { row: 48, font: 12 });
+  const tight = ui$.boardFit(cards, 1080, 300, 16, 13);
+  assert.equal(tight.font, 12);
+  assert.ok(tight.row * 10 + 9 * 16 > 300);
 });
 
 test("a dragged card lands before the card under the pointer's left half, after its right half, and in reading order between cards", () => {

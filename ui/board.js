@@ -1,5 +1,3 @@
-const BOARD_PAD = 28;
-
 let editing = null;
 let boardFull = false;
 
@@ -100,6 +98,8 @@ function dragCard(c, down) {
     putCard(c.card, { pos: dropPos(cards.filter((x) => x.card !== c.card).map((x) => x.pos), index) });
   });
 }
+const shownSize = (c) => (editing && editing.card === c.card ? { w: Math.max(c.w, 4), h: Math.max(c.h, 7) } : c);
+const NEW_CARD = { w: 4, h: 2 };
 function spanCard(box, size) {
   box.style.gridColumn = `span ${size.w}`;
   box.style.gridRow = `span ${size.h}`;
@@ -109,9 +109,8 @@ function resizeCard(c, down) {
   const box = down.currentTarget.parentElement;
   const grid = box.parentElement;
   const css = getComputedStyle(grid);
-  const scale = grid.getBoundingClientRect().width / grid.offsetWidth;
-  const col = ((grid.offsetWidth + parseFloat(css.columnGap)) / BOARD_COLS) * scale;
-  const row = (parseFloat(css.gridAutoRows) + parseFloat(css.rowGap)) * scale;
+  const col = (grid.offsetWidth + parseFloat(css.columnGap)) / BOARD_COLS;
+  const row = parseFloat(css.gridAutoRows) + parseFloat(css.rowGap);
   let size = { w: c.w, h: c.h };
   box.classList.add("sizing");
   track(down.currentTarget, down, (e) => {
@@ -135,7 +134,7 @@ function cardEl(c) {
   const body = open ? cardEditor(c) : c.text.trim() ? cardDom(c.text, mdHooks()) : el("button", { className: "sm write", textContent: t("Write"), onclick: () => editCard(c) });
   const grip = open ? null : el("div", { className: "bsize", ariaHidden: "true", onpointerdown: (e) => resizeCard(c, e) });
   const box = el("div", { className: "bcard" + (c.card === "team" ? " team" : "") }, head, body, grip);
-  spanCard(box, open ? { w: Math.max(c.w, 4), h: Math.max(c.h, 7) } : c);
+  spanCard(box, shownSize(c));
   return box;
 }
 function addCard() {
@@ -147,17 +146,19 @@ function addCard() {
 function newCardEl() {
   const input = nameInput("", (name) => { editing = null; if (name) putCard("", { title: name }); else renderBoard(); });
   const box = el("div", { className: "bcard new" }, el("div", { className: "bhead" }, input));
-  spanCard(box, { w: 4, h: 2 });
+  spanCard(box, NEW_CARD);
   return box;
 }
-function fitAll() {
+function placeBoard() {
   const wrap = $("boardwrap");
   const canvas = $("canvas");
-  canvas.style.zoom = "1";
-  return Math.min((wrap.clientWidth - 2 * BOARD_PAD) / canvas.offsetWidth, (wrap.clientHeight - 2 * BOARD_PAD) / Math.max(1, canvas.offsetHeight));
-}
-function placeBoard() {
-  $("canvas").style.zoom = String(fitAll());
+  const grid = canvas.firstElementChild;
+  if (!grid) return;
+  const pad = parseFloat(getComputedStyle(wrap).paddingTop);
+  const sizes = [...st.board.map(shownSize), editing && editing.adding ? NEW_CARD : null].filter(Boolean);
+  const fit = boardFit(sizes, wrap.clientWidth - 2 * pad, wrap.clientHeight - 2 * pad, parseFloat(getComputedStyle(grid).rowGap), parseFloat(getComputedStyle(document.body).fontSize));
+  canvas.style.setProperty("--brow", fit.row + "px");
+  canvas.style.setProperty("--bfont", fit.font + "px");
 }
 function renderBoard() {
   if (!onBoard() || !inRoom()) return;
@@ -170,9 +171,10 @@ function toggleBoardFull() {
   boardFull = !boardFull;
   document.body.classList.toggle("boardfull", boardFull);
   setFull(boardFull);
-  setTimeout(placeBoard, 50);
 }
 new ResizeObserver(() => { if (onBoard()) placeBoard(); }).observe($("boardpane"));
-$("boardfull").onclick = toggleBoardFull;
 $("boardadd").onclick = addCard;
-$("boardwin").onclick = () => invoke("open_board_window").catch(fail);
+$("boardmore").onclick = (e) => openMenu([
+  { label: t("Board window"), icon: "window", run: () => invoke("open_board_window").catch(fail) },
+  { label: t("Full screen"), icon: "maximize", right: "F", run: toggleBoardFull },
+], e);

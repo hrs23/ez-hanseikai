@@ -111,6 +111,8 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - a note with a tag, its edit and its deletion reach everyone. `e2e` (`live`)
 - the game plan is a board of cards with short Markdown, and a card is added, renamed, moved, resized and deleted by anyone. `e2e` (`library`)
 - on the board, dragging a card's corner resizes it in whole grid cells with an outline, dragging its header shows a bar where it will land, long text scrolls inside the card, and the team card resizes but does not move. `manual`
+- the board shows every card without scrolling: the rows follow the dense 12-column layout and the text grows with the space; it scrolls only when the text would go below 12px. `unit`
+- the board fits again after a window resize, a card resize or move, and full screen; its bar has only Add card and a More menu with Board window and Full screen, and F still toggles full screen. `manual`
 - the sidebar width is dragged, kept, and never scrolls sideways. `e2e` (`library`)
 - jobs: room events hide unfinished plugin runs. `unit`
 - room: tags are read from text; @names are stored as member ids with the written name (a duplicate name stores each member, an old note stores none); events merge with their edits; peer events are cleaned. `unit`

@@ -1528,7 +1528,6 @@ document.addEventListener("keydown", (e) => {
   if (document.querySelector("dialog[open]")) return;
   if (!inRoom()) return;
   if (ctrl && ["1", "2", "3", "4", "b", "r"].includes(e.key.toLowerCase())) { e.preventDefault(); return; }
-  if (ctrl && e.key === "Enter" && onBoard() && boardEditing) { e.preventDefault(); saveBoard(); return; }
   if (ctrl && e.key.toLowerCase() === "z" && !typing()) { e.preventDefault(); runUndo(); return; }
   if (e.key === "Escape") { escapeKey(); return; }
   if (typing() || nativeKey(e) || e.metaKey || e.altKey) return;
@@ -1538,7 +1537,7 @@ document.addEventListener("keydown", (e) => {
   let action = null;
   if (e.ctrlKey) action = player && (key === "ArrowLeft" || key === "ArrowRight") ? () => jump(key === "ArrowLeft" ? -STEP.huge : STEP.huge) : null;
   else if (key === "?") action = () => openSettings("shortcuts");
-  else if (onBoard() && !boardEditing && k === "f") action = toggleBoardFull;
+  else if (onBoard() && k === "f") action = toggleBoardFull;
   else if (page === "player") action = stageKey(e, key) || (player && (PLAYER_KEYS[(e.shiftKey ? "Shift+" : "") + k] || PLAYER_KEYS[k])) || null;
   if (!action) return;
   e.preventDefault();
