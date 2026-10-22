@@ -81,6 +81,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - a voice counts as speaking until the hang has passed and not after (`ui-test`); the bezel and a run of seeks end after the bezel time even with animations off (`manual`).
 - the page scripts load as one scope without a name declared twice. `ui-test`
 - dragging the volume and the popover ranges still works with clicks not taking focus; Tab still reaches the controls with a visible focus ring. `manual`
+- The player has one Review tab: analysis status rows, then the search and scope; with no search words and this recording the notes, chapters, moments and drawings sit in their match (or under Whole recording without matches), editable in place; a search or all recordings gives the flat list; a note added through the api shows in it with the AI mark. `e2e` (`api`)
 
 ## Watch Party
 

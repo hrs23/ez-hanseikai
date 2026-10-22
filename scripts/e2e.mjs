@@ -1542,8 +1542,8 @@ async function library(ctx) {
     await allSee([a, b, c], "the note written through the API is an AI note", within(LOG_SYNC_S * 2), (st) => st.events.some((e) => e.key === made.json.key && e.text === `${text} #api` && e.kind === "note" && e.source === "ai"));
     const tagged = await api(a, "GET", `${recording(ctx.set)}/events?tag=API`, { token });
     check(tagged.json.events.some((e) => e.key === made.json.key), "the note is not found by its tag");
-    await evaluate(a, `side = "notes"; openSession(${JSON.stringify(ctx.set)}); true`);
-    await waitFor("A lists the note in the player with the AI mark", within(UI_REFRESH_S * 5), () => evaluate(a, `$("notelist").textContent.includes("Noted through the API") && !!$("notelist").querySelector(".aimark")`));
+    await evaluate(a, `side = "review"; openSession(${JSON.stringify(ctx.set)}); true`);
+    await waitFor("A lists the note in the player with the AI mark", within(UI_REFRESH_S * 5), () => evaluate(a, `$("reviewlist").textContent.includes("Noted through the API") && !!$("reviewlist").querySelector(".aimark")`));
     const status = await api(a, "GET", "/v1/status", { token });
     check(status.status === 200 && status.json.room === ctx.room && status.json.recording === false && ["idle", "standby"].includes(status.json.state) && status.json.members.length === 3 && status.json.members.some((m) => m.id === a.id && m.state === status.json.state), `status: ${status.status} ${brief(status.json)}`);
     const diag = await api(a, "GET", "/v1/diagnostics?everyone=true", { token });

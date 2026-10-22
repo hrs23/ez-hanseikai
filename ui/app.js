@@ -853,13 +853,12 @@ function renderEvents() {
   const speech = items.filter((n) => n.role === "speech").sort((x, y) => x.m - y.m);
   renderPanelTabs(shown, speech);
   renderTimeline(Math.round(total()));
-  renderEventList(shown, words);
   renderConvo(speech);
-  renderReviewTab();
+  renderReview(shown, words);
 }
 function renderPanelTabs(shown, speech) {
   const notes = shown.filter((n) => n.kind === "note").length;
-  const tabs = [["review", t("Review")], ["notes", t("Notes"), notes], ...(speech.length ? [["talk", t("Talk")]] : [])];
+  const tabs = [["review", t("Review"), notes], ...(speech.length ? [["talk", t("Talk")]] : [])];
   if (!tabs.some(([k]) => k === side)) side = tabs[0][0];
   if (changed("paneltabs", [tabs, side, lang])) $("paneltabs").replaceChildren(...tabs.map(([k, label, n]) => {
     const b = el("button", { className: k === side ? "on" : "", role: "tab", ariaSelected: k === side }, label, n ? el("em", { textContent: String(n) }) : null);
@@ -870,8 +869,7 @@ function renderPanelTabs(shown, speech) {
   if (changed("panelhint", [side, lang])) $("panelhint").replaceChildren(...hint);
   $("panelhint").hidden = !hint.length;
   $("reviewlist").hidden = side !== "review";
-  $("notelist").hidden = side !== "notes";
-  $("filterrow").hidden = side !== "notes";
+  $("filterrow").hidden = side !== "review";
   $("convolist").hidden = side !== "talk";
   $("scope").value = scope;
 }
@@ -879,18 +877,6 @@ function renderTimeline(tot) {
   const list = chapters(tot);
   if (changed("chapters", [list.map((n) => [n.key, n.m, n.end, n.body]), tot])) renderChapters(list, tot);
   if (changed("lane", [items.filter((n) => n.role === "moment").map((n) => [n.key, n.m, n.body, n.author, n.kind]), tot, st.colors])) renderLane(tot);
-}
-function renderEventList(shown, words) {
-  const set = playSet();
-  if ($("notelist").querySelector("input") || !changed("events", [shown, lang, selected, st.colors, scope])) return;
-  if (!shown.length) { $("notelist").replaceChildren(el("div", { className: "none", textContent: words.length ? t("Nothing found") : t("No notes yet") })); return; }
-  const out = [];
-  let group = set ? set.id : null;
-  for (const n of shown) {
-    if (scope === "all" && n.setId !== group) { group = n.setId; out.push(el("div", { className: "grp", textContent: sessionName(n.setId) })); }
-    out.push(eventRow(n));
-  }
-  $("notelist").replaceChildren(...out);
 }
 function renderConvo(speech) {
   if (!changed("convo", [speech.map((n) => [n.key, n.m, n.speaker, n.body]), lang, st.colors])) return;
@@ -901,26 +887,36 @@ function renderConvo(speech) {
     return row;
   }));
 }
-function renderReviewTab() {
-  if (side !== "review") return;
+function renderReview(shown, words) {
   const set = playSet();
-  if (!set) return;
+  if (side !== "review" || !set || $("reviewlist").querySelector("input")) return;
   const tot = total();
+  const grouped = scope !== "all" && !words.length;
   const list = matchChapters(matchEnds(items), tot, !!set.live);
-  const notes = noteMoments(items);
   const ends = items.filter((n) => n.plugin && (n.tags || []).includes(MATCH_TAG) && n.m !== null);
   const pending = (set.analysis || []).filter((a) => a.state !== "done");
   const now = nowM();
   const cur = list.find((c) => c.m <= now && now < c.end);
-  const sig = [list, notes.map((n) => [n.key, n.m, n.body, n.author, n.source]), pending, cur && cur.n, lang, st.colors, st.names, plugins.map((p) => p.name)];
-  if (!changed("reviewtab", sig)) return;
-  const noteRow = (n) => el("div", { className: "ev" }, el("button", { className: "at", textContent: fmt(n.m), onclick: () => seekTo(n.m) }), el("span", { className: "tx" }, ...inline(n.body), n.source === "ai" ? el("span", { className: "aimark", textContent: t("AI") }) : null, el("span", { className: "by" }, dot(n.author), n.who)));
-  const groups = list.length ? list.map((c) => ({ title: t("Match {n}", { n: c.n }), range: `${fmt(c.m)}–${fmt(c.end)}`, m: c.m, cur: cur === c, rows: [...notes.filter((n) => n.m >= c.m && n.m < c.end).map(noteRow), ...ends.filter((e) => Math.abs(e.m - c.end) < JUMP_MIN).map((e) => el("div", { className: "ev sys" }, el("button", { className: "at", textContent: fmt(e.m), onclick: () => seekTo(e.m) }), el("span", { className: "tx" }, icon("flag", "sm"), t("Match end"))))] })) : [{ title: t("Whole recording"), range: fmt(tot), m: 0, cur: true, rows: notes.map(noteRow) }];
+  if (!changed("review", [shown, list, pending, cur && cur.n, grouped, lang, selected, st.colors, st.names, plugins.map((p) => p.name), scope])) return;
   const out = pending.map((a) => el("div", { className: "ev sys analysis" }, icon(a.state === "failed" ? "alert" : "cpu", "sm"), el("span", { className: "tx " + (a.state === "failed" ? "warn" : "muted"), textContent: `${t(pluginName(a.plugin))} · ${analysisReason(a, nameOf)}` }), a.state === "failed" ? el("button", { className: "sm", textContent: t("Retry"), onclick: () => retryAnalysis(set, a.plugin) }) : null));
-  out.push(...groups.map((g) => el("div", { className: "match" + (g.cur ? " cur" : "") },
-    el("div", { className: "mh" }, el("b", { textContent: g.title }), el("small", { textContent: g.range }), el("button", { className: "sm", onclick: () => { seekTo(g.m); if (!clock.playing) act("play", g.m); } }, icon("play", "sm"), t("Watch"))),
-    ...(g.rows.length ? g.rows : [el("div", { className: "none", textContent: t("No notes") })]))));
-  out.push(el("button", { className: "tolink", onclick: editTeam }, icon("board", "sm"), t("Write to the game plan")));
+  if (grouped) {
+    const inside = (n, c) => n.m !== null && n.m >= c.m && n.m < c.end;
+    const groups = list.map((c) => ({ title: t("Match {n}", { n: c.n }), range: `${fmt(c.m)}–${fmt(c.end)}`, m: c.m, cur: cur === c, rows: [...shown.filter((n) => inside(n, c)).map(eventRow), ...ends.filter((e) => Math.abs(e.m - c.end) < JUMP_MIN).map((e) => el("div", { className: "ev sys" }, el("button", { className: "at", textContent: fmt(e.m), onclick: () => seekTo(e.m) }), el("span", { className: "tx" }, icon("flag", "sm"), t("Match end"))))] }));
+    const rest = shown.filter((n) => !list.some((c) => inside(n, c)));
+    if (rest.length || !list.length) groups.push({ title: t("Whole recording"), range: fmt(tot), m: 0, cur: !list.length, rows: rest.map(eventRow) });
+    out.push(...groups.map((g) => el("div", { className: "match" + (g.cur ? " cur" : "") },
+      el("div", { className: "mh" }, el("b", { textContent: g.title }), el("small", { textContent: g.range }), el("button", { className: "sm", onclick: () => { seekTo(g.m); if (!clock.playing) act("play", g.m); } }, icon("play", "sm"), t("Watch"))),
+      ...g.rows)));
+    out.push(el("button", { className: "tolink", onclick: editTeam }, icon("board", "sm"), t("Write to the game plan")));
+  } else if (!shown.length) out.push(el("div", { className: "none", textContent: words.length ? t("Nothing found") : t("No notes yet") }));
+  else {
+    let group = set.id;
+    for (const n of shown) {
+      if (scope === "all" && n.setId !== group) { group = n.setId; out.push(el("div", { className: "grp", textContent: sessionName(n.setId) })); }
+      out.push(eventRow(n));
+    }
+  }
+  $("reviewlist").className = "list" + (grouped ? " review" : "");
   $("reviewlist").replaceChildren(...out);
 }
 function timeText(n) {
@@ -1011,7 +1007,7 @@ function renderMoment(m) {
 function filterTag(tag) {
   if (!playSet()) return;
   $("filter").value = "#" + tag;
-  side = "notes";
+  side = "review";
   showPanel(true);
   if (page !== "player") go("player");
   renderEvents();
