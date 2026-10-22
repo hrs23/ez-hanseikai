@@ -1,7 +1,10 @@
 @font-face { font-family: "Inter"; src: url("fonts/inter-latin-wght-normal.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "Noto Sans JP"; src: url("fonts/noto-sans-jp-jis1-wght.woff2") format("woff2"); font-weight: 400 700; font-display: swap; }
+@font-face { font-family: "M PLUS 1"; src: url("fonts/m-plus-1-jis1-wght.woff2") format("woff2"); font-weight: 400 700; font-display: swap; }
 :root {
   color-scheme: dark;
-  --font: "Inter", "Segoe UI Variable Text", "Segoe UI", "Yu Gothic UI", "Meiryo UI", sans-serif;
+  --font: "Inter", "M PLUS 1", "Segoe UI Variable Text", "Segoe UI", "Yu Gothic UI", "Meiryo UI", sans-serif;
+  --font-board: "Inter", "Noto Sans JP", "Segoe UI Variable Text", "Segoe UI", "Yu Gothic UI", "Meiryo UI", sans-serif;
   --mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
   --s0: 2px; --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px;
   --t-xs: 11px; --t-sm: 12px; --t-md: 13px; --t-lg: 15px; --t-xl: 20px; --t-2xl: 26px;
@@ -339,7 +342,7 @@ body.noside .side, body.boardfull .side, body.noside .splitter, body.boardfull .
 .bbar > .sp { flex: 1; }
 .bbar .row { gap: var(--s2); }
 .boardwrap { flex: 1; overflow: auto; scrollbar-width: none; padding: var(--s4); }
-.canvas { font-size: var(--bfont, var(--t-md)); }
+.canvas { font-family: var(--font-board); font-size: var(--bfont, var(--t-md)); }
 .bcard.team { font-size: 1.15em; }
 .brow { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); grid-auto-rows: 4px; grid-auto-flow: row dense; column-gap: var(--s3); }
 .bcard.drag { opacity: var(--opacity-dim); }

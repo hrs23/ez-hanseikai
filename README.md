@@ -72,3 +72,5 @@ See [docs/development.md](docs/development.md). The docs are [the design](docs/d
 ## License
 
 MIT or Apache-2.0, at your option.
+
+The bundled fonts (Inter, Noto Sans JP, M PLUS 1) are under the SIL Open Font License 1.1, see `ui/fonts`.
