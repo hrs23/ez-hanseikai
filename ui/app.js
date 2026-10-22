@@ -1228,7 +1228,7 @@ function pickLayout(s, anchor) {
 
 function openMenu(list, at, keepFocus) {
   const m = $("menu");
-  const target = at instanceof Event ? at.currentTarget || at.target : at;
+  const target = at instanceof Event ? (at.currentTarget instanceof Element ? at.currentTarget : at.target) : at;
   if (!keepFocus || m.hidden) {
     menuReturn = document.activeElement;
     anchorMenu(target.hasAttribute("aria-haspopup") ? target : null);
