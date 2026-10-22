@@ -18,6 +18,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - removing C for the whole room while a recording runs stops it fetching and leaves the others recording. `e2e` (`live`)
 - B leaves the room from its menu and enters it again with its recordings and notes, A and B leave and enter again at once, a new room moves B out of it, and B deletes it from the list. `e2e` (`live`)
 - C removes the room from this PC while sharing and its folder does not come back. `e2e` (`live`)
+- leaving or removing a room stops its capture before the folder goes, with no "could not finish" warning; a capture stop never waits for the kill timeout; a join leaves no empty pending folder; a peer that just restarted shows its live path as soon as data flows. `manual`
 - B leaving ends only its part and rejoins, a crashed C does not keep the stopped set open, and everyone has it. `e2e` (`recover`)
 - the room header menu lists the room commands and a rename in its settings reaches everyone. `e2e` (`library`)
 - each member row says one short state. `e2e` (`library`)

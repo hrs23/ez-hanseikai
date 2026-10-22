@@ -306,6 +306,7 @@ pub fn leave(core: &Arc<Core>) {
     core.save_rooms();
     end_set(core, false, None);
     apply_active(core);
+    record::retire(core);
 }
 
 fn open(core: &Arc<Core>, id: &str) {
@@ -371,6 +372,9 @@ pub fn forget_room(core: &Arc<Core>, id: &str) {
     leave_room(core, id);
     core.rooms.lock().unwrap().list.retain(|r| r.id != id);
     core.save_rooms();
+    if id.starts_with("pending-") {
+        data::remove_room(core, id);
+    }
 }
 
 pub fn rename_room(core: &Arc<Core>, name: &str) -> Result<(), String> {
@@ -697,6 +701,7 @@ pub fn adopt_room(core: &Arc<Core>, pending: &str, id: &str, name: &str, members
         }
     }
     core.save_rooms();
+    data::remove_room(core, pending);
     for m in members {
         add_member(core, id, m);
     }

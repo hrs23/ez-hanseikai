@@ -42,7 +42,8 @@ pub fn kind(addr: &TransportAddr) -> &'static str {
 }
 
 pub fn path_kind(conn: &Connection) -> (&'static str, u64, Option<String>) {
-    conn.paths().iter().find(|p| p.is_selected()).map_or(("none", 0, None), |p| {
+    let paths = conn.paths();
+    paths.iter().find(|p| p.is_selected()).or_else(|| paths.iter().next()).map_or(("none", 0, None), |p| {
         let host = match p.remote_addr() {
             TransportAddr::Relay(url) => url.host_str().map(String::from),
             _ => None,

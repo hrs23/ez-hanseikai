@@ -468,7 +468,7 @@ fn voice_command(input: u16, output: u16) -> Command {
     command
         .args(["-map", "0:a", "-c:a", "aac", "-b:a", &format!("{AUDIO_KBPS}k"), "-metadata:s:a:0", "title=Microphone"])
         .args(["-movflags", "empty_moov+default_base_moof+skip_trailer", "-frag_duration", VOICE_FRAGMENT_US, "-f", "mp4", &format!("tcp://127.0.0.1:{output}")])
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stderr(Stdio::piped());
     command
 }
@@ -765,6 +765,9 @@ impl Sink {
             self.watch.lock().unwrap().wrote();
             debug::frame(debug::ENCODED);
         }
+        if crate::test_mode() {
+            let _ = pipe.write_all(b"q");
+        }
     }
 
     pub fn write_audio(&self, track: usize, pcm: &[u8]) {
@@ -866,6 +869,19 @@ pub(crate) fn current_sink(core: &Arc<Core>, canvas: Option<(u32, u32)>) -> Opti
         }
     }
     slot.clone()
+}
+
+pub fn retire(core: &Core) {
+    let e = &core.engine;
+    let want = want(core);
+    let old = {
+        let mut slot = e.sink.lock().unwrap();
+        let stale = slot.as_ref().is_some_and(|s| want.as_ref().map(|(room, voice)| (room.as_str(), *voice)) != Some((s.room.as_str(), s.voice)));
+        slot.take().filter(|_| stale)
+    };
+    if let Some(old) = old {
+        old.finish();
+    }
 }
 
 pub fn end_set(core: &Core, only: Option<&str>) -> Option<crate::room::ActiveSet> {
