@@ -192,6 +192,7 @@ function openSettings(pane) {
   $("name").value = st.name;
   $("language").value = st.language;
   $("sessionsound").checked = sessionSound;
+  pressVoice();
   $("relays").value = st.relays.join("\n");
   renderHotkeys();
   $("myid").textContent = longId(st.id, 4);
@@ -412,6 +413,12 @@ $("name").onchange = () => { const name = cleanText($("name").value, LIMITS.name
 $("avatarimage").onclick = () => pickImage((image) => run("set_profile", { avatar: image }));
 $("avatarclear").onclick = () => run("set_profile", { avatar: "" });
 $("language").onchange = () => run("set_language", { language: $("language").value });
+function pressVoice() {
+  for (const b of $("voiceside").children) press(b, b.dataset.v === voiceSide);
+  for (const b of $("voicetone").children) press(b, b.dataset.v === voiceToneChoice);
+}
+for (const b of $("voiceside").children) b.onclick = () => { voiceSide = b.dataset.v; store("voiceSide", voiceSide); pressVoice(); applyAudio(); };
+for (const b of $("voicetone").children) b.onclick = () => { voiceToneChoice = b.dataset.v; store("voiceTone", voiceToneChoice); pressVoice(); applyAudio(); };
 $("sessionsound").onchange = () => { sessionSound = $("sessionsound").checked; store("sessionSound", sessionSound); };
 $("copyid").onclick = () => navigator.clipboard.writeText(st.id).then(() => flash(t("ID copied")));
 $("opendata").onclick = $("storeopen").onclick = () => dialog("open_data_folder").catch(fail);

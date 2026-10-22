@@ -11,7 +11,7 @@ const source = ["util.js", "i18n.js", "live.js", "media.js", "layout.js", "dock.
 const memory = new Map();
 const localStorage = { getItem: (k) => memory.get(k) ?? null, setItem: (k, v) => memory.set(k, v) };
 const context = vm.createContext({ localStorage, window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id, location: { search: "" } });
-const ui$ = vm.runInContext(`${source}\n({ LIMITS, cleanText, single, changed, matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, hotkeyRows, memberStatus, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, cardParts, dropPos, dropSlot, boardSpan, boardFont, cellSpan, fitFont, deletePreview, exportChoice, exportArgs, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, voiceTone, VOICE_TONES, VOICE_TONE_DEFAULT, minimapRect, talking, stillTalking, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, nextChip, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ LIMITS, cleanText, single, changed, matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, hotkeyRows, memberStatus, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, cardParts, dropPos, dropSlot, boardSpan, boardFont, cellSpan, fitFont, deletePreview, exportChoice, exportArgs, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, voiceTone, known, VOICE_SIDES, VOICE_TONES, VOICE_SIDE_DEFAULT, VOICE_TONE_DEFAULT, minimapRect, talking, stillTalking, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, nextChip, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 test("a changed() check against a tile's own store reports again on a rebuilt tile", () => {
   const first = {};
   assert.equal(ui$.changed("what", [1], first), true);
@@ -23,16 +23,24 @@ const plain = (v) => JSON.parse(JSON.stringify(v));
 
 const moment = (m, extra = {}) => ({ role: "moment", m, plugin: { id: "apex-matches" }, tags: ["match"], ...extra });
 
-test("recorded voices are set apart only in a Watch Party with a recording open, by the chosen preset", () => {
-  assert.equal(ui$.voiceTone(true, true, "mild"), "mild");
-  assert.equal(ui$.voiceTone(true, true, "off"), "off");
-  assert.equal(ui$.voiceTone(false, true, "strong"), "off");
-  assert.equal(ui$.voiceTone(true, false, "strong"), "off");
-  assert.equal(ui$.voiceTone(true, true, "unknown"), "off");
-  assert.equal(ui$.VOICE_TONE_DEFAULT, "left");
-  assert.deepEqual(Object.keys(ui$.VOICE_TONES), ["off", "left", "mild", "strong"]);
-  assert.deepEqual(plain(ui$.VOICE_TONES.left), { pan: -0.6 });
-  for (const p of Object.values(ui$.VOICE_TONES)) if (p) assert.deepEqual(Object.keys(p).filter((k) => !["highpass", "lowpass", "pan"].includes(k)), []);
+test("recorded voices take the chosen side and tone, Auto goes left only in a Watch Party, and Center with Clear leaves them as recorded", () => {
+  const tone = (...a) => plain(ui$.voiceTone(...a));
+  assert.equal(tone("auto", "clear", false), null);
+  assert.deepEqual(tone("auto", "clear", true), { pan: -0.6 });
+  assert.deepEqual(tone("auto", "strong", true), { highpass: 150, lowpass: 1800, pan: -0.8 });
+  assert.deepEqual(tone("auto", "mild", false), { lowpass: 3000, pan: 0 });
+  assert.deepEqual(tone("left", "clear", false), { pan: -0.6 });
+  assert.deepEqual(tone("right", "clear", true), { pan: 0.6 });
+  assert.equal(tone("center", "clear", true), null);
+  assert.deepEqual(tone("center", "mild", false), { lowpass: 3000, pan: 0 });
+  assert.equal(tone("up", "clear", true), null);
+  assert.equal(tone("toString", "clear", true), null);
+  assert.equal(tone("left", "loud", true), null);
+  assert.equal(tone(ui$.VOICE_SIDE_DEFAULT, ui$.VOICE_TONE_DEFAULT, false), null);
+  assert.deepEqual(tone(ui$.VOICE_SIDE_DEFAULT, ui$.VOICE_TONE_DEFAULT, true), { pan: -0.6 });
+  assert.deepEqual([ui$.known("right", ui$.VOICE_SIDES, "auto"), ui$.known("mild", ui$.VOICE_SIDES, "auto"), ui$.known(null, ui$.VOICE_TONES, "clear"), ui$.known("toString", ui$.VOICE_TONES, "clear")], ["right", "auto", "clear", "clear"]);
+  const html = read("index.html");
+  for (const [id, table] of [["voiceside", ui$.VOICE_SIDES], ["voicetone", ui$.VOICE_TONES]]) assert.deepEqual([...html.match(new RegExp(`id="${id}"[^]*?</div>`))[0].matchAll(/data-v="(\w+)"/g)].map((m) => m[1]), Object.keys(table));
 });
 
 test("the minimap crop is a square of the frame height at the top left for any resolution", () => {

@@ -9,8 +9,11 @@ const HAVE_FUTURE_DATA = 3;
 const SPEAK_LEVEL = 0.02;
 const SPEAK_HANG_MS = 300;
 const VOICE_WINDOW = 8192;
-const VOICE_TONES = { off: null, left: { pan: -0.6 }, mild: { lowpass: 3000, pan: -0.6 }, strong: { highpass: 150, lowpass: 1800, pan: -0.8 } };
-const VOICE_TONE_DEFAULT = "left";
+const VOICE_SIDES = { auto: null, left: -1, right: 1, center: 0 };
+const VOICE_SIDE_PARTY = "left";
+const VOICE_TONES = { clear: { pan: 0.6 }, mild: { lowpass: 3000, pan: 0.6 }, strong: { highpass: 150, lowpass: 1800, pan: 0.8 } };
+const VOICE_SIDE_DEFAULT = "auto";
+const VOICE_TONE_DEFAULT = "clear";
 const VOICE_FILTER_Q = Math.SQRT1_2;
 
 let context = null;
@@ -98,17 +101,24 @@ function voiceTap(video) {
   out.connect(gain).connect(ctx.destination);
   return { out, an, gain, buf: new Float32Array(VOICE_WINDOW) };
 }
-const voiceTone = (party, open, choice) => (party && open && VOICE_TONES[choice] ? choice : "off");
-function setTone(tap, name) {
-  if ((tap.tone || "off") === name) return;
+const known = (v, table, fallback) => (Object.hasOwn(table, v) ? v : fallback);
+function voiceTone(side, tone, party) {
+  const p = VOICE_TONES[tone];
+  const pan = VOICE_SIDES[side === "auto" ? (party ? VOICE_SIDE_PARTY : "center") : side];
+  if (!p || typeof pan !== "number") return null;
+  const out = { ...p, pan: pan * p.pan };
+  return out.pan || out.highpass || out.lowpass ? out : null;
+}
+function setTone(tap, tone) {
+  const key = JSON.stringify(tone);
+  if ((tap.tone || "null") === key) return;
   const ctx = tap.gain.context;
-  const p = VOICE_TONES[name];
   const filter = (type, frequency) => new BiquadFilterNode(ctx, { type, frequency, Q: VOICE_FILTER_Q });
-  const nodes = p ? [p.highpass && filter("highpass", p.highpass), p.lowpass && filter("lowpass", p.lowpass), new StereoPannerNode(ctx, { pan: p.pan })].filter(Boolean) : [];
+  const nodes = tone ? [tone.highpass && filter("highpass", tone.highpass), tone.lowpass && filter("lowpass", tone.lowpass), tone.pan && new StereoPannerNode(ctx, { pan: tone.pan })].filter(Boolean) : [];
   tap.gain.disconnect();
   for (const n of tap.nodes || []) n.disconnect();
   nodes.reduce((from, n) => from.connect(n), tap.gain).connect(ctx.destination);
-  Object.assign(tap, { tone: name, nodes });
+  Object.assign(tap, { tone: key, nodes });
 }
 function peakOf({ an, buf }) {
   an.getFloatTimeDomainData(buf);
