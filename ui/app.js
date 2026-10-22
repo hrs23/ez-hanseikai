@@ -850,6 +850,7 @@ function renderReview(shown) {
   const rows = [...shown.map((n) => ({ m: n.m ?? -1, row: eventRow(n) })), ...starts].sort((a, b) => a.m - b.m).map((r) => r.row);
   const bar = chip ? [el("div", { className: "chipbar" }, el("button", { type: "button", className: "tag on", textContent: (chip.kind === "tag" ? tagName(chip.value) : "@" + chip.value) + " ×", onclick: () => pickChip(chip.kind, chip.value, chip.ids) }))] : [];
   $("reviewlist").replaceChildren(...bar, ...(rows.length ? rows : [el("div", { className: "none", textContent: t("No notes yet") })]));
+  for (const b of $("reviewlist").querySelectorAll(".ev .tag")) b.classList.toggle("on", chipIs(chip, b.dataset.kind, b.dataset.value));
 }
 function renderAnalysis(set) {
   const list = set ? set.analysis || [] : [];
@@ -880,15 +881,23 @@ function goTo(n) {
 }
 let chip = null;
 function pickChip(kind, value, ids) {
-  chip = chip && chip.kind === kind && chip.value.toLowerCase() === value.toLowerCase() ? null : { kind, value, ids, set: selected };
+  if (boardWindow) { window.__TAURI__.event.emit("chip", { kind, value, ids }).catch(warn); return; }
+  const here = page === "player" && !!playSet();
+  const id = here ? selected : selected || (recordingRows()[0] || {}).id;
+  if (!id) return;
+  if (!here) openSession(id);
+  chip = nextChip(chip, kind, value, ids, id, here);
+  if (chip) showPanel(true);
   renderEvents();
+  $("reviewlist").scrollTop = 0;
 }
+listenMain("chip", (e) => pickChip(e.payload.kind, e.payload.value, e.payload.ids));
 function eventRow(n) {
   const at = el("button", { className: "at", textContent: timeText(n), disabled: !n.seekable || n.m === null });
   at.onclick = () => goTo(n);
   const sys = !!n.plugin || n.kind === "mark";
-  const body = n.role === "drawing" ? [t("Drawing") + (n.count > 1 ? ` ×${n.count}` : "")] : inline(n.body, { onChip: pickChip, chip, mentions: n.mentions });
-  const tags = n.kind === "note" ? [] : (n.tags || []).map((tg) => el("span", { className: "tag", textContent: tagName(tg) }));
+  const body = n.role === "drawing" ? [t("Drawing") + (n.count > 1 ? ` ×${n.count}` : "")] : inline(n.body, n.mentions);
+  const tags = n.kind === "note" ? [] : (n.tags || []).map((tg) => chipEl("tag", tg, tagName(tg)));
   const tx = el("span", { className: "tx" }, sys ? icon("flag", "sm") : null, ...body, n.source === "ai" ? el("span", { className: "aimark", textContent: t("AI") }) : null, ...tags);
   const by = el("span", { className: "by", title: n.who }, n.plugin ? el("i", { className: "dt", style: "background:var(--muted)" }) : dot(n.author));
   const row = el("div", { className: "ev" + (sys ? " sys" : "") + (n.role === "chapter" ? " chapter" : "") }, at, tx, by);
@@ -942,7 +951,7 @@ function renderMoment(m) {
   const notes = activeAt(items.filter((n) => n.role === "moment" && n.text && !n.plugin), m).slice(-OVERLAY_MAX);
   const typists = (watchParty && st.party.on ? st.party.typing || [] : []).filter((id) => id !== st.id);
   if (changed("overlay", [notes.map((n) => [n.key, n.m, n.body, n.author]), typists.map(nameOf), st.colors, lang])) $("overlay").replaceChildren(
-    ...notes.map((n) => el("p", {}, avatar(n.author, "sm"), el("span", {}, ...inline(n.body, { mentions: n.mentions })))),
+    ...notes.map((n) => el("p", {}, avatar(n.author, "sm"), el("span", {}, ...inline(n.body, n.mentions)))),
     ...typists.map((id) => el("p", { className: "typing", textContent: t("{name} is typing…", { name: nameOf(id) }) })));
 }
 function openLink(link) {

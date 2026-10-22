@@ -110,7 +110,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 ## Debrief
 
 - a note with a tag, its edit and its deletion reach everyone. `e2e` (`live`)
-- the game plan is a board of cards with short Markdown, and a card is added, renamed, moved, resized and deleted by anyone. `e2e` (`library`)
+- the game plan is a board of cards with short Markdown, a tag chip on a card opens a recording with its timeline filtered by that tag, and a card is added, renamed, moved, resized and deleted by anyone. `e2e` (`library`)
 - on the board, dragging a card's corner resizes it in whole grid cells with an outline, dragging its header shows a bar where it will land, long text scrolls inside the card, and the team card resizes but does not move. `manual`
 - the board shows every card without scrolling: the rows follow the dense 12-column layout and the text grows with the space; it scrolls only when the text would go below 12px. `unit`
 - the board fits again after a window resize, a card resize or move, and full screen; its bar has only Add card and a More menu with Board window and Full screen, and F still toggles full screen. `manual`
@@ -199,9 +199,8 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - sources: a closed window is never replaced by another window of the same program. `unit`
 - days read as today, yesterday or a date; shortcuts need Ctrl or Alt and read like the native menu; each global shortcut row is named and can be reset only when it differs from its default; the pages call a recording a recording, never a session; every English phrase and fixed message has a Japanese one and every Japanese entry is used; every end-to-end step is named in docs/test-cases.md. `ui-test`
 - start page: an update or video-tools notice shows before any room is open; the two main actions read Join a room and Create a room. `manual` (UI walkthrough harness)
-- notes: #tags and @member names show as chips; a chip filters the recording's timeline and a second tap or the × clears it; typing # or @ suggests tags or names and Enter, Tab or a click inserts the pick; a name matches longest first, with spaces, Japanese and emoji, and never inside a word; a stored mention follows a renamed member (chip shows the current name) and filters by id, an old note without ids filters by name. `ui-test`
+- notes: #tags and @member names show as chips wherever they appear (timeline, notes on the video, game plan cards); a chip filters the timeline of the open recording and shows the panel, from elsewhere it opens the last open or newest recording filtered, a game plan card matches mentions by name, and in the player a second tap or the × clears it; typing # or @ suggests tags or names and Enter, Tab or a click inserts the pick; a name matches longest first, with spaces, Japanese and emoji, and never inside a word; a stored mention follows a renamed member (chip shows the current name) and filters by id, an old note without ids filters by name. `ui-test`
 - interface text (labels, buttons, menus) cannot be selected, while notes, events, cards, tables, fields and code can; the browser menu never shows and right-click offers Copy, Cut and Paste only where text is selected or editable. `manual` (UI walkthrough harness)
-- notes: #tags and @member names show as chips; a chip filters the recording's timeline and a second tap or the × clears it; typing # or @ suggests tags or names and Enter, Tab or a click inserts the pick; a name matches longest first, with spaces, Japanese and emoji, and never inside a word. `ui-test`
 
 ## User input
 

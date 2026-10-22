@@ -36,10 +36,9 @@ function parseLink(text) {
   return { set, m, view: parts[2] && parts[2] !== "all" ? parts[2] : null };
 }
 
-function inline(text, over) {
-  const stored = over && over.mentions;
+function inline(text, stored) {
   const names = stored ? [...new Set(stored.map((m) => m.name))].sort((a, b) => b.length - a.length) : memberNames();
-  return mdSpans(mdInline(text), mdHooks({ names, who: (name) => mentionWho(name, stored), ...over }));
+  return mdSpans(mdInline(text), mdHooks({ names, who: (name) => mentionWho(name, stored) }));
 }
 
 function memberNow() {
@@ -72,6 +71,12 @@ function mentionParts(text, names) {
   }
   if (last < text.length) out.push(text.slice(last));
   return out;
+}
+
+const chipIs = (chip, kind, value) => !!chip && chip.kind === kind && chip.value.toLowerCase() === value.toLowerCase();
+
+function nextChip(chip, kind, value, ids, set, here) {
+  return here && chipIs(chip, kind, value) ? null : { kind, value, ids, set };
 }
 
 function chipMatches(n, chip) {

@@ -1274,8 +1274,8 @@ async function library(ctx) {
     for (const app of [a, b, c]) await waitFor(`${app.key} shows no avatar for B and no room icon`, within(LOG_SYNC_S * 2), async () => { const s = await state(app); return !s.avatars[b.id] && s.room.icon === ""; });
   });
 
-  await step("the game plan is a board of cards with short Markdown, and a card is added, renamed, moved, resized and deleted by anyone", async () => {
-    const text = ["Win the ring", "- first", "- second", `==hold== [Opening](ezh://moment/${encodeURIComponent(ctx.set)}/5/all) [site](https://example.com/x) [bad](javascript:alert(1)) <img src=x onerror=alert(1)>`, "| Who | Job |"].join("\n");
+  await step("the game plan is a board of cards with short Markdown, a tag chip on a card opens a recording with its timeline filtered by that tag, and a card is added, renamed, moved, resized and deleted by anyone", async () => {
+    const text = ["Win the ring", "- first", "- second #drops", `==hold== [Opening](ezh://moment/${encodeURIComponent(ctx.set)}/5/all) [site](https://example.com/x) [bad](javascript:alert(1)) <img src=x onerror=alert(1)>`, "| Who | Job |"].join("\n");
     await evaluate(a, `showRoomTab("board"); true`);
     await invoke(a, "put_board_card", { room: ctx.room, card: "team", text });
     const card = async (app, id) => (await state(app)).board.find((x) => x.card === id);
@@ -1286,6 +1286,9 @@ async function library(ctx) {
     check(dom.text.includes("javascript:alert(1)") && dom.text.includes("<img src=x onerror=alert(1)>") && dom.text.includes("| Who | Job |"), "the unsafe link, the tag and the table are not shown as plain text");
     check(dom.writes === 3, `the empty member cards show ${dom.writes} Write buttons`);
     await screenshot(a, "board-room");
+    await evaluate(a, `$("canvas").querySelector(".bcard.team .tag[data-kind=tag]").click(); true`);
+    await waitFor("a tag chip on a board card opens a recording with its timeline filtered by that tag", within(UI_REFRESH_S * 5), () => evaluate(a, `page === "player" && !!playSet() && chip?.kind === "tag" && chip.value === "drops" && chip.set === selected && panelShown() && $("reviewlist").querySelector(".chipbar .tag.on")?.textContent.startsWith("#drops")`));
+    await evaluate(a, `showRoomTab("board"); true`);
     const id = await invoke(b, "put_board_card", { room: ctx.room, card: "", title: "Drops", text: "north" });
     for (const app of [a, b, c]) await waitFor(`${app.key} sees the new card after the member cards`, within(LOG_SYNC_S * 2), async () => { const x = await card(app, id); return x?.title === "Drops" && x.text === "north" && (await state(app)).board.at(-1).card === id; });
     await invoke(c, "put_board_card", { room: ctx.room, card: id, title: "Calls" });

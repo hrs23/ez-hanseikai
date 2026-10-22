@@ -37,7 +37,7 @@ async function openWeb(url, label) {
   if (!mdVouched(url, label) && !(await ask(t("Open {host}?", { host: new URL(url).host }), t("Open"), false, url))) return;
   dialog("open_link", { url }).catch(warn);
 }
-const mdHooks = (over = {}) => ({ onLink: openLink, onOpen: openWeb, ...over });
+const mdHooks = (over = {}) => ({ onLink: openLink, onOpen: openWeb, names: memberNames(), who: (name) => mentionWho(name, null), ...over });
 
 function mdHref(url) {
   if (/^ezh:\/\/moment\//i.test(url)) {
@@ -152,15 +152,16 @@ function mdParse(text) {
 
 const mdText = (nodes) => nodes.map((n) => n.text ?? n.code ?? mdText(n.strong || n.em || n.strike || n.mark || n.children || [])).join("");
 
-function chipEl(kind, value, label, hooks, ids) {
-  if (!hooks.onChip) return el("span", { className: "tag", textContent: label });
-  const on = hooks.chip && hooks.chip.kind === kind && hooks.chip.value.toLowerCase() === value.toLowerCase();
-  return el("button", { type: "button", className: "tag" + (on ? " on" : ""), textContent: label, onclick: (e) => { e.stopPropagation(); hooks.onChip(kind, value, ids); } });
+function chipEl(kind, value, label, ids = []) {
+  const b = el("button", { type: "button", className: "tag", textContent: label, onclick: (e) => { e.stopPropagation(); pickChip(kind, value, ids); } });
+  b.dataset.kind = kind;
+  b.dataset.value = value;
+  return b;
 }
 
 function mentionEl(name, hooks) {
-  const who = hooks.who ? hooks.who(name) : { value: name, ids: [] };
-  return chipEl("mention", who.value, "@" + who.value, hooks, who.ids);
+  const who = hooks.who(name);
+  return chipEl("mention", who.value, "@" + who.value, who.ids);
 }
 
 function mdSpans(nodes, hooks) {
@@ -168,14 +169,14 @@ function mdSpans(nodes, hooks) {
   return nodes.flatMap((n) => {
     if (n.text !== undefined) {
       const parts = n.text.split("\n");
-      return parts.flatMap((p, k) => (k ? [el("br"), p] : [p])).flatMap((p) => (typeof p === "string" && hooks.names ? mentionParts(p, hooks.names).map((q) => (q.mention ? mentionEl(q.mention, hooks) : q)) : [p]));
+      return parts.flatMap((p, k) => (k ? [el("br"), p] : [p])).flatMap((p) => (typeof p === "string" ? mentionParts(p, hooks.names).map((q) => (q.mention ? mentionEl(q.mention, hooks) : q)) : [p]));
     }
     if (n.code !== undefined) return [el("code", { textContent: n.code })];
     if (n.strong) return [wrap("strong", n.strong)];
     if (n.em) return [wrap("em", n.em)];
     if (n.strike) return [wrap("del", n.strike)];
     if (n.mark) return [wrap("mark", n.mark)];
-    if (n.tag !== undefined) return [chipEl("tag", n.tag, tagName(n.tag), hooks)];
+    if (n.tag !== undefined) return [chipEl("tag", n.tag, tagName(n.tag))];
     if (n.link.kind === "moment") {
       const label = mdText(n.children) || t("Moment");
       return [el("button", { className: "link", onclick: (e) => { e.stopPropagation(); hooks.onLink(n.link.link); } }, icon("play", "sm"), `${label} ${fmt(n.link.link.m)}`)];

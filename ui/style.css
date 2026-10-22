@@ -446,6 +446,7 @@ body.boardwin .side, body.boardwin .splitter, body.boardwin .notices, body.board
 .overlay { position: absolute; left: 50%; bottom: 12%; transform: translateX(-50%); z-index: 4; display: flex; flex-direction: column; align-items: center; gap: var(--s1); max-width: min(660px, 85%); font-size: calc(1em * 1.3); pointer-events: none; }
 .overlay p { margin: 0; padding: var(--s2) var(--s3); border-radius: var(--r-sm); background: var(--overlay); color: var(--white); display: flex; align-items: center; gap: var(--s2); overflow-wrap: anywhere; max-height: 5em; overflow: hidden; }
 .overlay p > span { min-width: 0; }
+.overlay .tag { pointer-events: auto; }
 .overlay p.typing { color: var(--muted); font-style: italic; font-size: calc(var(--t-sm) * 1.3); }
 .quick { position: absolute; left: 50%; bottom: var(--s3); transform: translateX(-50%); width: min(440px, 90%); background: var(--raised); border: 1px solid var(--accent); border-radius: var(--r-md); box-shadow: var(--shadow-pop); z-index: 7; margin: 0; }
 .quick .q { display: flex; align-items: center; gap: var(--s2); height: 40px; padding: 0 var(--s2) 0 var(--s1); }
