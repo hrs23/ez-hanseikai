@@ -66,6 +66,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - Live shows a tile for everyone who shares a screen, also while recording. `e2e` (`live`)
 - a member without a picture, on Live (offline or not sharing) or in a recording (only voice parts), gets a small avatar chip with the speaking ring and the mic-off mark in a strip under the tiles instead of a tile; the grid, the view buttons and their number keys count only members with a picture, the volume popup still lists every member (voice only for a chip), and with nobody pictured the chips sit alone in the middle. `ui-test` (who gets a chip), `manual`
 - connections stay up while live tiles stay in step, a member stalls, and the others stop waiting for one too far behind. `e2e` (`live`)
+- every tile (also the minimap tile) has its name strip above the picture, never over it, and the grid counts the strip in each tile height; a long name is cut with an ellipsis. `manual`
 - dragging a name label swaps two tiles. `e2e` (`library`)
 - Your own tile shows and moves right after recording ends and while it records. `todo`
 - net: a live reply names the recording of each series; history gets its share while live fills the limit. `unit`

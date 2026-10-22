@@ -27,13 +27,14 @@ function cells(n, id) {
   return { cols, rows, tiles: [...Array(n).keys()].map(at), free: [...Array(cols * rows - n).keys()].map((i) => at(n + i)) };
 }
 
-function rects(n, id, width, height, gap, slots = n) {
+function rects(n, id, width, height, gap, slots = n, strip = 0) {
   const c = cells(Math.max(n, slots), id);
-  const unit = Math.max(0, Math.min((width - (c.cols - 1) * gap) / c.cols, (height - (c.rows - 1) * gap) / c.rows / ASPECT));
+  const unit = Math.max(0, Math.min((width - (c.cols - 1) * gap) / c.cols, (height - (c.rows - 1) * gap - c.rows * strip) / c.rows / ASPECT));
   const blockW = c.cols * unit + (c.cols - 1) * gap;
-  const blockH = c.rows * unit * ASPECT + (c.rows - 1) * gap;
+  const rowH = unit * ASPECT + strip;
+  const blockH = c.rows * rowH + (c.rows - 1) * gap;
   const left = (width - blockW) / 2, top = (height - blockH) / 2;
-  const px = (r) => ({ x: left + r.x * (unit + gap), y: top + r.y * (unit * ASPECT + gap), w: r.w * unit + (r.w - 1) * gap, h: r.h * unit * ASPECT + (r.h - 1) * gap });
+  const px = (r) => ({ x: left + r.x * (unit + gap), y: top + r.y * (rowH + gap), w: r.w * unit + (r.w - 1) * gap, h: r.h * rowH + (r.h - 1) * gap });
   const all = [...c.tiles, ...c.free].map(px);
   return { tiles: all.slice(0, n), free: all.slice(n) };
 }

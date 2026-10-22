@@ -22,6 +22,8 @@ const TAG_HINTS = 5;
 const DRAG_START_PX = 4;
 const CODEC_PROBE = { width: 1280, height: 720, bitrate: 6000000, framerate: 30 };
 const GAP = 6;
+const STRIP = 26;
+document.documentElement.style.setProperty("--strip", STRIP + "px");
 const MINI_MS = 100;
 const MINI_MIN_PX = 96;
 const WIDE_PANEL = 1240;
@@ -129,7 +131,8 @@ function tile(s, key) {
   const tl = { key, sigs: {}, media: slot(el("video", { muted: true, preload: "auto" })), mic: null, loud: -Infinity, name: el("span", { className: "nm" }), av: el("span"), imp: el("span", { className: "imp", hidden: true }), who: el("div", { className: "who" }), what: el("div", { className: "what" }), problem: el("div", { className: "problem", hidden: true }) };
   tl.snd = el("span", { className: "snd", hidden: true }, icon("volume-2"));
   tl.lab = el("div", { className: "nl" }, tl.av, tl.name, tl.imp, tl.snd, el("span", { className: "moff" }, icon("mic-off", "sm")));
-  tl.box = el("div", { className: "tile", tabIndex: 0 }, tl.media.video, el("div", { className: "waitbox" }, tl.who, tl.what), tl.problem, tl.lab);
+  tl.pic = el("div", { className: "pic" }, tl.media.video, el("div", { className: "waitbox" }, tl.who, tl.what), tl.problem);
+  tl.box = el("div", { className: "tile", tabIndex: 0 }, tl.lab, tl.pic);
   const focus = () => { const i = s.keys.indexOf(key) + 1; setView(s, s.view === i ? 0 : i); };
   if (s === rec) tl.box.dataset.speak = key;
   else tl.media.video.addEventListener("resize", () => place(play));
@@ -195,9 +198,10 @@ function place(s) {
   const slots = focus ? n : Math.max(n, s.slots || 0);
   const mode = focus ? (n > 1 ? (s.mode === "side" ? "side" : "bottom") : "grid") : effectiveMode(s);
   let mini = s === play ? miniKey() : null;
-  let r = rects(n, mode, s.el.clientWidth, s.el.clientHeight, GAP, slots);
-  if (mini && !r.free.length) r = rects(n, mode, s.el.clientWidth, s.el.clientHeight, GAP, slots + 1);
-  if (mini && r.free[0].h < MINI_MIN_PX) [mini, r] = [null, rects(n, mode, s.el.clientWidth, s.el.clientHeight, GAP, slots)];
+  const fit = (extra) => rects(n, mode, s.el.clientWidth, s.el.clientHeight, GAP, slots + extra, STRIP);
+  let r = fit(0);
+  if (mini && !r.free.length) r = fit(1);
+  if (mini && r.free[0].h - STRIP < MINI_MIN_PX) [mini, r] = [null, fit(0)];
   const blanks = mini ? r.free.slice(1) : r.free;
   const at = (e, b) => Object.assign(e.style, { left: b.x + "px", top: b.y + "px", width: b.w + "px", height: b.h + "px" });
   order.forEach((key, i) => {
@@ -226,7 +230,7 @@ function miniKey() {
 }
 function showMini(key, b) {
   const m = play.mini || (play.mini = { gen: 0, video: null, sigs: {}, canvas: el("canvas"), av: el("span"), name: el("span", { className: "nm" }) });
-  if (!m.box) play.el.append((m.box = el("div", { className: "tile mini" }, m.canvas, el("div", { className: "nl" }, m.av, m.name))));
+  if (!m.box) play.el.append((m.box = el("div", { className: "tile mini" }, el("div", { className: "nl" }, m.av, m.name), el("div", { className: "pic" }, m.canvas))));
   m.box.hidden = !key;
   m.name.textContent = t("Minimap");
   if (key && changed("av", [key, nameOf(key), look(key)], m.sigs)) m.av.replaceChildren(avatar(key, "sm"));

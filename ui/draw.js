@@ -9,7 +9,7 @@ const COORD_STEP = 10000;
 const ink = { tool: "pen", live: new Map(), cleared: null, press: null, sentAt: 0, sendTimer: null, frame: 0 };
 
 function contentRect(tl) {
-  const box = tl.box.getBoundingClientRect();
+  const box = tl.pic.getBoundingClientRect();
   const v = tl.media.video;
   const ratio = v.videoWidth && v.videoHeight ? v.videoWidth / v.videoHeight : 1 / ASPECT;
   const w = Math.min(box.width, box.height * ratio);
@@ -18,7 +18,7 @@ function contentRect(tl) {
 }
 
 function inkLayer(tl) {
-  if (!tl.ink) tl.ink = tl.box.appendChild(svg("svg", { class: "ink", viewBox: "0 0 1 1", preserveAspectRatio: "none" }));
+  if (!tl.ink) tl.ink = tl.pic.appendChild(svg("svg", { class: "ink", viewBox: "0 0 1 1", preserveAspectRatio: "none" }));
   const r = contentRect(tl);
   Object.assign(tl.ink.style, { left: r.x + "px", top: r.y + "px", width: r.w + "px", height: r.h + "px" });
   return r;
