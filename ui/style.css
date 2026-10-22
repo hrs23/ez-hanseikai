@@ -122,6 +122,8 @@ mark { background: var(--warn-soft); color: var(--warn); border-radius: var(--r-
 .av > img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
 .av > svg { width: 80%; height: 80%; fill: currentColor; stroke: currentColor; stroke-width: 0.5; stroke-linejoin: round; fill-rule: evenodd; }
 .av.room { border-radius: 22%; color: var(--soft); }
+.chip { display: inline-flex; align-items: center; gap: var(--s2); min-width: 0; }
+.t.lg b { font-size: var(--t-lg); }
 button.plain { background: none; border: 0; padding: 0; height: auto; border-radius: 50%; }
 .av { transition: box-shadow var(--fast); }
 .av.speaking, .avs .av.speaking, .tile.speaking .nl .av { box-shadow: 0 0 0 2px var(--ring, var(--surface)), 0 0 0 3px var(--mc, var(--ok)); }
@@ -295,7 +297,6 @@ body.noside .side, body.boardfull .side, body.noside .splitter, body.boardfull .
 .table tr.dim td { color: var(--faint); }
 .roombody:has(.drawer) .table :is(th, td):nth-child(5), .roombody:has(.drawer) .table :is(th, td):nth-child(6) { display: none; }
 .table td.chev { width: 36px; color: var(--muted); text-align: right; }
-.table td .who { display: inline-flex; align-items: center; gap: var(--s2); }
 .table td .who b { font-weight: var(--w-semibold); max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
 .roombody:has(.drawer) .table td .who b { max-width: 150px; }
 .table td .mono + button { margin-left: var(--s1); vertical-align: middle; }
@@ -308,7 +309,6 @@ body.noside .side, body.boardfull .side, body.noside .splitter, body.boardfull .
 .drawer { width: 360px; flex: none; border-left: 1px solid var(--line); background: var(--surface); display: flex; flex-direction: column; gap: var(--s3); padding: var(--s4); overflow-y: auto; }
 .dhead { display: flex; align-items: center; gap: var(--s3); }
 .dhead .t { display: flex; flex-direction: column; flex: 1; min-width: 0; }
-.dhead b { font-size: var(--t-lg); }
 .dhead small { color: var(--muted); }
 .pathbox { border-radius: var(--r-md); padding: var(--s3) var(--s3); display: flex; flex-direction: column; gap: var(--s0); }
 .pathbox b { display: flex; align-items: center; gap: var(--s2); }
@@ -327,8 +327,8 @@ body.noside .side, body.boardfull .side, body.noside .splitter, body.boardfull .
 .phead.click:hover { background: var(--hover-bg); border-radius: var(--r-md); }
 .phead .pic { width: 36px; height: 36px; border-radius: var(--r-md); background: var(--raised-2); color: var(--muted); display: flex; align-items: center; justify-content: center; flex: none; }
 .phead .pt { display: flex; flex-direction: column; min-width: 0; line-height: 1.35; }
-.phead .pt b { font-weight: var(--w-bold); font-size: var(--t-lg); }
-.phead .pt span { color: var(--muted); font-size: var(--t-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.phead .pt b { font-weight: var(--w-bold); }
+.phead .pt small { color: var(--muted); font-size: var(--t-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .phead > svg { color: var(--muted); }
 .sample { width: 108px; height: 36px; flex: none; border-radius: var(--r-sm); background: var(--bg); border: 1px solid var(--line); position: relative; overflow: hidden; }
 .sample.chapters { background: var(--bg); }

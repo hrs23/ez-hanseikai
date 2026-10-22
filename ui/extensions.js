@@ -55,7 +55,7 @@ function extensionRow(p) {
   const line = p.view ? "" : extensionLine(p, nameOf);
   const toggle = el("input", { type: "checkbox", className: "switch", role: "switch", checked: p.on, ariaLabel: t(p.name), onclick: (e) => e.stopPropagation(), onchange: (e) => { const on = e.target.checked; askRoom(t(on ? "Turn on {name} for the room?" : "Turn off {name} for the room?", { name: t(p.name) }), t(on ? "Turn on" : "Turn off"), () => savePlugin(p, on)); } });
   const head = el("div", { className: "phead" + (more ? " click" : ""), onclick: more ? () => { if (open) openExtensions.delete(p.id); else openExtensions.add(p.id); store("ext-open", [...openExtensions]); delete sigs.roomtab; renderRoom(); } : null },
-    el("span", { className: "pic" }, icon("puzzle")), el("div", { className: "pt" }, el("b", { textContent: t(p.name) }), el("span", { textContent: t(p.summary) })), sampleOf(p.sample), el("span", { className: "sp" }),
+    el("span", { className: "pic" }, icon("puzzle")), withClass(stack(t(p.name), t(p.summary), true), "pt"), sampleOf(p.sample), el("span", { className: "sp" }),
     line ? el("span", { className: p.on && (!p.runner || p.failed) ? "warn" : "muted", textContent: line }) : null, toggle, more ? icon(open ? "chevron-up" : "chevron-down", "sm") : null);
   const body = open ? el("div", { className: "pbody" }, el("div", { className: "psec" }, extensionRunner(p)), extensionRecordings(p)) : null;
   return el("div", { className: "plug" + (open ? " open" : "") }, head, body);

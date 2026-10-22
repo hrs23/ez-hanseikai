@@ -37,7 +37,7 @@ function renderStart() {
   if (!st.name) askName = true;
   $("namefield").hidden = !askName;
   $("nameshow").hidden = askName;
-  if (!askName && changed("startname", [st.name, look(st.id)])) { $("nameav").replaceChildren(avatar(st.id, "lg")); $("nametext").textContent = st.name; }
+  if (!askName && changed("startname", [st.name, look(st.id)])) $("nameshow").replaceChildren(nameChip(avatar(st.id, "lg"), st.name, $("nameedit")));
   if (document.activeElement !== $("startname")) $("startname").value = st.name;
   const named = !!st.name || !!cleanText($("startname").value, LIMITS.name);
   $("startpending").hidden = !pendingRoom;
@@ -51,7 +51,7 @@ function renderStart() {
   $("roomlist").replaceChildren(...others.map((r, i) => {
     const enter = () => run("enter_room", { id: r.id }, openLive);
     const more = iconButton("more", t("More"), (e) => { e.stopPropagation(); openMenu([{ label: t("Delete…"), icon: "trash", danger: true, run: () => deleteRoom(r) }], e.currentTarget); }, "icon sm more");
-    const row = el("div", { className: "rrow", tabIndex: 0, role: "button" }, roomIcon(r, "lg"), el("b", { textContent: r.name }), el("span", { className: "sp" }), r.used_us ? el("span", { className: "muted small", textContent: formatWhen(new Date(r.used_us / 1000), new Date(), lang), title: fullWhen(new Date(r.used_us / 1000), lang) }) : null, el("button", { className: "sm" + (i ? "" : " primary"), textContent: t("Enter"), onclick: (e) => { e.stopPropagation(); enter(); } }), more);
+    const row = el("div", { className: "rrow", tabIndex: 0, role: "button" }, nameChip(roomIcon(r, "lg"), r.name), el("span", { className: "sp" }), r.used_us ? el("span", { className: "muted small", textContent: formatWhen(new Date(r.used_us / 1000), new Date(), lang), title: fullWhen(new Date(r.used_us / 1000), lang) }) : null, el("button", { className: "sm" + (i ? "" : " primary"), textContent: t("Enter"), onclick: (e) => { e.stopPropagation(); enter(); } }), more);
     row.onclick = enter;
     row.onkeydown = (e) => { if (e.key === "Enter") enter(); };
     return row;
@@ -120,7 +120,7 @@ function renderMembers() {
   const out = [];
   for (const a of st.asks) {
     const answer = (approve) => () => run("answer_ask", { id: a.id, approve });
-    out.push(el("div", { className: "askbox" }, picture(a.name, null, "", "lg"), el("div", { className: "t" }, el("b", { textContent: t("{name} wants to join", { name: a.name || longId(a.id, 2) }) }), el("small", { className: "mono", textContent: longId(a.id, 2) })), el("span", { className: "sp" }), el("button", { className: "primary", textContent: t("Approve"), onclick: answer(true) }), el("button", { textContent: t("Decline"), onclick: answer(false) })));
+    out.push(el("div", { className: "askbox" }, picture(a.name, null, "", "lg"), stack(t("{name} wants to join", { name: a.name || longId(a.id, 2) }), el("small", { className: "mono", textContent: longId(a.id, 2) })), el("span", { className: "sp" }), el("button", { className: "primary", textContent: t("Approve"), onclick: answer(true) }), el("button", { textContent: t("Decline"), onclick: answer(false) })));
   }
   if (st.invites) out.push(el("div", { className: "invitebox" }, icon("link", "sm"), el("span", { textContent: t("An invite code is open") }), el("span", { className: "sp" }), el("button", { className: "sm", onclick: copyInvite }, icon("copy", "sm"), t("Copy")), el("button", { className: "sm", onclick: cancelInvite, textContent: t("Cancel invite") })));
   const head = el("tr", {}, ...["Name", "ID", "Status", "Connection", "Round trip", "Version", ""].map((h) => el("th", { textContent: h ? t(h) : "" })));
@@ -130,7 +130,7 @@ function renderMembers() {
     const conn = me || !p.connected ? el("span", { className: "faint", textContent: "—" }) : el("span", { className: "net " + (p.path === "relay" ? "warn" : "ok"), onclick: (e) => { e.stopPropagation(); openDiagnostics(); } }, icon("relay", "sm"), p.path === "relay" ? t("Relay") : t("Direct"));
     const version = me ? st.version : p && p.version;
     const tr = el("tr", { className: "pick" + (drawerFor === id ? " sel" : "") + (state.kind === "off" ? " dim" : ""), tabIndex: 0 },
-      el("td", {}, el("span", { className: "who" }, me ? el("button", { className: "plain", ariaLabel: t("Avatar"), onclick: (e) => { e.stopPropagation(); openSettings("general"); } }, avatar(id, "", "on", false, true)) : avatar(id, "", p && p.connected ? "on" : null, false, true), el("b", { textContent: nameOf(id) }), me ? el("span", { className: "pill gray", textContent: t("You") }) : null)),
+      el("td", {}, withClass(nameChip(me ? el("button", { className: "plain", ariaLabel: t("Avatar"), onclick: (e) => { e.stopPropagation(); openSettings("general"); } }, avatar(id, "", "on", false, true)) : avatar(id, "", p && p.connected ? "on" : null, false, true), nameOf(id), me ? el("span", { className: "pill gray", textContent: t("You") }) : null), "who")),
       el("td", {}, el("span", { className: "mono", textContent: longId(id) }), iconButton("copy", t("Copy ID"), (e) => { e.stopPropagation(); navigator.clipboard.writeText(id).then(() => flash(t("ID copied"))); })),
       el("td", { className: "state " + state.kind }, el("i", { className: "sdot" }), state.text),
       el("td", {}, conn),
@@ -176,7 +176,7 @@ function renderDrawer() {
   const measuring = !!speed && speed.id === id && !speed.line;
   if (speed && speed.id === id && speed.line) add(t("Speed"), speed.line);
   box.replaceChildren(
-    el("div", { className: "dhead" }, avatar(id, "xl"), el("div", { className: "t" }, el("b", { textContent: nameOf(id) }), el("small", { className: "mono", textContent: longId(id) })), iconButton("x", t("Close"), () => { drawerFor = null; delete sigs.roomtab; renderRoom(); })),
+    el("div", { className: "dhead" }, avatar(id, "xl"), stack(nameOf(id), el("small", { className: "mono", textContent: longId(id) }), true), iconButton("x", t("Close"), () => { drawerFor = null; delete sigs.roomtab; renderRoom(); })),
     path || "",
     el("dl", { className: "kv" }, ...kv),
     receivingFrom.length ? el("div", { className: "h3", textContent: t("Receiving") }) : "",
@@ -351,7 +351,7 @@ function renderDiagnostics() {
   if (!changed("diag", [st.peers, st.capture.sharing, flow, lang])) return;
   const peers = st.peers;
   const what = () => [st.capture.sharing ? t("Live picture and voice") : null, t("Recorded files"), t("Log")].filter(Boolean).join(" · ");
-  const node = (id, sub, cls = "") => el("div", { className: "node " + cls }, avatar(id, "lg", null, false, true), el("div", { className: "t" }, el("b", { textContent: nameOf(id) }), sub ? el("small", { textContent: sub }) : null));
+  const node = (id, sub, cls = "") => el("div", { className: "node " + cls }, avatar(id, "lg", null, false, true), stack(nameOf(id), sub));
   const links = peers.map((p) => el("div", { className: "flink " + (p.connected ? p.path : "off") }, el("span", { className: "line" }), p.connected && p.path === "relay" ? el("span", { className: "relaybox" }, el("b", { textContent: t("Relay server") }), el("small", { textContent: p.relay || t("content not visible") })) : el("span", { className: "label", textContent: p.connected ? `${t("Direct")} · ${t("encrypted")} · ${p.rtt_ms} ms` : t("Offline") }), node(p.id, "", p.connected ? "" : "dim")));
   const diagram = el("div", { className: "flowmap" }, node(st.id, ""), el("div", { className: "links" }, ...(links.length ? links : [el("div", { className: "none", textContent: t("No other members") })])));
   const head = el("tr", {}, ...["Peer", "Path", "What is sent", "Sent", "Received"].map((h) => el("th", { textContent: t(h) })));

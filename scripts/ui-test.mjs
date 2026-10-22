@@ -736,6 +736,10 @@ test("an avatar shows the image, a built-in shape or the initial; an unknown sha
   assert.equal(draw(`roomIcon({ id: "ab12", name: "Other", icon: "" }, "sm")`).style.background, preset.style.background);
   assert.equal(draw(`roomIcon({ name: "Practice", icon: "${image}" }, "sm")`).find("img").length, 1);
   assert.deepEqual(plain(draw(`look("ren")`)), [2, image.length, image.slice(-16)]);
+  const chip = draw(`nameChip(roomIcon({ name: "Practice", icon: "" }, "sm"), "Practice", "x")`);
+  assert.deepEqual([chip.tag, chip.className, chip.children[0].className, chip.find("b")[0].textContent, chip.textContent], ["span", "chip", "av sm room", "Practice", "PPracticex"]);
+  const two = draw(`stack("Aki", "aaaa", true)`);
+  assert.deepEqual([two.tag, two.className, two.find("b")[0].textContent, two.find("small")[0].textContent, draw(`stack("Aki", "")`).children.length], ["span", "t lg", "Aki", "aaaa", 1]);
 });
 
 test("a card shows nothing a note can write as running or navigating", () => {

@@ -19,6 +19,7 @@ function el(tag, props = {}, ...children) {
   e.append(...children.flat().filter((c) => c !== null && c !== undefined && c !== false));
   return e;
 }
+const withClass = (e, className) => { e.classList.add(className); return e; };
 function svg(tag, attrs = {}, ...children) {
   const e = document.createElementNS("http://www.w3.org/2000/svg", tag);
   for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);

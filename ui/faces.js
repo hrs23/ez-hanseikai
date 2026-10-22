@@ -71,6 +71,13 @@ function avatar(id, size, dot, grey, still) {
   return a;
 }
 
+function nameChip(pic, name, ...after) {
+  return el("span", { className: "chip" }, pic, el("b", { textContent: name }), ...after);
+}
+function stack(title, sub, large) {
+  return el("span", { className: large ? "t lg" : "t" }, el("b", { textContent: title }), typeof sub === "string" ? (sub ? el("small", { textContent: sub }) : null) : sub);
+}
+
 const CREST_BOTTOM = "#14171d";
 const presetTile = (name, size) => {
   const color = colorOf(ROOM_PRESETS.indexOf(name));
