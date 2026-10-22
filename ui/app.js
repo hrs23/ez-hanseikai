@@ -22,6 +22,7 @@ const TAG_HINTS = 5;
 const DRAG_START_PX = 4;
 const CODEC_PROBE = { width: 1280, height: 720, bitrate: 6000000, framerate: 30 };
 const GAP = 6;
+const MINI_MS = 100;
 const WIDE_PANEL = 1240;
 
 const tileGrid = (box, strip, kind) => ({ el: box, strip, kind, tiles: {}, chips: {}, keys: [], voice: [], mode: "grid", slots: 0, view: 0, last: 1, free: [] });
@@ -44,6 +45,7 @@ let rate = 1;
 let volume = stored("volume", 1);
 let sessionSound = stored("sessionSound", true);
 let gameSound = stored("gameSound", null);
+let minimap = stored("minimap", false);
 let seekRun = null;
 const BEZEL_MS = 500;
 let muted = false;
@@ -182,7 +184,10 @@ function place(s) {
   const order = focus ? [focus, ...s.keys.filter((k) => k !== focus)] : s.keys;
   const slots = focus ? n : Math.max(n, s.slots || 0);
   const mode = focus ? (n > 1 ? (s.mode === "side" ? "side" : "bottom") : "grid") : effectiveMode(s);
-  const r = rects(n, mode, s.el.clientWidth, s.el.clientHeight, GAP, slots);
+  const mini = s === play ? miniKey() : null;
+  let r = rects(n, mode, s.el.clientWidth, s.el.clientHeight, GAP, slots);
+  if (mini && !r.free.length) r = rects(n, mode, s.el.clientWidth, s.el.clientHeight, GAP, slots + 1);
+  const blanks = mini ? r.free.slice(1) : r.free;
   const at = (e, b) => Object.assign(e.style, { left: b.x + "px", top: b.y + "px", width: b.w + "px", height: b.h + "px" });
   order.forEach((key, i) => {
     const tl = s.tiles[key];
@@ -190,10 +195,12 @@ function place(s) {
     at(tl.box, r.tiles[i]);
     tl.box.classList.toggle("active", key === focus);
   });
-  while (s.free.length > r.free.length) s.free.pop().remove();
-  while (s.free.length < r.free.length) s.free.push(s.el.appendChild(el("div", { className: "tile blank" })));
-  r.free.forEach((b, i) => at(s.free[i], b));
+  while (s.free.length > blanks.length) s.free.pop().remove();
+  while (s.free.length < blanks.length) s.free.push(s.el.appendChild(el("div", { className: "tile blank" })));
+  blanks.forEach((b, i) => at(s.free[i], b));
   if (s === play) {
+    showMini(mini);
+    if (mini) at(play.mini.box, r.free[0]);
     const all = [...r.tiles, ...r.free];
     if (all.length) {
       s.el.parentElement.style.setProperty("--pt", Math.min(...all.map((b) => b.y)) + "px");
@@ -201,6 +208,36 @@ function place(s) {
     }
   }
   if (s === play && st) renderInk();
+}
+function miniKey() {
+  const key = minimap && st && !play.view && soundKey(0, play.keys, st.id, gameSound);
+  return key && play.tiles[key] && play.tiles[key].media.video.videoWidth ? key : null;
+}
+function showMini(key) {
+  const m = play.mini || (play.mini = { gen: 0, video: null, sigs: {}, canvas: el("canvas"), av: el("span"), name: el("span", { className: "nm" }) });
+  if (!m.box) play.el.append((m.box = el("div", { className: "tile mini" }, m.canvas, el("div", { className: "nl" }, m.av, m.name))));
+  m.box.hidden = !key;
+  m.name.textContent = t("Minimap");
+  if (key && changed("av", [key, nameOf(key), look(key)], m.sigs)) m.av.replaceChildren(avatar(key, "sm"));
+  const v = key ? play.tiles[key].media.video : null;
+  if (m.video === v) return;
+  m.video = v;
+  const gen = ++m.gen;
+  m.drawn = null;
+  if (!v) return;
+  const frame = () => {
+    if (m.gen !== gen || !v.isConnected) return;
+    const r = minimapRect(v.videoWidth, v.videoHeight);
+    if (r && !(v.paused && m.drawn === v.currentTime)) {
+      const w = Math.round(r.w * v.videoWidth), h = Math.round(r.h * v.videoHeight);
+      if (m.canvas.width !== w || m.canvas.height !== h) Object.assign(m.canvas, { width: w, height: h });
+      m.canvas.getContext("2d").drawImage(v, r.x * v.videoWidth, r.y * v.videoHeight, w, h, 0, 0, w, h);
+      m.drawn = v.currentTime;
+    }
+    if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(frame);
+    else setTimeout(frame, MINI_MS);
+  };
+  frame();
 }
 for (const s of [rec, play]) new ResizeObserver(() => place(s)).observe(s.el);
 
@@ -408,6 +445,7 @@ function chooseSound(key) {
   gameSound = key;
   store("gameSound", key);
   applyAudio();
+  place(play);
 }
 function applyAudio() {
   const away = page !== "player";
@@ -1094,7 +1132,7 @@ function pickLayout(s, anchor) {
       return b;
     }));
     box.append(counts, kinds);
-    openMenu([{ element: box }], anchor, true);
+    openMenu([{ element: box }, { separator: true }, { label: t("Minimap"), check: minimap, run: () => { minimap = !minimap; store("minimap", minimap); place(play); } }], anchor, true);
   };
   show(Math.max(present, s.slots || 0));
 }

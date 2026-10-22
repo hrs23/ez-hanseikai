@@ -192,6 +192,7 @@ const JA = {
   "Laser": "レーザー",
   "Latest": "最新",
   "Layout": "レイアウト",
+  "Minimap": "ミニマップ",
   "Leave": "抜ける",
   "Leave room": "ルームを離れる",
   "Length": "長さ",

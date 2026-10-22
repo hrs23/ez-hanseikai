@@ -11,7 +11,7 @@ const source = ["util.js", "i18n.js", "live.js", "media.js", "layout.js", "dock.
 const memory = new Map();
 const localStorage = { getItem: (k) => memory.get(k) ?? null, setItem: (k, v) => memory.set(k, v) };
 const context = vm.createContext({ localStorage, window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id, location: { search: "" } });
-const ui$ = vm.runInContext(`${source}\n({ LIMITS, cleanText, single, changed, matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, hotkeyRows, takenKeys, memberStatus, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, cardParts, dropPos, dropSlot, boardSpan, boardFont, cellSpan, fitFont, deletePreview, exportChoice, exportArgs, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, talking, stillTalking, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, nextChip, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ LIMITS, cleanText, single, changed, matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, hotkeyRows, takenKeys, memberStatus, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, cardParts, dropPos, dropSlot, boardSpan, boardFont, cellSpan, fitFont, deletePreview, exportChoice, exportArgs, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, minimapRect, talking, stillTalking, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, nextChip, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 test("a changed() check against a tile's own store reports again on a rebuilt tile", () => {
   const first = {};
   assert.equal(ui$.changed("what", [1], first), true);
@@ -22,6 +22,19 @@ test("a changed() check against a tile's own store reports again on a rebuilt ti
 const plain = (v) => JSON.parse(JSON.stringify(v));
 
 const moment = (m, extra = {}) => ({ role: "moment", m, plugin: { id: "apex-matches" }, tags: ["match"], ...extra });
+
+test("the minimap crop is a square of the frame height at the top left for any resolution", () => {
+  const px = (w, h) => { const r = ui$.minimapRect(w, h); return [r.x * w, r.y * h, r.w * w, r.h * h].map(Math.round); };
+  assert.deepEqual(px(1280, 720), [29, 29, 169, 169]);
+  assert.deepEqual(px(1920, 1080), [43, 43, 254, 254]);
+  assert.deepEqual(px(2560, 1440), [58, 58, 338, 338]);
+  assert.deepEqual(px(3840, 2160), [86, 86, 508, 508]);
+  assert.deepEqual(px(1920, 1200), [48, 48, 282, 282]);
+  assert.deepEqual(px(3440, 1440), [58, 58, 338, 338]);
+  assert.deepEqual(px(1440, 1080), [43, 43, 254, 254]);
+  assert.equal(ui$.minimapRect(0, 0), null);
+  assert.equal(ui$.minimapRect(1920, 0), null);
+});
 
 test("the page scripts together declare no name twice", () => {
   const files = [...read("index.html").matchAll(/<script src="([^"]+)"/g)].map((m) => m[1]);

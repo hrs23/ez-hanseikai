@@ -43,6 +43,14 @@ function soundKey(view, keys, me, chosen) {
   return [chosen, me].find((k) => keys.includes(k)) || keys[0] || null;
 }
 
+const MINIMAP = { at: 0.04, size: 0.235 };
+
+function minimapRect(width, height) {
+  if (!width || !height) return null;
+  const x = Math.min(1, (MINIMAP.at * height) / width);
+  return { x, y: MINIMAP.at, w: Math.min(1 - x, (MINIMAP.size * height) / width), h: MINIMAP.size };
+}
+
 const seekSum = (run, delta) => (Math.sign(run) === Math.sign(delta) ? run + delta : delta);
 
 const BOARD_COLS = 12;
