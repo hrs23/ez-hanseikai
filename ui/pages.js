@@ -242,6 +242,7 @@ function renderSettings() {
   $("qinfo").textContent = [q.width ? `${q.width} × ${q.height}` : "", `${q.fps} fps`, `${(q.kbps / 1000).toFixed(1)} Mbit/s`, String(q.codec).toUpperCase()].filter(Boolean).join(" · ");
   if (document.activeElement !== $("limit")) $("limit").value = st.limit_mbps || "";
   if (document.activeElement !== $("apion")) $("apion").checked = st.api.on;
+  if (document.activeElement !== $("notifyjoins")) $("notifyjoins").checked = st.notify_joins;
   $("apirows").hidden = !st.api.on;
   $("apiaddr").textContent = apiUrl(st.api.address);
   if (st.api.on && settingsPane === "api") renderApiReference();
@@ -402,6 +403,7 @@ $("promptreset").onclick = () => editPrompt(true);
 $("promptcopy").onclick = () => navigator.clipboard.writeText(aiCopyText($("prompttext").value, promptToken)).then(() => { $("promptdlg").close(); flash(t("Prompt copied")); }).catch(fail);
 $("apidoc").onclick = () => dialog("open_link", { url: `${apiUrl(st.api.address)}/llms.txt` }).catch(fail);
 $("apion").onchange = () => run("set_api", { on: $("apion").checked });
+$("notifyjoins").onchange = () => run("set_notify_joins", { on: $("notifyjoins").checked });
 $("apicopy").onclick = () => invoke("api_info").then((info) => navigator.clipboard.writeText(info.token)).then(() => flash(t("Token copied"))).catch(fail);
 $("apinew").onclick = async () => {
   if (await ask(t("Make a new token?"), t("New token"), false)) run("new_api_token", null, () => flash(t("New token made")));
@@ -463,7 +465,7 @@ const menuActions = {
   "toggle-recording": toggleRecording,
 };
 listenMain("menu", (e) => { if (menuActions[e.payload]) menuActions[e.payload](); });
-listenMain("joined", (e) => { flash(t("{name} joined", { name: e.payload })); chime("join"); });
+listenMain("joined", (e) => { flash(t("{name} joined", { name: e.payload })); if (document.hasFocus()) chime("join"); });
 listenMain("session", (e) => {
   const debrief = e.payload.action === "end" ? debriefOpen : null;
   debriefOpen = null;

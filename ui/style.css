@@ -161,6 +161,8 @@ button.plain { background: none; border: 0; padding: 0; height: auto; border-rad
 .splitter:hover::after { background: var(--line-strong); }
 .splitter.drag::after, .splitter:focus-visible::after { background: var(--accent); }
 .splitter:focus-visible { outline: none; }
+body.note { flex-direction: row; align-items: center; gap: var(--s3); padding: 0 var(--s4); background: var(--raised); border: 1px solid var(--line-strong); box-sizing: border-box; font-weight: var(--w-semibold); cursor: pointer; animation: note 1s forwards; }
+@keyframes note { 0% { opacity: 0; } 4%, 94% { opacity: 1; } 100% { opacity: 0; } }
 body.dragging-side { cursor: col-resize; user-select: none; }
 body.noside .side, body.boardfull .side, body.noside .splitter, body.boardfull .splitter { display: none; }
 .sidehead { padding: var(--s3) var(--s2) 0; display: flex; flex-direction: column; gap: var(--s0); flex: none; }

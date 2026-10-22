@@ -266,6 +266,7 @@ const JA = {
   "Recording": "録画中",
   "Recording audio": "録音中",
   "Recording sounds": "録画の音",
+  "Notify when someone joins": "メンバーの参加を通知",
   "Recording started": "録画が始まりました",
   "Recording stopped": "録画が終わりました",
   "Recording stopped: the disk is almost full.": "ディスクがほぼいっぱいなので録画を止めました。",

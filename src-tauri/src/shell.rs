@@ -1,8 +1,9 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use tauri::menu::{Menu, MenuBuilder, MenuItem, MenuItemBuilder, SubmenuBuilder};
@@ -20,7 +21,18 @@ pub type Hotkeys = [String; 1];
 pub type Taken = [bool; 1];
 const BOARD: &str = "board";
 const STATUS_POLL: Duration = Duration::from_secs(1);
-const JA: [(&str, &str); 40] = [
+const JOIN_QUIET: Duration = Duration::from_secs(10);
+const JOIN_GATHER: Duration = Duration::from_secs(5);
+const NOTE: &str = "join-";
+const NOTE_SIZE: (f64, f64) = (320.0, 64.0);
+const NOTE_MARGIN: f64 = 12.0;
+const NOTE_FOR: Duration = Duration::from_secs(6);
+const CHIME_HZ: [f64; 2] = [784.0, 988.0];
+const CHIME_NOTE_S: f64 = 0.14;
+const CHIME_GAIN: f64 = 0.15;
+const CHIME_FLOOR: f64 = 0.0001;
+const CHIME_RATE: u32 = 48000;
+const JA: [(&str, &str); 43] = [
     ("Already running with this data folder.", "このデータフォルダですでに動いています。"),
     ("EZ Hanseikai", "EZ反省会"),
     ("File", "ファイル"),
@@ -61,7 +73,18 @@ const JA: [(&str, &str); 40] = [
     ("Version", "バージョン"),
     ("Moment marked", "マークしました"),
     ("{name} wants to join", "{name} が参加を希望しています"),
+    ("{name} joined {room}", "{name} が {room} に参加しました"),
+    ("{a} and {b} joined {room}", "{a} と {b} が {room} に参加しました"),
+    ("{a}, {b} and {n} more joined {room}", "{a}、{b} ほか {n} 人が {room} に参加しました"),
 ];
+
+pub struct Join {
+    at: Instant,
+    id: String,
+    name: String,
+}
+
+static NOTES: AtomicUsize = AtomicUsize::new(0);
 
 struct Items {
     toggle: Option<MenuItem<Wry>>,
@@ -166,6 +189,128 @@ pub fn show_window(app: &AppHandle) {
         let _ = window.unminimize();
         let _ = window.set_focus();
         let _ = app.emit("shown", ());
+    }
+}
+
+pub fn joined(core: &Core, id: &str, name: String, since: Duration) {
+    if since >= JOIN_QUIET && *core.notify_joins.lock().unwrap() && core.joined_room().is_ok() {
+        core.joins.lock().unwrap().push(Join { at: Instant::now(), id: id.to_string(), name });
+    }
+}
+
+fn due_joins(joins: &mut Vec<Join>, watched: bool, now: Instant) -> Option<Vec<Join>> {
+    if watched {
+        joins.clear();
+    }
+    if !joins.first().is_some_and(|j| now.duration_since(j.at) >= JOIN_GATHER) {
+        return None;
+    }
+    let mut out: Vec<Join> = Vec::new();
+    for join in joins.drain(..) {
+        if !out.iter().any(|o| o.id == join.id) {
+            out.push(join);
+        }
+    }
+    Some(out)
+}
+
+fn joined_text(lang: &str, names: &[&str], room: &str) -> String {
+    let text = match names {
+        [] => return String::new(),
+        [a] => tr(lang, "{name} joined {room}").replace("{name}", a),
+        [a, b] => tr(lang, "{a} and {b} joined {room}").replace("{a}", a).replace("{b}", b),
+        [a, b, rest @ ..] => tr(lang, "{a}, {b} and {n} more joined {room}").replace("{a}", a).replace("{b}", b).replace("{n}", &rest.len().to_string()),
+    };
+    text.replace("{room}", room)
+}
+
+fn note_spot(at: (i32, i32), size: (u32, u32), scale: f64) -> (f64, f64) {
+    ((at.0 as f64 + size.0 as f64) / scale - NOTE_SIZE.0 - NOTE_MARGIN, (at.1 as f64 + size.1 as f64) / scale - NOTE_SIZE.1 - NOTE_MARGIN)
+}
+
+pub fn close_note(app: &AppHandle) {
+    for (label, window) in app.webview_windows() {
+        if label.starts_with(NOTE) {
+            let _ = window.destroy();
+        }
+    }
+}
+
+fn show_note(app: &AppHandle, dir: &Path, id: &str, text: &str) {
+    let Some(monitor) = app.primary_monitor().ok().flatten() else { return notify(app, text, "") };
+    let work = monitor.work_area();
+    let (x, y) = note_spot(work.position.into(), work.size.into(), monitor.scale_factor());
+    let mut url = tauri::Url::parse("http://note/").unwrap();
+    url.query_pairs_mut().append_pair("id", id).append_pair("text", text).append_pair("ms", &NOTE_FOR.as_millis().to_string());
+    let page = format!("toast.html?{}", url.query().unwrap_or_default());
+    let (handle, dir, text) = (app.clone(), dir.to_path_buf(), text.to_string());
+    let _ = app.run_on_main_thread(move || {
+        close_note(&handle);
+        let label = format!("{NOTE}{}", NOTES.fetch_add(1, Ordering::Relaxed));
+        let builder = tauri::WebviewWindowBuilder::new(&handle, label, tauri::WebviewUrl::App(page.into()))
+            .title(app_name(&handle, ""))
+            .decorations(false)
+            .resizable(false)
+            .shadow(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .focused(false)
+            .focusable(false)
+            .inner_size(NOTE_SIZE.0, NOTE_SIZE.1)
+            .position(x, y)
+            .transparent(true)
+            .theme(Some(tauri::Theme::Dark));
+        match crate::profile(builder, &dir).build() {
+            Ok(window) => {
+                std::thread::spawn(move || {
+                    std::thread::sleep(NOTE_FOR);
+                    let _ = window.destroy();
+                });
+            }
+            Err(e) => {
+                tracing::warn!("the join notice did not open: {e}");
+                notify(&handle, &text, "");
+            }
+        }
+    });
+}
+
+fn chime_wav() -> Vec<u8> {
+    let per = (CHIME_RATE as f64 * CHIME_NOTE_S) as usize;
+    let samples: Vec<i16> = CHIME_HZ
+        .iter()
+        .flat_map(|hz| {
+            (0..per).map(move |i| {
+                let t = i as f64 / CHIME_RATE as f64;
+                let gain = CHIME_GAIN * (CHIME_FLOOR / CHIME_GAIN).powf(t / CHIME_NOTE_S);
+                ((std::f64::consts::TAU * hz * t).sin() * gain * i16::MAX as f64) as i16
+            })
+        })
+        .collect();
+    let data = (samples.len() * 2) as u32;
+    let mut out = Vec::with_capacity(44 + data as usize);
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&CHIME_RATE.to_le_bytes());
+    out.extend_from_slice(&(CHIME_RATE * 2).to_le_bytes());
+    out.extend_from_slice(&2u16.to_le_bytes());
+    out.extend_from_slice(&16u16.to_le_bytes());
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data.to_le_bytes());
+    out.extend(samples.iter().flat_map(|s| s.to_le_bytes()));
+    out
+}
+
+fn chime() {
+    use windows::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
+    static WAV: OnceLock<Vec<u8>> = OnceLock::new();
+    let wav = WAV.get_or_init(chime_wav);
+    unsafe {
+        let _ = PlaySoundW(windows::core::PCWSTR(wav.as_ptr().cast()), None, SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
     }
 }
 
@@ -594,6 +739,13 @@ pub fn setup(app: &tauri::App, core: Arc<Core>) -> tauri::Result<()> {
                 }
             }
             asked.retain(|id| asks.iter().any(|(a, _)| a == id));
+            let due = due_joins(&mut core.joins.lock().unwrap(), window_watched(&app), Instant::now());
+            if let Some(joins) = due {
+                let room = core.active_room().map(|r| r.name).unwrap_or_default();
+                let names: Vec<&str> = joins.iter().map(|j| j.name.as_str()).collect();
+                show_note(&app, &core.dir, &joins[0].id, &joined_text(&lang, &names, &room));
+                chime();
+            }
             std::thread::sleep(STATUS_POLL);
         }
     });
@@ -619,6 +771,47 @@ mod tests {
         assert_eq!(tr("en", "Room"), "Room");
         assert_eq!(tr("ja", "Not translated"), "Not translated");
         assert_eq!(wants_text("ja", "Sora"), "Sora が参加を希望しています");
+    }
+
+    #[test]
+    fn joins_within_a_few_seconds_make_one_notice_and_none_while_the_window_is_watched() {
+        let start = Instant::now();
+        let join = |s: u64, id: &str| Join { at: start + Duration::from_secs(s), id: id.into(), name: id.to_uppercase() };
+        let mut joins = vec![join(0, "a"), join(2, "b"), join(3, "a")];
+        assert!(due_joins(&mut joins, false, start + JOIN_GATHER - Duration::from_millis(1)).is_none());
+        let due = due_joins(&mut joins, false, start + JOIN_GATHER).unwrap();
+        assert_eq!(due.iter().map(|j| j.name.as_str()).collect::<Vec<_>>(), ["A", "B"]);
+        assert!(joins.is_empty());
+        let mut joins = vec![join(0, "a")];
+        assert!(due_joins(&mut joins, true, start + JOIN_GATHER).is_none());
+        assert!(joins.is_empty());
+    }
+
+    #[test]
+    fn a_join_notice_names_two_and_counts_the_rest() {
+        assert_eq!(joined_text("en", &["Ren"], "Scrims"), "Ren joined Scrims");
+        assert_eq!(joined_text("en", &["Ren", "Mio"], "Scrims"), "Ren and Mio joined Scrims");
+        assert_eq!(joined_text("en", &["Ren", "Mio", "Kai", "Sora"], "Scrims"), "Ren, Mio and 2 more joined Scrims");
+        assert_eq!(joined_text("ja", &["Ren"], "Scrims"), "Ren が Scrims に参加しました");
+        assert_eq!(joined_text("ja", &["Ren", "Mio", "Kai"], "Scrims"), "Ren、Mio ほか 1 人が Scrims に参加しました");
+    }
+
+    #[test]
+    fn the_join_notice_sits_at_the_bottom_right_of_the_work_area() {
+        assert_eq!(note_spot((0, 0), (1920, 1040), 1.0), (1920.0 - 332.0, 1040.0 - 76.0));
+        assert_eq!(note_spot((0, 0), (3840, 2080), 2.0), (1920.0 - 332.0, 1040.0 - 76.0));
+        assert_eq!(note_spot((0, 0), (2560, 1380), 1.25), (2048.0 - 332.0, 1104.0 - 76.0));
+        assert_eq!(note_spot((60, 0), (1860, 1080), 1.0), (1920.0 - 332.0, 1080.0 - 76.0));
+    }
+
+    #[test]
+    fn the_join_chime_is_a_short_mono_wave() {
+        let wav = chime_wav();
+        assert_eq!(&wav[..4], b"RIFF");
+        assert_eq!(&wav[8..16], b"WAVEfmt ");
+        let samples = (CHIME_RATE as f64 * CHIME_NOTE_S) as usize * CHIME_HZ.len();
+        assert_eq!(wav.len(), 44 + samples * 2);
+        assert_eq!(u32::from_le_bytes(wav[4..8].try_into().unwrap()) as usize, wav.len() - 8);
     }
 
     #[test]

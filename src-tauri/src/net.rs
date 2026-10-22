@@ -106,15 +106,20 @@ fn learn_hello(core: &Arc<Core>, id: &EndpointId, message: &Value) -> u32 {
     let version = message["app"].as_str().unwrap_or("unknown").to_string();
     let proto = message["proto"].as_u64().unwrap_or(0) as u32;
     let name = crate::clean_name(message["name"].as_str().unwrap_or_default());
-    if core.update_peer(id, |p| std::mem::take(&mut p.announce)).unwrap_or(false) {
-        let _ = core.app.emit("joined", if name.is_empty() { short(id) } else { name.clone() });
-    }
     let codecs = codec_list(&message["codecs"]);
-    core.update_peer(id, |p| {
+    let now = now_us();
+    let back = core.update_peer(id, |p| {
+        let back = room::returning(p.seen_us, now).then_some(p.since.elapsed());
         p.info = Some((version, proto));
-        p.seen_us = Some(now_us());
+        p.seen_us = Some(now);
         p.codecs = codecs;
+        back
     });
+    if let Some(Some(since)) = back {
+        let shown = if name.is_empty() { short(id) } else { name.clone() };
+        let _ = core.app.emit("joined", &shown);
+        crate::shell::joined(core, &id.to_string(), shown, since);
+    }
     room::remember_name(core, &id.to_string(), &name, true);
     if proto != PROTOCOL {
         return proto;

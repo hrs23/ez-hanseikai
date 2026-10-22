@@ -390,6 +390,12 @@ test("every English phrase in the pages has a Japanese one, and every Japanese e
   assert.deepEqual(Object.keys(ui$.JA).filter((k) => !strings.has(k.toLowerCase())), []);
 });
 
+test("Settings has a switch to notify when someone joins, kept by the app", () => {
+  assert.match(read("index.html"), /data-t="Notify when someone joins"[^\n]*<input id="notifyjoins" type="checkbox" class="switch" role="switch">/);
+  assert.match(read("pages.js"), /\$\("notifyjoins"\)\.checked = st\.notify_joins/);
+  assert.match(read("pages.js"), /run\("set_notify_joins", \{ on: \$\("notifyjoins"\)\.checked \}\)/);
+});
+
 test("the folder export is a menu action of the page", () => {
   assert.match(read("pages.js"), /"export-folder":/);
 });

@@ -73,6 +73,7 @@ pub const OPS: &[(&str, Op)] = &[
     ("export_check", |c, _| null(export::check(c))),
     ("export_folder", export_folder),
     ("set_api", set_api),
+    ("set_notify_joins", set_notify_joins),
     ("new_api_token", new_api_token),
     ("api_info", api_info),
     ("api_reference", |_, _| Ok(json!(api::reference()))),
@@ -476,6 +477,12 @@ fn set_api(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     Ok(Value::Null)
 }
 
+fn set_notify_joins(core: &Arc<Core>, args: Value) -> Result<Value, String> {
+    *core.notify_joins.lock().unwrap() = arg(&args, "on")?;
+    core.save_settings();
+    Ok(Value::Null)
+}
+
 fn new_api_token(core: &Arc<Core>, _: Value) -> Result<Value, String> {
     *core.api_token.lock().unwrap() = room::random_hex(api::TOKEN_BYTES);
     core.save_settings();
@@ -493,7 +500,7 @@ mod tests {
     use super::*;
     use crate::names;
 
-    const WINDOW_COMMANDS: [&str; 5] = ["open_set_folder", "open_data_folder", "open_link", "pick_folder", "save_text"];
+    const WINDOW_COMMANDS: [&str; 6] = ["open_set_folder", "open_data_folder", "open_link", "pick_folder", "save_text", "show_main"];
 
     fn files(dir: &str, ext: &str) -> Vec<(String, String)> {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join(dir);

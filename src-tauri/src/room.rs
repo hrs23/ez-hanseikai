@@ -242,6 +242,10 @@ impl Core {
     }
 }
 
+pub fn returning(seen_us: Option<i64>, now_us: i64) -> bool {
+    seen_us.is_none_or(|seen| now_us - seen >= UNREACHABLE_AFTER.as_micros() as i64)
+}
+
 pub fn reachable(connected: bool, seen_us: Option<i64>, now_us: i64, up: Duration) -> bool {
     connected || seen_us.map_or(up < UNREACHABLE_AFTER, |seen| now_us - seen < UNREACHABLE_AFTER.as_micros() as i64)
 }
@@ -1517,6 +1521,7 @@ pub fn state_json(core: &Core) -> Value {
         "rooms": room_list,
         "layout": core.layout.lock().unwrap().clone(),
         "hotkeys": crate::shell::hotkeys_json(&core.hotkeys.lock().unwrap(), &core.hotkeys_taken.lock().unwrap()),
+        "notify_joins": *core.notify_joins.lock().unwrap(),
         "api": {"on": *core.api_on.lock().unwrap(), "address": crate::api::address(), "error": core.api_error.lock().unwrap().clone()},
         "sets": sets,
         "peers": peers,
@@ -1995,6 +2000,8 @@ pub mod tests {
         assert!(!reachable(false, Some(now - minute), now, Duration::ZERO));
         assert!(reachable(false, None, now, UNREACHABLE_AFTER / 2));
         assert!(!reachable(false, None, now, UNREACHABLE_AFTER));
+        assert!(returning(None, now) && returning(Some(now - minute), now));
+        assert!(!returning(Some(now - minute + 1), now));
     }
 
     #[test]
