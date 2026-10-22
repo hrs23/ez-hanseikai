@@ -852,7 +852,7 @@ mod tests {
     }
 
     fn ended(set: &str, owner: &str, end_us: Option<i64>) -> Set {
-        let file = File { set: set.into(), owner: owner.into(), start_us: 0, end_us, offset_us: 0, segs: vec![], caps: HashMap::new(), view: None, present: true };
+        let file = File { set: set.into(), owner: owner.into(), start_us: 0, end_us, offset_us: 0, segs: vec![Seg { capture: "1".into(), series: SERIES[0], n: 1, t_us: 0, d_us: 1, size: 1, sha256: String::new() }], caps: HashMap::new(), view: None, present: true };
         Set { id: set.into(), room: "r".into(), files: vec![file], stopped: true }
     }
 
