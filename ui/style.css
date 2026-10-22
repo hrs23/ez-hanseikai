@@ -392,8 +392,17 @@ body.boardwin .side, body.boardwin .splitter, body.boardwin .notices, body.board
 .toolsov { display: flex; align-items: center; gap: var(--s2); padding: var(--s2) var(--s3); flex: none; min-width: 0; }
 .toolsov .seg { background: var(--overlay); }
 #views { flex: 0 1 auto; overflow: hidden; }
-.stage { flex: 1; min-height: 0; position: relative; margin: 0 var(--s3); }
-.tiles { position: absolute; inset: 0; }
+.stage { flex: 1; min-height: 0; position: relative; margin: 0 var(--s3); display: flex; flex-direction: column; }
+.tiles { position: relative; flex: 1; min-height: 0; }
+.voices { flex: none; display: flex; flex-wrap: wrap; justify-content: center; gap: var(--s2); padding: var(--s2) 0; }
+.stage.onlyvoice .voices { position: absolute; inset: 0; align-content: center; }
+.vchip { --ring: var(--raised); display: inline-flex; align-items: center; gap: var(--s2); max-width: 200px; height: var(--control-sm); padding: 0 var(--s3) 0 var(--s1); border-radius: var(--r-full); background: var(--raised); color: var(--text); font-size: var(--t-sm); font-weight: var(--w-semibold); white-space: nowrap; }
+.vchip .nm { overflow: hidden; text-overflow: ellipsis; }
+.vchip.off { color: var(--muted); }
+.vchip .moff { display: none; }
+.vchip.micoff .moff { display: inline-flex; }
+.vchip .av { transition: box-shadow var(--fast); }
+.vchip.speaking .av { box-shadow: 0 0 0 2px var(--ring), 0 0 0 4px var(--ok); }
 .tile { position: absolute; border-radius: var(--r-sm); background: var(--black); overflow: hidden; transition: outline-color var(--fast); }
 .tile video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
 .tile.active { outline: 2px solid var(--accent); outline-offset: -2px; }
@@ -408,7 +417,6 @@ body.boardwin .side, body.boardwin .splitter, body.boardwin .notices, body.board
 .waitbox { display: none; }
 .tile.wait { background: radial-gradient(ellipse at center, var(--raised), var(--black)); }
 .tile.hatch { background: repeating-linear-gradient(135deg, var(--surface) 0 8px, var(--hatch) 8px 16px); }
-.tile.hatch.off { background: repeating-linear-gradient(135deg, var(--black) 0 8px, var(--hatch) 8px 16px); }
 .tile.hatch video { display: none; }
 .tile .problem { position: absolute; left: var(--s2); bottom: var(--s2); padding: var(--s0) var(--s2); border-radius: var(--r-sm); background: var(--warn-soft); color: var(--warn); font-size: var(--t-sm); z-index: 2; }
 .waitbox .pick { position: absolute; inset: 0; width: 100%; height: 100%; flex-direction: column; gap: var(--s2); border: 0; border-radius: 0; background: transparent; color: var(--muted); font-size: var(--t-lg); }
@@ -421,7 +429,6 @@ body.boardwin .side, body.boardwin .splitter, body.boardwin .notices, body.board
 .tile.late .waitbox { background: var(--scrim); color: var(--soft); }
 .tile.wait .waitbox .big svg { width: 28px; height: 28px; }
 .tile.wait .waitbox b { color: var(--soft); }
-.tile.mine { background: var(--surface); outline: 1.5px dashed var(--line-strong); outline-offset: -1.5px; }
 .nl { position: absolute; left: var(--s2); top: var(--s2); max-width: calc(100% - 16px); display: flex; align-items: center; gap: var(--s2); height: var(--control-sm); padding: 0 var(--s3) 0 var(--s1); border-radius: var(--r-full); background: var(--scrim); color: var(--white); font-size: var(--t-sm); font-weight: var(--w-semibold); white-space: nowrap; overflow: hidden; cursor: grab; z-index: 2; }
 .nl { cursor: grab; touch-action: none; user-select: none; }
 #playtiles .nl { cursor: pointer; }

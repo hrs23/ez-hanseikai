@@ -11,7 +11,7 @@ const source = ["util.js", "i18n.js", "live.js", "media.js", "layout.js", "dock.
 const memory = new Map();
 const localStorage = { getItem: (k) => memory.get(k) ?? null, setItem: (k, v) => memory.set(k, v) };
 const context = vm.createContext({ localStorage, window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id, location: { search: "" } });
-const ui$ = vm.runInContext(`${source}\n({ LIMITS, cleanText, single, changed, matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, hotkeyRows, memberStatus, sendsPicture, viewLine, tileProblem, livePlayers, ordered, extensionLine, analysisReason, analysisState, cardParts, dropPos, dropSlot, boardSpan, boardRows, boardFit, deletePreview, exportChoice, exportArgs, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, talking, stillTalking, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ LIMITS, cleanText, single, changed, matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, hotkeyRows, memberStatus, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, cardParts, dropPos, dropSlot, boardSpan, boardRows, boardFit, deletePreview, exportChoice, exportArgs, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, talking, stillTalking, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 test("a changed() check against a tile's own store reports again on a rebuilt tile", () => {
   const first = {};
   assert.equal(ui$.changed("what", [1], first), true);
@@ -506,6 +506,11 @@ test("a recording is hidden from the list when it is a debrief of another, and d
   assert.equal(ui$.noPicture({ players: [{ parts: [{ v: {}, m: {} }] }] }), false);
   assert.equal(ui$.noPicture({ players: [] }), false);
 });
+test("a player member gets a voice chip instead of a tile only when every part it is known to have is voice", () => {
+  assert.equal(ui$.noScreen({ parts: [{ m: {} }, { m: {} }] }), true);
+  assert.equal(ui$.noScreen({ parts: [{ m: {} }, { v: {}, m: {} }] }), false);
+  assert.equal(ui$.noScreen({ parts: [] }), false);
+});
 test("the sidebar width stays between limits and the splitter takes the arrow keys", () => {
   assert.equal(ui$.clampSide(100), ui$.SIDE_MIN);
   assert.equal(ui$.clampSide(900), ui$.SIDE_MAX);
@@ -728,7 +733,7 @@ test("the view line names the first member who blocks the playback, in one sente
   assert.equal(line(finishedSet([view("ren", { verified_by: ["koya"] })]), ctx({ online: (id) => ui$.sendsPicture(peers[id]) })).text, "Receiving Ren's video");
   const silent = finishedSet([view("me", { parts: [{ m: {} }] })]);
   assert.equal(line(silent), null);
-  assert.equal(line(silent, ctx(), "me").text, "Aki didn't record a screen");
+  assert.equal(line(silent, ctx(), "me"), null);
   assert.equal(line(finishedSet([view("ren", { verified_by: ["ren"], recording: true })])), null);
   assert.equal(line({ ...finishedSet([view("ren", { verified_by: ["ren"] })]), live: true }), null);
   assert.equal(line(finishedSet([view("ren", { verified_by: ["ren"], have: 0 }), view("koya", { verified_by: ["koya"] })])).text, "Ren's video missing");
@@ -740,14 +745,12 @@ test("the view line names the first member who blocks the playback, in one sente
 test("a Live tile tells at most one problem, only while this PC records", () => {
   ui$.setLanguage("en");
   const now = 1000 * 1e6;
-  const m = (extra) => ({ recording: true, sharing: true, now, start: now - 600e6, voiceEnd: now - 2e6, pictureEnd: now - 5e6, ...extra });
+  const m = (extra) => ({ recording: true, now, start: now - 600e6, voiceEnd: now - 2e6, pictureEnd: now - 5e6, ...extra });
   assert.equal(ui$.tileProblem(m({})), null);
-  assert.equal(ui$.tileProblem(m({ recording: false, sharing: false })), null);
-  assert.equal(ui$.tileProblem(m({ sharing: false })), "Not recording screen");
+  assert.equal(ui$.tileProblem(m({ recording: false, voiceEnd: now - 90e6 })), null);
   assert.equal(ui$.tileProblem(m({ voiceEnd: now - 61e6 })), "No voice for 1 min");
   assert.equal(ui$.tileProblem(m({ voiceEnd: now - 60e6 })), null);
   assert.equal(ui$.tileProblem(m({ pictureEnd: now - 15e6 })), "15 s behind");
-  assert.equal(ui$.tileProblem(m({ sharing: false, voiceEnd: now - 90e6 })), "Not recording screen");
   assert.equal(ui$.tileProblem(m({ voiceEnd: null, start: null, pictureEnd: undefined })), null);
   assert.equal(ui$.tileProblem(m({ voiceEnd: null, start: now - 90e6 })), "No voice for 1 min");
   ui$.setLanguage("ja");
@@ -755,7 +758,7 @@ test("a Live tile tells at most one problem, only while this PC records", () => 
   ui$.setLanguage("en");
 });
 
-test("Live lists every room member in the saved order and then in join order, whatever their connection", () => {
+test("Live lists every room member in the saved order and then in join order, whatever their connection, with a picture only while online and sharing", () => {
   const state = (extra = {}) => ({
     id: "me", layout: { order: ["koya", "me"] }, capture: { source: null, live: null, working: false },
     peers: [{ id: "ren", connected: true, sharing: true, live: { size: 5, path: "p" } }, { id: "koya", connected: false, sharing: false }, { id: "mia", connected: true, sharing: false }],
@@ -765,9 +768,11 @@ test("Live lists every room member in the saved order and then in join order, wh
   assert.deepEqual(plain(list.map((p) => p.key)), ["koya", "me", "ren", "mia"]);
   assert.deepEqual(plain(list.map((p) => p.online)), [false, true, true, true]);
   assert.deepEqual(plain(list.map((p) => p.sharing)), [false, false, true, false]);
+  assert.deepEqual(plain(list.map((p) => p.picture)), [false, false, true, false]);
+  assert.equal(ui$.livePlayers(state({ peers: [{ id: "koya", connected: false, sharing: true }] })).find((p) => p.key === "koya").picture, false);
   assert.equal(list[2].file.size, 5);
   const relayed = ui$.livePlayers(state({ peers: [{ id: "ren", connected: true, sharing: true, path: "relay", live: { size: 5 } }] })).find((p) => p.key === "ren");
-  assert.deepEqual(plain({ relayed: relayed.relayed, file: relayed.file }), { relayed: true, file: null });
+  assert.deepEqual(plain({ relayed: relayed.relayed, file: relayed.file, picture: relayed.picture }), { relayed: true, file: null, picture: true });
   assert.equal(ui$.livePlayers(state({ layout: null })).map((p) => p.key).join(), "me,ren,koya,mia");
   const recording = ui$.livePlayers(state({ capture: { source: {}, live: { size: 9 }, working: true }, sets: [{ live: true, players: [{ owner: "me", recording: true, last_us: { v: 3, m: 4 }, start_us: 10, offset_us: 2 }, { owner: "ren", recording: true }] }] }));
   const me = recording.find((p) => p.key === "me");

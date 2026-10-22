@@ -36,7 +36,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 ## Recording
 
 - Record on A starts the set on B. `e2e` (`live`)
-- with no source, leaving Live for another page and coming back shows Select screen on the own live tile again; a rebuilt tile always redraws its text. `e2e` (`live`), `ui-test`
+- leaving Live for another page and coming back shows the same text on the own live tile; a rebuilt tile always redraws its text. `e2e` (`live`), `ui-test`
 - while the own live file exists and capture stalls, the live tile shows the capture problem as its small overlay line. `manual`
 - a debrief row in the side panel offers Download when its audio is not on this PC, and Save once it is. `manual`
 - while recording the start box says Stop recording with the time and the list gets the running recording. `e2e` (`live`)
@@ -61,13 +61,14 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 
 - live segments flow and C gets the history. `e2e` (`live`)
 - Live shows a tile for everyone who shares a screen, also while recording. `e2e` (`live`)
+- a member without a picture, on Live (offline or not sharing) or in a recording (only voice parts), gets a small avatar chip with the speaking ring and the mic-off mark in a strip under the tiles instead of a tile; the grid, the view buttons and their number keys count only members with a picture, the volume popup still lists every member (voice only for a chip), and with nobody pictured the chips sit alone in the middle. `ui-test` (who gets a chip), `manual`
 - connections stay up while live tiles stay in step, a member stalls, and the others stop waiting for one too far behind. `e2e` (`live`)
 - dragging a name label swaps two tiles. `e2e` (`library`)
 - Your own tile shows and moves right after recording ends and while it records. `todo`
 - net: a live reply names the recording of each series; history gets its share while live fills the limit. `unit`
 - record: a segment opens only beside its init; a live stream serves only segments of the recording it asked for and ends once it is two segments behind; quality steps down only while every direct receiver fell behind twice recently. `unit`
 - History to one member waits while live flows to another but not while that live write is stuck, and in standby the quality drops one preset when live falls behind for every receiver. `manual`
-- receiving speed and the live edge; live tiles wait for the slowest member, never go back, stop waiting for one too far behind, mark it late once passed, and advance while nobody holds; the live delay shrinks slowly only while the slack is above the gap, and a tile with no start follows its own edge; a Live tile tells at most one problem, only while this PC records; live lists every room member in the saved order and then in join order, whatever their connection, without a picture from a member reached through a relay. `ui-test`
+- receiving speed and the live edge; live tiles wait for the slowest member, never go back, stop waiting for one too far behind, mark it late once passed, and advance while nobody holds; the live delay shrinks slowly only while the slack is above the gap, and a tile with no start follows its own edge; a Live tile tells at most one problem, only while this PC records; live lists every room member in the saved order and then in join order, whatever their connection, with a tile only while online and sharing, and no live file from a member reached through a relay. `ui-test`
 
 ## Playback
 

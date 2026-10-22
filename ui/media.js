@@ -213,6 +213,6 @@ function feedParts(tl, p, m, b) {
     tl.mic.tap = voiceTap(tl.mic.video);
     applyAudio();
   }
-  feedSeries(tl.media, p, "v", wall);
+  if (tl.media) feedSeries(tl.media, p, "v", wall);
   if (tl.mic) feedSeries(tl.mic, p, "m", wall);
 }

@@ -17,9 +17,8 @@ function seenLabel(us, now) {
 const noScreen = (p) => (p.parts || []).length > 0 && p.parts.every((part) => !part.v);
 
 function playerLine(set, p, ctx) {
-  if (p.recording || !p.end_us) return null;
+  if (p.recording || !p.end_us || p.verified_by.includes(ctx.me)) return null;
   const name = ctx.name(p.owner);
-  if (p.verified_by.includes(ctx.me)) return noScreen(p) ? { kind: "nopicture", text: t("{name} didn't record a screen", { name }) } : null;
   const holders = p.verified_by.filter((id) => id !== ctx.me);
   if (!holders.some(ctx.online)) return { kind: "away", text: t("{name}'s video hasn't arrived", { name }) };
   if (set.wanted || p.have > 0) {
@@ -30,8 +29,7 @@ function playerLine(set, p, ctx) {
 
 function viewLine(set, ctx, key) {
   if (set.live) return null;
-  const lines = set.players.filter((p) => !key || p.owner === key).map((p) => playerLine(set, p, ctx));
-  return lines.find((line) => line && (key || line.kind !== "nopicture")) || null;
+  return set.players.filter((p) => !key || p.owner === key).map((p) => playerLine(set, p, ctx)).find(Boolean) || null;
 }
 
 const ageOf = (now, ...ends) => {
@@ -41,7 +39,6 @@ const ageOf = (now, ...ends) => {
 
 function tileProblem(m) {
   if (!m.recording) return null;
-  if (!m.sharing) return t("Not recording screen");
   if (ageOf(m.now, m.voiceEnd, m.start) > VOICE_QUIET_S) return t("No voice for 1 min");
   const lag = ageOf(m.now, m.pictureEnd, m.start);
   return lag > PICTURE_LAG_S ? t("{n} s behind", { n: Math.round(lag) }) : null;

@@ -24,9 +24,9 @@ const CODEC_PROBE = { width: 1280, height: 720, bitrate: 6000000, framerate: 30 
 const GAP = 6;
 const WIDE_PANEL = 1240;
 
-const tileGrid = (box, kind) => ({ el: box, kind, tiles: {}, keys: [], mode: "grid", slots: 0, view: 0, last: 1, free: [] });
-const rec = tileGrid($("livetiles"), "record");
-const play = tileGrid($("playtiles"), "player");
+const tileGrid = (box, strip, kind) => ({ el: box, strip, kind, tiles: {}, chips: {}, keys: [], voice: [], mode: "grid", slots: 0, view: 0, last: 1, free: [] });
+const rec = tileGrid($("livetiles"), $("livevoices"), "record");
+const play = tileGrid($("playtiles"), $("playvoices"), "player");
 const clock = { playing: false, m: 0, at: 0 };
 const positions = new Map();
 const liveClock = { pos: null, rate: 1, held: false, late: [], at: 0 };
@@ -142,15 +142,35 @@ function tile(s, key) {
   s.el.append(tl.box);
   return (s.tiles[key] = tl);
 }
-function nameTile(tl, key, online = true) {
+function voiceChip(s, key) {
+  if (s.chips[key]) return s.chips[key];
+  const c = { key, sigs: {}, media: null, mic: null, loud: -Infinity, av: el("span"), name: el("span", { className: "nm" }) };
+  c.box = el("div", { className: "vchip" }, c.av, c.name, el("span", { className: "moff" }, icon("mic-off", "sm")));
+  if (s === rec) c.box.dataset.speak = key;
+  s.strip.append(c.box);
+  return (s.chips[key] = c);
+}
+function nameVoice(c, key, online = true) {
+  c.name.textContent = nameOf(key);
+  c.box.classList.toggle("off", !online);
+  if (changed("av", [nameOf(key), look(key), online], c.sigs)) c.av.replaceChildren(avatar(key, "sm", null, !online));
+}
+function showVoices(s, shown) {
+  const boxes = s.voice.map((k) => s.chips[k].box);
+  if (boxes.some((b, i) => s.strip.children[i] !== b)) s.strip.append(...boxes);
+  s.strip.hidden = !shown || !s.voice.length;
+  if (shown) $("stage").classList.toggle("onlyvoice", !s.keys.length && s.voice.length > 0);
+}
+function nameTile(tl, key) {
   tl.name.textContent = nameOf(key);
   tl.who.textContent = nameOf(key);
   tl.imp.hidden = !importedIds.has(key);
   tl.imp.textContent = t("Imported");
-  if (changed("av", [nameOf(key), look(key), online], tl.sigs)) tl.av.replaceChildren(avatar(key, "sm", null, !online));
+  if (changed("av", [nameOf(key), look(key)], tl.sigs)) tl.av.replaceChildren(avatar(key, "sm"));
 }
-function prune(s, keys) {
+function prune(s, keys, voice = []) {
   for (const [key, tl] of Object.entries(s.tiles)) if (!keys.includes(key)) { drop(tl.media); drop(tl.mic); tl.box.remove(); delete s.tiles[key]; }
+  for (const [key, c] of Object.entries(s.chips)) if (!voice.includes(key)) { drop(c.mic); c.box.remove(); delete s.chips[key]; }
 }
 function effectiveMode(s) {
   return layoutFits(s.mode, Math.max(s.keys.length, s.slots || 0)) ? s.mode : "grid";
@@ -300,41 +320,35 @@ function tickLive() {
 }
 function liveWhat(p) {
   const problem = p.me && captureProblem(st.capture);
-  if (p.me && (!p.sharing || problem)) return [el("button", { className: "pick", onclick: (e) => { e.stopPropagation(); openSource($("screenmore")); } }, icon("monitor"), problem || t("Select screen"))];
-  if (!p.online || !p.sharing) return [];
-  return [el("span", { textContent: (p.relayed ? t("No picture via relay") : t("Starting…")) })];
-}
-function liveState(p) {
-  if (p.file) return "video";
-  if (p.me && !p.sharing) return "select";
-  return !p.online ? "away" : p.sharing && !p.relayed ? "starting" : "quiet";
+  if (problem) return [el("button", { className: "pick", onclick: (e) => { e.stopPropagation(); openSource($("screenmore")); } }, icon("monitor"), problem)];
+  return [el("span", { textContent: p.relayed ? t("No picture via relay") : t("Starting…") })];
 }
 function renderLive() {
   const idle = page === "player" && showingNow() && !playSet();
   $("livetiles").hidden = !idle;
-  if (!idle) { prune(rec, []); return; }
+  if (!idle) { rec.voice = []; prune(rec, []); showVoices(rec, false); return; }
   const list = livePlayers(st);
   const lay = fromSaved(st.layout);
-  rec.keys = list.map((p) => p.key);
+  rec.keys = list.filter((p) => p.picture).map((p) => p.key);
+  rec.voice = list.filter((p) => !p.picture).map((p) => p.key);
   rec.mode = lay.mode;
   rec.slots = lay.slots;
-  prune(rec, rec.keys);
+  prune(rec, rec.keys, rec.voice);
   const mine = st.recording && !(st.active_set && st.active_set.voice);
   for (const p of list) {
+    if (!p.picture) { nameVoice(voiceChip(rec, p.key), p.key, p.online); continue; }
     const tl = tile(rec, p.key);
-    const state = liveState(p);
-    nameTile(tl, p.key, p.online);
-    const problem = (state === "video" && p.me && captureProblem(st.capture)) || tileProblem({ recording: mine && p.online, sharing: p.sharing, now: nowUs(), start: p.start, voiceEnd: p.last && p.last.m, pictureEnd: p.last && p.last.v });
-    if (changed("livewhat", [state, p.relayed, captureProblem(st.capture), nameOf(p.key), problem, lang], tl.sigs)) {
+    nameTile(tl, p.key);
+    const problem = (p.file && p.me && captureProblem(st.capture)) || tileProblem({ recording: mine, now: nowUs(), start: p.start, voiceEnd: p.last && p.last.m, pictureEnd: p.last && p.last.v });
+    if (changed("livewhat", [!!p.file, p.relayed, captureProblem(st.capture), nameOf(p.key), problem, lang], tl.sigs)) {
       tl.what.replaceChildren(...liveWhat(p));
       tl.problem.textContent = problem || "";
       tl.problem.hidden = !problem;
     }
-    tl.box.classList.toggle("wait", state === "select" || state === "starting" || (state === "quiet" && p.sharing));
-    tl.box.classList.toggle("hatch", state === "away" || state === "quiet");
-    tl.box.classList.toggle("off", state === "away");
-    tl.box.classList.toggle("mine", state === "select");
+    tl.box.classList.toggle("wait", !p.file);
+    tl.box.classList.toggle("hatch", !p.file && p.relayed);
   }
+  showVoices(rec, true);
   place(rec);
 }
 
@@ -399,11 +413,11 @@ function applyAudio() {
   const away = page !== "player";
   const heard = soundKey(play.view, play.keys, st.id, gameSound);
   const level = (on, mix) => (away || muted || !on || mix.muted ? 0 : volume * mix.volume);
-  play.keys.forEach((key) => {
-    const tl = play.tiles[key];
+  [...play.keys, ...play.voice].forEach((key) => {
+    const tl = play.tiles[key] || play.chips[key];
     if (!tl) return;
     const mine = recv(key);
-    tl.snd.hidden = key !== heard || play.keys.length < 2;
+    if (tl.snd) tl.snd.hidden = key !== heard || play.keys.length < 2;
     for (const [s, on, mix] of [[tl.media, key === heard, mine.app], [tl.mic, true, mine.voice]]) if (s) {
       setLevel(s, level(on, mix));
       s.video.playbackRate = livePinned() ? liveClock.rate : rate;
@@ -434,10 +448,10 @@ function mixRow(key, kind, label) {
   return el("div", { className: "poprow" }, el("span", { textContent: label }), range, mute);
 }
 function openMix(anchor) {
-  const keys = play.keys;
-  const heard = soundKey(play.view, keys, st.id, gameSound);
+  const keys = [...play.keys, ...play.voice];
+  const heard = soundKey(play.view, play.keys, st.id, gameSound);
   const pick = (key) => el("button", { className: "icon sm" + (key === heard ? " on" : ""), title: t("Switch app sound"), ariaLabel: t("Switch app sound"), onclick: () => { chooseSound(key); openMix(anchor); } }, icon("volume-2", "sm"));
-  showPop([el("div", { className: "head" }, el("b", { textContent: t("Volume per member") })), el("div", { className: "mixgrid" }, ...keys.map((key) => el("div", { className: "mixm" }, el("div", { className: "who" }, avatar(key, "sm"), el("span", { className: "nm", textContent: nameOf(key) }), keys.length > 1 && !play.view ? pick(key) : null), mixRow(key, "app", t("App sound")), mixRow(key, "voice", t("Voice")))))], anchor, true, keys.length > 2 ? "wide" : "");
+  showPop([el("div", { className: "head" }, el("b", { textContent: t("Volume per member") })), el("div", { className: "mixgrid" }, ...keys.map((key) => el("div", { className: "mixm" }, el("div", { className: "who" }, avatar(key, "sm"), el("span", { className: "nm", textContent: nameOf(key) }), play.keys.length > 1 && !play.view && play.tiles[key] ? pick(key) : null), play.tiles[key] ? mixRow(key, "app", t("App sound")) : null, mixRow(key, "voice", t("Voice")))))], anchor, true, keys.length > 2 ? "wide" : "");
 }
 function showPop(children, anchor, above, cls = "") {
   const pop = $("pop");
@@ -457,14 +471,15 @@ function renderPlayer() {
   const list = players();
   const shared = watchParty && st.party.on && set && partyLayout && partyLayout.set === set.id;
   const lay = set ? (shared ? { mode: partyLayout.mode || "grid", slots: partyLayout.slots || 0, order: partyLayout.order || [] } : playLayout(set)) : fromSaved(null);
-  play.keys = ordered(list.map((p) => p.key), lay.order);
+  play.voice = list.filter((p) => noScreen(p.file)).map((p) => p.key);
+  play.keys = ordered(list.map((p) => p.key).filter((k) => !play.voice.includes(k)), lay.order);
   play.mode = lay.mode;
   play.slots = lay.slots;
   if (shared && partyLayout.focus !== undefined) { play.view = partyLayout.focus ? play.keys.indexOf(partyLayout.focus) + 1 : 0; delete partyLayout.focus; }
-  prune(play, play.keys);
+  prune(play, play.keys, play.voice);
   for (const p of list) {
-    const tl = tile(play, p.key);
-    nameTile(tl, p.key);
+    if (play.voice.includes(p.key)) nameVoice(voiceChip(play, p.key), p.key);
+    else nameTile(tile(play, p.key), p.key);
   }
   place(play);
   applyAudio();
@@ -472,6 +487,7 @@ function renderPlayer() {
   renderHeader(set);
   renderViews();
   $("playtiles").hidden = !set;
+  if (set) showVoices(play, true); else play.strip.hidden = true;
   $("toolbar").hidden = idle;
   $("views").hidden = $("tools").hidden = !set;
   renderTransport(set, idle);
@@ -608,7 +624,7 @@ function stepSet(dir) {
 
 function lineNodes(set, line, iconName, sep = "") {
   const action = line.action ? [sep, el("button", { className: "sm", textContent: line.action, onclick: (e) => { e.stopPropagation(); run("download_set", { room: set.room, set: set.id }); } })] : [];
-  return [...(line.kind === "nopicture" ? [] : [icon(iconName, "sm")]), line.text, ...action];
+  return [icon(iconName, "sm"), line.text, ...action];
 }
 function whatNodes(what, line, set) {
   if (line) return lineNodes(set, line, line.kind === "away" ? "alert" : "download");
@@ -630,21 +646,23 @@ function tick() {
   const todo = [];
   const now = Date.now();
   for (const p of list) {
-    const tl = play.tiles[p.key];
+    const tl = play.tiles[p.key] || play.chips[p.key];
     if (!tl) continue;
     feedParts(tl, p, m, b);
     if (tl.mic) {
       tl.loud = clock.playing && !away ? talking(tl.loud, peakOf(tl.mic.tap), now) : -Infinity;
       markVoice(tl.box, stillTalking(tl.loud, now), recv(p.key).voice.muted);
     }
-    const end = wallEnd(tl.media);
-    const pictured = !!(partAt(p, wall) || {}).v;
-    const behind = !pinned && !!p.file.total && p.file.have < p.file.total && end !== null && wall / 1e6 > end;
-    tl.box.classList.toggle("wait", !tl.media.part || !pictured || behind);
-    tl.box.classList.toggle("late", !!tl.media.part && pinned && liveClock.late.includes(p.key));
-    const line = !pictured || behind ? viewLine(set, viewContext(), p.key) : null;
-    const what = line ? line.text : !pictured ? "voice" : nameOf(p.key);
-    if (changed("what", [what, line && line.action, nameOf(p.key), lang], tl.sigs)) tl.what.replaceChildren(...whatNodes(what, line, set));
+    if (tl.media) {
+      const end = wallEnd(tl.media);
+      const pictured = !!(partAt(p, wall) || {}).v;
+      const behind = !pinned && !!p.file.total && p.file.have < p.file.total && end !== null && wall / 1e6 > end;
+      tl.box.classList.toggle("wait", !tl.media.part || !pictured || behind);
+      tl.box.classList.toggle("late", !!tl.media.part && pinned && liveClock.late.includes(p.key));
+      const line = !pictured || behind ? viewLine(set, viewContext(), p.key) : null;
+      const what = line ? line.text : !pictured ? "voice" : nameOf(p.key);
+      if (changed("what", [what, line && line.action, nameOf(p.key), lang], tl.sigs)) tl.what.replaceChildren(...whatNodes(what, line, set));
+    }
     for (const s of [tl.media, tl.mic]) if (s && s.base !== null) todo.push([s, wall / 1e6 - s.base, clock.playing && !away && !(pinned && liveClock.held)]);
   }
   const ready = todo.map(([s, at]) => aim(s, at));
