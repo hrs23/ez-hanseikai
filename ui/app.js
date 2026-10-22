@@ -64,9 +64,6 @@ let menuReturn = null;
 let menuAnchor = null;
 let exporting = null;
 let importedIds = new Set();
-let side = "review";
-let scope = "session";
-let subtitles = stored("subtitles", true);
 let receive = stored("receive", {});
 let sidebar = stored("sidebar", true);
 let panel = stored("panel", true);
@@ -120,10 +117,10 @@ const dot = (id) => el("i", { className: "dt", style: `background:${colorOf(colo
 
 function tile(s, key) {
   if (s.tiles[key]) return s.tiles[key];
-  const tl = { key, media: slot(el("video", { muted: true, preload: "auto" })), mic: null, loud: -Infinity, name: el("span", { className: "nm" }), av: el("span"), imp: el("span", { className: "imp", hidden: true }), who: el("div", { className: "who" }), what: el("div", { className: "what" }), sub: el("div", { className: "subt", hidden: true }), problem: el("div", { className: "problem", hidden: true }) };
+  const tl = { key, media: slot(el("video", { muted: true, preload: "auto" })), mic: null, loud: -Infinity, name: el("span", { className: "nm" }), av: el("span"), imp: el("span", { className: "imp", hidden: true }), who: el("div", { className: "who" }), what: el("div", { className: "what" }), problem: el("div", { className: "problem", hidden: true }) };
   tl.snd = el("span", { className: "snd", hidden: true }, icon("volume-2", "sm"));
   tl.lab = el("div", { className: "nl" }, tl.av, tl.name, tl.imp, tl.snd, el("span", { className: "moff" }, icon("mic-off", "sm")));
-  tl.box = el("div", { className: "tile", tabIndex: 0 }, tl.media.video, el("div", { className: "waitbox" }, tl.who, tl.what), tl.sub, tl.problem, tl.lab);
+  tl.box = el("div", { className: "tile", tabIndex: 0 }, tl.media.video, el("div", { className: "waitbox" }, tl.who, tl.what), tl.problem, tl.lab);
   const focus = () => { const i = s.keys.indexOf(key) + 1; setView(s, s.view === i ? 0 : i); };
   if (s === rec) tl.box.dataset.speak = key;
   tl.box.onkeydown = (e) => { if (e.key === "Enter") focus(); };
@@ -482,7 +479,7 @@ function renderTransport(set, idle) {
   const liveSetShown = !!(set && set.live);
   const edge = liveEdge(total(), nowM());
   if (set && !set.live) live = false;
-  for (const id of ["play", "back", "fwd", "addnote", "mixbtn", "cc", "seek", "lane", "chapters", "matchchip"]) $(id).classList.toggle("nodisp", idle);
+  for (const id of ["play", "back", "fwd", "addnote", "mixbtn", "seek", "lane", "chapters", "matchchip"]) $(id).classList.toggle("nodisp", idle);
   $("speed").classList.toggle("nodisp", idle || followingLive());
   $("transport").classList.toggle("idle", idle);
   $("clocknow").parentElement.hidden = idle;
@@ -492,16 +489,10 @@ function renderTransport(set, idle) {
   if (changed("livebtn", [idle, atLive, idle ? 0 : Math.round(edge.behind), lang])) $("live").replaceChildren(el("i"), idle ? t("Live") : atLive ? t("Latest") : t("Jump to latest"), atLive ? "" : el("span", { className: "lagt", textContent: "−" + fmt(edge.behind) }));
   $("seek").classList.toggle("onlive", liveSetShown && atLive);
   $("seek").querySelector(".grow").hidden = !liveSetShown;
-  press($("cc"), subtitles);
   const frac = set && set.progress.total ? Math.min(1, set.progress.have / set.progress.total) : 1;
   $("seek").querySelector(".got").style.width = frac * 100 + "%";
   $("seek").querySelector(".missing").hidden = !(set && set.progress.stuck);
   $("seek").querySelector(".missing").style.left = frac * 100 + "%";
-}
-const debriefLength = (list) => Math.max(1, Math.round(list.reduce((n, d) => n + ((d.end_us || nowUs()) - d.start_us), 0) / 6e7));
-function debriefChip(set, list) {
-  const text = t(list.length === 1 ? "Debrief {n} time · {m} min" : "Debrief {n} times · {m} min", { n: list.length, m: debriefLength(list) });
-  return el("button", { className: "sm", title: t("Export…"), onclick: () => exportDebriefs(set, list) }, icon("mic", "sm"), text);
 }
 function viewChip(set, line) {
   return el("span", { className: "pill " + (line.kind === "away" ? "warn" : "gray") }, ...lineNodes(set, line, line.kind === "receiving" ? "spinner" : line.kind === "away" ? "alert" : "download", " · "));
@@ -514,8 +505,7 @@ function headerChips(set) {
     return [pill("rec", "rec", t("Recording {time}", { time: fmt((nowUs() - a.start_us) / 1e6) })), live ? null : pill("gray", null, t("Playing back · {time} behind the latest", { time: fmt(edge.behind) }))];
   }
   const line = viewLine(set, viewContext());
-  const debriefs = debriefsOf(set.id);
-  return [set.imported_by ? pill("gray", "download", t("Imported by {name}", { name: set.imported_by })) : pill("gray", "film", t("Recorded")), line ? viewChip(set, line) : null, debriefs.length ? debriefChip(set, debriefs) : null];
+  return [set.imported_by ? pill("gray", "download", t("Imported by {name}", { name: set.imported_by })) : pill("gray", "film", t("Recorded")), line ? viewChip(set, line) : null];
 }
 function headerSub(set) {
   if (!set) return [st.active_set ? fmt((nowUs() - st.active_set.start_us) / 1e6) : null, t("Free {free}", { free: bytes(st.disk.free) })].filter(Boolean).join(" · ");
@@ -807,7 +797,7 @@ function indexOf(state) {
   const byKey = new Map(state.events.map((e) => [e.key, e]));
   const setOfKey = new Map();
   for (const s of state.sets) for (const k of s.events) if (!setOfKey.has(k)) setOfKey.set(k, s);
-  return { byKey, setOfKey, items: new Map(), all: null };
+  return { byKey, setOfKey, items: new Map() };
 }
 const setOf = (e) => idx.setOfKey.get(e.key) || null;
 const setLength = (s) => fmt(((s.end_us || nowUs()) - s.start_us) / 1e6);
@@ -818,10 +808,6 @@ function itemOf(e, set) {
   const at = (us) => (us === null || us === undefined || !set ? null : (us - set.start_us) / 1e6);
   return { ...e, role: r, setId: set ? set.id : null, m: at(e.local_us), end: at(e.end_us), who: e.plugin ? (e.plugin.name ? t(e.plugin.name) : pluginName(e.plugin.id)) : nameOf(e.author), body: e.kind === "mark" ? t("Marked") : eventText(e), speaker: e.file ? nameOf(e.file) : nameOf(e.author) };
 }
-function matches(n, words) {
-  const text = `${n.body} ${n.who} ${n.kind}`.toLowerCase();
-  return words.every((w) => (w.startsWith("#") ? (n.tags || []).some((tg) => "#" + tg.toLowerCase() === w) : text.includes(w)));
-}
 function setItems(set) {
   if (!set) return [];
   if (!idx.items.has(set.id)) {
@@ -829,10 +815,6 @@ function setItems(set) {
     idx.items.set(set.id, st.events.filter((e) => keys.has(e.key)).map((e) => itemOf(e, set)));
   }
   return idx.items.get(set.id);
-}
-function allItems() {
-  if (!idx.all) idx.all = st.events.filter((e) => idx.setOfKey.has(e.key)).map((e) => itemOf(e, setOf(e)));
-  return idx.all;
 }
 const listed = (r) => r === "moment" || r === "chapter" || r === "drawing";
 function chapters(tot) {
@@ -847,66 +829,36 @@ function matchNow(m) {
 function renderEvents() {
   const set = playSet();
   items = setItems(set);
-  const words = $("filter").value.toLowerCase().split(/\s+/).filter(Boolean);
-  const pool = scope === "all" ? allItems() : items;
-  const order = (x, y) => (x.setId === y.setId ? (x.m ?? -1) - (y.m ?? -1) : x.setId < y.setId ? 1 : -1);
-  const shown = groupDrawings(pool.filter((n) => listed(n.role) && matches(n, words)).sort(order));
-  const speech = items.filter((n) => n.role === "speech").sort((x, y) => x.m - y.m);
-  renderPanelTabs(shown, speech);
   renderTimeline(Math.round(total()));
-  renderConvo(speech);
-  renderReview(shown, words);
-}
-function renderPanelTabs(shown, speech) {
-  const notes = shown.filter((n) => n.kind === "note").length;
-  const tabs = [["review", t("Review"), notes], ...(speech.length ? [["talk", t("Talk")]] : [])];
-  if (!tabs.some(([k]) => k === side)) side = tabs[0][0];
-  if (changed("paneltabs", [tabs, side, lang])) $("paneltabs").replaceChildren(...tabs.map(([k, label, n]) => {
-    const b = el("button", { className: k === side ? "on" : "", role: "tab", ariaSelected: k === side }, label, n ? el("em", { textContent: String(n) }) : null);
-    b.onclick = () => { side = k; renderEvents(); };
-    return b;
-  }));
-  $("reviewlist").hidden = side !== "review";
-  $("filterrow").hidden = side !== "review";
-  $("convolist").hidden = side !== "talk";
-  $("scope").value = scope;
+  renderReview(groupDrawings(items.filter((n) => listed(n.role)).sort((x, y) => (x.m ?? -1) - (y.m ?? -1))));
+  renderDebriefs(set);
 }
 function renderTimeline(tot) {
   const list = chapters(tot);
   if (changed("chapters", [list.map((n) => [n.key, n.m, n.end, n.body]), tot])) renderChapters(list, tot);
   if (changed("lane", [items.filter((n) => n.role === "moment").map((n) => [n.key, n.m, n.body, n.author, n.kind]), tot, st.colors])) renderLane(tot);
 }
-function renderConvo(speech) {
-  if (!changed("convo", [speech.map((n) => [n.key, n.m, n.speaker, n.body]), lang, st.colors])) return;
-  $("convolist").replaceChildren(...speech.map((n) => {
-    const row = el("div", { className: "ev talk", tabIndex: 0 }, el("span", { className: "at", textContent: fmt(n.m) }), el("span", { className: "tx" }, el("span", { className: "who" }, dot(n.file || n.author), n.speaker), el("span", { textContent: n.body })));
-    row.dataset.key = n.key;
-    row.onclick = () => seekTo(n.m);
-    return row;
-  }));
-}
-function renderReview(shown, words) {
+function renderReview(shown) {
   const set = playSet();
-  if (side !== "review" || !set || $("reviewlist").querySelector("input")) return;
-  const grouped = scope !== "all" && !words.length;
+  if (!set || $("reviewlist").querySelector("input")) return;
   const list = matchChapters(matchEnds(items), total(), !!set.live);
-  const pending = (set.analysis || []).filter((a) => a.state !== "done");
-  if (!changed("review", [shown, list, pending, grouped, lang, selected, st.colors, st.names, plugins.map((p) => p.name), scope])) return;
-  const out = pending.map((a) => el("div", { className: "ev sys analysis" }, icon(a.state === "failed" ? "alert" : "cpu", "sm"), el("span", { className: "tx " + (a.state === "failed" ? "warn" : "muted") }, `${t(pluginName(a.plugin))} · ${analysisReason(a, nameOf)}`, a.state === "failed" ? el("button", { className: "sm", textContent: t("Retry"), onclick: () => retryAnalysis(set, a.plugin) }) : null)));
-  if (grouped) {
-    const starts = list.map((c) => ({ m: c.m, row: el("div", { className: "ev sys" }, el("button", { className: "at", textContent: fmt(c.m), onclick: () => seekTo(c.m) }), el("span", { className: "tx" }, icon("flag", "sm"), t("Match {n}", { n: c.n }))) }));
-    const rows = [...shown.map((n) => ({ m: n.m ?? -1, row: eventRow(n) })), ...starts].sort((a, b) => a.m - b.m);
-    out.push(...rows.map((r) => r.row));
-    if (!rows.length) out.push(el("div", { className: "none", textContent: t("No notes yet") }));
-  } else if (!shown.length) out.push(el("div", { className: "none", textContent: words.length ? t("Nothing found") : t("No notes yet") }));
-  else {
-    let group = set.id;
-    for (const n of shown) {
-      if (scope === "all" && n.setId !== group) { group = n.setId; out.push(el("div", { className: "grp", textContent: sessionName(n.setId) })); }
-      out.push(eventRow(n));
-    }
-  }
+  const failed = (set.analysis || []).filter((a) => a.state === "failed");
+  if (!changed("review", [shown, list, failed, lang, selected, st.colors, st.names, plugins.map((p) => p.name)])) return;
+  const out = failed.map((a) => el("div", { className: "ev sys analysis" }, icon("alert", "sm"), el("span", { className: "tx warn" }, `${t(pluginName(a.plugin))} · ${analysisReason(a, nameOf)}`, el("button", { className: "sm", textContent: t("Retry"), onclick: () => retryAnalysis(set, a.plugin) }))));
+  const starts = list.map((c) => ({ m: c.m, row: el("div", { className: "ev sys" }, el("button", { className: "at", textContent: fmt(c.m), onclick: () => seekTo(c.m) }), el("span", { className: "tx" }, icon("flag", "sm"), t("Match {n}", { n: c.n }))) }));
+  const rows = [...shown.map((n) => ({ m: n.m ?? -1, row: eventRow(n) })), ...starts].sort((a, b) => a.m - b.m);
+  out.push(...rows.map((r) => r.row));
+  if (!rows.length) out.push(el("div", { className: "none", textContent: t("No notes yet") }));
   $("reviewlist").replaceChildren(...out);
+}
+function renderDebriefs(set) {
+  const list = set ? debriefsOf(set.id) : [];
+  $("debriefs").hidden = !list.length;
+  if (!changed("debriefs", [list.map((d) => [d.id, d.end_us, onThisPc(d)]), lang])) return;
+  $("debriefs").replaceChildren(el("div", { className: "h3", textContent: t("Debrief recordings") }), ...list.map((d) => el("div", { className: "drow" },
+    icon("mic", "sm"), el("span", { textContent: sessionClock(d.id) }), el("span", { className: "sp" }),
+    el("span", { className: "muted", textContent: t("{m} min", { m: Math.max(1, Math.round(((d.end_us || nowUs()) - d.start_us) / 6e7)) }) }),
+    el("button", { className: "sm", textContent: t("Save"), disabled: !onThisPc(d), onclick: () => exportFolder(d) }))));
 }
 function timeText(n) {
   if (n.m === null) return t("Whole recording");
@@ -922,9 +874,9 @@ function eventRow(n) {
   at.onclick = () => goTo(n);
   const sys = !!n.plugin || n.kind === "mark";
   const body = n.role === "drawing" ? [t("Drawing") + (n.count > 1 ? ` ×${n.count}` : "")] : inline(n.body);
-  const tags = n.kind === "note" ? [] : (n.tags || []).map((tg) => el("button", { className: "tag", textContent: tagName(tg), onclick: (e) => { e.stopPropagation(); filterTag(tg); } }));
+  const tags = n.kind === "note" ? [] : (n.tags || []).map((tg) => el("span", { className: "tag", textContent: tagName(tg) }));
   const tx = el("span", { className: "tx" }, sys ? icon("flag", "sm") : null, ...body, n.source === "ai" ? el("span", { className: "aimark", textContent: t("AI") }) : null, ...tags);
-  const by = el("span", { className: "by" }, n.plugin ? el("i", { className: "dt", style: "background:var(--muted)" }) : dot(n.author), n.who);
+  const by = el("span", { className: "by", title: n.who }, n.plugin ? el("i", { className: "dt", style: "background:var(--muted)" }) : dot(n.author));
   const row = el("div", { className: "ev" + (sys ? " sys" : "") + (n.role === "chapter" ? " chapter" : "") }, at, tx, by);
   if (n.mine && n.kind !== "mark") {
     const acts = el("span", { className: "acts" });
@@ -978,28 +930,6 @@ function renderMoment(m) {
   if (changed("overlay", [notes.map((n) => [n.key, n.m, n.body, n.author]), typists.map(nameOf), st.colors, lang])) $("overlay").replaceChildren(
     ...notes.map((n) => el("p", {}, avatar(n.author, "sm"), ...inline(n.body))),
     ...typists.map((id) => el("p", { className: "typing", textContent: t("{name} is typing…", { name: nameOf(id) }) })));
-  const speech = subtitles ? activeAt(items.filter((n) => n.role === "speech"), m) : [];
-  for (const key of play.keys) {
-    const tl = play.tiles[key];
-    if (!tl) continue;
-    const lines = speech.filter((n) => (n.file || n.author) === key).map((n) => n.body);
-    tl.sub.hidden = !lines.length;
-    if (tl.sub.textContent !== lines.join("\n")) tl.sub.textContent = lines.join("\n");
-  }
-  const current = speech.length ? speech[speech.length - 1].key : null;
-  for (const row of $("convolist").children) {
-    const on = row.dataset.key === current;
-    if (on && !row.classList.contains("cur") && clock.playing) row.scrollIntoView({ block: "nearest" });
-    row.classList.toggle("cur", on);
-  }
-}
-function filterTag(tag) {
-  if (!playSet()) return;
-  $("filter").value = "#" + tag;
-  side = "review";
-  showPanel(true);
-  if (page !== "player") go("player");
-  renderEvents();
 }
 function openLink(link) {
   if (!setById(link.set)) { flash(t("That recording is not on this PC.")); return; }
@@ -1229,14 +1159,6 @@ async function pickExportFolder() {
   await invoke("export_check");
   return dialog("pick_folder");
 }
-async function exportDebriefs(set, list) {
-  try {
-    const folder = await pickExportFolder();
-    if (!folder) return;
-    for (const d of list) await invoke("export_folder", { room: d.room, set: d.id, folder: `${folder}\\${d.id}` });
-    flash(t("Export finished"));
-  } catch (e) { fail(e); }
-}
 function exportFolder(set) {
   if (!set) { flash(t("Open a recording first")); return; }
   pickExportFolder().then((folder) => {
@@ -1465,11 +1387,9 @@ $("matchchip").onclick = (e) => matchMenu(e.currentTarget);
 $("mixbtn").onclick = (e) => openMix(e.currentTarget);
 $("volume").oninput = () => setVolume(Number($("volume").value));
 $("mute").onclick = toggleMute;
-$("cc").onclick = () => { subtitles = !subtitles; store("subtitles", subtitles); renderPlayer(); };
 $("panelbtn").onclick = togglePanel;
 $("full").onclick = toggleFull;
 $("layoutplay").onclick = (e) => pickLayout(current(), e.currentTarget);
-$("scope").onchange = () => { scope = $("scope").value; renderEvents(); };
 for (const b of $("tools").querySelectorAll("[data-tool]")) b.onclick = () => { ink.tool = b.dataset.tool; renderTools(); };
 $("clearink").onclick = () => clearInk(false);
 $("toast").onmouseenter = () => clearTimeout($("toast").hideTimer);
@@ -1516,7 +1436,6 @@ function peekAt(x) {
 }
 $("seek").onmousemove = (e) => peekAt(e.clientX);
 $("seek").onmouseleave = () => { $("peek").hidden = true; peek.at = null; };
-$("filter").oninput = () => renderEvents();
 addEventListener("resize", () => renderShell());
 
 const once = (fn) => (e) => { if (!e.repeat) fn(); };

@@ -1490,9 +1490,9 @@ async function library(ctx) {
     }
     check(logOf(a, ctx.room, a.id).some((r) => r.k === "party" && r.set === ctx.review), "A did not log what was watched when the review started");
     for (const app of all) await waitFor(`${app.key} links the review to the recording it was about`, within(LOG_SYNC_S * 2), async () => setOf(await state(app), ctx.review)?.of === ctx.set);
-    await waitFor("A lists the recording and not its debrief, which the recording's header counts", within(UI_REFRESH_S * 3), () => evaluate(a, `recordingRows().every((r) => r.id !== ${JSON.stringify(ctx.review)}) && debriefsOf(${JSON.stringify(ctx.set)}).length === 1`));
+    await waitFor("A lists the recording and not its debrief, which the recording's panel lists", within(UI_REFRESH_S * 3), () => evaluate(a, `recordingRows().every((r) => r.id !== ${JSON.stringify(ctx.review)}) && debriefsOf(${JSON.stringify(ctx.set)}).length === 1`));
     await evaluate(a, `openSession(${JSON.stringify(ctx.set)}); true`);
-    await waitFor("A's header says Debrief 1 time", within(UI_REFRESH_S * 3), () => evaluate(a, `$("pchips").textContent.includes(t("Debrief {n} time · {m} min", { n: 1, m: debriefLength(debriefsOf(${JSON.stringify(ctx.set)})) }))`));
+    await waitFor("A's panel lists the debrief with its start, length and Save under the timeline", within(UI_REFRESH_S * 3), () => evaluate(a, `!$("debriefs").hidden && $("debriefs").querySelectorAll(".drow").length === 1 && $("debriefs").textContent.includes(sessionClock(${JSON.stringify(ctx.review)})) && $("debriefs").textContent.includes(t("Save")) && !$("pchips").textContent.includes(t("Debrief"))`));
     ctx.notes.push(`debrief with ${logOf(a, ctx.room, a.id).filter((r) => r.k === "party" && r.set === ctx.review).length} party records of A linked to its recording`);
   });
 
@@ -1540,7 +1540,7 @@ async function library(ctx) {
     await allSee([a, b, c], "the note written through the API is an AI note", within(LOG_SYNC_S * 2), (st) => st.events.some((e) => e.key === made.json.key && e.text === `${text} #api` && e.kind === "note" && e.source === "ai"));
     const tagged = await api(a, "GET", `${recording(ctx.set)}/events?tag=API`, { token });
     check(tagged.json.events.some((e) => e.key === made.json.key), "the note is not found by its tag");
-    await evaluate(a, `side = "review"; openSession(${JSON.stringify(ctx.set)}); true`);
+    await evaluate(a, `openSession(${JSON.stringify(ctx.set)}); true`);
     await waitFor("A lists the note in the player with the AI mark", within(UI_REFRESH_S * 5), () => evaluate(a, `$("reviewlist").textContent.includes("Noted through the API") && !!$("reviewlist").querySelector(".aimark")`));
     const status = await api(a, "GET", "/v1/status", { token });
     check(status.status === 200 && status.json.room === ctx.room && status.json.recording === false && ["idle", "standby"].includes(status.json.state) && status.json.members.length === 3 && status.json.members.some((m) => m.id === a.id && m.state === status.json.state), `status: ${status.status} ${brief(status.json)}`);

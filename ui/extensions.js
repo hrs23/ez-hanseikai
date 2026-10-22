@@ -20,12 +20,8 @@ function analysisReason(a, name) {
   return a.waiting_for ? t("Waiting for {name}'s PC", { name: name(a.waiting_for) }) : t("Waiting");
 }
 function recordingAnalysis(s) {
-  const mine = (s.analysis || []).filter((a) => a.state !== "done");
-  const failed = mine.find((a) => a.state === "failed");
-  const going = mine.find((a) => a.state === "running");
-  if (failed) return { kind: "line", icon: "alert", cls: "warn", text: t("Analysis failed") };
-  if (going) return { kind: "tail", icon: "cpu", text: analyzing(going) };
-  return null;
+  const failed = (s.analysis || []).find((a) => a.state === "failed");
+  return failed ? { kind: "line", icon: "alert", cls: "warn", text: t("Analysis failed") } : null;
 }
 function sampleOf(kind) {
   return kind === "chapters" ? el("div", { className: "sample chapters" }, el("i", { className: "fill" }), ...[24, 52, 81].map((x) => el("b", { style: `left:${x}%` }))) : null;

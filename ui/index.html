@@ -127,7 +127,6 @@
                 <button id="live" class="livebtn"></button>
                 <button id="addnote" class="txt" data-t-title="Add note (C)"><span data-icon="note" data-icon-class="sm"></span><span data-t="Note">Note</span><kbd>C</kbd></button>
                 <button id="mixbtn" class="icon" data-icon="users" data-t-title="Volume per member" data-t-label="Volume per member"></button>
-                <button id="cc" class="icon" data-icon="captions" data-t-title="Subtitles" data-t-label="Subtitles"></button>
                 <button id="speed" class="txt rate" data-t-title="Speed" data-t-label="Speed"></button>
                 <button id="layoutplay" class="icon" data-icon="grid" data-t-label="Layout" data-t-title="Layout" aria-haspopup="menu"></button>
                 <button id="full" class="icon" data-t-title="Full screen (F)" data-t-label="Full screen"></button>
@@ -137,10 +136,9 @@
         </div>
       </div>
       <aside id="panel" class="panel">
-        <div id="paneltabs" class="tabs" role="tablist"></div>
-        <div id="filterrow" class="search"><div class="selbox"><span class="lead" data-icon="search" data-icon-class="sm"></span><input id="filter" type="search" autocomplete="off" data-t-placeholder="Filter" data-t-label="Filter"><span class="selbox chipsel"><select id="scope" data-t-label="Scope"><option value="session" data-t="This recording">This recording</option><option value="all" data-t="All recordings">All recordings</option></select></span></div></div>
+        <div class="phd" data-t="Timeline">Timeline</div>
         <div id="reviewlist" class="list review"></div>
-        <div id="convolist" class="list convo"></div>
+        <div id="debriefs" class="debriefs" hidden></div>
       </aside>
     </div>
   </section>

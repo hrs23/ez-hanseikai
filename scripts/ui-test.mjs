@@ -571,7 +571,7 @@ test("an avatar shows the image, a built-in shape or the initial; an unknown sha
 });
 
 test("a card shows nothing a note can write as running or navigating", () => {
-  const { ctx } = page(["util.js", "icons.js", "i18n.js", "layout.js", "events.js", "markdown.js"], { st: {}, filterTag() {}, openLink() {} });
+  const { ctx } = page(["util.js", "icons.js", "i18n.js", "layout.js", "events.js", "markdown.js"], { st: {}, openLink() {} });
   const text = ["Plan", "[bad](javascript:alert(1)) <img src=x onerror=alert(1)> [ok](https://example.com/p) [m](ezh://moment/s1/5/all)", "- [ ] not a task", "| A | B |"].join("\n");
   const card = vm.runInContext(`cardDom(${JSON.stringify(text)}, mdHooks({ onOpen: () => {} }))`, ctx);
   assert.equal(card.find("table").length + card.find("pre").length + card.find("input").length, 0);
@@ -591,7 +591,7 @@ test("a card shows nothing a note can write as running or navigating", () => {
   assert.equal(dom("Lead\nbody").children[0].className, "chead");
 });
 test("a moment link keeps a formatted label, and deep lists render without running out of stack", () => {
-  const { ctx } = page(["util.js", "icons.js", "i18n.js", "layout.js", "events.js", "markdown.js"], { st: {}, filterTag() {}, openLink() {} });
+  const { ctx } = page(["util.js", "icons.js", "i18n.js", "layout.js", "events.js", "markdown.js"], { st: {}, openLink() {} });
   const label = (text) => vm.runInContext(`cardDom(${JSON.stringify("x\n" + text)}, mdHooks())`, ctx).find("button").filter((b) => b.className === "link")[0].textContent;
   assert.equal(label("[**Opening** push](ezh://moment/s1/5/all)"), "Opening push 0:05");
   assert.equal(label("[Rotate `B`](ezh://moment/s1/5/all)"), "Rotate B 0:05");
@@ -707,9 +707,9 @@ test("an extension row says one thing: no runner, what failed, who it waits for,
   assert.equal(ui$.analysisReason({ state: "failed" }, name), "Failed");
   assert.equal(ui$.analysisReason({ state: "failed", reason: "missing" }, name), "File missing");
   assert.equal(ui$.analysisReason({ state: "running", progress: 0.424 }, name), "Analyzing 42%");
-  assert.equal(ui$.recordingAnalysis({ analysis: [{ state: "done" }, { state: "running", progress: 0.42 }] }).text, "Analyzing 42%");
+  assert.equal(ui$.recordingAnalysis({ analysis: [{ state: "done" }, { state: "running", progress: 0.42 }, { state: "left" }] }), null);
+  assert.equal(ui$.recordingAnalysis({ analysis: [{ state: "running" }, { state: "failed" }] }).text, "Analysis failed");
   assert.equal(ui$.analysisReason({ state: "running", progress: null }, name), "Analyzing");
-  assert.equal(ui$.recordingAnalysis({ analysis: [{ state: "running" }] }).text, "Analyzing");
   assert.equal(ui$.recordingAnalysis({ analysis: [{ state: "running", progress: 0.1 }, { state: "failed" }] }).text, "Analysis failed");
   assert.equal(ui$.recordingAnalysis({ analysis: [{ state: "done" }, { state: "left" }] }), null);
   ui$.setLanguage("ja");

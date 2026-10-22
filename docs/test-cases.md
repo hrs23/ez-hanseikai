@@ -85,7 +85,8 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - a voice counts as speaking until the hang has passed and not after (`ui-test`); the bezel and a run of seeks end after the bezel time even with animations off (`manual`).
 - the page scripts load as one scope without a name declared twice. `ui-test`
 - dragging the volume and the popover ranges still works with clicks not taking focus; Tab still reaches the controls with a visible focus ring. `manual`
-- The player has one Review tab: analysis status rows, then the search and scope; with no search words and this recording the notes, chapters, moments and drawings sit in their match (or under Whole recording without matches), editable in place; a search or all recordings gives the flat list; a note added through the api shows in it with the AI mark. `e2e` (`api`)
+- The player side panel is the timeline only, one line per row (time, text, author dot) in time order with match starts as rows, editable in place, a note added through the api shows with the AI mark; analysis shows there and in the sidebar only when it failed, with Retry; no tabs, search or scope. `e2e` (`api`)
+- The debriefs of the open recording are listed at the bottom of the side panel under Debrief recordings, one row each with start time, length and Save, which exports only that one debrief through the folder export; the section is hidden with none and the header has no debrief chip. `e2e` (`library`)
 
 ## Watch Party
 

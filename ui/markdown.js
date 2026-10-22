@@ -37,7 +37,7 @@ async function openWeb(url, label) {
   if (!mdVouched(url, label) && !(await ask(t("Open {host}?", { host: new URL(url).host }), t("Open"), false, url))) return;
   dialog("open_link", { url }).catch(warn);
 }
-const mdHooks = (over = {}) => ({ onTag: filterTag, onLink: openLink, onOpen: openWeb, ...over });
+const mdHooks = (over = {}) => ({ onLink: openLink, onOpen: openWeb, ...over });
 
 function mdHref(url) {
   if (/^ezh:\/\/moment\//i.test(url)) {
@@ -164,7 +164,7 @@ function mdSpans(nodes, hooks) {
     if (n.em) return [wrap("em", n.em)];
     if (n.strike) return [wrap("del", n.strike)];
     if (n.mark) return [wrap("mark", n.mark)];
-    if (n.tag !== undefined) return [el("button", { className: "tag", textContent: tagName(n.tag), onclick: (e) => { e.stopPropagation(); hooks.onTag(n.tag); } })];
+    if (n.tag !== undefined) return [el("span", { className: "tag", textContent: tagName(n.tag) })];
     if (n.link.kind === "moment") {
       const label = mdText(n.children) || t("Moment");
       return [el("button", { className: "link", onclick: (e) => { e.stopPropagation(); hooks.onLink(n.link.link); } }, icon("play", "sm"), `${label} ${fmt(n.link.link.m)}`)];
