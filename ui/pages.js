@@ -379,9 +379,9 @@ $("roomsave").onclick = async () => {
 };
 $("roomno").onclick = () => $("roomdlg").close();
 for (const b of $("setnav").querySelectorAll("button")) b.onclick = () => { settingsPane = b.dataset.pane; showPane(); };
-$("prompttask").oninput = () => editPrompt(false);
+$("prompttext").oninput = () => editPrompt(false);
 $("promptreset").onclick = () => editPrompt(true);
-$("promptcopy").onclick = () => navigator.clipboard.writeText(promptText()).then(() => { $("promptdlg").close(); flash(t("Prompt copied")); }).catch(fail);
+$("promptcopy").onclick = () => navigator.clipboard.writeText(aiCopyText($("prompttext").value, promptToken)).then(() => { $("promptdlg").close(); flash(t("Prompt copied")); }).catch(fail);
 $("aibtn").onclick = (e) => openAiMenu(e.currentTarget, newestRecording());
 $("aiplay").onclick = (e) => openAiMenu(e.currentTarget, selected);
 for (const b of document.querySelectorAll(".apibadge")) b.onclick = () => openSettings("api");

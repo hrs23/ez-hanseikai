@@ -1610,8 +1610,8 @@ async function library(ctx) {
     await evaluate(a, `$("aibtn").click(); true`);
     await waitFor("A opens the AI menu", within(UI_REFRESH_S * 5), () => evaluate(a, `!$("menu").hidden && $("menu").querySelectorAll("button").length === 3`));
     await evaluate(a, `$("menu").querySelector("button").click(); true`);
-    await waitFor("A shows the prompt before copying", within(UI_REFRESH_S * 5), () => evaluate(a, `$("promptdlg").open && $("prompttext").readOnly && $("prompttext").value.includes("llms.txt")`));
-    check(await evaluate(a, `!$("prompttext").value.includes(promptText().match(/Token: (\\S+)/)[1]) && promptText().includes("Token: ")`), "the prompt preview shows the token");
+    await waitFor("A shows the prompt before copying", within(UI_REFRESH_S * 5), () => evaluate(a, `$("promptdlg").open && !$("prompttext").readOnly && $("prompttext").value.includes("llms.txt")`));
+    check(await evaluate(a, `(() => { const v = $("prompttext").value; return !v.includes(promptToken) && v.includes("Token: ••••••••") && aiCopyText(v, promptToken).includes("Token: " + promptToken) && v.startsWith(promptPurpose.task + "\\n\\n"); })()`), "the prompt box is one text with the masked token and the task first");
     await screenshot(a, "ai-prompt");
     await evaluate(a, `$("promptdlg").close(); true`);
     const prompt = await evaluate(a, `closeMenu(), invoke("api_info").then((i) => aiPrompt(aiPurposes()[0], i, st.room, newestRecording()))`);

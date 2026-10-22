@@ -53,21 +53,25 @@ async function openAiMenu(anchor, recording) {
 
 let promptPurpose = null;
 let promptFacts = "";
-const promptText = () => `${$("prompttask").value.trim() || promptPurpose.task}\n\n${promptFacts}`;
-function promptReset() { $("promptreset").disabled = $("prompttask").value === promptPurpose.task; }
+let promptToken = "";
+const aiTaskOf = (text) => text.split("\n\n")[0].trim();
+const aiCopyText = (text, token) => text.replaceAll(AI_MASK, token);
+const promptBody = (task) => `${task}\n\n${aiPreview(promptFacts, promptToken)}`;
+function promptReset() { $("promptreset").disabled = aiTaskOf($("prompttext").value) === promptPurpose.task; }
 function showPrompt(purpose, facts, token) {
   promptPurpose = purpose;
   promptFacts = facts;
+  promptToken = token;
   $("prompttitle").textContent = purpose.label;
-  $("prompttask").value = aiTask(purpose);
-  $("prompttext").value = aiPreview(facts, token);
+  $("prompttext").value = promptBody(aiTask(purpose));
   promptReset();
   $("promptdlg").showModal();
   $("promptcopy").focus();
 }
 function editPrompt(reset) {
-  if (reset) $("prompttask").value = promptPurpose.task;
-  store(aiTaskKey(promptPurpose), $("prompttask").value.trim() === promptPurpose.task ? null : $("prompttask").value);
+  if (reset) $("prompttext").value = promptBody(promptPurpose.task);
+  const task = aiTaskOf($("prompttext").value);
+  store(aiTaskKey(promptPurpose), task && task !== promptPurpose.task ? task : null);
   promptReset();
 }
 

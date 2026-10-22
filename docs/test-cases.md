@@ -153,7 +153,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - Deleting the AI notes, retrying a job or exporting a recording of a room that is not in the list is refused as not on this PC. `todo`
 - ops: the page calls only listed operations and every operation is documented; arguments are read by name; displays get their size and windows do not. `unit`
 - the AI menu offers a few prompts, or the switch when the API is off; a prompt names the API address, the token, llms.txt, the room and the recording; endpoint examples that are JSON are shown as indented code and the rest as text. `ui-test`
-- The task of an AI prompt can be edited in the prompt dialog and is kept per purpose; Copy uses the edited task with the fixed address, token, room and recording lines; "Reset to default" restores the default and forgets the edit. `ui-test` (saved task, cleared task)
+- The AI prompt dialog shows the whole prompt in one editable box (task, blank line, then the address, masked token, room, recording and keep-the-token-secret line); Copy copies the box with the mask replaced by the real token (a deleted mask is copied as is); only the part before the first blank line is kept per purpose, so the facts are always fresh; "Reset to default" is enabled only when the task differs and restores the default. `ui-test` (mask swap, saved task, cleared task), e2e prompt step
 
 ## Network and clocks
 
