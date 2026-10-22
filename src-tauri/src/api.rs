@@ -890,10 +890,9 @@ mod tests {
     }
 
     fn plugin_records(id: &str, owner: &str) -> Vec<Value> {
-        let config = crate::jobs::Config { on: true, version: "1.1.0".into(), runner: Some(owner.to_string()) };
-        let key = format!("{}s1/{owner}", crate::jobs::prefix(id, &config));
+        let key = format!("{}s1/{owner}", crate::jobs::prefix(id, "1.1.0"));
         vec![
-            json!({"k": "plugin", "plugin": id, "on": true, "version": config.version, "t_us": 1}),
+            json!({"k": "plugin", "plugin": id, "on": true, "version": "1.1.0", "t_us": 1}),
             json!({"k": "job", "state": "done", "job": key, "run": 7, "t_us": 2, "tags": {}}),
         ]
     }

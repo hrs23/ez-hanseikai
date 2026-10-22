@@ -395,6 +395,8 @@ const JA = {
   "Volume": "音量",
   "Volume per member": "メンバーごとの音量",
   "Waiting": "待機中",
+  "Waiting for the recording to end": "録画が終わるのを待っています",
+  "Waiting for the video tools": "動画ツールを待っています",
   "Waiting for approval": "承認を待っています",
   "What is sent": "送っているもの",
   "Whole recording": "録画全体",

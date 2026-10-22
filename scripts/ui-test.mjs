@@ -885,7 +885,7 @@ test("Live lists every room member in the saved order and then in join order, wh
   assert.equal(ui$.livePlayers(state({ capture: { source: {}, live: null, working: false }, sets: [{ live: true, players: [{ owner: "me", recording: true }] }] })).find((p) => p.key === "me").recording, false);
 });
 
-test("an extension row says one thing: no runner, what failed, who it waits for, or what is left", () => {
+test("an extension row says one thing: no runner, what failed, who it waits for, or what is left; an Analysis row waiting on the runner's own PC says it waits for the recording to end or for the video tools", () => {
   ui$.setLanguage("en");
   const name = (id) => ({ a: "Ren", b: "Koya" })[id];
   const line = (p) => ui$.extensionLine({ on: true, runner: "a", left: 0, failed: 0, waiting_for: null, ...p }, name);
@@ -898,6 +898,9 @@ test("an extension row says one thing: no runner, what failed, who it waits for,
   assert.equal(ui$.analysisReason({ state: "left", reason: "waiting", waiting_for: "a" }, name), "Waiting for Ren's PC");
   assert.equal(ui$.analysisReason({ state: "left", reason: "receiving" }, name), "Receiving");
   assert.equal(ui$.analysisReason({ state: "left", reason: "queue" }, name), "Waiting");
+  assert.equal(ui$.analysisReason({ state: "left", reason: "recording" }, name), "Waiting for the recording to end");
+  assert.equal(ui$.analysisReason({ state: "left", reason: "ffmpeg" }, name), "Waiting for the video tools");
+  assert.equal(ui$.analysisReason({ state: "left", reason: "no_runner" }, name), "No runner");
   assert.equal(ui$.analysisReason({ state: "failed" }, name), "Failed");
   assert.equal(ui$.analysisReason({ state: "failed", reason: "missing" }, name), "File missing");
   assert.equal(ui$.analysisReason({ state: "running", progress: 0.424 }, name), "Analyzing 42%");
@@ -912,6 +915,8 @@ test("an extension row says one thing: no runner, what failed, who it waits for,
   assert.equal(ui$.analysisState({ state: "idle" }, "a", name), "Not analyzed");
   ui$.setLanguage("ja");
   assert.equal(line({ left: 3 }), "残り 3 件 · Ren のPC");
+  assert.equal(ui$.analysisReason({ state: "left", reason: "recording" }, name), "録画が終わるのを待っています");
+  assert.equal(ui$.analysisReason({ state: "left", reason: "ffmpeg" }, name), "動画ツールを待っています");
   ui$.setLanguage("en");
 });
 

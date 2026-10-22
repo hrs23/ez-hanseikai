@@ -17,6 +17,8 @@ function analysisReason(a, name) {
   if (a.state === "running") return analyzing(a);
   if (a.reason === "receiving") return t("Receiving");
   if (a.reason === "no_runner") return t("No runner");
+  if (a.reason === "recording") return t("Waiting for the recording to end");
+  if (a.reason === "ffmpeg") return t("Waiting for the video tools");
   return a.waiting_for ? t("Waiting for {name}'s PC", { name: name(a.waiting_for) }) : t("Waiting");
 }
 const runningMark = (s) => { const a = (s.analysis || []).find((x) => x.state === "running"); return a ? analyzing(a) : null; };
