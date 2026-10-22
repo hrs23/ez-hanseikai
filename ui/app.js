@@ -117,7 +117,7 @@ const dot = (id) => el("i", { className: "dt", style: `background:${colorOf(colo
 function tile(s, key) {
   if (s.tiles[key]) return s.tiles[key];
   const tl = { key, sigs: {}, media: slot(el("video", { muted: true, preload: "auto" })), mic: null, loud: -Infinity, name: el("span", { className: "nm" }), av: el("span"), imp: el("span", { className: "imp", hidden: true }), who: el("div", { className: "who" }), what: el("div", { className: "what" }), problem: el("div", { className: "problem", hidden: true }) };
-  tl.snd = el("span", { className: "snd", hidden: true }, icon("volume-2", "sm"));
+  tl.snd = el("span", { className: "snd", hidden: true }, icon("volume-2", "sm"), icon("volume-x", "sm"));
   tl.lab = el("div", { className: "nl" }, tl.av, tl.name, tl.imp, tl.snd, el("span", { className: "moff" }, icon("mic-off", "sm")));
   tl.box = el("div", { className: "tile", tabIndex: 0 }, tl.media.video, el("div", { className: "waitbox" }, tl.who, tl.what), tl.problem, tl.lab);
   const focus = () => { const i = s.keys.indexOf(key) + 1; setView(s, s.view === i ? 0 : i); };
@@ -398,7 +398,9 @@ function applyAudio() {
     const tl = play.tiles[key];
     if (!tl) return;
     const mine = recv(key);
-    tl.snd.hidden = key !== heard || play.keys.length < 2;
+    tl.snd.hidden = play.keys.length < 2;
+    tl.snd.classList.toggle("off", key !== heard);
+    tl.box.classList.toggle("heard", key === heard && !play.view && play.keys.length > 1);
     for (const [s, on, mix] of [[tl.media, key === heard, mine.app], [tl.mic, true, mine.voice]]) if (s) {
       setLevel(s, level(on, mix));
       s.video.playbackRate = livePinned() ? liveClock.rate : rate;
@@ -407,8 +409,8 @@ function applyAudio() {
   const pick = play.keys.length > 1 && !play.view;
   $("gamesound").hidden = !pick;
   if (pick && changed("gamesound", [heard, nameOf(heard), look(heard), lang])) {
-    $("gamesound").replaceChildren(avatar(heard, "sm"));
-    $("gamesound").title = $("gamesound").ariaLabel = t("App sound: {name}", { name: nameOf(heard) });
+    $("gamesound").replaceChildren(icon("gamepad-2", "sm"), avatar(heard, "sm"));
+    $("gamesound").title = $("gamesound").ariaLabel = t("{name} app sound is playing", { name: nameOf(heard) });
   }
   if (changed("mute", [muted || volume === 0])) $("mute").replaceChildren(icon(muted || volume === 0 ? "volume-x" : "volume-2"));
   $("volume").value = muted ? 0 : volume;

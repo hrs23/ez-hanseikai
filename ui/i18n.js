@@ -83,7 +83,7 @@ const JA = {
   "Another app uses that shortcut.": "そのショートカットは別のアプリが使っています。",
   "Apex matches": "Apex の試合終了検知",
   "App sound": "アプリの音",
-  "App sound: {name}": "アプリの音: {name}",
+  "{name} app sound is playing": "{name} のアプリの音を再生中",
   "◀◀ {n} s": "◀◀ {n}秒",
   "{n} s ▶▶": "{n}秒 ▶▶",
   "Approve": "承認",
