@@ -23,6 +23,7 @@ const DRAG_START_PX = 4;
 const CODEC_PROBE = { width: 1280, height: 720, bitrate: 6000000, framerate: 30 };
 const GAP = 6;
 const MINI_MS = 100;
+const MINI_MIN_PX = 96;
 const WIDE_PANEL = 1240;
 
 const tileGrid = (box, strip, kind) => ({ el: box, strip, kind, tiles: {}, chips: {}, keys: [], voice: [], mode: "grid", slots: 0, view: 0, last: 1, free: [] });
@@ -131,6 +132,7 @@ function tile(s, key) {
   tl.box = el("div", { className: "tile", tabIndex: 0 }, tl.media.video, el("div", { className: "waitbox" }, tl.who, tl.what), tl.problem, tl.lab);
   const focus = () => { const i = s.keys.indexOf(key) + 1; setView(s, s.view === i ? 0 : i); };
   if (s === rec) tl.box.dataset.speak = key;
+  else tl.media.video.addEventListener("resize", () => place(play));
   tl.box.onkeydown = (e) => { if (e.key === "Enter") focus(); };
   if (s === play) {
     tl.box.onpointerdown = (e) => inkDown(tl, e);
@@ -192,9 +194,10 @@ function place(s) {
   const order = focus ? [focus, ...s.keys.filter((k) => k !== focus)] : s.keys;
   const slots = focus ? n : Math.max(n, s.slots || 0);
   const mode = focus ? (n > 1 ? (s.mode === "side" ? "side" : "bottom") : "grid") : effectiveMode(s);
-  const mini = s === play ? miniKey() : null;
+  let mini = s === play ? miniKey() : null;
   let r = rects(n, mode, s.el.clientWidth, s.el.clientHeight, GAP, slots);
   if (mini && !r.free.length) r = rects(n, mode, s.el.clientWidth, s.el.clientHeight, GAP, slots + 1);
+  if (mini && r.free[0].h < MINI_MIN_PX) [mini, r] = [null, rects(n, mode, s.el.clientWidth, s.el.clientHeight, GAP, slots)];
   const blanks = mini ? r.free.slice(1) : r.free;
   const at = (e, b) => Object.assign(e.style, { left: b.x + "px", top: b.y + "px", width: b.w + "px", height: b.h + "px" });
   order.forEach((key, i) => {
@@ -207,7 +210,7 @@ function place(s) {
   while (s.free.length < blanks.length) s.free.push(s.el.appendChild(el("div", { className: "tile blank" })));
   blanks.forEach((b, i) => at(s.free[i], b));
   if (s === play) {
-    showMini(mini);
+    showMini(mini, r.free[0]);
     if (mini) at(play.mini.box, r.free[0]);
     const all = [...r.tiles, ...r.free];
     if (all.length) {
@@ -221,31 +224,38 @@ function miniKey() {
   const key = st && !play.view && plugins.some((p) => p.view === "minimap" && p.on) && soundKey(0, play.keys, st.id, gameSound);
   return key && play.tiles[key] && play.tiles[key].media.video.videoWidth ? key : null;
 }
-function showMini(key) {
+function showMini(key, b) {
   const m = play.mini || (play.mini = { gen: 0, video: null, sigs: {}, canvas: el("canvas"), av: el("span"), name: el("span", { className: "nm" }) });
   if (!m.box) play.el.append((m.box = el("div", { className: "tile mini" }, m.canvas, el("div", { className: "nl" }, m.av, m.name))));
   m.box.hidden = !key;
   m.name.textContent = t("Minimap");
   if (key && changed("av", [key, nameOf(key), look(key)], m.sigs)) m.av.replaceChildren(avatar(key, "sm"));
+  m.side = key ? b.h : 0;
   const v = key ? play.tiles[key].media.video : null;
-  if (m.video === v) return;
+  if (m.video === v) return drawMini(m);
   m.video = v;
   const gen = ++m.gen;
   m.drawn = null;
   if (!v) return;
   const frame = () => {
     if (m.gen !== gen || !v.isConnected) return;
-    const r = minimapRect(v.videoWidth, v.videoHeight);
-    if (r && !(v.paused && m.drawn === v.currentTime)) {
-      const w = Math.round(r.w * v.videoWidth), h = Math.round(r.h * v.videoHeight);
-      if (m.canvas.width !== w || m.canvas.height !== h) Object.assign(m.canvas, { width: w, height: h });
-      m.canvas.getContext("2d").drawImage(v, r.x * v.videoWidth, r.y * v.videoHeight, w, h, 0, 0, w, h);
-      m.drawn = v.currentTime;
-    }
+    drawMini(m);
     if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(frame);
     else setTimeout(frame, MINI_MS);
   };
   frame();
+}
+function drawMini(m) {
+  const v = m.video;
+  const r = v && minimapRect(v.videoWidth, v.videoHeight);
+  const px = Math.round(m.side * devicePixelRatio);
+  const sig = r && [v.currentTime, v.videoWidth, v.videoHeight, px].join();
+  if (!r || (v.paused && m.drawn === sig)) return;
+  if (m.canvas.width !== px) Object.assign(m.canvas, { width: px, height: px });
+  const c = m.canvas.getContext("2d");
+  c.imageSmoothingQuality = "high";
+  c.drawImage(v, r.x * v.videoWidth, r.y * v.videoHeight, r.w * v.videoWidth, r.h * v.videoHeight, 0, 0, px, px);
+  if (v.readyState >= v.HAVE_CURRENT_DATA) m.drawn = sig;
 }
 for (const s of [rec, play]) new ResizeObserver(() => place(s)).observe(s.el);
 

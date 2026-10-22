@@ -46,9 +46,10 @@ function soundKey(view, keys, me, chosen) {
 const MINIMAP = { at: 0.04, size: 0.235 };
 
 function minimapRect(width, height) {
-  if (!width || !height) return null;
-  const x = Math.min(1, (MINIMAP.at * height) / width);
-  return { x, y: MINIMAP.at, w: Math.min(1 - x, (MINIMAP.size * height) / width), h: MINIMAP.size };
+  if (!(width > 0 && height > 0)) return null;
+  const at = MINIMAP.at * height;
+  const side = Math.min(MINIMAP.size * height, width - at);
+  return side > 0 ? { x: at / width, y: MINIMAP.at, w: side / width, h: side / height } : null;
 }
 
 const seekSum = (run, delta) => (Math.sign(run) === Math.sign(delta) ? run + delta : delta);
