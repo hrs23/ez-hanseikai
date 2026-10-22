@@ -29,7 +29,6 @@ const JA = {
   "Add card": "カードを追加",
   "Write": "書く",
   "Delete this card?": "このカードを削除しますか？",
-  "Rename": "名前を変更",
   "Card": "カード",
   "Summarize with AI": "AIでまとめる",
   "Select screen": "画面を選ぶ",

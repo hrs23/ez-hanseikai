@@ -1197,6 +1197,11 @@ pub fn board_cards(events: &[Value], members: &[String]) -> Vec<Value> {
     }
     for e in events.iter().filter(|e| e["kind"] == "board") {
         let card = e["values"]["card"].as_str().filter(|c| !c.is_empty()).unwrap_or("team");
+        let card = if members.iter().any(|m| m == card) { format!("m:{card}") } else { card.to_string() };
+        if !board_card_valid(&card) {
+            continue;
+        }
+        let card = card.as_str();
         let at = (e["at_us"].as_i64().unwrap_or(0), e["author"].as_str().unwrap_or_default().to_string());
         if cards.get(card).is_some_and(|(old, _)| *old >= at) {
             continue;
@@ -2081,6 +2086,8 @@ pub mod tests {
         assert_eq!(more.iter().map(|c| c["card"].as_str().unwrap()).collect::<Vec<_>>(), ["team", "c:1", "m:b", "m:a"]);
         assert_eq!((more[1]["text"].as_str(), more[1]["title"].as_str(), more[1]["pos"].as_f64()), (Some("Moved"), Some("Drops"), Some(0.5)));
         assert_eq!(more[2]["gone"], true);
+        let legacy = board_cards(&[card(12, "a", "Old", json!({"card": "b"})), card(13, "a", "Bad", json!({"card": "x y"}))], &members);
+        assert_eq!(legacy.iter().map(|c| (c["card"].as_str().unwrap(), c["text"].as_str().unwrap())).collect::<Vec<_>>(), [("team", ""), ("m:a", ""), ("m:b", "Old")]);
         assert!(board_card_valid("team") && board_card_valid(&format!("m:{}", "a".repeat(64))) && board_card_valid("m:ab12") && board_card_valid("c:0f-9") && !board_card_valid("m:") && !board_card_valid("x:1") && !board_card_valid("c:a b"));
     }
 }

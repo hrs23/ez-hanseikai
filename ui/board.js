@@ -21,7 +21,12 @@ function stopEditing() {
 }
 function cardEditor(c) {
   const box = el("textarea", { value: c.text, maxLength: BOARD_MAX, spellcheck: false, ariaLabel: cardTitle(c) });
-  const save = () => { editing = null; putCard(c.card, { text: box.value }); };
+  const save = () => {
+    const input = $("canvas").querySelector(".bhead input");
+    const title = input ? input.value.trim() : c.title || "";
+    editing = null;
+    putCard(c.card, title === (c.title || "") ? { text: box.value } : { text: box.value, title });
+  };
   box.onkeydown = (e) => {
     e.stopPropagation();
     if (composing(e)) return;
@@ -29,6 +34,16 @@ function cardEditor(c) {
     if (e.key === "Escape") { e.preventDefault(); stopEditing(); }
   };
   return el("div", { className: "cedit" }, box, el("div", { className: "row end" }, el("button", { className: "sm", textContent: t("Cancel"), onclick: stopEditing }), el("button", { className: "primary sm", onclick: save }, t("Save"), el("kbd", { textContent: "Ctrl+Enter" }))));
+}
+function titleInput(c) {
+  const input = el("input", { value: c.title || "", placeholder: cardTitle({ ...c, title: null }), maxLength: 24, ariaLabel: t("Name") });
+  input.onkeydown = (e) => {
+    e.stopPropagation();
+    if (composing(e)) return;
+    if (e.key === "Enter") { e.preventDefault(); const box = $("canvas").querySelector(".cedit textarea"); if (box) box.focus(); }
+    if (e.key === "Escape") { e.preventDefault(); stopEditing(); }
+  };
+  return input;
 }
 function nameInput(value, done) {
   const input = el("input", { value, maxLength: 24, ariaLabel: t("Name") });
@@ -49,8 +64,7 @@ function nameInput(value, done) {
 }
 function cardMenu(c, anchor) {
   openMenu([
-    { label: t("Rename"), icon: "edit", run: () => { editing = { card: c.card, rename: true }; renderBoard(); const input = $("canvas").querySelector(".bhead input"); if (input) input.focus(); } },
-    ...(c.card === "team" ? [] : [{ separator: true }, { label: t("Delete…"), icon: "trash", danger: true, run: async () => { if (await ask(t("Delete this card?"), t("Delete"), true)) putCard(c.card, { gone: true }); } }]),
+    { label: t("Delete…"), icon: "trash", danger: true, run: async () => { if (await ask(t("Delete this card?"), t("Delete"), true)) putCard(c.card, { gone: true }); } },
   ], anchor);
 }
 function dragCard(c, down) {
@@ -82,15 +96,15 @@ function dragCard(c, down) {
   grab.addEventListener("pointercancel", end);
 }
 function cardEl(c) {
-  const renaming = editing && editing.rename && editing.card === c.card;
-  const title = renaming ? nameInput(c.title || "", (name) => { editing = null; if (name !== null && name !== (c.title || "")) putCard(c.card, { title: name }); else renderBoard(); }) : el("b", { textContent: cardTitle(c) });
+  const open = editing && editing.card === c.card;
+  const title = open ? titleInput(c) : el("b", { textContent: cardTitle(c) });
   const face = c.card.startsWith("m:") ? avatar(c.card.slice(2), "sm") : null;
   const edit = iconButton("edit", t("Edit"), () => editCard(c));
-  const more = iconButton("more", t("More"), (e) => cardMenu(c, e.currentTarget));
+  const more = c.card === "team" ? null : iconButton("more", t("More"), (e) => cardMenu(c, e.currentTarget));
   const head = el("div", { className: "bhead" }, face, title, el("span", { className: "sp" }), edit, more);
   head.onpointerdown = (e) => dragCard(c, e);
-  head.oncontextmenu = (e) => { e.preventDefault(); cardMenu(c, e); };
-  const body = editing && editing.card === c.card && !editing.rename ? cardEditor(c) : c.text.trim() ? cardDom(c.text, mdHooks()) : el("button", { className: "sm write", textContent: t("Write"), onclick: () => editCard(c) });
+  if (more) head.oncontextmenu = (e) => { e.preventDefault(); cardMenu(c, e); };
+  const body = open ? cardEditor(c) : c.text.trim() ? cardDom(c.text, mdHooks()) : el("button", { className: "sm write", textContent: t("Write"), onclick: () => editCard(c) });
   return el("div", { className: "bcard" + (c.card === "team" ? " team" : "") }, head, body);
 }
 function addCard() {
