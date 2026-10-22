@@ -235,3 +235,12 @@ The UI cleans typed text and the app cleans it again, the same way, and counts w
 | a relay URL that is not https, longer than 256 characters, or more than 8 URLs | refused with a short message | `unit` (relay.rs) |
 | upload limit of 1e300 or below 0 | capped at 100000 Mbit/s, or no limit | `manual` |
 | Enter or a click twice in a row on Create room, Join a room, Save room, a note or a card | one room, one join, one rename, one note, one card | `ui-test` (a running submit ignores the next one) |
+
+## Interface
+
+- the timeline time column fits its longest time with no overlap, in English and Japanese at 820 and 1280 wide; a recording not on this PC dims only its thumbnail and keeps its text readable; small buttons, the connection badge, the Join pill and Download are at least 28 px tall to click; high contrast mode outlines the selected and pressed states. `manual` (UI walkthrough harness)
+- a last seen time has the full local date and time as a tooltip; IDs show three groups everywhere with the full ID as a tooltip; the window is named after the room, and the recording open in the player. `ui-test`
+- the app reopens the room's last page or recording, with its timeline scroll, after a restart. `manual`
+- Extensions and Settings > Recordings show Loading before the first answer, an empty state, and a failed load with Retry. `manual`
+- deleting a board card names it in the confirmation and can be undone; Close room asks first while a recording runs, and the start screen's Delete room… keeps its warning. `manual`
+- ? opens the shortcuts on the start screen too; the player tooltips and the View menu show their keys; a confirmation that deletes focuses Cancel and the others focus their action; a popup gives focus back to its opener; the toast and the player messages are announced. `manual`
