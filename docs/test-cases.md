@@ -249,4 +249,4 @@ The UI cleans typed text and the app cleans it again, the same way, and counts w
 - Extensions and Settings > Recordings show Loading before the first answer, an empty state, and a failed load with Retry. `manual`
 - deleting a board card names it in the confirmation and can be undone; Close room asks first while a recording runs, and the start screen's Delete room… keeps its warning. `manual`
 - ? opens the shortcuts on the start screen too; the player tooltips and the View menu show their keys; a confirmation that deletes focuses Cancel and the others focus their action; a popup gives focus back to its opener; the toast and the player messages are announced. `manual`
-- a playing tile that drifts is nudged by its speed and seeks only on a jump, a far or held drift, never while stalled or just after a seek; the log gets `player:` lines for seeks, stalls, dropped frames, long tasks and the codec's decoding info. `ui-test`
+- the log gets `player:` lines for seeks, stalls, dropped frames, long tasks and the codec's decoding info. `manual`

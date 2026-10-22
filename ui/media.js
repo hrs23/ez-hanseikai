@@ -4,12 +4,7 @@ const PROBE_S = 0.01;
 const RETRY_MS = 3000;
 const HOLD_MAX_MS = 1000;
 const SEEK_TOLERANCE = 0.05;
-const DRIFT_NUDGE_MIN = 0.15;
-const DRIFT_NUDGE_MAX = 1.5;
-const DRIFT_FAR = 4;
-const DRIFT_HOLD_MS = 1000;
-const DRIFT_QUIET_MS = 1500;
-const NUDGE_RATE = 0.08;
+const DRIFT_MAX = 0.4;
 const LOG_LINES_PER_MIN = 20;
 const LONG_TASK_MS = 100;
 const PROBE_MS = 1000;
@@ -30,7 +25,7 @@ const talking = (last, peak, now) => (peak >= SPEAK_LEVEL ? now : last);
 const stillTalking = (last, now) => now - last < SPEAK_HANG_MS;
 
 const slot = (video, label = "") => {
-  const s = { video, label, nudge: 1, rate: 1, drift: { high: 0, seekedAt: 0, target: null }, dropped: 0, ms: null, sb: null, part: null, index: null, size: -1, base: null, shift: 0, got: new Map(), tail: 0, want: null, job: null, failedAt: 0, waitSince: 0 };
+  const s = { video, label, seekedAt: 0, dropped: 0, ms: null, sb: null, part: null, index: null, size: -1, base: null, shift: 0, got: new Map(), tail: 0, want: null, job: null, failedAt: 0, waitSince: 0 };
   video.onerror = () => broken(s);
   for (const type of ["waiting", "stalled", "seeking"]) video.addEventListener(type, () => videoEvent(s, type));
   return s;
@@ -210,46 +205,15 @@ function feed(s, part, off, wall, first = part) {
 }
 const feedSeries = (s, p, series, wall) => feed(s, partFor(p, series, wall), p.off, wall, partFor(p, series, -Infinity));
 
-function driftStep(drift, state, hist, now) {
-  const off = Math.abs(drift);
-  const seek = (reason) => ({ act: "seek", nudge: 1, high: 0, reason });
-  if (state.paused) return off > SEEK_TOLERANCE ? seek("paused") : { act: "none", nudge: 1, high: 0 };
-  if (state.jumped) return seek("jump");
-  if (state.seeking || state.readyState < HAVE_FUTURE_DATA || now - hist.seekedAt < DRIFT_QUIET_MS) return { act: "none", nudge: 1, high: 0 };
-  if (off > DRIFT_FAR) return seek("far");
-  const high = off > DRIFT_NUDGE_MAX ? hist.high || now : 0;
-  if (high && now - high > DRIFT_HOLD_MS) return seek("held");
-  if (off <= DRIFT_NUDGE_MIN) return { act: "none", nudge: 1, high };
-  return { act: "nudge", nudge: drift < 0 ? 1 + NUDGE_RATE : 1 - NUDGE_RATE, high };
-}
-
-function setRate(s, rate) {
-  s.rate = rate;
-  const next = rate * s.nudge;
-  if (s.video.playbackRate !== next) s.video.playbackRate = next;
-}
-
 function aim(s, t) {
   const v = s.video;
   const to = Math.min(t, isFinite(v.duration) ? v.duration : t);
-  if (to >= 0 && isFinite(to)) {
-    const now = Date.now();
-    const hist = s.drift;
-    const jumped = hist.target !== null && Math.abs(to - hist.target) > JUMP_MIN;
-    hist.target = to;
-    const drift = v.currentTime - to;
-    const step = driftStep(drift, { paused: v.paused, seeking: v.seeking, readyState: v.readyState, jumped }, hist, now);
-    hist.high = step.high;
-    if (step.act === "seek") {
-      if (!v.paused) playerLog(`${s.label} seek ${drift > 0 ? "+" : ""}${drift.toFixed(2)} s ${step.reason} ahead=${aheadOf(v)} rs=${v.readyState}`);
-      v.currentTime = to;
-      hist.seekedAt = now;
-      if (Math.abs(drift) > JUMP_MIN) s.waitSince = 0;
-    }
-    if (step.nudge !== s.nudge) {
-      s.nudge = step.nudge;
-      setRate(s, s.rate);
-    }
+  const off = Math.abs(v.currentTime - to);
+  if (to >= 0 && isFinite(to) && off > (v.paused ? SEEK_TOLERANCE : DRIFT_MAX)) {
+    if (!v.paused) playerLog(`${s.label} seek ${(v.currentTime - to).toFixed(2)} s ahead=${aheadOf(v)} rs=${v.readyState}`);
+    s.seekedAt = Date.now();
+    v.currentTime = to;
+    if (off > JUMP_MIN) s.waitSince = 0;
   }
   return !v.seeking && v.readyState >= HAVE_FUTURE_DATA;
 }
@@ -269,7 +233,7 @@ function playerLog(text) {
 }
 function videoEvent(s, type) {
   const v = s.video;
-  if (type === "seeking" && Date.now() - s.drift.seekedAt < 200) return;
+  if (type === "seeking" && Date.now() - s.seekedAt < 200) return;
   playerLog(`${s.label} ${type} t=${v.currentTime.toFixed(2)} ahead=${aheadOf(v)} rs=${v.readyState}`);
 }
 function playerProbe(slots, tiles, minimap) {

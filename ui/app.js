@@ -1,6 +1,6 @@
 const STEP = { small: 1, normal: 5, big: 10, huge: 60 };
 const VOLUME_STEP = 0.05;
-const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3];
+const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
 const MAX_KEYED = 6;
 const TICK_MS = 150;
 const REFRESH_MS = 1000;
@@ -373,7 +373,7 @@ function tickLive() {
     const step = edge ? liveFollow(bufferedEnd(s.video), s.video.currentTime) : { target: liveClock.pos - s.base, playing: !liveClock.held };
     aim(s, step.target);
     pace(s, step.target, step.playing);
-    setRate(s, edge ? 1 : liveClock.rate);
+    s.video.playbackRate = edge ? 1 : liveClock.rate;
   }
 }
 function liveWhat(p) {
@@ -480,7 +480,7 @@ function applyAudio() {
     if (tl.snd) tl.snd.hidden = key !== heard || play.keys.length < 2;
     for (const [s, on, mix] of [[tl.media, key === heard, mine.app], [tl.mic, true, mine.voice]]) if (s) {
       setLevel(s, level(on, mix));
-      setRate(s, livePinned() ? liveClock.rate : rate);
+      s.video.playbackRate = livePinned() ? liveClock.rate : rate;
     }
     if (tl.mic && tl.mic.tap) setTone(tl.mic.tap, tone);
   });
