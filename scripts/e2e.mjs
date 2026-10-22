@@ -1615,7 +1615,7 @@ async function library(ctx) {
     await waitFor("A shows the API badge once, beside the connection badge", within(UI_REFRESH_S * 5), () => evaluate(a, `!$("apibadge").hidden && $("apibadge").nextElementSibling === $("netbadge") && document.querySelectorAll(".apibadge").length === 1`));
     await evaluate(a, `$("apibadge").click(); true`);
     check(await evaluate(a, `$("settings").open && settingsPane === "api" && !$("settings").querySelector('section[data-pane="api"]').hidden`), "the badge does not open Settings > API");
-    await waitFor("A lists the endpoints", within(UI_REFRESH_S * 5), () => evaluate(a, `$("apiref").querySelectorAll("details").length >= 15 && $("apiref").textContent.includes("/v1/status") && $("apiref").querySelector("pre") !== null`));
+    await waitFor("A lists the endpoints", within(UI_REFRESH_S * 5), () => evaluate(a, `$("apiref").querySelectorAll("details").length === ${llms.text.match(/^(GET|POST|PUT) /gm).length} && $("apiref").textContent.includes("/v1/status") && $("apiref").querySelector("pre") !== null`));
     await evaluate(a, `$("settings").close(); go("room"); true`);
     await evaluate(a, `roomMenu($("roomname")); [...$("menu").querySelectorAll("button")].find((b) => b.textContent === t("AI")).click(); true`);
     await waitFor("A opens the AI menu from the room menu", within(UI_REFRESH_S * 5), () => evaluate(a, `!$("menu").hidden && $("menu").querySelectorAll("button").length === 3`));
