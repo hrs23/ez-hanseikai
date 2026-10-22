@@ -565,6 +565,12 @@ test("an avatar shows the image, a built-in shape or the initial; an unknown sha
   assert.deepEqual([room.textContent, room.className], ["P", "av sm room"]);
   const preset = draw(`roomIcon({ id: "ab12", name: "Practice", icon: "" }, "sm")`);
   assert.deepEqual([preset.textContent, preset.find("path").length, preset.className], ["", 1, "av sm room"]);
+  const shape = (icon) => draw(`roomIcon({ id: "ab12", name: "Practice", icon: "${icon}" }, "sm")`).find("path")[0]?.attributes.d;
+  assert.deepEqual([draw(`ROOM_PRESETS.length`), draw(`ROOM_PRESETS.some((n) => FACES[n])`)], [16, false]);
+  assert.equal(shape("bolt"), draw(`ROOM_FACES.bolt`));
+  assert.equal(shape("cat"), draw(`FACES.cat`));
+  assert.equal(shape("unknown"), undefined);
+  assert.ok(draw(`ROOM_PRESETS`).includes(draw(`defaultPreset("ab12")`)));
   assert.equal(draw(`roomIcon({ id: "ab12", name: "Other", icon: "" }, "sm")`).style.background, preset.style.background);
   assert.equal(draw(`roomIcon({ name: "Practice", icon: "${image}" }, "sm")`).find("img").length, 1);
   assert.deepEqual(plain(draw(`look("ren")`)), [2, image.length, image.slice(-16)]);

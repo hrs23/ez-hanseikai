@@ -365,7 +365,7 @@ $("joincode").onkeydown = (e) => { if (e.key === "Enter" && !composing(e) && !$(
 $("pendingcancel").onclick = () => st.room && run("remove_room", { id: st.room.id });
 $("roomnameinput").oninput = showIconDraft;
 $("roomiconpick").onclick = () => pickImage((image) => { iconDraft = image; showIconDraft(); });
-$("roomfacegrid").replaceChildren(...PRESETS.map((name, i) => el("button", { className: "facebtn", ariaLabel: `${t("Room icon")} ${i + 1}`, onclick: () => { iconDraft = presetImage(name); showIconDraft(); } }, presetTile(name, "lg"))));
+$("roomfacegrid").replaceChildren(...ROOM_PRESETS.map((name, i) => el("button", { className: "facebtn", ariaLabel: `${t("Room icon")} ${i + 1}`, onclick: () => { iconDraft = presetImage(name); showIconDraft(); } }, presetTile(name, "lg"))));
 $("roomiconclear").onclick = () => { iconDraft = ""; showIconDraft(); };
 $("roomnameinput").onkeydown = (e) => { if (e.key === "Enter" && !composing(e) && !$("roomsave").disabled) $("roomsave").click(); };
 $("roomsave").onclick = async () => {
