@@ -152,10 +152,15 @@ function mdParse(text) {
 
 const mdText = (nodes) => nodes.map((n) => n.text ?? n.code ?? mdText(n.strong || n.em || n.strike || n.mark || n.children || [])).join("");
 
-function chipEl(kind, value, label, hooks) {
+function chipEl(kind, value, label, hooks, ids) {
   if (!hooks.onChip) return el("span", { className: "tag", textContent: label });
   const on = hooks.chip && hooks.chip.kind === kind && hooks.chip.value.toLowerCase() === value.toLowerCase();
-  return el("button", { type: "button", className: "tag" + (on ? " on" : ""), textContent: label, onclick: (e) => { e.stopPropagation(); hooks.onChip(kind, value); } });
+  return el("button", { type: "button", className: "tag" + (on ? " on" : ""), textContent: label, onclick: (e) => { e.stopPropagation(); hooks.onChip(kind, value, ids); } });
+}
+
+function mentionEl(name, hooks) {
+  const who = hooks.who ? hooks.who(name) : { value: name, ids: [] };
+  return chipEl("mention", who.value, "@" + who.value, hooks, who.ids);
 }
 
 function mdSpans(nodes, hooks) {
@@ -163,7 +168,7 @@ function mdSpans(nodes, hooks) {
   return nodes.flatMap((n) => {
     if (n.text !== undefined) {
       const parts = n.text.split("\n");
-      return parts.flatMap((p, k) => (k ? [el("br"), p] : [p])).flatMap((p) => (typeof p === "string" && hooks.names ? mentionParts(p, hooks.names).map((q) => (q.mention ? chipEl("mention", q.mention, "@" + q.mention, hooks) : q)) : [p]));
+      return parts.flatMap((p, k) => (k ? [el("br"), p] : [p])).flatMap((p) => (typeof p === "string" && hooks.names ? mentionParts(p, hooks.names).map((q) => (q.mention ? mentionEl(q.mention, hooks) : q)) : [p]));
     }
     if (n.code !== undefined) return [el("code", { textContent: n.code })];
     if (n.strong) return [wrap("strong", n.strong)];

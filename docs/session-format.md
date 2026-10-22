@@ -70,8 +70,8 @@ Every kind the app writes. The body's field `k` holds the kind, for example {`k`
 | `rec_end` | `set`, `room`, `t_us`, `stop` | The writer's part ends. `stop` is true when someone pressed Stop, so a member who missed it ends the set when it finds this record in any log. |
 | `cap` | `room`, `capture`, `start_us`, `init` {`v`, `m`: {`size`, `sha256`}}, plus the capture details of `rec` | A capture starts or an init arrives. All `cap` records of one capture are merged, later fields winning. |
 | `seg` | `capture`, `series`, `n`, `set`, `t_us`, `d_us`, `size`, `sha256` | A finished segment of a set: number `n` (from 1), its start, duration, size and SHA-256. Only segments of a set are logged. |
-| `event` | `id`, `t_us`, `kind`, `target`, `text`, `values`, `tags`, `source?` | A note, mark, drawing, board card or plugin result. `source` is `ai` for a note written through the local API. `id` is unique per author. `target` is `{"t_us"}` for a moment or `{"from_us", "to_us"}` for a range, with `set?` and `file?` (a member ID). A plugin result also has `plugin` {`id`, `name`, `version`}, `job` and `run`. |
-| `event_edit` | `id`, `t_us`, `text`, `tags` | The new text of the writer's event. |
+| `event` | `id`, `t_us`, `kind`, `target`, `text`, `values`, `tags`, `mentions?`, `source?` | A note, mark, drawing, board card or plugin result. `source` is `ai` for a note written through the local API. `id` is unique per author. `mentions` lists the members `@named` in a note as {`id`, `name`} (the name as written; a duplicate name lists every member with it); without it, a mention is read by member name. `target` is `{"t_us"}` for a moment or `{"from_us", "to_us"}` for a range, with `set?` and `file?` (a member ID). A plugin result also has `plugin` {`id`, `name`, `version`}, `job` and `run`. |
+| `event_edit` | `id`, `t_us`, `text`, `tags`, `mentions?` | The new text of the writer's event. |
 | `event_del` | `id`, `t_us` | The writer's event is deleted. |
 | `event_restore` | `id`, `t_us` | The deletion is undone. |
 | `set_del` | `room`, `set`, `t_us` | Every member drops the set. |

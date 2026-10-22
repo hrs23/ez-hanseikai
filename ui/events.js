@@ -37,12 +37,25 @@ function parseLink(text) {
 }
 
 function inline(text, over) {
-  return mdSpans(mdInline(text), mdHooks({ names: memberNames(), ...over }));
+  const stored = over && over.mentions;
+  const names = stored ? [...new Set(stored.map((m) => m.name))].sort((a, b) => b.length - a.length) : memberNames();
+  return mdSpans(mdInline(text), mdHooks({ names, who: (name) => mentionWho(name, stored), ...over }));
+}
+
+function memberNow() {
+  return { ...((st && st.names) || {}), ...(st && st.id && st.name ? { [st.id]: st.name } : {}) };
 }
 
 function memberNames() {
   const all = [...Object.values((st && st.names) || {}), st && st.name].filter((n) => typeof n === "string" && n.trim());
   return [...new Set(all)].sort((a, b) => b.length - a.length);
+}
+
+function mentionWho(name, stored) {
+  const key = name.toLowerCase();
+  const now = memberNow();
+  const ids = stored ? stored.filter((m) => m.name.toLowerCase() === key).map((m) => m.id) : Object.keys(now).filter((id) => String(now[id]).toLowerCase() === key);
+  return { value: ids.length === 1 && now[ids[0]] ? now[ids[0]] : name, ids };
 }
 
 function mentionParts(text, names) {
@@ -65,6 +78,7 @@ function chipMatches(n, chip) {
   if (!chip) return true;
   const want = chip.value.toLowerCase();
   if (chip.kind === "tag") return (n.tags || []).some((t) => t.toLowerCase() === want);
+  if (Array.isArray(n.mentions)) return n.mentions.some((m) => (chip.ids || []).includes(m.id));
   return mentionParts(n.body || n.text || "", memberNames()).some((p) => p.mention && p.mention.toLowerCase() === want);
 }
 

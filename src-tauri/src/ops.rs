@@ -350,7 +350,13 @@ fn add_event(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     if kind == "note" && text.trim().is_empty() {
         return Err("Write something first.".into());
     }
-    Ok(log_event(core, &room, &kind, &text, target, values))
+    let id = now_us();
+    let mut record = room::user_event(id, &kind, &text, target, values);
+    if kind == "note" {
+        record = room::with_mentions(record, &room::names(core, core.room(&room).as_ref(), false));
+    }
+    log_and_share(core, &room, &record);
+    Ok(json!(id))
 }
 
 fn event_action(core: &Arc<Core>, args: Value) -> Result<Value, String> {
@@ -363,6 +369,7 @@ fn event_action(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     };
     let text = clean_note(&arg::<String>(&args, "text")?, BOARD_MAX);
     merge(&mut record, &json!({"id": arg::<i64>(&args, "id")?, "t_us": now_us(), "text": text, "tags": room::tags(&text)}));
+    record = room::with_mentions(record, &room::names(core, core.room(&room).as_ref(), false));
     log_and_share(core, &room, &record);
     Ok(Value::Null)
 }

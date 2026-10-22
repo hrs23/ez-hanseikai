@@ -1028,6 +1028,48 @@ pub fn tags(text: &str) -> Vec<String> {
     out
 }
 
+fn word(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
+}
+
+pub fn mentions(text: &str, names: &HashMap<String, String>) -> Vec<Value> {
+    let mut list: Vec<(&String, Vec<char>)> = names.iter().filter(|(_, n)| !n.trim().is_empty()).map(|(id, n)| (id, n.chars().collect())).collect();
+    list.sort_by_key(|(_, n)| std::cmp::Reverse(n.len()));
+    let chars: Vec<char> = text.chars().collect();
+    let same = |a: &[char], b: &[char]| a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.to_lowercase().eq(y.to_lowercase()));
+    let mut out: Vec<Value> = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let rest = &chars[(i + 1).min(chars.len())..];
+        let start = chars[i] == '@' && (i == 0 || !(chars[i - 1].is_alphanumeric() || chars[i - 1] == '_'));
+        let hit = start.then(|| list.iter().find(|(_, n)| rest.len() >= n.len() && same(&rest[..n.len()], n) && !(n.last().is_some_and(|c| word(*c)) && rest.get(n.len()).is_some_and(|c| word(*c))))).flatten();
+        let Some((_, found)) = hit else {
+            i += 1;
+            continue;
+        };
+        let written: String = rest[..found.len()].iter().collect();
+        for (id, _) in list.iter().filter(|(_, n)| same(n, found)) {
+            if !out.iter().any(|m| m["id"] == id.as_str() && m["name"].as_str().is_some_and(|x| x.to_lowercase() == written.to_lowercase())) {
+                out.push(json!({"id": id, "name": written}));
+            }
+        }
+        i += 1 + found.len();
+    }
+    out
+}
+
+pub fn with_mentions(mut record: Value, names: &HashMap<String, String>) -> Value {
+    record["mentions"] = json!(mentions(record["text"].as_str().unwrap_or_default(), names));
+    record
+}
+
+fn event_mentions(r: &Value) -> Value {
+    match r["mentions"].as_array() {
+        Some(list) => json!(list.iter().filter(|m| m["id"].is_string() && m["name"].is_string()).map(|m| json!({"id": m["id"], "name": m["name"]})).collect::<Vec<_>>()),
+        None => Value::Null,
+    }
+}
+
 fn event_tags(r: &Value, text: &str) -> Value {
     match r["tags"].as_array() {
         Some(list) => json!(list.iter().filter_map(|t| t.as_str()).collect::<Vec<_>>()),
@@ -1048,7 +1090,7 @@ fn event_from(r: &Value, owner: &str, id: i64, offset_us: i64) -> Value {
         "kind": r["kind"].as_str().unwrap_or("event"),
         "local_us": local("t_us").or_else(|| local("from_us")), "end_us": local("to_us"),
         "set": set, "file": file,
-        "text": text, "values": r["values"], "tags": tags, "deleted": false, "run": r["run"],
+        "text": text, "values": r["values"], "tags": tags, "mentions": event_mentions(r), "deleted": false, "run": r["run"],
         "source": if r["source"] == "ai" { json!("ai") } else { Value::Null }, "at_us": id - offset_us,
     })
 }
@@ -1088,6 +1130,7 @@ pub fn events(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> Vec<Value> {
                 (Some("event_edit"), Some(i)) => {
                     let text: String = r["text"].as_str().unwrap_or_default().chars().take(crate::BOARD_MAX).collect();
                     list[i]["tags"] = event_tags(r, &text);
+                    list[i]["mentions"] = event_mentions(r);
                     list[i]["text"] = json!(text);
                 }
                 (Some("event_del"), Some(i)) => list[i]["deleted"] = json!(true),
@@ -1690,6 +1733,23 @@ pub mod tests {
     fn log_lines_carry_the_local_wall_clock() {
         assert_eq!(wall_clock(1_760_801_895_123_456, 9 * 3600), "2025-10-19T00:38:15.123");
         assert_eq!(wall_clock(0, -3600), "1969-12-31T23:00:00.000");
+    }
+
+    #[test]
+    fn mentions_store_member_ids_and_the_written_name() {
+        let names: HashMap<String, String> = [("a", "Jo"), ("b", "Jo Smith"), ("c", "jo"), ("d", "たろう")].map(|(i, n)| (i.to_string(), n.to_string())).into();
+        let ids = |text: &str| {
+            let mut v: Vec<String> = mentions(text, &names).iter().map(|m| format!("{}={}", m["id"].as_str().unwrap(), m["name"].as_str().unwrap())).collect();
+            v.sort();
+            v
+        };
+        assert_eq!(ids("go @Jo Smith!"), vec!["b=Jo Smith"]);
+        assert_eq!(ids("go @JO"), vec!["a=JO", "c=JO"]);
+        assert_eq!(ids("@たろう、mail a@Jo.com @Joe @"), vec!["d=たろう"]);
+        assert!(ids("none").is_empty());
+        let r = with_mentions(user_event(1, "note", "hi @Jo Smith", json!({"set": "s1"}), json!({})), &names);
+        let e = events(&[log("a", 0, vec![r, user_event(2, "note", "old", json!({"set": "s1"}), json!({}))])], None);
+        assert_eq!((e[0]["mentions"].clone(), e[1]["mentions"].clone()), (json!([{"id": "b", "name": "Jo Smith"}]), Value::Null));
     }
 
     #[test]

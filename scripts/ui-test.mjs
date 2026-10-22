@@ -11,7 +11,7 @@ const source = ["util.js", "i18n.js", "live.js", "media.js", "layout.js", "dock.
 const memory = new Map();
 const localStorage = { getItem: (k) => memory.get(k) ?? null, setItem: (k, v) => memory.set(k, v) };
 const context = vm.createContext({ localStorage, window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id, location: { search: "" } });
-const ui$ = vm.runInContext(`${source}\n({ matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, memberStatus, sendsPicture, viewLine, tileProblem, livePlayers, ordered, extensionLine, analysisReason, recordingAnalysis, analysisState, cardParts, dropPos, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, talking, stillTalking, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, memberStatus, sendsPicture, viewLine, tileProblem, livePlayers, ordered, extensionLine, analysisReason, recordingAnalysis, analysisState, cardParts, dropPos, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, talking, stillTalking, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 const plain = (v) => JSON.parse(JSON.stringify(v));
 
 const moment = (m, extra = {}) => ({ role: "moment", m, plugin: { id: "apex-matches" }, tags: ["match"], ...extra });
@@ -750,6 +750,18 @@ test("a filter chip keeps notes with that tag or mention", () => {
   assert.equal(ui$.chipMatches(note, { kind: "mention", value: "jo" }), true);
   assert.equal(ui$.chipMatches({ body: "plain", tags: [] }, { kind: "mention", value: "Jo" }), false);
   assert.deepEqual([...ui$.memberNames()], ["Jo", "Me"]);
+});
+
+test("a mention follows a renamed member by id and still matches the filter", () => {
+  ui$.setStorage({ id: "me", names: { a: "Joe", b: "Joe", me: "You" }, name: "Mia" });
+  const note = { body: "go @Jo now", mentions: [{ id: "a", name: "Jo" }] };
+  assert.deepEqual(plain(ui$.mentionWho("Jo", note.mentions)), { value: "Joe", ids: ["a"] });
+  assert.deepEqual(plain(ui$.mentionWho("Joe", null)), { value: "Joe", ids: ["a", "b"] });
+  assert.deepEqual(plain(ui$.mentionWho("Gone", [{ id: "z", name: "Gone" }])), { value: "Gone", ids: ["z"] });
+  assert.equal(ui$.chipMatches(note, { kind: "mention", value: "Joe", ids: ["a"] }), true);
+  assert.equal(ui$.chipMatches(note, { kind: "mention", value: "Joe", ids: ["b"] }), false);
+  assert.equal(ui$.chipMatches({ body: "go @Joe", mentions: null }, { kind: "mention", value: "joe", ids: ["a"] }), true);
+  assert.equal(ui$.chipMatches({ body: "no mention", mentions: [] }, { kind: "mention", value: "Joe", ids: ["a"] }), false);
 });
 
 test("typing # or @ suggests known tags or member names and inserts the pick", () => {

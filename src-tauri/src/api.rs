@@ -366,7 +366,7 @@ fn event_json(l: &Loaded, set: &Set, e: &Value) -> Value {
     json!({
         "key": e["key"], "id": e["id"], "author": e["author"], "author_name": l.name(e["author"].as_str().unwrap_or_default()),
         "plugin": e["plugin"]["name"], "kind": e["kind"], "at_s": seconds(set, e["local_us"].as_i64()), "to_s": seconds(set, e["end_us"].as_i64()),
-        "member": member, "member_name": member.map(|m| l.name(m)), "text": e["text"], "tags": e["tags"], "values": e["values"],
+        "member": member, "member_name": member.map(|m| l.name(m)), "text": e["text"], "tags": e["tags"], "mentions": e["mentions"], "values": e["values"],
     })
 }
 
@@ -525,6 +525,9 @@ fn add_event(be: &dyn Backend, l: &Loaded, set: &Set, req: &Request) -> Response
     };
     let id = be.now_us();
     let mut record = room::user_event(id, kind, &text, target, Value::Null);
+    if kind == "note" {
+        record = room::with_mentions(record, &l.head.names);
+    }
     record["source"] = json!("ai");
     if let Err(e) = be.add(&l.head.id, record) {
         return error(409, &e);

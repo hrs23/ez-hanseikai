@@ -847,7 +847,7 @@ function renderReview(shown) {
   shown = shown.filter((n) => chipMatches(n, chip));
   const starts = list.map((c) => ({ m: c.m, row: el("div", { className: "ev sys" }, el("button", { className: "at", textContent: fmt(c.m), onclick: () => seekTo(c.m) }), el("span", { className: "tx" }, icon("flag", "sm"), t("Match {n}", { n: c.n }))) }));
   const rows = [...shown.map((n) => ({ m: n.m ?? -1, row: eventRow(n) })), ...starts].sort((a, b) => a.m - b.m).map((r) => r.row);
-  const bar = chip ? [el("div", { className: "chipbar" }, el("button", { type: "button", className: "tag on", textContent: (chip.kind === "tag" ? tagName(chip.value) : "@" + chip.value) + " ×", onclick: () => pickChip(chip.kind, chip.value) }))] : [];
+  const bar = chip ? [el("div", { className: "chipbar" }, el("button", { type: "button", className: "tag on", textContent: (chip.kind === "tag" ? tagName(chip.value) : "@" + chip.value) + " ×", onclick: () => pickChip(chip.kind, chip.value, chip.ids) }))] : [];
   $("reviewlist").replaceChildren(...bar, ...(rows.length ? rows : [el("div", { className: "none", textContent: t("No notes yet") })]));
 }
 function renderAnalysis(set) {
@@ -878,15 +878,15 @@ function goTo(n) {
   else seekTo(n.m);
 }
 let chip = null;
-function pickChip(kind, value) {
-  chip = chip && chip.kind === kind && chip.value.toLowerCase() === value.toLowerCase() ? null : { kind, value, set: selected };
+function pickChip(kind, value, ids) {
+  chip = chip && chip.kind === kind && chip.value.toLowerCase() === value.toLowerCase() ? null : { kind, value, ids, set: selected };
   renderEvents();
 }
 function eventRow(n) {
   const at = el("button", { className: "at", textContent: timeText(n), disabled: !n.seekable || n.m === null });
   at.onclick = () => goTo(n);
   const sys = !!n.plugin || n.kind === "mark";
-  const body = n.role === "drawing" ? [t("Drawing") + (n.count > 1 ? ` ×${n.count}` : "")] : inline(n.body, { onChip: pickChip, chip });
+  const body = n.role === "drawing" ? [t("Drawing") + (n.count > 1 ? ` ×${n.count}` : "")] : inline(n.body, { onChip: pickChip, chip, mentions: n.mentions });
   const tags = n.kind === "note" ? [] : (n.tags || []).map((tg) => el("span", { className: "tag", textContent: tagName(tg) }));
   const tx = el("span", { className: "tx" }, sys ? icon("flag", "sm") : null, ...body, n.source === "ai" ? el("span", { className: "aimark", textContent: t("AI") }) : null, ...tags);
   const by = el("span", { className: "by", title: n.who }, n.plugin ? el("i", { className: "dt", style: "background:var(--muted)" }) : dot(n.author));
@@ -941,7 +941,7 @@ function renderMoment(m) {
   const notes = activeAt(items.filter((n) => n.role === "moment" && n.text && !n.plugin), m).slice(-OVERLAY_MAX);
   const typists = (watchParty && st.party.on ? st.party.typing || [] : []).filter((id) => id !== st.id);
   if (changed("overlay", [notes.map((n) => [n.key, n.m, n.body, n.author]), typists.map(nameOf), st.colors, lang])) $("overlay").replaceChildren(
-    ...notes.map((n) => el("p", {}, avatar(n.author, "sm"), ...inline(n.body))),
+    ...notes.map((n) => el("p", {}, avatar(n.author, "sm"), ...inline(n.body, { mentions: n.mentions }))),
     ...typists.map((id) => el("p", { className: "typing", textContent: t("{name} is typing…", { name: nameOf(id) }) })));
 }
 function openLink(link) {

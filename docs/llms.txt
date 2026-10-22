@@ -16,7 +16,7 @@ The API is off by default. A person turns it on in the app: Settings > API > Loc
 - Times in a recording are seconds from its start (`at_s`, `from_s`, `to_s`, rounded to 0.1). Clock times are milliseconds since 1970 (`start_ms`, `end_ms`).
 - Reads work for every room on this PC. Operations act on the room that is open in the app, as the window does; events and the board are written only to the open room once this PC is a member of it (409 otherwise): open it with enter_room.
 - Operations run at once, without the window's confirmations. delete_set, remove_room, delete_old_files and reset {keep_rooms: false} delete recordings or the app's data with no undo: call them only when the person asked for exactly that. The token gives the same control as the window.
-- Notes are at most 500 characters, a game plan card at most 4000 and a request body at most 64 kB. A note you add through this API is shown to people with an AI mark, and a person can delete all of them at once. Write `#tag` in a note text to tag it, or send `tags`.
+- Notes are at most 500 characters, a game plan card at most 4000 and a request body at most 64 kB. A note you add through this API is shown to people with an AI mark, and a person can delete all of them at once. Write `#tag` in a note text to tag it, or send `tags`. Write `@name` of a room member to mention them; the note keeps the member ID and the written name, so a mention survives a rename.
 - Paths are on this PC (write them like C:/videos/scrim). A recording leaves (export_folder) as a folder of plain files; the format is in docs/session-format.md of the repository.
 
 ## Read
@@ -42,7 +42,7 @@ GET /v1/rooms/{room}/recordings/{recording}/voices/{member}
   The member's voice in the recording as raw audio/mp4; when it has several captures (the app restarted while recording) they follow one another in time order, each starting with its own ftyp. 404 when there is none. Transcribe them to know what was said.
 
 GET /v1/rooms/{room}/recordings/{recording}/events[?tag=rotate][&kind=note]
-  {"events": [{"key": "<author>/<id>", "id": 1792445520000000, "author": "...", "author_name": "Ann", "plugin": null, "kind": "note", "at_s": 120.5, "to_s": null, "member": null, "member_name": null, "text": "Rotate early #rotate", "tags": ["rotate"], "values": null}]}
+  {"events": [{"key": "<author>/<id>", "id": 1792445520000000, "author": "...", "author_name": "Ann", "plugin": null, "kind": "note", "at_s": 120.5, "to_s": null, "member": null, "member_name": null, "text": "Rotate early #rotate", "tags": ["rotate"], "mentions": [{"id": "...", "name": "Ren"}], "values": null}]}
   Notes, marks and analysis results in time order (untimed ones first). plugin is the extension's name for analysis results, null for people. kinds: note, mark, match_end, ... Spoken lines, drawings and the game plan are left out unless you ask with kind=speech, kind=drawing or kind=board.
 
 GET /v1/rooms/{room}/recordings/{recording}/chapters
