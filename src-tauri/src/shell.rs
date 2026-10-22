@@ -46,7 +46,7 @@ const JA: [(&str, &str); 43] = [
     ("Copy invite code", "招待コードをコピー"),
     ("Cancel invite", "招待を取り消す"),
     ("Room settings…", "ルームの設定…"),
-    ("Leave room", "ルームを離れる"),
+    ("Close room", "ルームを閉じる"),
     ("Members", "メンバー"),
     ("Extensions", "拡張機能"),
     ("Start recording", "録画開始"),
@@ -67,15 +67,15 @@ const JA: [(&str, &str); 43] = [
     ("Report a problem", "問題を報告"),
     ("Release notes", "リリースノート"),
     ("About", "バージョン情報"),
-    ("Cancel the export and exit?", "エクスポートを中止してアプリを終了しますか?"),
-    ("Files are still arriving. Exit anyway?", "まだファイルを受け取っています。それでも終了しますか?"),
+    ("Cancel the export and exit?", "エクスポートを中止してアプリを終了しますか？"),
+    ("Files are still arriving. Exit anyway?", "まだファイルを受け取っています。それでも終了しますか？"),
     ("Cancel", "キャンセル"),
     ("Version", "バージョン"),
     ("Moment marked", "マークしました"),
     ("{name} wants to join", "{name} が参加を希望しています"),
     ("{name} joined {room}", "{name} が {room} に参加しました"),
     ("{a} and {b} joined {room}", "{a} と {b} が {room} に参加しました"),
-    ("{a}, {b} and {n} more joined {room}", "{a}、{b} ほか {n} 人が {room} に参加しました"),
+    ("{a}, {b} and {n} more joined {room}", "{a}、{b} ほか{n}人が {room} に参加しました"),
 ];
 
 pub struct Join {
@@ -612,7 +612,7 @@ fn build_menu(app: &AppHandle, lang: &str, toggle: &MenuItem<Wry>, mark: &MenuIt
         .item(&it("copy-invite", "Copy invite code", None)?)
         .item(&it("cancel-invite", "Cancel invite", None)?)
         .separator()
-        .item(&it("leave-room", "Leave room", None)?)
+        .item(&it("leave-room", "Close room", None)?)
         .build()?;
     let session = SubmenuBuilder::new(app, tr(lang, "Recording"))
         .item(toggle)
@@ -631,7 +631,7 @@ fn build_menu(app: &AppHandle, lang: &str, toggle: &MenuItem<Wry>, mark: &MenuIt
         .item(&it("sidebar", "Sidebar", Some("CmdOrCtrl+B"))?)
         .item(&it("fullscreen", "Full screen", Some("F11"))?)
         .separator()
-        .item(&it("shortcuts", "Keyboard shortcuts", None)?)
+        .item(&MenuItemBuilder::with_id("shortcuts", format!("{}\t?", tr(lang, "Keyboard shortcuts"))).build(app)?)
         .build()?;
     let help = SubmenuBuilder::new(app, tr(lang, "Help"))
         .item(&it("diagnostics", "Diagnostics", None)?)

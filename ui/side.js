@@ -71,7 +71,7 @@ function roomMenu(anchor) {
     { label: t("Copy invite code"), icon: "user-plus", run: copyInvite },
     ...(st.invites ? [{ label: t("Cancel invite"), icon: "x", run: cancelInvite }] : []),
     { separator: true },
-    { label: t("Leave room"), icon: "logout", run: leaveRoom },
+    { label: t("Close room"), icon: "logout", run: closeRoom },
   ], anchor);
 }
 function navigate(name) {
@@ -235,7 +235,8 @@ function renderDock() {
   if (changed("me", [st.name, st.id, look(st.id), lang])) {
     $("meav").replaceChildren(avatar(st.id, "lg", "on"));
     $("mename").textContent = st.name;
-    $("meid").textContent = longId(st.id, 2);
+    $("meid").textContent = longId(st.id);
+    $("meid").title = st.id;
   }
   const relay = netState(st.peers) === "relay";
   if (changed("net", [relay, lang])) {

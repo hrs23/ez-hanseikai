@@ -8,7 +8,8 @@ const SHORTCUTS = [
   ["Back / forward 1 min", ["Ctrl+←", "Ctrl+→"]],
   ["Slower / faster", ["<", ">"]],
   ["Mute / volume", ["M", "↑", "↓"]],
-  ["Full screen / leave", ["F", "F11", "Esc"]],
+  ["Player full screen / leave", ["F", "Esc"]],
+  ["Full screen", ["F11"]],
   ["All players / one player", ["0", "1–6", "Tab"]],
   ["Previous / next recording", ["Shift+P", "Shift+N"]],
   ["Add note", ["C"]],
@@ -26,6 +27,7 @@ let drawerFor = null;
 let speed = null;
 let settingsPane = "general";
 let storageInfo = null;
+let storageFailed = false;
 let picked = new Set();
 let flow = null;
 let flowAt = 0;
@@ -50,7 +52,7 @@ function renderStart() {
   if (!changed("rooms", [others.map((r) => [r.id, r.name, stamp(r.icon), r.used_us]), lang])) return;
   $("roomlist").replaceChildren(...others.map((r, i) => {
     const enter = () => run("enter_room", { id: r.id }, openLive);
-    const more = iconButton("more", t("More"), (e) => { e.stopPropagation(); openMenu([{ label: t("Delete…"), icon: "trash", danger: true, run: () => deleteRoom(r) }], e.currentTarget); }, "icon sm more");
+    const more = iconButton("more", t("More"), (e) => { e.stopPropagation(); openMenu([{ label: t("Delete room…"), icon: "trash", danger: true, run: () => deleteRoom(r) }], e.currentTarget); }, "icon sm more");
     const row = el("div", { className: "rrow", tabIndex: 0, role: "button" }, nameChip(roomIcon(r, "lg"), r.name), el("span", { className: "sp" }), r.used_us ? el("span", { className: "muted small", textContent: formatWhen(new Date(r.used_us / 1000), new Date(), lang), title: fullWhen(new Date(r.used_us / 1000), lang) }) : null, el("button", { className: "sm" + (i ? "" : " primary"), textContent: t("Enter"), onclick: (e) => { e.stopPropagation(); enter(); } }), more);
     row.onclick = enter;
     row.onkeydown = (e) => { if (e.key === "Enter") enter(); };
@@ -60,7 +62,10 @@ function renderStart() {
 async function deleteRoom(room) {
   if (await ask(t("Leave {room} and delete its recordings and notes?", { room: room.name }), t("Delete"), true)) run("remove_room", { id: room.id });
 }
-const leaveRoom = () => st.room && run("close_room", { id: st.room.id }, openLive);
+async function closeRoom() {
+  if (!st.room || (st.recording && !(await ask(t("Stop your recording and close the room?"), t("Close room"), true)))) return;
+  run("close_room", { id: st.room.id }, openLive);
+}
 const joinWith = (input) => run("join_room", { code: input.value }, () => { input.value = ""; refresh(); });
 const typedName = () => cleanText($("startname").value, LIMITS.name) || st.name;
 const copyInvite = () => invoke("create_invite", { reuse: true }).then((code) => navigator.clipboard.writeText(code)).then(() => { flash(t("Invite code copied")); refresh(); }).catch(fail);
@@ -120,7 +125,7 @@ function renderMembers() {
   const out = [];
   for (const a of st.asks) {
     const answer = (approve) => () => run("answer_ask", { id: a.id, approve });
-    out.push(el("div", { className: "askbox" }, picture(a.name, null, "", "lg"), stack(t("{name} wants to join", { name: a.name || longId(a.id, 2) }), el("small", { className: "mono", textContent: longId(a.id, 2) })), el("span", { className: "sp" }), el("button", { className: "primary", textContent: t("Approve"), onclick: answer(true) }), el("button", { textContent: t("Decline"), onclick: answer(false) })));
+    out.push(el("div", { className: "askbox" }, picture(a.name, null, "", "lg"), stack(t("{name} wants to join", { name: a.name || longId(a.id) }), el("small", { className: "mono", textContent: longId(a.id) })), el("span", { className: "sp" }), el("button", { className: "primary", textContent: t("Approve"), onclick: answer(true) }), el("button", { textContent: t("Decline"), onclick: answer(false) })));
   }
   if (st.invites) out.push(el("div", { className: "invitebox" }, icon("link", "sm"), el("span", { textContent: t("An invite code is open") }), el("span", { className: "sp" }), el("button", { className: "sm", onclick: copyInvite }, icon("copy", "sm"), t("Copy")), el("button", { className: "sm", onclick: cancelInvite, textContent: t("Cancel invite") })));
   const head = el("tr", {}, ...["Name", "ID", "Status", "Connection", "Round trip", "Version", ""].map((h) => el("th", { textContent: h ? t(h) : "" })));
@@ -131,8 +136,8 @@ function renderMembers() {
     const version = me ? st.version : p && p.version;
     const tr = el("tr", { className: "pick" + (drawerFor === id ? " sel" : "") + (state.kind === "off" ? " dim" : ""), tabIndex: 0 },
       el("td", {}, withClass(nameChip(me ? el("button", { className: "plain", ariaLabel: t("Avatar"), onclick: (e) => { e.stopPropagation(); openSettings("general"); } }, avatar(id, "", "on", false, true)) : avatar(id, "", p && p.connected ? "on" : null, false, true), nameOf(id), me ? el("span", { className: "pill gray", textContent: t("You") }) : null), "who")),
-      el("td", {}, el("span", { className: "mono", textContent: longId(id) }), iconButton("copy", t("Copy ID"), (e) => { e.stopPropagation(); navigator.clipboard.writeText(id).then(() => flash(t("ID copied"))); })),
-      el("td", { className: "state " + state.kind }, el("i", { className: "sdot" }), state.text),
+      el("td", {}, idText(id), iconButton("copy", t("Copy ID"), (e) => { e.stopPropagation(); navigator.clipboard.writeText(id).then(() => flash(t("ID copied"))).catch(fail); })),
+      el("td", { className: "state " + state.kind, title: state.title || "" }, el("i", { className: "sdot" }), state.text),
       el("td", {}, conn),
       el("td", { textContent: !me && p.connected ? `${p.rtt_ms} ms` : "" }),
       el("td", { className: version && version !== st.version ? "warn" : "", textContent: version || "—" }),
@@ -171,12 +176,12 @@ function renderDrawer() {
     if (p.sent != null) add(t("Sent"), bytes(p.sent));
     if (p.received != null) add(t("Received"), bytes(p.received));
     if (p.offset_us != null) add(t("Clock offset"), `${p.offset_us >= 0 ? "+" : "−"}${(Math.abs(p.offset_us) / 1e6).toFixed(2)} s`);
-  } else if (!me) path = el("div", { className: "pathbox off" }, el("b", { textContent: memberOf(id).status.text }));
+  } else if (!me) path = el("div", { className: "pathbox off" }, el("b", { textContent: memberOf(id).status.text, title: memberOf(id).status.title || "" }));
   add(t("Version"), (me ? st.version : p && p.version) || "—");
   const measuring = !!speed && speed.id === id && !speed.line;
   if (speed && speed.id === id && speed.line) add(t("Speed"), speed.line);
   box.replaceChildren(
-    el("div", { className: "dhead" }, avatar(id, "xl"), stack(nameOf(id), el("small", { className: "mono", textContent: longId(id) }), true), iconButton("x", t("Close"), () => { drawerFor = null; delete sigs.roomtab; renderRoom(); })),
+    el("div", { className: "dhead" }, avatar(id, "xl"), stack(nameOf(id), idText(id, "small"), true), iconButton("x", t("Close"), () => { drawerFor = null; delete sigs.roomtab; renderRoom(); })),
     path || "",
     el("dl", { className: "kv" }, ...kv),
     receivingFrom.length ? el("div", { className: "h3", textContent: t("Receiving") }) : "",
@@ -195,7 +200,7 @@ function openSettings(pane) {
   pressVoice();
   $("relays").value = st.relays.join("\n");
   renderHotkeys();
-  $("myid").textContent = longId(st.id, 4);
+  $("myid").textContent = longId(st.id);
   $("myid").title = st.id;
   invoke("data_info").then((info) => { $("datadir").textContent = info.dir; }).catch(warn);
   $("version").textContent = st.version;
@@ -276,7 +281,7 @@ function renderApiReference() {
   }).catch(fail);
 }
 function loadStorage() {
-  invoke("data_info").then((info) => { storageInfo = info; delete sigs.storage; renderStorage(); }).catch(fail);
+  invoke("data_info").then((info) => { storageInfo = info; storageFailed = false; }, (e) => { warn(e); storageFailed = true; }).then(() => { delete sigs.storage; renderStorage(); });
 }
 function recvText(s) {
   const recv = receiving(s);
@@ -288,13 +293,14 @@ function renderStorage() {
   const totalBytes = d.total || 1;
   const other = Math.max(0, totalBytes - d.free - used);
   const sets = st.sets.filter((s) => !s.live);
-  const sig = [used, d, sets.map((s) => [s.id, s.progress.have, s.progress.total, s.shared, recvText(s)]), [...picked], lang];
+  const sig = [used, !!storageInfo, storageFailed, d, sets.map((s) => [s.id, s.progress.have, s.progress.total, s.shared, recvText(s)]), [...picked], lang];
   if (!changed("storage", sig)) return;
   $("storedir").textContent = storageInfo ? storageInfo.dir : "";
   const seg = (cls, n) => { const i = el("i", { className: cls }); i.style.width = (n / totalBytes) * 100 + "%"; return i; };
   $("usage").replaceChildren(seg("app", used), seg("other", other));
   const free = d.hours_left != null ? t("Free {free} · about {h} h of recording", { free: bytes(d.free), h: Math.floor(d.hours_left) }) : t("Free {free}", { free: bytes(d.free) });
-  $("legend").replaceChildren(el("span", {}, el("i", { className: "app" }), `${st.app} ${bytes(used)}`), el("span", {}, el("i", { className: "other" }), t("Other files {size}", { size: bytes(other) })), el("span", { className: "sp" }), el("span", {}, el("i", { className: "free" }), free));
+  const state = loadState(!!storageInfo, storageFailed, "", loadStorage);
+  $("legend").replaceChildren(...(state ? [state] : [el("span", {}, el("i", { className: "app" }), `${st.app} ${bytes(used)}`), el("span", {}, el("i", { className: "other" }), t("Other files {size}", { size: bytes(other) })), el("span", { className: "sp" }), el("span", {}, el("i", { className: "free" }), free)]));
   $("selold").textContent = t("All but newest {n}", { n: KEEP_NEWEST });
   for (const id of [...picked]) if (!sets.some((s) => s.id === id)) picked.delete(id);
   const biggest = Math.max(1, ...sets.map((s) => s.progress.have));
@@ -302,10 +308,10 @@ function renderStorage() {
     const box = el("input", { type: "checkbox", checked: picked.has(s.id), disabled: !canDelete(s), ariaLabel: sessionName(s.id) });
     box.onchange = () => { if (box.checked) picked.add(s.id); else picked.delete(s.id); delete sigs.storage; renderStorage(); };
     const notes = noteCount(s);
-    return el("tr", { className: picked.has(s.id) ? "sel" : "" }, el("td", {}, box), el("td", {}, el("b", { textContent: sessionName(s.id) }), " ", el("span", { className: "muted small", textContent: noPicture(s) ? t("voice only") : t(notes === 1 ? "{n} note" : "{n} notes", { n: notes }) })), el("td", { textContent: setLength(s) }), el("td", { textContent: String(s.players.length) }), el("td", {}, onThisPc(s) ? [el("span", { className: "sizebar" }, el("i", { style: `width:${(s.progress.have / biggest) * 100}%` })), bytes(s.progress.have)] : el("span", { className: "muted", textContent: "—" })), el("td", { className: "muted small", textContent: recvText(s) }));
+    return el("tr", { className: picked.has(s.id) ? "sel" : "" }, el("td", {}, box), el("td", {}, el("b", { textContent: sessionName(s.id), title: fullWhen(sessionStart(s.id)) }), " ", el("span", { className: "muted small", textContent: noPicture(s) ? t("voice only") : t(notes === 1 ? "{n} note" : "{n} notes", { n: notes }) })), el("td", { textContent: setLength(s) }), el("td", { textContent: String(s.players.length) }), el("td", {}, onThisPc(s) ? [el("span", { className: "sizebar" }, el("i", { style: `width:${(s.progress.have / biggest) * 100}%` })), bytes(s.progress.have)] : el("span", { className: "muted", textContent: "—" })), el("td", { className: "muted small", textContent: recvText(s) }));
   });
   const head = el("tr", {}, ...["", "Recorded", "Length", "People", "Size", ""].map((h) => el("th", { textContent: h ? t(h) : "" })));
-  $("storetable").replaceChildren(el("table", { className: "table" }, el("thead", {}, head), el("tbody", {}, ...rows)));
+  $("storetable").replaceChildren(rows.length ? el("table", { className: "table" }, el("thead", {}, head), el("tbody", {}, ...rows)) : el("div", { className: "empty", textContent: t("No recordings yet") }));
   const size = sets.filter((s) => picked.has(s.id)).reduce((n, s) => n + s.progress.have, 0);
   $("selsum").textContent = picked.size ? t("{n} selected · {size}", { n: picked.size, size: bytes(size) }) : "";
   $("deletesel").disabled = !picked.size;
@@ -417,7 +423,7 @@ function pressVoice() {
   pick($("voicetone"), voiceToneChoice, (v) => { voiceToneChoice = v; store("voiceTone", voiceToneChoice); pressVoice(); applyAudio(); });
 }
 $("sessionsound").onchange = () => { sessionSound = $("sessionsound").checked; store("sessionSound", sessionSound); };
-$("copyid").onclick = () => navigator.clipboard.writeText(st.id).then(() => flash(t("ID copied")));
+$("copyid").onclick = () => navigator.clipboard.writeText(st.id).then(() => flash(t("ID copied"))).catch(fail);
 $("opendata").onclick = $("storeopen").onclick = () => dialog("open_data_folder").catch(fail);
 $("relays").onchange = () => run("set_relays", { urls: $("relays").value.split("\n").map((u) => cleanText(u, LIMITS.relay)) });
 $("limit").onchange = () => run("set_limit", { mbps: $("limit").value ? Number($("limit").value) : null });
@@ -480,7 +486,7 @@ const menuActions = {
   "copy-invite": copyInvite,
   "cancel-invite": () => { if (st.invites) cancelInvite(); },
   "rename-room": openRoomSettings,
-  "leave-room": leaveRoom,
+  "leave-room": closeRoom,
   "add-note": openQuick,
   "delete-session": () => deleteSession(playSet()),
   "page-live": () => navigate("live"),

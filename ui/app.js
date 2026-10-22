@@ -63,6 +63,7 @@ let available = null;
 let checkedAt = 0;
 let updateText = "";
 let menuReturn = null;
+let popReturn = null;
 let menuAnchor = null;
 let exporting = null;
 let importedIds = new Set();
@@ -80,9 +81,10 @@ let pluginsGen = 0;
 let dismissed = new Set();
 let full = false;
 let listening = false;
+let restored = false;
 
 const peerOf = (id) => st.peers.find((p) => p.id === id);
-const nameOf = (id) => (id === st.id ? st.name || t("You") : st.names[id] || longId(id, 2));
+const nameOf = (id) => (id === st.id ? st.name || t("You") : st.names[id] || longId(id));
 const people = () => [st.id, ...st.peers.map((p) => p.id)];
 const liveSet = () => st.sets.find((s) => s.live) || null;
 const inRoom = () => !!st && !!st.room && !st.room.pending;
@@ -506,6 +508,7 @@ function openVoiceSettings() {
 }
 function showPop(children, anchor, above, cls = "") {
   const pop = $("pop");
+  if (pop.hidden) popReturn = document.activeElement;
   pop.className = "pop " + cls;
   pop.replaceChildren(...children);
   pop.hidden = false;
@@ -573,6 +576,7 @@ function headerChips(set) {
 function renderHeader(set) {
   const title = !set ? t("Live") : set.live ? t("Recording") : sessionName(set.id);
   $("ptitle").textContent = title;
+  $("ptitle").title = set && !set.live ? fullWhen(new Date(set.start_us / 1000)) : "";
   const chips = headerChips(set);
   const csig = chips.map((c) => c && c.outerHTML);
   if (changed("pchips", csig)) $("pchips").replaceChildren(...chips.filter(Boolean));
@@ -581,7 +585,7 @@ function renderHeader(set) {
   $("panelbtn").classList.toggle("on", panelShown());
   if (changed("fullicon", [full, lang])) {
     $("full").replaceChildren(icon(full ? "minimize" : "maximize"));
-    $("full").title = t(full ? "Exit full screen (Esc)" : "Full screen (F)");
+    $("full").title = t(full ? "Exit full screen (Esc)" : "Player full screen (F)");
     $("full").setAttribute("aria-pressed", full);
   }
 }
@@ -749,8 +753,11 @@ function tick() {
   $("seek").setAttribute("aria-valuemax", Math.round(tot));
   $("seek").setAttribute("aria-valuenow", Math.round(m));
   $("seek").setAttribute("aria-valuetext", fmt(m));
-  if (changed("playicon", [clock.playing])) $("play").replaceChildren(icon(clock.playing ? "pause" : "play"));
-  $("play").setAttribute("aria-label", clock.playing ? t("Pause") : t("Play"));
+  if (changed("playicon", [clock.playing, lang])) {
+    $("play").replaceChildren(icon(clock.playing ? "pause" : "play"));
+    $("play").setAttribute("aria-label", clock.playing ? t("Pause") : t("Play"));
+    $("play").title = clock.playing ? t("Pause (Space)") : t("Play (Space)");
+  }
   renderMoment(m);
 }
 
@@ -1204,6 +1211,8 @@ document.addEventListener("mousedown", (e) => {
 function closePop() {
   if ($("pop").hidden) return;
   $("pop").hidden = true;
+  if (popReturn && popReturn.isConnected) popReturn.focus();
+  popReturn = null;
   if (popClosed) { const f = popClosed; popClosed = null; f(); }
 }
 let popClosed = null;
@@ -1214,7 +1223,7 @@ function stageMenu(e, key) {
   openMenu([
     ...(pick ? [{ label: t("Switch app sound"), icon: "volume-2", check: soundKey(0, play.keys, st.id, gameSound) === key, run: () => chooseSound(key) }, { separator: true }] : []),
     { label: t("Add note"), icon: "note", right: "C", run: openQuick },
-    { label: t("Copy link to this moment"), icon: "link", run: () => navigator.clipboard.writeText(momentLink(set.id, nowM(), play.view ? play.keys[play.view - 1] : null)).then(() => osd(t("Link copied"))).catch(fail) },
+    { label: t("Copy link to this moment"), icon: "link", run: () => navigator.clipboard.writeText(momentLink(set.id, nowM(), play.view ? play.keys[play.view - 1] : null)).then(() => flash(t("Link copied"))).catch(fail) },
     { label: t("Clear drawing"), icon: "eraser", right: "X", run: () => clearInk(false) },
   ], e);
 }
@@ -1328,7 +1337,7 @@ function refresh() {
 }
 let refreshing = null;
 let refreshAgain = false;
-const steps = () => [renderShell, renderStart, renderSide, renderNotices, renderPlayer, renderEvents, renderTools, renderRoom, renderRecovery, renderOpenDialogs];
+const steps = () => [renderShell, renderTitle, renderStart, renderSide, renderNotices, renderPlayer, renderEvents, renderTools, renderRoom, renderRecovery, renderOpenDialogs];
 async function update() {
   st = await invoke("state");
   clockShift = st.now_us - Date.now() * 1000;
@@ -1356,6 +1365,27 @@ async function update() {
   if (!drag && watchParty && st.party.on && !sameParty(st.party.shared, partyLast)) applyParty(st.party.shared);
   for (const step of steps()) try { step(); } catch (e) { console.error(e); }
   markLive();
+  if (restored) saveLast();
+  else { restored = true; if (inRoom()) restoreLast(); }
+}
+function renderTitle() {
+  const set = page === "player" ? playSet() : null;
+  const title = windowTitle(st.app, inRoom() ? st.room.name : "", set && !set.live ? sessionName(set.id) : "");
+  if (changed("wintitle", title)) window.__TAURI__.window.getCurrentWindow().setTitle(title).catch(warn);
+}
+function saveLast() {
+  if (!inRoom()) return;
+  const last = { room: st.room.id, page, tab: roomTab, set: page === "player" && !nowView ? selected : null, scroll: Math.round($("reviewlist").scrollTop) };
+  if (changed("last", last)) store("last", last);
+}
+function restoreLast() {
+  const last = stored("last", null);
+  if (!last || last.room !== st.room.id) return;
+  const set = last.set && setById(last.set);
+  if (set && onThisPc(set)) {
+    openSession(set.id);
+    refresh().then(() => { $("reviewlist").scrollTop = last.scroll || 0; });
+  } else if (last.page === "room" && last.tab) showRoomTab(last.tab);
 }
 function renderRecovery() {
   $("recovery").hidden = !st.recovery;
@@ -1418,7 +1448,7 @@ function ask(title, action, danger) {
   $("confirmyes").textContent = action;
   $("confirmyes").className = danger ? "danger" : "primary";
   d.showModal();
-  $("confirmno").focus();
+  $(danger ? "confirmno" : "confirmyes").focus();
   return new Promise((done) => {
     $("confirmyes").onclick = () => { d.close(); done(true); };
     d.onclose = () => done(false);
@@ -1482,9 +1512,9 @@ function editMenu(e, field) {
   const editable = !!field && !field.readOnly && !field.disabled;
   const paste = () => navigator.clipboard.readText().then((text) => { field.setRangeText(text, field.selectionStart, field.selectionEnd, "end"); field.dispatchEvent(new Event("input", { bubbles: true })); }).catch(warn);
   openMenu([
-    ...(field ? [{ label: t("Cut"), icon: "x", disabled: !editable || !has, run: () => document.execCommand("cut") }] : []),
+    ...(field ? [{ label: t("Cut"), icon: "scissors", disabled: !editable || !has, run: () => document.execCommand("cut") }] : []),
     { label: t("Copy"), icon: "copy", disabled: !has, run: () => document.execCommand("copy") },
-    ...(field ? [{ label: t("Paste"), icon: "download", disabled: !editable, run: paste }, { label: t("Select all"), run: () => field.select() }] : []),
+    ...(field ? [{ label: t("Paste"), icon: "clipboard", disabled: !editable, run: paste }, { label: t("Select all"), run: () => field.select() }] : []),
   ], e);
 }
 document.addEventListener("contextmenu", (e) => {
@@ -1622,6 +1652,7 @@ document.addEventListener("keydown", (e) => {
   const ctrl = e.ctrlKey && !e.altKey && !e.metaKey;
   if (ctrl && e.key === ",") { e.preventDefault(); openSettings(); return; }
   if (document.querySelector("dialog[open]")) return;
+  if (e.key === "?" && !typing() && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); openSettings("shortcuts"); return; }
   if (!inRoom()) return;
   if (ctrl && ["1", "2", "3", "4", "b", "r"].includes(e.key.toLowerCase())) { e.preventDefault(); return; }
   if (ctrl && e.key.toLowerCase() === "z" && !typing()) { e.preventDefault(); runUndo(); return; }
@@ -1633,7 +1664,6 @@ document.addEventListener("keydown", (e) => {
   const k = key.length === 1 ? key.toLowerCase() : key;
   let action = null;
   if (e.ctrlKey) action = player && (key === "ArrowLeft" || key === "ArrowRight") ? () => jump(key === "ArrowLeft" ? -STEP.huge : STEP.huge) : null;
-  else if (key === "?") action = () => openSettings("shortcuts");
   else if (onBoard() && k === "f") action = toggleBoardFull;
   else if (st.recording && !player && (k === "m" || k === "v")) action = once(() => $(k === "m" ? "micbtn" : "screenbtn").click());
   else if (page === "player") action = stageKey(e, key) || (player && (PLAYER_KEYS[(e.shiftKey ? "Shift+" : "") + k] || PLAYER_KEYS[k])) || null;

@@ -2,7 +2,7 @@ const VOICE_QUIET_S = 60;
 const PICTURE_LAG_S = 10;
 
 function memberStatus(m, now) {
-  if (!m.connected) return { kind: "off", text: m.seen_us ? t("Offline · last seen {time}", { time: seenLabel(m.seen_us, now) }) : t("Offline") };
+  if (!m.connected) return m.seen_us ? { kind: "off", text: t("Offline · last seen {time}", { time: seenLabel(m.seen_us, now) }), title: fullWhen(new Date(m.seen_us / 1000)) } : { kind: "off", text: t("Offline") };
   if (!m.sharing) return { kind: "idle", text: t("Not sharing") };
   return m.relayed ? { kind: "idle", text: t("No picture via relay") } : { kind: "standby", text: t("Standby") };
 }

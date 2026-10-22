@@ -11,7 +11,7 @@ const source = ["util.js", "i18n.js", "live.js", "media.js", "layout.js", "dock.
 const memory = new Map();
 const localStorage = { getItem: (k) => memory.get(k) ?? null, setItem: (k, v) => memory.set(k, v) };
 const context = vm.createContext({ localStorage, window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id, location: { search: "" } });
-const ui$ = vm.runInContext(`${source}\n({ INK_TOOLS, INK_TOOL_TITLE, nextInkTool, LIMITS, escapeStep, cleanText, single, changed, matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, rowHit, formatWhen, fullWhen, sessionWhen, keysOf, hotkeyRows, memberStatus, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, runningMark, cardParts, dropPos, dropSlot, boardSpan, boardFont, cellSpan, fitFont, deletePreview, cleanupPicked, cleanupTotal, cleanupHead, cleanupDone, exportChoice, exportArgs, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, voiceTone, known, VOICE_SIDES, VOICE_TONES, VOICE_SIDE_DEFAULT, VOICE_TONE_DEFAULT, minimapRect, talking, stillTalking, markSpeak, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, nextChip, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ INK_TOOLS, INK_TOOL_TITLE, nextInkTool, LIMITS, escapeStep, cleanText, single, changed, matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, rowHit, formatWhen, fullWhen, sessionWhen, keysOf, hotkeyRows, memberStatus, windowTitle, longId, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, runningMark, cardParts, dropPos, dropSlot, boardSpan, boardFont, cellSpan, fitFont, deletePreview, cleanupPicked, cleanupTotal, cleanupHead, cleanupDone, exportChoice, exportArgs, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, voiceTone, known, VOICE_SIDES, VOICE_TONES, VOICE_SIDE_DEFAULT, VOICE_TONE_DEFAULT, minimapRect, talking, stillTalking, markSpeak, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, nextChip, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 test("a changed() check against a tile's own store reports again on a rebuilt tile", () => {
   const first = {};
   assert.equal(ui$.changed("what", [1], first), true);
@@ -194,8 +194,8 @@ test("the clean up review picks every group and each old folder without an ID ke
   assert.equal(ui$.cleanupDone({ moved: 3, deleted: 1, skipped: 2 }), "Moved 3 files to the Recycle Bin · Deleted 1 file · 2 files could not be moved");
   assert.equal(ui$.cleanupDone({ moved: 0, deleted: 0, skipped: 0 }), "Nothing to clean up");
   ui$.setLanguage("ja");
-  assert.equal(ui$.cleanupTotal(plan, ui$.cleanupPicked(plan)).text, "4 件(4.0 KB)をごみ箱に移動");
-  assert.equal(ui$.cleanupHead("Old folders", 2, 10), "古いフォルダ · 2 件 · 10 B");
+  assert.equal(ui$.cleanupTotal(plan, ui$.cleanupPicked(plan)).text, "4件 (4.0 KB) をごみ箱に移動");
+  assert.equal(ui$.cleanupHead("Old folders", 2, 10), "古いフォルダ · 2件 · 10 B");
   ui$.setLanguage("en");
 });
 
@@ -576,6 +576,16 @@ test("a member row says one short state", () => {
   assert.match(say({ connected: false }), /^オフライン/);
   ui$.setLanguage("en");
 });
+
+test("a last seen time has the full local date and time, IDs show one length, and the window is named after the room and recording", () => {
+  const us = new Date(2026, 9, 19, 9, 5).getTime() * 1000;
+  ui$.setLanguage("en");
+  assert.match(ui$.memberStatus({ connected: false, seen_us: us }, new Date(2026, 9, 19, 12, 0)).title, /October 19, 2026.*09:05/);
+  assert.equal(ui$.longId("aaaabbbbccccdddd"), "aaaa·bbbb·cccc");
+  assert.equal(ui$.windowTitle("EZ Hanseikai", "", ""), "EZ Hanseikai");
+  assert.equal(ui$.windowTitle("EZ Hanseikai", "Night Squad", ""), "Night Squad");
+  assert.equal(ui$.windowTitle("EZ Hanseikai", "Night Squad", "Yesterday 23:07"), "Night Squad - Yesterday 23:07");
+});
 test("a recording is hidden from the list when it is a debrief of another, and debriefs are found by the recording they name", () => {
   const sets = [{ id: "s1", live: false, of: null }, { id: "d1", live: false, of: "s1" }, { id: "d2", live: false, of: "s1" }, { id: "s2", live: false, of: null }, { id: "live", live: true, of: null }];
   ui$.setStorage({ sets });
@@ -916,7 +926,7 @@ test("an extension row says one thing: no runner, what failed, who it waits for,
   assert.equal(ui$.runningMark({}), null);
   assert.equal(ui$.analysisState({ state: "idle" }, "a", name), "Not analyzed");
   ui$.setLanguage("ja");
-  assert.equal(line({ left: 3 }), "残り 3 件 · Ren のPC");
+  assert.equal(line({ left: 3 }), "残り3件 · Ren のPC");
   assert.equal(ui$.analysisReason({ state: "left", reason: "recording" }, name), "録画が終わるのを待っています");
   assert.equal(ui$.analysisReason({ state: "left", reason: "ffmpeg" }, name), "動画ツールを待っています");
   ui$.setLanguage("en");

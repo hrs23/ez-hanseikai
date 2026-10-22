@@ -900,7 +900,7 @@ async function live(ctx) {
     const kept = (st) => ({ ids: [st.sets.map((s) => s.id), st.events.map((e) => e.key)].map((x) => x.sort().join()).join(), have: Object.fromEntries(st.sets.flatMap((s) => s.players.map((p) => [`${s.id} ${p.owner}`, p.have]))) });
     const before = kept(await state(b));
     await waitFor("B shows the room header", within(UI_REFRESH_S * 5), () => evaluate(b, `!$("app").hidden && !!st.room`));
-    await evaluate(b, `$("roomname").click(); [...$("menu").querySelectorAll("button")].find((x) => x.textContent === t("Leave room")).click(); true`);
+    await evaluate(b, `$("roomname").click(); [...$("menu").querySelectorAll("button")].find((x) => x.textContent === t("Close room")).click(); true`);
     await waitFor("B shows the start screen and still lists the room", within(UI_REFRESH_S * 5), async () => { const st = await state(b); return !st.room && st.rooms.some((r) => r.id === ctx.room) && evaluate(b, `!$("start").hidden && $("app").hidden`); });
     await invoke(b, "enter_room", { id: ctx.room });
     await meshed([a, b], ctx.room, REJOIN_S);
@@ -1250,7 +1250,7 @@ async function library(ctx) {
     await waitFor("the sidebar header shows the room name as a menu", within(UI_REFRESH_S * 5), () => evaluate(a, `$("roomname").querySelector(".nm").textContent === "Practice" && $("roomname").getAttribute("aria-haspopup") === "menu"`));
     await evaluate(a, `$("roomname").click(); true`);
     const labels = await evaluate(a, `[...$("menu").querySelectorAll("button")].map((b) => b.textContent)`);
-    check(labels.filter((l) => l !== "Cancel invite").join() === ["Room settings…", "Copy invite code", "Leave room"].join(), `the room menu lists ${labels}`);
+    check(labels.filter((l) => l !== "Cancel invite").join() === ["Room settings…", "Copy invite code", "Close room"].join(), `the room menu lists ${labels}`);
     await evaluate(a, `[...$("menu").querySelectorAll("button")].find((b) => b.textContent === t("Room settings…")).click(); true`);
     await waitFor("A shows the room settings", within(UI_REFRESH_S * 3), () => evaluate(a, `$("roomdlg").open && $("roomnameinput").value === "Practice" && $("roomsave").disabled`));
     await screenshot(a, "room-settings");

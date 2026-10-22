@@ -98,7 +98,8 @@ function stored(key, fallback) {
 function store(key, value) {
   try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { console.warn(e); }
 }
-const longId = (id, groups = 3) => (String(id).match(/.{1,4}/g) || []).slice(0, groups).join("·");
+const longId = (id) => (String(id).match(/.{1,4}/g) || []).slice(0, 3).join("·");
+const idText = (id, tag = "span") => el(tag, { className: "mono", textContent: longId(id), title: id });
 const warn = (e) => console.warn(e);
 const playFailed = (e) => { if (e.name !== "AbortError" && e.name !== "NotAllowedError") warn(e); };
 const sessionDay = (id) => id.slice(0, 10);
@@ -116,6 +117,7 @@ const sessionStart = (id) => {
   const [h, mi, sec] = (id.split(" ")[1] || "").split("-").map(Number);
   return new Date(y, m - 1, d, h || 0, mi || 0, sec || 0);
 };
+const windowTitle = (app, room, recording) => (!room ? app : recording ? `${room} - ${recording}` : room);
 let titles = {};
 const sessionWhen = (id, now = new Date()) => formatWhen(sessionStart(id), now, language);
 const sessionName = (id, now = new Date()) => titles[id] || sessionWhen(id, now);

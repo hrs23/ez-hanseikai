@@ -1,4 +1,6 @@
 let openExtensions = new Set(stored("ext-open", []));
+let pluginsLoaded = false;
+let pluginsFailed = false;
 
 function downloadStats(d) {
   const n = d.total ? Math.min(100, Math.floor((d.done / d.total) * 100)) : 0;
@@ -62,9 +64,14 @@ function extensionRow(p) {
   const body = open ? el("div", { className: "pbody" }, el("div", { className: "psec" }, extensionRunner(p)), extensionRecordings(p)) : null;
   return el("div", { className: "plug" + (open ? " open" : "") }, head, body);
 }
+function loadState(loaded, failed, empty, retry) {
+  if (failed) return el("div", { className: "empty" }, el("span", { textContent: t("Couldn't load") }), " ", el("button", { className: "sm", textContent: t("Retry"), onclick: retry }));
+  if (!loaded) return el("div", { className: "empty", textContent: t("Loading") });
+  return empty ? el("div", { className: "empty", textContent: empty }) : null;
+}
 function renderExtensions() {
-  if (!changed("roomtab", ["extensions", plugins, [...openExtensions], st.sets.map((s) => [s.id, s.analysis]), st.names, lang])) return;
-  $("roomtab").replaceChildren(el("div", { className: "plugins" }, ...plugins.map(extensionRow)));
+  if (!changed("roomtab", ["extensions", plugins, pluginsLoaded, pluginsFailed, [...openExtensions], st.sets.map((s) => [s.id, s.analysis]), st.names, lang])) return;
+  $("roomtab").replaceChildren(el("div", { className: "plugins" }, loadState(pluginsLoaded, pluginsFailed, plugins.length ? "" : t("No extensions"), pollPlugins), ...plugins.map(extensionRow)));
 }
 function pollPlugins() {
   if (!st || !inRoom() || document.hidden) return;
@@ -72,7 +79,14 @@ function pollPlugins() {
   invoke("room_plugins").then((list) => {
     if (gen !== pluginsGen) return;
     plugins = list;
+    pluginsLoaded = true;
+    pluginsFailed = false;
     renderRoom();
     renderSessions();
-  }).catch(warn);
+  }).catch((e) => {
+    warn(e);
+    if (gen !== pluginsGen) return;
+    pluginsFailed = true;
+    renderRoom();
+  });
 }

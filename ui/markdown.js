@@ -34,7 +34,7 @@ function mdVouched(url, label) {
 }
 
 async function openWeb(url, label) {
-  if (!mdVouched(url, label) && !(await ask(t("Open {host}?", { host: new URL(url).host }), t("Open"), false, url))) return;
+  if (!mdVouched(url, label) && !(await ask(t("Open {host}?", { host: new URL(url).host }), t("Open"), false))) return;
   dialog("open_link", { url }).catch(warn);
 }
 const mdHooks = (over = {}) => ({ onLink: openLink, onOpen: openWeb, names: memberNames(), who: (name) => mentionWho(name, null), ...over });

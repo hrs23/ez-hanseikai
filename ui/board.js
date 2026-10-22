@@ -59,10 +59,14 @@ function nameInput(value, done) {
   input.onblur = () => close(false);
   return input;
 }
+async function deleteCard(c) {
+  if (!(await ask(t("Delete {name}?", { name: cardTitle(c) }), t("Delete"), true))) return;
+  putCard(c.card, { gone: true });
+  setUndo(() => putCard(c.card, { gone: false, text: c.text, title: c.title || "", pos: c.pos, w: c.w, h: c.h }));
+  flash(t("Deleted"), "info", { label: t("Undo"), run: runUndo });
+}
 function cardMenu(c, anchor) {
-  openMenu([
-    { label: t("Delete…"), icon: "trash", danger: true, run: async () => { if (await ask(t("Delete this card?"), t("Delete"), true)) putCard(c.card, { gone: true }); } },
-  ], anchor);
+  openMenu([{ label: t("Delete…"), icon: "trash", danger: true, run: () => deleteCard(c) }], anchor);
 }
 function track(grab, down, move, end) {
   const stop = (e) => {

@@ -99,7 +99,7 @@
               </div>
               <div id="livevoices" class="voices" hidden></div>
               <div id="playvoices" class="voices" hidden></div>
-              <div id="osd" class="osd" hidden><span id="osdav"></span><span id="osdtext"></span></div>
+              <div id="osd" class="osd" role="status" aria-live="polite" hidden><span id="osdav"></span><span id="osdtext"></span></div>
             </div>
             <div id="transport" class="transport">
               <div id="chapters" class="chaps" hidden></div>
@@ -107,13 +107,13 @@
               <div id="seek" class="seek" role="slider" tabindex="0" data-t-label="Position" aria-valuemin="0"><i class="got"></i><i class="missing"></i><i class="fill"></i><i class="grow"></i><i class="thumb"></i><div id="seekwho" class="seekwho" hidden></div><div id="peek" class="peek" hidden><canvas width="192" height="108"></canvas><span id="peekchapter"></span><span id="peektime"></span></div></div>
               <div class="crow">
                 <button id="play" class="icon" data-t-label="Play"></button>
-                <button id="back" class="icon" data-icon="rotate-ccw" data-t-title="Back 5 s" data-t-label="Back 5 s"></button>
-                <button id="fwd" class="icon" data-icon="rotate-cw" data-t-title="Forward 5 s" data-t-label="Forward 5 s"></button>
+                <button id="back" class="icon" data-icon="rotate-ccw" data-t-title="Back 5 s (←)" data-t-label="Back 5 s"></button>
+                <button id="fwd" class="icon" data-icon="rotate-cw" data-t-title="Forward 5 s (→)" data-t-label="Forward 5 s"></button>
                 <span class="vol"><button id="mute" class="icon" data-t-label="Mute" data-t-title="Mute (M)"></button><input id="volume" type="range" min="0" max="1" step="0.05" value="1" data-t-label="Volume"><button id="gamesound" class="icon" hidden></button></span>
                 <span class="clock"><span id="clocknow"></span><span id="clocktotal"></span></span>
                 <button id="matchchip" class="chapname" hidden></button>
                 <span class="sp"></span>
-                <button id="rate" class="txt rate" data-t-title="Speed" data-t-label="Speed" aria-haspopup="menu">1×</button>
+                <button id="rate" class="txt rate" data-t-title="Speed (< >)" data-t-label="Speed" aria-haspopup="menu">1×</button>
                 <button id="live" class="livebtn"></button>
                 <button id="addnote" class="txt" data-t-title="Add note (C)"><span data-icon="note" data-icon-class="sm"></span><span data-t="Note">Note</span><kbd>C</kbd></button>
                 <button id="full" class="icon" data-t-label="Full screen" aria-pressed="false"></button>
@@ -228,7 +228,7 @@
   <div class="row end"><button id="promptreset"><span data-t="Reset to default">Reset to default</span></button><button id="promptcopy" class="primary"><span data-icon="copy" data-icon-class="sm"></span><span data-t="Copy prompt">Copy prompt</span></button></div>
 </dialog>
 <dialog id="exportdlg">
-  <h2 data-t="Export to folder…">Export to folder…</h2>
+  <h2 data-t="Export to folder">Export to folder</h2>
   <label class="field"><span data-t="Range">Range</span><select id="exportrange"><option value="whole" data-t="Whole recording">Whole recording</option><option value="matches" data-t="Per match">Per match</option></select></label>
   <label class="field"><span data-t="Quality">Quality</span><select id="exportquality"><option value="original" data-t="Original">Original</option><option value="standard" data-t="Standard">Standard</option><option value="light" data-t="Light">Light</option></select></label>
   <label class="field"><span data-t="Members">Members</span><select id="exportmember"></select></label>
@@ -239,7 +239,7 @@
   <div class="row end"><button id="confirmno" class="close" data-t="Cancel">Cancel</button><button id="confirmyes"></button></div>
 </dialog>
 <input id="imagefile" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
-<div id="toast" class="toast" popover="manual" hidden><span id="toasticon"></span><span id="toasttext"></span><button id="toastaction" class="sm" hidden></button></div>
+<div id="toast" class="toast" popover="manual" role="status" aria-live="polite" hidden><span id="toasticon"></span><span id="toasttext"></span><button id="toastaction" class="sm" hidden></button></div>
 <button id="exitfull" class="exitfull" popover="manual" hidden data-icon="minimize" data-t-title="Exit full screen (Esc)" data-t-label="Exit full screen"></button>
 <div id="menu" class="menu" popover="manual" role="menu" hidden></div>
 <div id="pop" class="pop" popover="manual" hidden></div>
