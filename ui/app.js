@@ -117,7 +117,7 @@ const dot = (id) => el("i", { className: "dt", style: `background:${colorOf(colo
 
 function tile(s, key) {
   if (s.tiles[key]) return s.tiles[key];
-  const tl = { key, media: slot(el("video", { muted: true, preload: "auto" })), mic: null, loud: -Infinity, name: el("span", { className: "nm" }), av: el("span"), imp: el("span", { className: "imp", hidden: true }), who: el("div", { className: "who" }), what: el("div", { className: "what" }), problem: el("div", { className: "problem", hidden: true }) };
+  const tl = { key, sigs: {}, media: slot(el("video", { muted: true, preload: "auto" })), mic: null, loud: -Infinity, name: el("span", { className: "nm" }), av: el("span"), imp: el("span", { className: "imp", hidden: true }), who: el("div", { className: "who" }), what: el("div", { className: "what" }), problem: el("div", { className: "problem", hidden: true }) };
   tl.snd = el("span", { className: "snd", hidden: true }, icon("volume-2", "sm"));
   tl.lab = el("div", { className: "nl" }, tl.av, tl.name, tl.imp, tl.snd, el("span", { className: "moff" }, icon("mic-off", "sm")));
   tl.box = el("div", { className: "tile", tabIndex: 0 }, tl.media.video, el("div", { className: "waitbox" }, tl.who, tl.what), tl.problem, tl.lab);
@@ -150,8 +150,7 @@ function nameTile(tl, key, online = true) {
   tl.who.textContent = nameOf(key);
   tl.imp.hidden = !importedIds.has(key);
   tl.imp.textContent = t("Imported");
-  const sig = JSON.stringify([nameOf(key), look(key), online]);
-  if (tl.avSig !== sig) { tl.avSig = sig; tl.av.replaceChildren(avatar(key, "sm", null, !online)); }
+  if (changed("av", [nameOf(key), look(key), online], tl.sigs)) tl.av.replaceChildren(avatar(key, "sm", null, !online));
 }
 function prune(s, keys) {
   for (const [key, tl] of Object.entries(s.tiles)) if (!keys.includes(key)) { drop(tl.media); drop(tl.mic); tl.box.remove(); delete s.tiles[key]; }
@@ -321,8 +320,8 @@ function renderLive() {
     const tl = tile(rec, p.key);
     const state = liveState(p);
     nameTile(tl, p.key, p.online);
-    const problem = tileProblem({ recording: mine && p.online, sharing: p.sharing, now: nowUs(), start: p.start, voiceEnd: p.last && p.last.m, pictureEnd: p.last && p.last.v });
-    if (changed("livewhat/" + p.key, [state, p.relayed, captureProblem(st.capture), nameOf(p.key), problem, lang])) {
+    const problem = (state === "video" && p.me && captureProblem(st.capture)) || tileProblem({ recording: mine && p.online, sharing: p.sharing, now: nowUs(), start: p.start, voiceEnd: p.last && p.last.m, pictureEnd: p.last && p.last.v });
+    if (changed("livewhat", [state, p.relayed, captureProblem(st.capture), nameOf(p.key), problem, lang], tl.sigs)) {
       tl.what.replaceChildren(...liveWhat(p));
       tl.problem.textContent = problem || "";
       tl.problem.hidden = !problem;
@@ -658,7 +657,7 @@ function tick() {
     tl.box.classList.toggle("late", !!tl.media.part && pinned && liveClock.late.includes(p.key));
     const line = !pictured || behind ? viewLine(set, viewContext(), p.key) : null;
     const what = line ? line.text : !pictured ? "voice" : nameOf(p.key);
-    if (changed("what/" + p.key, [what, line && line.action, nameOf(p.key), lang])) tl.what.replaceChildren(...whatNodes(what, line, set));
+    if (changed("what", [what, line && line.action, nameOf(p.key), lang], tl.sigs)) tl.what.replaceChildren(...whatNodes(what, line, set));
     for (const s of [tl.media, tl.mic]) if (s && s.base !== null) todo.push([s, wall / 1e6 - s.base, clock.playing && !away && !(pinned && liveClock.held)]);
   }
   const ready = todo.map(([s, at]) => aim(s, at));
@@ -866,10 +865,10 @@ function renderDebriefs(set) {
   $("debriefs").replaceChildren(el("div", { className: "h3", textContent: t("Debrief recordings") }), ...list.map((d) => el("div", { className: "drow" },
     icon("mic", "sm"), el("span", { textContent: sessionClock(d.id) }), el("span", { className: "sp" }),
     el("span", { className: "muted", textContent: t("{m} min", { m: Math.max(1, Math.round(((d.end_us || nowUs()) - d.start_us) / 6e7)) }) }),
-    el("button", { className: "sm", textContent: t("Save"), disabled: !onThisPc(d), onclick: () => exportFolder(d) }))));
+    downloadButton(d) || el("button", { className: "sm", textContent: t("Save"), onclick: () => exportFolder(d) }))));
 }
 function timeText(n) {
-  if (n.m === null) return t("Whole recording");
+  if (n.m === null) return "";
   return n.end !== null && n.role === "chapter" ? `${fmt(n.m)}–${fmt(n.end)}` : fmt(n.m);
 }
 function goTo(n) {

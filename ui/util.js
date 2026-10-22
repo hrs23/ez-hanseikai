@@ -34,10 +34,10 @@ const nowUs = () => Date.now() * 1000 + clockShift;
 const MEMBER_COLORS = ["orange", "sky", "lime", "magenta", "yellow", "violet", "pink", "blue"];
 const colorOf = (index) => `var(--member-${MEMBER_COLORS[(index || 0) % MEMBER_COLORS.length]})`;
 const sigs = {};
-function changed(name, value) {
+function changed(name, value, store = sigs) {
   const sig = JSON.stringify(value);
-  if (sigs[name] === sig) return false;
-  sigs[name] = sig;
+  if (store[name] === sig) return false;
+  store[name] = sig;
   return true;
 }
 function press(e, on) {

@@ -29,10 +29,12 @@ function rowSignature(r) {
   return [r.id, setLength(s), sessionState(s), recordingAnalysis(s), s.imported_by, s.title, s.thumb, matchCount(s), noteCount(s), s.players.map((p) => p.owner), onThisPc(s), sizeOf(s), s.shared, s.analysis, debriefsOf(s.id).length, st.party.watching[s.id]];
 }
 
+function downloadButton(s) {
+  return onThisPc(s) ? null : el("button", { className: "sm", textContent: t("Download"), onclick: (e) => { e.stopPropagation(); run("download_set", { room: s.room, set: s.id }); } });
+}
+
 function whereLine(s) {
-  const here = onThisPc(s);
-  const fetch = here || s.wanted ? null : el("button", { className: "sm", textContent: t("Download"), onclick: (e) => { e.stopPropagation(); run("download_set", { room: s.room, set: s.id }); } });
-  return el("div", { className: "l2 where" }, el("span", { textContent: t(here ? "On this PC" : "Not on this PC") }), el("span", { textContent: bytes(sizeOf(s)) }), fetch);
+  return el("div", { className: "l2 where" }, el("span", { textContent: t(onThisPc(s) ? "On this PC" : "Not on this PC") }), el("span", { textContent: bytes(sizeOf(s)) }), downloadButton(s));
 }
 
 const KEEP_NEWEST = 3;

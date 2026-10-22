@@ -36,6 +36,9 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 ## Recording
 
 - Record on A starts the set on B. `e2e` (`live`)
+- with no source, leaving Live for another page and coming back shows Select screen on the own live tile again; a rebuilt tile always redraws its text. `e2e` (`live`), `ui-test`
+- while the own live file exists and capture stalls, the live tile shows the capture problem as its small overlay line. `manual`
+- a debrief row in the side panel offers Download when its audio is not on this PC, and Save once it is. `manual`
 - while recording the start box says Stop recording with the time and the list gets the running recording. `e2e` (`live`)
 - the set stops and everyone has it. `e2e` (`live`)
 - A, B and C record a short set, C joining late and recording long enough that every tile has video at the far seek. `e2e` (`library`)
