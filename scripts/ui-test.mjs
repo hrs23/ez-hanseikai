@@ -11,7 +11,7 @@ const source = ["util.js", "i18n.js", "live.js", "media.js", "layout.js", "dock.
 const memory = new Map();
 const localStorage = { getItem: (k) => memory.get(k) ?? null, setItem: (k, v) => memory.set(k, v) };
 const context = vm.createContext({ localStorage, window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id, location: { search: "" } });
-const ui$ = vm.runInContext(`${source}\n({ LIMITS, escapeStep, cleanText, single, changed, matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, rowHit, formatWhen, fullWhen, sessionWhen, keysOf, hotkeyRows, memberStatus, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, runningMark, cardParts, dropPos, dropSlot, boardSpan, boardFont, cellSpan, fitFont, deletePreview, cleanupPicked, cleanupTotal, cleanupHead, cleanupDone, exportChoice, exportArgs, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, voiceTone, known, VOICE_SIDES, VOICE_TONES, VOICE_SIDE_DEFAULT, VOICE_TONE_DEFAULT, minimapRect, talking, stillTalking, markSpeak, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, nextChip, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ INK_TOOLS, INK_TOOL_TITLE, nextInkTool, LIMITS, escapeStep, cleanText, single, changed, matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, rowHit, formatWhen, fullWhen, sessionWhen, keysOf, hotkeyRows, memberStatus, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, runningMark, cardParts, dropPos, dropSlot, boardSpan, boardFont, cellSpan, fitFont, deletePreview, cleanupPicked, cleanupTotal, cleanupHead, cleanupDone, exportChoice, exportArgs, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, voiceTone, known, VOICE_SIDES, VOICE_TONES, VOICE_SIDE_DEFAULT, VOICE_TONE_DEFAULT, minimapRect, talking, stillTalking, markSpeak, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, nextChip, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 test("a changed() check against a tile's own store reports again on a rebuilt tile", () => {
   const first = {};
   assert.equal(ui$.changed("what", [1], first), true);
@@ -1020,21 +1020,17 @@ test("Esc closes a menu or dialog first, then a popup, then leaves a text field,
   assert.equal(step({}), "none");
 });
 
-test("every drawing tool has a tooltip with its key in both languages, and the player keys have no duplicates", () => {
-  const html = read("index.html");
-  const app = read("app.js");
-  const body = app.match(/const PLAYER_KEYS = \{([\s\S]*?)\n\};/)[1];
+test("the drawing button cycles Pen, Laser, off on P, every state has a Japanese tooltip with the key, and the player keys have no duplicates", () => {
+  assert.deepEqual([ui$.nextInkTool("pen"), ui$.nextInkTool("laser"), ui$.nextInkTool(null)], ["laser", null, "pen"]);
+  const jaTitles = Object.values(plain(ui$.INK_TOOL_TITLE));
+  assert.equal(jaTitles.length, 3);
+  ui$.setLanguage("ja");
+  for (const title of jaTitles) { assert.ok(title.includes("(P)")); assert.notEqual(ui$.t(title), title); }
+  ui$.setLanguage("en");
+  const body = read("app.js").match(/const PLAYER_KEYS = \{([\s\S]*?)\n\};/)[1];
   const keys = [...body.matchAll(/^  ("?[^\s":]+"?|" "):/gm)].map((m) => m[1].replaceAll('"', "").toLowerCase());
   assert.equal(new Set(keys).size, keys.length);
-  const tools = { pen: "p", arrow: "r", laser: "t" };
-  for (const [tool, key] of Object.entries(tools)) {
-    assert.ok(keys.includes(key));
-    assert.ok(app.includes(`${key}: () => selectTool("${tool}")`));
-    const title = html.match(new RegExp(`data-tool="${tool}"[^>]*data-t-title="([^"]*)"`))[1];
-    assert.ok(title.includes(`(${key.toUpperCase()}):`));
-    assert.ok(read("i18n.js").includes(`"${title}":`));
-  }
-  const clear = html.match(/id="clearink"[^>]*data-t-title="([^"]*)"/)[1];
-  assert.ok(clear.includes("(X)") && keys.includes("x") && read("i18n.js").includes(`"${clear}":`));
-  assert.match(read("pages.js"), /\["P", "R", "T", "X"\]/);
+  assert.ok(keys.includes("p") && keys.includes("x") && keys.includes("a") && keys.includes("l"));
+  assert.match(read("pages.js"), /\["P", "X"\]/);
+  assert.match(read("index.html"), /id="tool"/);
 });

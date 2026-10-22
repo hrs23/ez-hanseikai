@@ -15,7 +15,7 @@ const SHORTCUTS = [
   ["Microphone / screen while recording", ["M", "V"]],
   ["Previous / next note", ["Q", "E"]],
   ["Previous / next match (or event)", ["A", "D"]],
-  ["Pen / arrow / laser / clear drawings", ["P", "R", "T", "X"]],
+  ["Drawing tool: pen, laser, off / clear drawings", ["P", "X"]],
   ["Undo", ["Ctrl+Z"]],
   ["Shortcuts", ["?"]],
 ];

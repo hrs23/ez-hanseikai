@@ -144,3 +144,11 @@ if (typeof MutationObserver !== "undefined") {
   const showModalDialog = HTMLDialogElement.prototype.showModal;
   HTMLDialogElement.prototype.showModal = function () { showModalDialog.call(this); document.querySelectorAll("[popover]:not([hidden])").forEach(raise); };
 }
+
+const INK_TOOLS = ["pen", "laser", null];
+const INK_TOOL_TITLE = {
+  pen: "Pen (P): draw a line that stays at this moment; press again for Laser",
+  laser: "Laser (P): a pointer that fades and works while playing; press again to stop drawing",
+  off: "Drawing off (P): press to draw with the Pen",
+};
+const nextInkTool = (tool) => INK_TOOLS[(INK_TOOLS.indexOf(tool) + 1) % INK_TOOLS.length];

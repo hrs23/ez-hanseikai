@@ -132,8 +132,7 @@ function addPoint(p, x, y) {
   const r = contentRect(p.tl);
   const n = (v) => Math.round(Math.min(1, Math.max(0, v)) * COORD_STEP) / COORD_STEP;
   const point = [n((x - r.left - r.x) / r.w), n((y - r.top - r.y) / r.h)];
-  if (p.stroke.tool === "arrow") p.stroke.points = [...p.stroke.points.slice(0, 2), ...point];
-  else p.stroke.points.push(...point);
+  p.stroke.points.push(...point);
   p.stroke.at = performance.now();
   sendStroke(p.stroke);
   renderInk();

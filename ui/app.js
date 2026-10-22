@@ -620,12 +620,18 @@ function renderViews() {
   layout.onclick = () => pickLayout(play, layout);
   $("views").replaceChildren(button(0, t("All")), ...names.map((n, i) => button(i + 1, n)), layout);
 }
-function selectTool(tool) {
-  ink.tool = ink.tool === tool ? null : tool;
+function cycleTool() {
+  ink.tool = nextInkTool(ink.tool);
   renderTools();
 }
 function renderTools() {
-  for (const b of $("tools").querySelectorAll("[data-tool]")) press(b, ink.tool === b.dataset.tool);
+  const b = $("tool");
+  const text = t(INK_TOOL_TITLE[ink.tool || "off"]);
+  const name = ink.tool === "laser" ? "laser" : "pen";
+  press(b, !!ink.tool);
+  b.title = text;
+  b.setAttribute("aria-label", text);
+  if (b.dataset.icon !== name) { b.dataset.icon = name; b.replaceChildren(icon(name, "sm")); }
 }
 
 function openSession(id) {
@@ -1513,7 +1519,7 @@ $("mute").onclick = toggleMute;
 $("panelbtn").onclick = togglePanel;
 $("full").onclick = toggleFull;
 $("exitfull").onclick = toggleFull;
-for (const b of $("tools").querySelectorAll("[data-tool]")) b.onclick = () => { selectTool(b.dataset.tool); };
+$("tool").onclick = cycleTool;
 $("clearink").onclick = () => clearInk(false);
 $("toast").onmouseenter = () => clearTimeout($("toast").hideTimer);
 $("toast").onmouseleave = () => hideAfter($("toast"), TOAST_MS);
@@ -1581,9 +1587,7 @@ const PLAYER_KEYS = {
   e: () => stepNote(1),
   a: () => stepMatch(-1),
   d: () => stepMatch(1),
-  p: () => selectTool("pen"),
-  r: () => selectTool("arrow"),
-  t: () => selectTool("laser"),
+  p: once(cycleTool),
   x: () => clearInk(false),
   "Shift+p": () => stepSet(-1),
   "Shift+n": () => stepSet(1),
