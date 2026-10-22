@@ -442,6 +442,10 @@ const JA = {
   "All direct": "すべて直接",
   "Downloading {what} from {host}": "{host} から {what} をダウンロード中",
   "Video tools": "動画ツール",
+  "Recorded voices": "録画の声",
+  "Left": "左寄せ",
+  "Mild": "弱",
+  "Strong": "強",
 };
 
 let language = "en";

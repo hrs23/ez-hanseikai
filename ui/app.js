@@ -45,6 +45,7 @@ let rate = 1;
 let volume = stored("volume", 1);
 let sessionSound = stored("sessionSound", true);
 let gameSound = stored("gameSound", null);
+let voiceToneChoice = stored("voiceTone", VOICE_TONE_DEFAULT);
 let seekRun = null;
 const BEZEL_MS = 500;
 let muted = false;
@@ -450,6 +451,7 @@ function applyAudio() {
   const away = page !== "player";
   const heard = soundKey(play.view, play.keys, st.id, gameSound);
   const level = (on, mix) => (away || muted || !on || mix.muted ? 0 : volume * mix.volume);
+  const tone = voiceTone(watchParty && st.party.on, !!playSet(), voiceToneChoice);
   [...play.keys, ...play.voice].forEach((key) => {
     const tl = play.tiles[key] || play.chips[key];
     if (!tl) return;
@@ -459,6 +461,7 @@ function applyAudio() {
       setLevel(s, level(on, mix));
       s.video.playbackRate = livePinned() ? liveClock.rate : rate;
     }
+    if (tl.mic && tl.mic.tap) setTone(tl.mic.tap, tone);
   });
   const pick = play.keys.length > 0;
   $("gamesound").hidden = !pick;
@@ -488,7 +491,13 @@ function openMix(anchor) {
   const keys = [...play.keys, ...play.voice];
   const heard = soundKey(play.view, play.keys, st.id, gameSound);
   const pick = (key) => el("button", { className: "icon sm" + (key === heard ? " on" : ""), title: t("Switch app sound"), ariaLabel: t("Switch app sound"), onclick: () => { chooseSound(key); openMix(anchor); } }, icon("volume-2", "sm"));
-  showPop([el("div", { className: "head" }, el("b", { textContent: t("Volume per member") })), el("div", { className: "mixgrid" }, ...keys.map((key) => el("div", { className: "mixm" }, el("div", { className: "who" }, avatar(key, "sm"), el("span", { className: "nm", textContent: nameOf(key) }), play.keys.length > 1 && !play.view && play.tiles[key] ? pick(key) : null), play.tiles[key] ? mixRow(key, "app", t("App sound")) : null, mixRow(key, "voice", t("Voice")))))], anchor, true, keys.length > 2 ? "wide" : "");
+  showPop([el("div", { className: "head" }, el("b", { textContent: t("Volume per member") })), el("div", { className: "mixgrid" }, ...keys.map((key) => el("div", { className: "mixm" }, el("div", { className: "who" }, avatar(key, "sm"), el("span", { className: "nm", textContent: nameOf(key) }), play.keys.length > 1 && !play.view && play.tiles[key] ? pick(key) : null), play.tiles[key] ? mixRow(key, "app", t("App sound")) : null, mixRow(key, "voice", t("Voice"))))), toneRow(anchor)], anchor, true, keys.length > 2 ? "wide" : "");
+}
+function toneRow(anchor) {
+  const labels = { off: t("Off"), left: t("Left"), mild: t("Mild"), strong: t("Strong") };
+  const pick = (name) => { voiceToneChoice = name; store("voiceTone", name); applyAudio(); openMix(anchor); };
+  const seg = el("div", { className: "seg full", ariaLabel: t("Recorded voices") }, ...Object.keys(VOICE_TONES).map((name) => el("button", { textContent: labels[name], className: name === voiceToneChoice ? "on" : "", ariaPressed: name === voiceToneChoice, onclick: () => pick(name) })));
+  return el("div", { className: "tonerow" }, el("span", { textContent: t("Recorded voices") }), seg);
 }
 function showPop(children, anchor, above, cls = "") {
   const pop = $("pop");

@@ -9,6 +9,9 @@ const HAVE_FUTURE_DATA = 3;
 const SPEAK_LEVEL = 0.02;
 const SPEAK_HANG_MS = 300;
 const VOICE_WINDOW = 8192;
+const VOICE_TONES = { off: null, left: { pan: -0.6 }, mild: { lowpass: 3000, pan: -0.6 }, strong: { highpass: 150, lowpass: 1800, pan: -0.8 } };
+const VOICE_TONE_DEFAULT = "left";
+const VOICE_FILTER_Q = Math.SQRT1_2;
 
 let context = null;
 const audio = () => (context ||= new AudioContext());
@@ -94,6 +97,18 @@ function voiceTap(video) {
   out.connect(an);
   out.connect(gain).connect(ctx.destination);
   return { out, an, gain, buf: new Float32Array(VOICE_WINDOW) };
+}
+const voiceTone = (party, open, choice) => (party && open && VOICE_TONES[choice] ? choice : "off");
+function setTone(tap, name) {
+  if ((tap.tone || "off") === name) return;
+  const ctx = tap.gain.context;
+  const p = VOICE_TONES[name];
+  const filter = (type, frequency) => new BiquadFilterNode(ctx, { type, frequency, Q: VOICE_FILTER_Q });
+  const nodes = p ? [p.highpass && filter("highpass", p.highpass), p.lowpass && filter("lowpass", p.lowpass), new StereoPannerNode(ctx, { pan: p.pan })].filter(Boolean) : [];
+  tap.gain.disconnect();
+  for (const n of tap.nodes || []) n.disconnect();
+  nodes.reduce((from, n) => from.connect(n), tap.gain).connect(ctx.destination);
+  Object.assign(tap, { tone: name, nodes });
 }
 function peakOf({ an, buf }) {
   an.getFloatTimeDomainData(buf);
