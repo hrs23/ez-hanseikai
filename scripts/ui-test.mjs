@@ -849,9 +849,10 @@ test("an avatar shows the image, a built-in shape or the initial; an unknown sha
   const preset = draw(`roomIcon({ id: "ab12", name: "Practice", icon: "" }, "sm")`);
   assert.deepEqual([preset.textContent, preset.find("path").length, preset.className], ["", 1, "av sm room"]);
   const shape = (icon) => draw(`roomIcon({ id: "ab12", name: "Practice", icon: "${icon}" }, "sm")`).find("path")[0]?.attributes.d;
-  assert.deepEqual([draw(`ROOM_PRESETS.length`), draw(`ROOM_PRESETS.some((n) => FACES[n])`)], [16, false]);
-  assert.equal(shape("bolt"), draw(`ROOM_FACES.bolt`));
-  assert.equal(shape("cat"), draw(`FACES.cat`));
+  assert.deepEqual([draw(`ROOM_PRESETS.length`), draw(`ROOM_PRESETS.some((n) => FACES[n])`)], [24, false]);
+  assert.deepEqual([draw(`PRESETS.length`), draw(`PRESETS.some((n) => ROOM_FACES[n])`)], [24, false]);
+  assert.equal(shape("lightning-bolt"), draw(`ROOM_FACES["lightning-bolt"]`));
+  assert.equal(shape("cat"), draw(`FACES.lynx`));
   const fallback = draw(`ROOM_FACES[defaultPreset("ab12")]`);
   for (const icon of ["unknown", "", "constructor", "__proto__", "toString", "a b'\\\"<>&\\u00e9\\u3042", "data:image/svg+xml;base64,AAAA"]) assert.equal(shape(icon), fallback);
   const odd = (icon) => draw(`roomIcon({ id: "ab12", name: "Practice", icon: ${JSON.stringify(icon)} }, "sm")`);
@@ -864,6 +865,22 @@ test("an avatar shows the image, a built-in shape or the initial; an unknown sha
     assert.deepEqual([face.find("path").length, face.find("img").length, face.textContent], [1, 0, ""]);
   }
   assert.ok(draw(`ROOM_PRESETS`).includes(draw(`defaultPreset("ab12")`)));
+  const legacyCrests = "flame bolt crown skull swords shield crosshair rocket wings trophy gem comet peak mask star chevrons".split(" ");
+  const legacyAnimals = "cat fox frog panda owl bunny octopus bear penguin koala wolf tiger raccoon shark whale crab".split(" ");
+  const old = { bolt: "lightning-bolt", swords: "crossed-swords", shield: "heater-shield", wings: "wing", chevrons: "chevron-stack", gem: "diamond" };
+  for (const name of legacyCrests) {
+    const d = shape(name);
+    assert.ok(d, name);
+    assert.equal(d, name in old ? draw(`ROOM_FACES["${old[name]}"]`) : draw(`ROOM_FACES[${JSON.stringify(name)}] || LEGACY_ROOM_FACES[${JSON.stringify(name)}]`));
+  }
+  const animal = { cat: "lynx", octopus: "kraken", whale: "orca" };
+  for (const name of legacyAnimals) {
+    const face = draw(`picture("", "red", ${JSON.stringify(name)}, "sm")`);
+    assert.equal(face.find("path")[0].attributes.d, draw(`FACES[${JSON.stringify(animal[name] || name)}] || LEGACY_FACES[${JSON.stringify(name)}]`), name);
+    assert.equal(face.className.includes("person"), false);
+  }
+  for (const name of draw(`[...PRESETS, ...ROOM_PRESETS]`)) assert.ok(draw(`knownIcon(${JSON.stringify(name)})`), name);
+  assert.equal(draw(`knownIcon("nonsense")`), false);
   assert.equal(draw(`roomIcon({ id: "ab12", name: "Other", icon: "" }, "sm")`).style.background, preset.style.background);
   assert.equal(draw(`roomIcon({ name: "Practice", icon: "${image}" }, "sm")`).find("img").length, 1);
   assert.deepEqual(plain(draw(`look("ren")`)), [2, image.length, image.slice(-16)]);
