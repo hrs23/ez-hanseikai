@@ -1262,7 +1262,6 @@ function exportOptions(set) {
       d.close();
       done(exportArgs(picked));
     };
-    $("exportno").onclick = () => d.close();
     d.onclose = () => done(null);
   });
 }
@@ -1414,7 +1413,6 @@ function ask(title, action, danger) {
   $("confirmno").focus();
   return new Promise((done) => {
     $("confirmyes").onclick = () => { d.close(); done(true); };
-    $("confirmno").onclick = () => { d.close(); done(false); };
     d.onclose = () => done(false);
   });
 }

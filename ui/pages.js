@@ -397,7 +397,6 @@ $("roomsave").onclick = single(async () => {
     refresh();
   } catch (e) { fail(e); }
 });
-$("roomno").onclick = () => $("roomdlg").close();
 for (const b of $("setnav").querySelectorAll("button")) b.onclick = () => { settingsPane = b.dataset.pane; showPane(); };
 $("prompttext").oninput = () => editPrompt(false);
 $("promptreset").onclick = () => editPrompt(true);
@@ -439,10 +438,8 @@ $("cleanup").onclick = async () => {
   if (done) flash(cleanupDone(done));
   loadStorage();
 };
-$("delno").onclick = () => $("deletedlg").close();
 $("diagcopy").onclick = () => diagnosticsText().then((text) => navigator.clipboard.writeText(text)).then(() => flash(t("Copied"))).catch(fail);
 $("diagsave").onclick = () => diagnosticsText().then((text) => dialog("save_text", { name: "ez-hanseikai-diagnostics.txt", text })).then((saved) => { if (saved) flash(t("Saved")); }).catch(fail);
-$("resetno").onclick = () => $("resetdlg").close();
 $("resetyes").onclick = () => {
   $("resetdlg").close();
   const keepRooms = $("keeprooms").checked;

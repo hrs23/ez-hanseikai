@@ -140,7 +140,7 @@
   <div class="dlghead"><h2 data-t="Room settings">Room settings</h2><button class="icon close" data-icon="x" data-t-label="Close"></button></div>
   <label class="field"><span data-t="Room name">Room name</span><input id="roomnameinput" class="lg" autocomplete="off"></label>
   <div class="field"><span data-t="Room icon">Room icon</span><div class="row"><span id="roomiconshow"></span><button id="roomiconpick" data-t="Choose image…">Choose image…</button><button id="roomiconclear" data-t="Remove">Remove</button></div><div id="roomfacegrid" class="faces" role="group" data-t-label="Room icon"></div></div>
-  <div class="row end"><button id="roomno" data-t="Cancel">Cancel</button><button id="roomsave" class="primary" data-t="Save">Save</button></div>
+  <div class="row end"><button id="roomno" class="close" data-t="Cancel">Cancel</button><button id="roomsave" class="primary" data-t="Save">Save</button></div>
 </dialog>
 <dialog id="settings" class="settings">
   <nav id="setnav" class="snav">
@@ -205,7 +205,7 @@
 <dialog id="deletedlg" class="wide">
   <h2 id="deltitle"></h2>
   <div id="dellist" class="dellist"></div>
-  <div class="row end"><button id="delno" data-t="Cancel">Cancel</button><button id="delyes" class="danger"></button></div>
+  <div class="row end"><button id="delno" class="close" data-t="Cancel">Cancel</button><button id="delyes" class="danger"></button></div>
 </dialog>
 <dialog id="diagdlg" class="diag">
   <div class="dlghead"><h2 data-t="Diagnostics">Diagnostics</h2><button class="icon close" data-icon="x" data-t-label="Close"></button></div>
@@ -216,7 +216,7 @@
   <h2 data-t="Reset the app?">Reset the app?</h2>
   <p class="muted" data-t="Settings, downloads and logs are removed.">Settings, downloads and logs are removed.</p>
   <label class="check"><input id="keeprooms" type="checkbox" checked><span data-t="Keep my ID, rooms and recordings">Keep my ID, rooms and recordings</span></label>
-  <div class="row end"><button id="resetno" data-t="Cancel">Cancel</button><button id="resetyes" class="danger" data-t="Reset">Reset</button></div>
+  <div class="row end"><button id="resetno" class="close" data-t="Cancel">Cancel</button><button id="resetyes" class="danger" data-t="Reset">Reset</button></div>
 </dialog>
 <dialog id="promptdlg" class="wide">
   <div class="dlghead"><h2 id="prompttitle"></h2><button class="icon close" data-icon="x" data-t-label="Close"></button></div>
@@ -229,11 +229,11 @@
   <label class="field"><span data-t="Range">Range</span><select id="exportrange"><option value="whole" data-t="Whole recording">Whole recording</option><option value="matches" data-t="Per match">Per match</option></select></label>
   <label class="field"><span data-t="Quality">Quality</span><select id="exportquality"><option value="original" data-t="Original">Original</option><option value="standard" data-t="Standard">Standard</option><option value="light" data-t="Light">Light</option></select></label>
   <label class="field"><span data-t="Members">Members</span><select id="exportmember"></select></label>
-  <div class="row end"><button id="exportno" data-t="Cancel">Cancel</button><button id="exportyes" class="primary" data-t="Choose folder…">Choose folder…</button></div>
+  <div class="row end"><button id="exportno" class="close" data-t="Cancel">Cancel</button><button id="exportyes" class="primary" data-t="Choose folder…">Choose folder…</button></div>
 </dialog>
 <dialog id="confirm">
   <h2 id="confirmtitle"></h2>
-  <div class="row end"><button id="confirmno" data-t="Cancel">Cancel</button><button id="confirmyes"></button></div>
+  <div class="row end"><button id="confirmno" class="close" data-t="Cancel">Cancel</button><button id="confirmyes"></button></div>
 </dialog>
 <input id="imagefile" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
 <div id="toast" class="toast" popover="manual" hidden><span id="toasticon"></span><span id="toasttext"></span><button id="toastaction" class="sm" hidden></button></div>
