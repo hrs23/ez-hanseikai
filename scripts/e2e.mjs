@@ -1399,7 +1399,8 @@ async function library(ctx) {
     await evaluate(a, `act("seek", ${SEEK_TO_S}); act("play", ${SEEK_TO_S}); true`);
     await follow(ctx, a, [b, c], true, "nowM()");
     const shown = await at(c);
-    check(await evaluate(c, `(() => { const b = document.querySelector(".wpbar button"); if (!b) return false; const r = b.getBoundingClientRect(); const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); if (!b.contains(hit)) return false; hit.click(); return true; })()`), "the Leave button is not the topmost element at its centre");
+    const leave = await evaluate(c, `(() => { const b = document.querySelector(".wpbar button"); if (!b) return { problem: "no button", page: document.body.className, party: watchParty }; const r = b.getBoundingClientRect(); const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); if (!b.contains(hit)) return { problem: "covered by " + (hit && (hit.id || hit.className || hit.tagName)), rect: [r.left, r.top, r.width, r.height].map(Math.round), vw: innerWidth, vh: innerHeight, body: document.body.className }; hit.click(); return { ok: true }; })()`);
+    check(leave.ok, `the Leave button is not the topmost element at its centre: ${brief(leave)}`);
     await waitFor("C leaves the party", within(UI_REFRESH_S * 3), async () => !(await state(c)).party.on);
     await sleep(UI_REFRESH_S * 1000);
     const left = await at(c);
