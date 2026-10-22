@@ -74,6 +74,7 @@ const JA = {
   "Active": "実行中・待ち",
   "Switch app sound": "アプリの音を切り替える",
   "Watch Party": "Watch Party",
+  "Watching": "視聴中",
   "Add note": "メモを追加",
   "Add note (C)": "メモを追加 (C)",
   "Address lookup": "アドレスの検索",

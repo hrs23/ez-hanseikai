@@ -218,11 +218,15 @@ body.noside .side, body.boardfull .side, body.noside .splitter, body.boardfull .
 .srow.on .thumbfaces .avs .av, .srow.on .wpn .av { box-shadow: 0 0 0 2px var(--raised-2); }
 .srow:hover:not(.on) .thumbfaces .avs .av, .srow:hover:not(.on) .wpn .av { box-shadow: 0 0 0 2px var(--raised); }
 .recdot { width: 8px; height: 8px; border-radius: 50%; background: var(--rec); flex: none; display: inline-block; animation: pulse var(--pulse) infinite; }
-.wpn { margin-left: auto; display: inline-flex; align-items: center; flex: none; }
+.srow .l1 { flex-wrap: wrap; row-gap: var(--s1); }
+.srow .l1 b { max-width: 100%; }
+.wpn { margin-left: auto; display: inline-flex; align-items: center; gap: var(--s1); flex: none; height: 22px; padding: 0 var(--s2); border-radius: var(--r-full); font-size: var(--t-xs); font-weight: var(--w-semibold); white-space: nowrap; }
+.wpn.live, .wpn.on { background: color-mix(in srgb, var(--accent) 18%, transparent); border-color: transparent; color: var(--accent); }
+.wpn.live:hover { background: color-mix(in srgb, var(--accent) 28%, transparent); }
+.wpn:not(.live):not(.on):not(.wt) { padding: 0; height: auto; }
 .srow.wp { box-shadow: inset 2px 0 0 var(--accent); }
-.srow .wt { display: none; margin-left: auto; flex: none; width: 22px; height: 22px; }
+.srow .wt { display: none; }
 .srow:hover .wt, .srow:focus-within .wt { display: inline-flex; }
-.srow .wt + .wpn { margin-left: 0; }
 .aimark { font-size: var(--t-xs); font-weight: var(--w-semibold); padding: 0 var(--s1); border-radius: var(--r-sm); background: var(--hover-bg); color: var(--muted); }
 .sidebanner { margin: var(--s2) var(--s2); padding: var(--s2) var(--s3); border-radius: var(--r-sm); background: var(--warn-soft); color: var(--warn); font-size: var(--t-sm); display: flex; gap: var(--s2); align-items: flex-start; cursor: pointer; flex: none; }
 .sidebanner svg { margin-top: var(--s0); }
