@@ -590,20 +590,22 @@ test("the AI menu offers a few prompts, or the switch when the API is off", () =
   const calls = [];
   const actions = { enable: () => calls.push("enable"), show: (purpose, text, token) => calls.push({ title: purpose.label, text, token }) };
   const items = ui$.aiMenuItems(info, room, "2026-10-19 21-30-00", actions);
-  assert.deepEqual(plain(items.map((i) => i.label)), ["Write notes from the voices", "Summarize a recording into the game plan", "Find the mistakes in a match"]);
-  assert.ok(items.length >= 3 && items.length <= 4);
-  items[0].run();
+  assert.equal(items[0].heading, "Copy a prompt for an external agent");
+  assert.ok(!items[0].run);
+  assert.deepEqual(plain(items.slice(1).map((i) => i.label)), ["Write notes from the voices", "Summarize a recording into the game plan", "Find the mistakes in a match"]);
+  assert.ok(items.length >= 4 && items.length <= 5);
+  items[1].run();
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].title, items[0].label);
+  assert.equal(calls[0].title, items[1].label);
   assert.ok(calls[0].text.includes(info.token));
   const preview = ui$.aiPreview(calls[0].text, calls[0].token);
   assert.ok(!preview.includes(info.token) && preview.includes("••••••••") && preview.includes("llms.txt"));
   const off = ui$.aiMenuItems({ ...info, on: false, token: "" }, room, null, actions);
-  assert.deepEqual(plain(off.map((i) => i.label)), ["Turn on the local API"]);
-  off[0].run();
+  assert.deepEqual(plain(off.map((i) => i.heading || i.label)), ["Copy a prompt for an external agent", "Turn on the local API"]);
+  off[1].run();
   assert.equal(calls[1], "enable");
   assert.ok("Copy prompt" in ui$.JA);
-  assert.ok("This app does not run the AI. Copy the prompt and give it to your own AI agent (such as Claude Code); it works through the local API." in ui$.JA);
+  assert.ok("Copy a prompt for an external agent" in ui$.JA);
 });
 
 test("a prompt names the API address, the token, llms.txt, the room and the recording", () => {

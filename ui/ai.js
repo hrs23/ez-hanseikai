@@ -37,8 +37,9 @@ const AI_MASK = "••••••••";
 const aiPreview = (text, token) => (token ? text.replaceAll(token, AI_MASK) : text);
 
 function aiMenuItems(info, room, recording, actions) {
-  if (!info.on) return [{ label: t("Turn on the local API"), icon: "terminal", run: actions.enable }];
-  return aiPurposes().map((p) => ({ label: p.label, icon: p.icon, run: () => actions.show(p, aiFacts(info, room, recording), info.token) }));
+  const heading = { heading: t("Copy a prompt for an external agent") };
+  if (!info.on) return [heading, { label: t("Turn on the local API"), icon: "terminal", run: actions.enable }];
+  return [heading, ...aiPurposes().map((p) => ({ label: p.label, icon: p.icon, run: () => actions.show(p, aiFacts(info, room, recording), info.token) }))];
 }
 
 async function openAiMenu(anchor, recording) {
