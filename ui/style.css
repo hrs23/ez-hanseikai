@@ -341,9 +341,16 @@ body.noside .side, body.boardfull .side, body.noside .splitter, body.boardfull .
 .canvas { width: 1080px; flex: none; display: flex; flex-direction: column; gap: 16px; }
 .bcard.team { font-size: 20px; padding: 24px 28px 28px; }
 .bcard.team .chead { font-size: 28px; }
-.brow { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; align-items: start; }
+.brow { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); grid-auto-rows: 48px; grid-auto-flow: row dense; gap: 16px; }
 .bcard.drag { opacity: var(--opacity-dim); }
-.bhead { display: flex; align-items: center; gap: 8px; cursor: grab; touch-action: none; }
+.bcard.sizing { outline: 2px dashed var(--accent); outline-offset: 2px; }
+.bcard.dropto::before, .bcard.dropend::before { content: ""; position: absolute; top: 0; bottom: 0; left: -10px; width: 4px; border-radius: 2px; background: var(--accent); }
+.bcard.dropend::before { left: auto; right: -10px; }
+.bsize { position: absolute; right: 0; bottom: 0; width: 20px; height: 20px; cursor: nwse-resize; touch-action: none; }
+.bsize::after { content: ""; position: absolute; right: 6px; bottom: 6px; width: 7px; height: 7px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); opacity: .4; }
+.bcard:hover .bsize::after, .bcard.sizing .bsize::after { opacity: 1; }
+.bcard > .cardmd, .bcard > .cedit { flex: 1; min-height: 0; overflow: auto; }
+.bhead { display: flex; align-items: center; gap: 8px; cursor: grab; touch-action: none; user-select: none; }
 .bcard.team .bhead { cursor: default; }
 .bhead b { font-weight: var(--w-bold); color: var(--accent); }
 .bhead input { flex: 1; }
@@ -351,10 +358,10 @@ body.noside .side, body.boardfull .side, body.noside .splitter, body.boardfull .
 .cardmd > :last-child { margin-bottom: 0; }
 .cardmd .chead { font-weight: var(--w-bold); margin: 0 0 6px; }
 .cedit { display: flex; flex-direction: column; gap: 8px; }
-.cedit textarea { min-height: 160px; font: 13px/1.7 var(--mono); background: var(--deep); }
+.cedit textarea { flex: 1; min-height: 80px; resize: none; font: 13px/1.7 var(--mono); background: var(--deep); }
 .cedit .row.end { margin-top: 0; }
 .bcard .write { align-self: flex-start; }
-.bcard { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 14px 18px 18px; min-width: 0; overflow-wrap: anywhere; display: flex; flex-direction: column; gap: 8px; }
+.bcard { position: relative; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 14px 18px 18px; min-width: 0; min-height: 0; overflow-wrap: anywhere; display: flex; flex-direction: column; gap: 8px; }
 .cardmd p { margin: 0 0 8px; line-height: 1.55; }
 .cardmd h4, .cardmd h5, .cardmd h6 { margin: 12px 0 4px; font-size: 15px; font-weight: var(--w-bold); }
 .cardmd ul, .cardmd ol { margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 4px; }

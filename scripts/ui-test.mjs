@@ -11,7 +11,7 @@ const source = ["util.js", "i18n.js", "live.js", "media.js", "layout.js", "dock.
 const memory = new Map();
 const localStorage = { getItem: (k) => memory.get(k) ?? null, setItem: (k, v) => memory.set(k, v) };
 const context = vm.createContext({ localStorage, window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id, location: { search: "" } });
-const ui$ = vm.runInContext(`${source}\n({ matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, memberStatus, sendsPicture, viewLine, tileProblem, livePlayers, ordered, extensionLine, analysisReason, recordingAnalysis, analysisState, cardParts, dropPos, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, talking, stillTalking, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, groupDrawings, dayLabel, keysOf, memberStatus, sendsPicture, viewLine, tileProblem, livePlayers, ordered, extensionLine, analysisReason, recordingAnalysis, analysisState, cardParts, dropPos, dropSlot, boardSpan, deletePreview, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, talking, stillTalking, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 const plain = (v) => JSON.parse(JSON.stringify(v));
 
 const moment = (m, extra = {}) => ({ role: "moment", m, plugin: { id: "apex-matches" }, tags: ["match"], ...extra });
@@ -522,6 +522,21 @@ test("a card is a bold first line over short markdown, with marked text, scene l
   assert.equal(ui$.cardParts("only a line").body.length, 0);
   const node = plain(ui$.mdInline("go [push](ezh://moment/s1/12.5/all) #rotate ==hold=="));
   assert.deepEqual(node.filter((n) => !n.text).map((n) => (n.link ? "link" : n.tag ? "tag" : "mark")), ["link", "tag", "mark"]);
+});
+
+test("a resized card snaps to whole grid cells within the limits", () => {
+  assert.deepEqual(plain(ui$.boardSpan({ w: 4, h: 5 }, 130, -70, 100, 64)), { w: 5, h: 4 });
+  assert.deepEqual(plain(ui$.boardSpan({ w: 4, h: 5 }, -900, 2000, 100, 64)), { w: 2, h: 16 });
+  assert.deepEqual(plain(ui$.boardSpan({ w: 10, h: 2 }, 900, -200, 100, 64)), { w: 12, h: 2 });
+});
+
+test("a dragged card lands before the card under the pointer's left half, after its right half, and in reading order between cards", () => {
+  const rects = [{ left: 0, right: 100, top: 0, bottom: 100 }, { left: 120, right: 220, top: 0, bottom: 200 }, { left: 0, right: 100, top: 120, bottom: 200 }];
+  assert.equal(ui$.dropSlot(rects, 140, 50), 1);
+  assert.equal(ui$.dropSlot(rects, 200, 150), 2);
+  assert.equal(ui$.dropSlot(rects, 110, 50), 1);
+  assert.equal(ui$.dropSlot(rects, 300, 300), 3);
+  assert.equal(ui$.dropSlot(rects, -5, -5), 0);
 });
 
 test("dropping a card between two others takes the middle position, and at the ends one step beyond", () => {

@@ -45,6 +45,20 @@ function soundKey(view, keys, me, chosen) {
 
 const seekSum = (run, delta) => (Math.sign(run) === Math.sign(delta) ? run + delta : delta);
 
+const BOARD_COLS = 12;
+const BOARD_ROWS = 16;
+
+function boardSpan(start, dx, dy, colStep, rowStep) {
+  const span = (n, max) => Math.min(max, Math.max(2, n));
+  return { w: span(start.w + Math.round(dx / colStep), BOARD_COLS), h: span(start.h + Math.round(dy / rowStep), BOARD_ROWS) };
+}
+
+function dropSlot(rects, x, y) {
+  const hit = rects.findIndex((r) => x >= r.left && x <= r.right && y >= r.top && y <= r.bottom);
+  if (hit >= 0) return x < (rects[hit].left + rects[hit].right) / 2 ? hit : hit + 1;
+  return rects.filter((r) => r.bottom < y || (r.top <= y && r.right < x)).length;
+}
+
 function dropPos(positions, index) {
   const before = positions[index - 1];
   const after = positions[index];

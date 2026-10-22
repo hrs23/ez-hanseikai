@@ -67,33 +67,62 @@ function cardMenu(c, anchor) {
     { label: t("Delete…"), icon: "trash", danger: true, run: async () => { if (await ask(t("Delete this card?"), t("Delete"), true)) putCard(c.card, { gone: true }); } },
   ], anchor);
 }
-function dragCard(c, down) {
-  if (down.button !== 0 || c.card === "team" || down.target.closest("button, input")) return;
-  const grab = down.currentTarget;
-  const from = { x: down.clientX, y: down.clientY };
-  const tiles = [...$("canvas").querySelectorAll(".brow > .bcard")];
-  let moving = false;
-  const move = (e) => {
-    if (!moving && Math.hypot(e.clientX - from.x, e.clientY - from.y) < DRAG_START_PX) return;
-    moving = true;
-    grab.parentElement.classList.add("drag");
-  };
-  const end = (e) => {
+function track(grab, down, move, end) {
+  const stop = (e) => {
     grab.removeEventListener("pointermove", move);
-    grab.removeEventListener("pointerup", end);
-    grab.removeEventListener("pointercancel", end);
+    grab.removeEventListener("pointerup", stop);
+    grab.removeEventListener("pointercancel", stop);
     grab.releasePointerCapture(down.pointerId);
-    grab.parentElement.classList.remove("drag");
-    if (!moving || e.type !== "pointerup") return;
-    const others = st.board.filter((x) => x.card !== "team" && x.card !== c.card);
-    const rects = tiles.filter((box) => box !== grab.parentElement).map((box) => box.getBoundingClientRect());
-    const index = rects.filter((r) => r.bottom < e.clientY || (r.top <= e.clientY && r.left + r.width / 2 < e.clientX)).length;
-    putCard(c.card, { pos: dropPos(others.map((x) => x.pos), index) });
+    end(e);
   };
   grab.setPointerCapture(down.pointerId);
   grab.addEventListener("pointermove", move);
-  grab.addEventListener("pointerup", end);
-  grab.addEventListener("pointercancel", end);
+  grab.addEventListener("pointerup", stop);
+  grab.addEventListener("pointercancel", stop);
+}
+function dragCard(c, down) {
+  if (down.button !== 0 || c.card === "team" || down.target.closest("button, input")) return;
+  const box = down.currentTarget.parentElement;
+  const tiles = [...$("canvas").querySelectorAll(".brow > .bcard:not(.team):not(.new)")].filter((x) => x !== box);
+  const rects = tiles.map((x) => x.getBoundingClientRect());
+  const cards = st.board.filter((x) => x.card !== "team");
+  const from = cards.findIndex((x) => x.card === c.card);
+  let index = null;
+  const mark = (i) => tiles.forEach((x, n) => { x.classList.toggle("dropto", n === i); x.classList.toggle("dropend", i === tiles.length && n === tiles.length - 1); });
+  track(down.currentTarget, down, (e) => {
+    if (index === null && Math.hypot(e.clientX - down.clientX, e.clientY - down.clientY) < DRAG_START_PX) return;
+    box.classList.add("drag");
+    index = dropSlot(rects, e.clientX, e.clientY);
+    mark(index === from ? -1 : index);
+  }, (e) => {
+    box.classList.remove("drag");
+    mark(-1);
+    if (index === null || index === from || e.type !== "pointerup") return;
+    putCard(c.card, { pos: dropPos(cards.filter((x) => x.card !== c.card).map((x) => x.pos), index) });
+  });
+}
+function spanCard(box, size) {
+  box.style.gridColumn = `span ${size.w}`;
+  box.style.gridRow = `span ${size.h}`;
+}
+function resizeCard(c, down) {
+  if (down.button !== 0) return;
+  const box = down.currentTarget.parentElement;
+  const grid = box.parentElement;
+  const css = getComputedStyle(grid);
+  const scale = grid.getBoundingClientRect().width / grid.offsetWidth;
+  const col = ((grid.offsetWidth + parseFloat(css.columnGap)) / BOARD_COLS) * scale;
+  const row = (parseFloat(css.gridAutoRows) + parseFloat(css.rowGap)) * scale;
+  let size = { w: c.w, h: c.h };
+  box.classList.add("sizing");
+  track(down.currentTarget, down, (e) => {
+    size = boardSpan(c, e.clientX - down.clientX, e.clientY - down.clientY, col, row);
+    spanCard(box, size);
+  }, (e) => {
+    box.classList.remove("sizing");
+    if (e.type === "pointerup" && (size.w !== c.w || size.h !== c.h)) putCard(c.card, size);
+    else spanCard(box, c);
+  });
 }
 function cardEl(c) {
   const open = editing && editing.card === c.card;
@@ -105,7 +134,10 @@ function cardEl(c) {
   head.onpointerdown = (e) => dragCard(c, e);
   if (more) head.oncontextmenu = (e) => { e.preventDefault(); cardMenu(c, e); };
   const body = open ? cardEditor(c) : c.text.trim() ? cardDom(c.text, mdHooks()) : el("button", { className: "sm write", textContent: t("Write"), onclick: () => editCard(c) });
-  return el("div", { className: "bcard" + (c.card === "team" ? " team" : "") }, head, body);
+  const grip = open ? null : el("div", { className: "bsize", ariaHidden: "true", onpointerdown: (e) => resizeCard(c, e) });
+  const box = el("div", { className: "bcard" + (c.card === "team" ? " team" : "") }, head, body, grip);
+  spanCard(box, open ? { w: Math.max(c.w, 4), h: Math.max(c.h, 7) } : c);
+  return box;
 }
 function addCard() {
   editing = { adding: true };
@@ -115,7 +147,9 @@ function addCard() {
 }
 function newCardEl() {
   const input = nameInput("", (name) => { editing = null; if (name) putCard("", { title: name }); else renderBoard(); });
-  return el("div", { className: "bcard new" }, el("div", { className: "bhead" }, input));
+  const box = el("div", { className: "bcard new" }, el("div", { className: "bhead" }, input));
+  spanCard(box, { w: 4, h: 2 });
+  return box;
 }
 function fitAll() {
   const wrap = $("boardwrap");
@@ -129,7 +163,7 @@ function placeBoard() {
 function renderBoard() {
   if (!onBoard() || !inRoom()) return;
   if (changed("board", editing ? [editing, lang] : [st.board, st.names, looks(), lang, st.tag_names])) {
-    $("canvas").replaceChildren(...st.board.filter((c) => c.card === "team").map(cardEl), el("div", { className: "brow" }, ...st.board.filter((c) => c.card !== "team").map(cardEl), editing && editing.adding ? newCardEl() : null));
+    $("canvas").replaceChildren(el("div", { className: "brow" }, ...st.board.map(cardEl), editing && editing.adding ? newCardEl() : null));
   }
   placeBoard();
 }

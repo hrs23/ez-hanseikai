@@ -1231,12 +1231,22 @@ pub fn board_card_valid(card: &str) -> bool {
     card.len() <= 80 && (card == "team" || card.strip_prefix("m:").or_else(|| card.strip_prefix("c:")).is_some_and(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')))
 }
 
+pub const BOARD_COLS: i64 = 12;
+pub const BOARD_ROWS: i64 = 16;
+
+pub fn board_span(card: &str, w: &Value, h: &Value) -> (i64, i64) {
+    let (dw, dh) = if card == "team" { (BOARD_COLS, 4) } else { (4, 5) };
+    let span = |v: &Value, default: i64, max: i64| v.as_f64().filter(|n| n.is_finite()).map_or(default, |n| (n.round() as i64).clamp(2, max));
+    (span(w, dw, BOARD_COLS), span(h, dh, BOARD_ROWS))
+}
+
 pub fn board_cards(events: &[Value], members: &[String]) -> Vec<Value> {
     let mut cards: BTreeMap<String, ((i64, String), Value)> = BTreeMap::new();
     let mut first: HashMap<String, f64> = members.iter().enumerate().map(|(i, member)| (format!("m:{member}"), i as f64)).collect();
     first.insert("team".into(), -1.0);
     for (card, pos) in &first {
-        cards.insert(card.clone(), ((i64::MIN, String::new()), json!({"title": null, "text": "", "pos": pos, "gone": false})));
+        let (w, h) = board_span(card, &Value::Null, &Value::Null);
+        cards.insert(card.clone(), ((i64::MIN, String::new()), json!({"title": null, "text": "", "pos": pos, "w": w, "h": h, "gone": false})));
     }
     for e in events.iter().filter(|e| e["kind"] == "board") {
         let card = e["values"]["card"].as_str().filter(|c| !c.is_empty()).unwrap_or("team");
@@ -1250,11 +1260,12 @@ pub fn board_cards(events: &[Value], members: &[String]) -> Vec<Value> {
             continue;
         }
         let pos = if card == "team" { -1.0 } else { e["values"]["pos"].as_f64().or_else(|| first.get(card).copied()).unwrap_or(f64::MAX) };
-        let state = json!({"title": e["values"]["title"].as_str().filter(|t| !t.is_empty()), "text": e["text"], "pos": pos, "gone": e["values"]["gone"] == true, "by": e["author"], "at_us": at.0});
+        let (w, h) = board_span(card, &e["values"]["w"], &e["values"]["h"]);
+        let state = json!({"title": e["values"]["title"].as_str().filter(|t| !t.is_empty()), "text": e["text"], "pos": pos, "w": w, "h": h, "gone": e["values"]["gone"] == true, "by": e["author"], "at_us": at.0});
         cards.insert(card.to_string(), (at, state));
     }
     let mut out: Vec<Value> = cards.into_iter().map(|(card, (_, mut state))| { state["card"] = json!(card); state }).collect();
-    out.sort_by(|a, b| a["pos"].as_f64().unwrap_or(f64::MAX).total_cmp(&b["pos"].as_f64().unwrap_or(f64::MAX)).then_with(|| a["card"].as_str().cmp(&b["card"].as_str())));
+    out.sort_by(|a, b| (a["card"] != "team").cmp(&(b["card"] != "team")).then_with(|| a["pos"].as_f64().unwrap_or(f64::MAX).total_cmp(&b["pos"].as_f64().unwrap_or(f64::MAX)).then_with(|| a["card"].as_str().cmp(&b["card"].as_str()))));
     out
 }
 
@@ -2142,10 +2153,14 @@ pub mod tests {
         let old = card(5, "a", "# Plan", Value::Null);
         let list = board_cards(&[old, card(7, "b", "Newer plan", json!({"card": "team"})), card(6, "a", "Older plan", json!({"card": ""}))], &members);
         assert_eq!((list[0]["card"].as_str(), list[0]["text"].as_str(), list[0]["by"].as_str()), (Some("team"), Some("Newer plan"), Some("b")));
-        let more = board_cards(&[card(8, "a", "New", json!({"card": "c:1", "title": "Drops", "pos": 2.5})), card(9, "b", "Mine", json!({"card": "m:a", "pos": 3.0})), card(10, "b", "", json!({"card": "m:b", "gone": true})), card(11, "a", "Moved", json!({"card": "c:1", "title": "Drops", "pos": 0.5}))], &members);
+        let more = board_cards(&[card(8, "a", "New", json!({"card": "c:1", "title": "Drops", "pos": 2.5})), card(9, "b", "Mine", json!({"card": "m:a", "pos": 3.0})), card(10, "b", "", json!({"card": "m:b", "gone": true})), card(11, "a", "Moved", json!({"card": "c:1", "title": "Drops", "pos": -3.0}))], &members);
         assert_eq!(more.iter().map(|c| c["card"].as_str().unwrap()).collect::<Vec<_>>(), ["team", "c:1", "m:b", "m:a"]);
-        assert_eq!((more[1]["text"].as_str(), more[1]["title"].as_str(), more[1]["pos"].as_f64()), (Some("Moved"), Some("Drops"), Some(0.5)));
+        assert_eq!((more[1]["text"].as_str(), more[1]["title"].as_str(), more[1]["pos"].as_f64()), (Some("Moved"), Some("Drops"), Some(-3.0)));
         assert_eq!(more[2]["gone"], true);
+        assert_eq!([&none[0], &none[1]].map(|c| (c["w"].as_i64(), c["h"].as_i64())), [(Some(12), Some(4)), (Some(4), Some(5))]);
+        let sized = board_cards(&[card(14, "a", "", json!({"card": "c:2", "w": 6, "h": 3.4})), card(15, "a", "", json!({"card": "c:3", "w": 99, "h": 0})), card(16, "a", "", json!({"card": "team", "w": "wide", "h": 8}))], &members);
+        let span = |id: &str| sized.iter().find(|c| c["card"] == id).map(|c| (c["w"].as_i64().unwrap(), c["h"].as_i64().unwrap()));
+        assert_eq!([span("c:2"), span("c:3"), span("team")], [Some((6, 3)), Some((12, 2)), Some((12, 8))]);
         let legacy = board_cards(&[card(12, "a", "Old", json!({"card": "b"})), card(13, "a", "Bad", json!({"card": "x y"}))], &members);
         assert_eq!(legacy.iter().map(|c| (c["card"].as_str().unwrap(), c["text"].as_str().unwrap())).collect::<Vec<_>>(), [("team", ""), ("m:a", ""), ("m:b", "Old")]);
         assert!(board_card_valid("team") && board_card_valid(&format!("m:{}", "a".repeat(64))) && board_card_valid("m:ab12") && board_card_valid("c:0f-9") && !board_card_valid("m:") && !board_card_valid("x:1") && !board_card_valid("c:a b"));

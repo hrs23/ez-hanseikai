@@ -403,7 +403,9 @@ fn put_board_card(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     let last = cards.iter().filter_map(|c| c["pos"].as_f64()).fold(0.0, f64::max);
     let pos = arg::<Option<f64>>(&args, "pos")?.filter(|p| p.is_finite()).or_else(|| current.and_then(|c| c["pos"].as_f64())).unwrap_or(last + 1.0);
     let gone = arg::<Option<bool>>(&args, "gone")?.unwrap_or_else(|| current.is_some_and(|c| c["gone"] == true));
-    let mut values = json!({"card": card, "pos": pos, "gone": gone});
+    let size = |k: &str| -> Result<Value, String> { Ok(arg::<Option<f64>>(&args, k)?.map_or_else(|| current.map_or(Value::Null, |c| c[k].clone()), |v| json!(v))) };
+    let (w, h) = room::board_span(&card, &size("w")?, &size("h")?);
+    let mut values = json!({"card": card, "pos": pos, "w": w, "h": h, "gone": gone});
     if !title.is_empty() {
         values["title"] = json!(title);
     }

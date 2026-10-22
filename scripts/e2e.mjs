@@ -1274,13 +1274,13 @@ async function library(ctx) {
     for (const app of [a, b, c]) await waitFor(`${app.key} shows no avatar for B and no room icon`, within(LOG_SYNC_S * 2), async () => { const s = await state(app); return !s.avatars[b.id] && s.room.icon === ""; });
   });
 
-  await step("the game plan is a board of cards with short Markdown, and a card is added, renamed, moved and deleted by anyone", async () => {
+  await step("the game plan is a board of cards with short Markdown, and a card is added, renamed, moved, resized and deleted by anyone", async () => {
     const text = ["Win the ring", "- first", "- second", `==hold== [Opening](ezh://moment/${encodeURIComponent(ctx.set)}/5/all) [site](https://example.com/x) [bad](javascript:alert(1)) <img src=x onerror=alert(1)>`, "| Who | Job |"].join("\n");
     await evaluate(a, `showRoomTab("board"); true`);
     await invoke(a, "put_board_card", { room: ctx.room, card: "team", text });
     const card = async (app, id) => (await state(app)).board.find((x) => x.card === id);
     for (const app of [b, c]) await waitFor(`${app.key} receives the team card`, within(LOG_SYNC_S * 2), async () => (await card(app, "team"))?.text === text);
-    await waitFor("A shows the cards", within(UI_REFRESH_S * 5), () => evaluate(a, `!!$("canvas").querySelector(".bcard.team .chead") && $("canvas").querySelectorAll(".brow > .bcard").length === 3`));
+    await waitFor("A shows the cards", within(UI_REFRESH_S * 5), () => evaluate(a, `!!$("canvas").querySelector(".bcard.team .chead") && $("canvas").querySelectorAll(".brow > .bcard:not(.team)").length === 3`));
     const dom = await evaluate(a, `(() => { const c = $("canvas").querySelector(".bcard.team"); return { head: c.querySelector(".chead").textContent, items: c.querySelectorAll("li").length, marks: c.querySelectorAll("mark").length, boxes: c.querySelectorAll("input,table,pre").length, links: [...c.querySelectorAll("a")].map((x) => [x.getAttribute("href"), x.title]), moments: c.querySelectorAll("button.link").length, images: c.querySelectorAll("img").length, text: c.textContent, writes: $("canvas").querySelectorAll(".write").length }; })()`);
     check(dom.head === "Win the ring" && dom.items === 2 && dom.marks === 1 && dom.boxes === 0 && dom.moments === 1 && dom.images === 0 && dom.links.length === 1 && dom.links[0][0] === null && dom.links[0][1] === "https://example.com/x", `the team card shows ${brief(dom)}`);
     check(dom.text.includes("javascript:alert(1)") && dom.text.includes("<img src=x onerror=alert(1)>") && dom.text.includes("| Who | Job |"), "the unsafe link, the tag and the table are not shown as plain text");
@@ -1292,6 +1292,9 @@ async function library(ctx) {
     await waitFor("A has C's rename before it moves the card", within(LOG_SYNC_S * 2), async () => (await card(a, id))?.title === "Calls");
     await invoke(a, "put_board_card", { room: ctx.room, card: id, pos: -0.5 });
     for (const app of [a, b, c]) await waitFor(`${app.key} sees the card renamed and moved up with its text`, within(LOG_SYNC_S * 2), async () => { const x = await card(app, id); return x?.title === "Calls" && x.text === "north" && (await state(app)).board[1].card === id; });
+    await invoke(c, "put_board_card", { room: ctx.room, card: id, w: 6, h: 3 });
+    for (const app of [a, b, c]) await waitFor(`${app.key} sees the card resized with its title, text and place`, within(LOG_SYNC_S * 2), async () => { const x = await card(app, id); return x?.w === 6 && x.h === 3 && x.title === "Calls" && x.text === "north" && (await state(app)).board[1].card === id; });
+    await waitFor("A shows the card six columns wide and three rows high", within(UI_REFRESH_S * 5), () => evaluate(a, `(() => { const box = $("canvas").querySelectorAll(".brow > .bcard")[1]; return box.style.gridColumn === "span 6" && box.style.gridRow === "span 3"; })()`));
     await invoke(b, "put_board_card", { room: ctx.room, card: id, gone: true });
     for (const app of [a, b, c]) await waitFor(`${app.key} no longer shows the deleted card`, within(LOG_SYNC_S * 2), async () => !(await card(app, id)));
     check((await invoke(a, "put_board_card", { room: ctx.room, card: "elsewhere", text: "x" }).catch((e) => e.message || "refused")) !== "elsewhere", "an invalid card id was accepted");
