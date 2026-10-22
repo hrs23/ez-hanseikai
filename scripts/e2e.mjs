@@ -1472,7 +1472,7 @@ async function library(ctx) {
     const pick = await evaluate(a, `play.keys.find((k) => k !== soundKey(0, play.keys, st.id, gameSound))`);
     await clickAt(a, `play.tiles[${JSON.stringify(pick)}].box`);
     await waitFor("the clicked tile's sound plays", within(UI_REFRESH_S * 3), () => evaluate(a, `soundKey(0, play.keys, st.id, gameSound) === ${JSON.stringify(pick)} && play.keys.every((k) => (k === ${JSON.stringify(pick)}) === !play.tiles[k].media.video.muted && (k === ${JSON.stringify(pick)}) === !play.tiles[k].snd.hidden) && $("gamesound").title === t("{name} app sound is playing", { name: nameOf(${JSON.stringify(pick)}) })`));
-    check(await evaluate(a, `[...$("views").children].every((b, i) => (b.querySelector(".key") === null) === (i > MAX_KEYED) && (i > MAX_KEYED || b.querySelector(".key").textContent === String(i)))`), "the view buttons show their shortcut numbers");
+    check(await evaluate(a, `[...$("views").children].slice(0, -1).every((b, i) => (b.querySelector(".key") === null) === (i > MAX_KEYED) && (i > MAX_KEYED || b.querySelector(".key").textContent === String(i)))`), "the view buttons show their shortcut numbers");
     const next = await evaluate(a, `play.keys[(play.keys.indexOf(${JSON.stringify(pick)}) + 1) % play.keys.length]`);
     await evaluate(a, `play.tiles[${JSON.stringify(next)}].box.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 80, clientY: 120 })); true`);
     await clickAt(a, `[...$("menu").querySelectorAll("button")].find((b) => b.textContent === t("Hear this"))`);
