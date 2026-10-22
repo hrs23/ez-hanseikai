@@ -882,7 +882,7 @@ mod tests {
         }
         fn add(&self, room: &str, record: Value) -> Result<(), String> {
             if room != "r1" {
-                return Err("Join a room first.".into());
+                return Err(crate::room::JOIN_FIRST.into());
             }
             Arc::make_mut(&mut self.logs.lock().unwrap()[0].records).push(record);
             Ok(())

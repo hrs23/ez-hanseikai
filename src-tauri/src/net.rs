@@ -254,7 +254,6 @@ async fn send_file(core: &Core, send: &mut SendStream, n: u32, path: &Path, at: 
                 *core.live_at.lock().unwrap() = Some(Instant::now());
             }
             debug::slow_send(what, wrote.elapsed());
-            row.add(k);
             sent += k as u64;
             pace(core, k, history).await;
             continue;
@@ -299,7 +298,7 @@ async fn follow(core: &Core, conn: &Connection, send: &mut SendStream, req: &Val
         return Ok(());
     }
     let _ = send.set_priority(priority(live, &series));
-    let what = debug::what(from, req, priority(live, &series));
+    let what = debug::what(from, req);
     let dir = core.series_dir(&room, set.as_deref(), &owner, &capture, &series);
     let which = if series == SERIES[0] { 0 } else { 1 };
     let current = || core.engine.live().filter(|l| l.room == room && l.capture == capture);
@@ -392,7 +391,6 @@ async fn handle(core: Arc<Core>, conn: Connection, mut send: SendStream, mut rec
             let (room, of) = (req["room"].as_str().unwrap_or_default(), req["of"].as_str().unwrap_or_default());
             if room::may_share(&core, room, &from.to_string(), of) {
                 if let Ok(mut file) = tokio::fs::File::open(core.log_path(room, of)).await {
-                    let started = Instant::now();
                     file.seek(std::io::SeekFrom::Start(req["from"].as_u64().unwrap_or(0))).await?;
                     let mut data = Vec::new();
                     (&mut file).take(PULL_MAX).read_to_end(&mut data).await?;
@@ -401,7 +399,7 @@ async fn handle(core: Arc<Core>, conn: Connection, mut send: SendStream, mut rec
                         (&mut file).take(need - data.len() as u64).read_to_end(&mut data).await?;
                     }
                     send.write_all(&data).await?;
-                    debug::log_transfer("out", from, room, of, data.len(), started);
+                    debug::log_transfer("out", from, of, data.len());
                 }
             }
         }
@@ -660,9 +658,8 @@ async fn pull_log(core: &Core, room: &str, of: &str, conn: &Connection) -> Resul
     let own = of == core.me();
     loop {
         let from = tokio::fs::metadata(&path).await.map(|m| m.len()).unwrap_or(0);
-        let started = Instant::now();
         let data = request(conn, &json!({"t": "pull", "room": room, "of": of, "from": from})).await?;
-        debug::log_transfer("in", conn.remote_id(), room, of, data.len(), started);
+        debug::log_transfer("in", conn.remote_id(), of, data.len());
         let more = data.len() as u64 >= PULL_MAX;
         {
             let _guard = core.log_lock.lock().unwrap();
@@ -725,7 +722,7 @@ async fn receive(core: &Arc<Core>, conn: &Connection, req: Value, expect: HashMa
     let set = Some(text("set")).filter(|s| valid_id(s));
     let dir = core.series_dir(&room, set.as_deref(), &owner, &capture, &series);
     let (from, at) = (req["from"].as_u64().unwrap_or(1) as u32, req["at"].as_u64().unwrap_or(0));
-    let what = debug::what(conn.remote_id(), &req, priority(req["live"] == true, &series));
+    let what = debug::what(conn.remote_id(), &req);
     let (mut send, mut recv) = conn.open_bi().await?;
     send.write_all(&serde_json::to_vec(&req)?).await?;
     send.finish()?;
@@ -766,7 +763,7 @@ async fn receive(core: &Arc<Core>, conn: &Connection, req: Value, expect: HashMa
                 };
                 drop(row);
                 let name = format!("{series}/{}", if k == 0 { INIT.to_string() } else { seg_name(k) });
-                debug::hash_fail(&owner, &capture, &series, k, bad);
+                debug::hash_fail(&owner, &capture, &series, k);
                 if let Some(set) = &set {
                     core.append_log(&room, &json!({"k": "file_bad", "room": room, "set": set, "file": format!("{owner}/{capture}/{name}"), "size": bad, "t_us": now_us()}));
                 }
@@ -776,10 +773,9 @@ async fn receive(core: &Arc<Core>, conn: &Connection, req: Value, expect: HashMa
         }
         buf.resize(len, 0);
         recv.read_exact(&mut buf).await?;
-        if let Some((_, _, file, _, row)) = current.as_mut() {
+        if let Some((_, _, file, ..)) = current.as_mut() {
             file.write_all(&buf).await?;
             file.flush().await?;
-            row.add(len);
         }
         got += len as u64;
     }

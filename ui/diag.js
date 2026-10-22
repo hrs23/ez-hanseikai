@@ -13,8 +13,7 @@ function flowRows(s, flow) {
   rows.push({ key: "Address lookup", level: "info", text: [relay, t("Publishes only the relay address")].filter(Boolean).join(" · ") });
   rows.push({ key: "Update check", level: "info", text: t("github.com · at start and every 4 h") });
   rows.push(flow.time.ok ? { key: "Time check", level: "info", text: t("{host} · at start and every hour", { host: flow.time.host }) } : { key: "Time check", level: "warn", text: `${flow.time.host} · ${t("Unreachable")}` });
-  const downloads = flow.downloads.map((d) => t("Downloading {what} from {host}", { what: t("Video tools"), host: d.hosts.join(", ") }));
-  rows.push(downloads.length ? { key: "Downloads", level: "warn", text: downloads.join(" · ") } : { key: "Downloads", level: "info", text: t("Video tools, only when needed") });
+  rows.push(flow.download ? { key: "Downloads", level: "warn", text: t("Downloading {what} from {host}", { what: t("Video tools"), host: flow.download }) } : { key: "Downloads", level: "info", text: t("Video tools, only when needed") });
   if (flow.api.on) rows.push({ key: "Local API", level: "info", text: t("This PC only") });
   return rows;
 }

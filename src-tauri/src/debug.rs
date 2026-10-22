@@ -146,20 +146,17 @@ pub struct What {
     row: Value,
     live: bool,
     series: String,
-    priority: i32,
 }
 
-pub fn what(peer: impl std::fmt::Display, req: &Value, priority: i32) -> What {
+pub fn what(peer: impl std::fmt::Display, req: &Value) -> What {
     let text = |k: &str| req[k].as_str().unwrap_or_default().to_string();
-    let row = json!({"peer": short(peer), "room": text("room"), "set": text("set"), "owner": short(text("owner")), "capture": text("capture"), "series": text("series")});
-    What { row, live: req["live"] == true, series: text("series"), priority }
+    let row = json!({"peer": short(peer), "owner": short(text("owner")), "capture": text("capture"), "series": text("series")});
+    What { row, live: req["live"] == true, series: text("series") }
 }
 
 pub struct Transfer {
     id: u64,
     row: Value,
-    started: Instant,
-    bytes: AtomicU64,
     done: bool,
 }
 
@@ -168,17 +165,12 @@ pub fn start(dir: &str, what: &What, n: u32) -> Transfer {
     row["dir"] = json!(dir);
     row["n"] = json!(n);
     row["kind"] = json!(kind(what.live, &what.series, n));
-    row["priority"] = json!(what.priority);
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     ACTIVE.lock().unwrap().push((id, row.clone()));
-    Transfer { id, row, started: Instant::now(), bytes: AtomicU64::new(0), done: false }
+    Transfer { id, row, done: false }
 }
 
 impl Transfer {
-    pub fn add(&self, bytes: usize) {
-        self.bytes.fetch_add(bytes as u64, Ordering::Relaxed);
-    }
-
     pub fn finish(mut self) {
         self.done = true;
     }
@@ -187,10 +179,7 @@ impl Transfer {
 impl Drop for Transfer {
     fn drop(&mut self) {
         ACTIVE.lock().unwrap().retain(|(id, _)| *id != self.id);
-        let mut row = std::mem::take(&mut self.row);
-        row["bytes"] = json!(self.bytes.load(Ordering::Relaxed));
-        row["ms"] = json!(self.started.elapsed().as_millis() as u64);
-        record(row, self.done);
+        record(std::mem::take(&mut self.row), self.done);
     }
 }
 
@@ -207,13 +196,12 @@ pub fn result(rows: &VecDeque<Value>, row: &Value, done: bool) -> &'static str {
 }
 
 fn record(mut row: Value, done: bool) {
-    row["t_us"] = json!(now_us());
     let mut rows = TRANSFERS.lock().unwrap();
     row["result"] = json!(result(&rows, &row, done));
     push(&mut rows, row);
 }
 
-pub fn mark_bad(rows: &mut VecDeque<Value>, owner: &str, capture: &str, series: &str, n: u32, bytes: u64) {
+pub fn mark_bad(rows: &mut VecDeque<Value>, owner: &str, capture: &str, series: &str, n: u32) {
     let wanted = json!({"dir": "in", "owner": short(owner), "capture": capture, "series": series, "n": n});
     if let Some(row) = rows.iter_mut().rev().find(|r| same_piece(r, &wanted)) {
         row["result"] = json!("hash fail");
@@ -221,14 +209,12 @@ pub fn mark_bad(rows: &mut VecDeque<Value>, owner: &str, capture: &str, series: 
     }
     let mut row = wanted;
     row["kind"] = json!(kind(false, series, n));
-    row["bytes"] = json!(bytes);
     row["result"] = json!("hash fail");
-    row["t_us"] = json!(now_us());
     push(rows, row);
 }
 
-pub fn hash_fail(owner: &str, capture: &str, series: &str, n: u32, bytes: u64) {
-    mark_bad(&mut TRANSFERS.lock().unwrap(), owner, capture, series, n, bytes);
+pub fn hash_fail(owner: &str, capture: &str, series: &str, n: u32) {
+    mark_bad(&mut TRANSFERS.lock().unwrap(), owner, capture, series, n);
 }
 
 pub fn queued_out(peer: &str) -> usize {
@@ -242,12 +228,10 @@ pub fn slow_send(what: &What, took: std::time::Duration) {
     }
 }
 
-pub fn log_transfer(dir: &str, peer: impl std::fmt::Display, room: &str, of: &str, bytes: usize, started: Instant) {
-    if bytes == 0 {
-        return;
+pub fn log_transfer(dir: &str, peer: impl std::fmt::Display, of: &str, bytes: usize) {
+    if bytes > 0 {
+        record(json!({"dir": dir, "peer": short(peer), "owner": short(of), "kind": "log"}), true);
     }
-    let row = json!({"dir": dir, "peer": short(peer), "room": room, "owner": short(of), "kind": "log", "bytes": bytes, "ms": started.elapsed().as_millis() as u64});
-    record(row, true);
 }
 
 pub fn message(dir: &str, kind: Option<&str>, bytes: usize) {
@@ -267,15 +251,11 @@ pub fn jobs(logs: &[(String, &[Value])]) -> Vec<Value> {
         for r in records.iter().filter(|r| r["k"] == "job") {
             let Some(id) = r["job"].as_str().map(String::from) else { continue };
             let t = r["t_us"].as_i64().unwrap_or(0);
-            let job = found.entry(id.clone()).or_insert_with(|| json!({"job": id, "first_us": t, "t_us": i64::MIN, "records": 0}));
-            job["records"] = json!(job["records"].as_u64().unwrap_or(0) + 1);
-            for k in ["plugin", "version", "file", "set"] {
+            let job = found.entry(id).or_insert_with(|| json!({"t_us": i64::MIN}));
+            for k in ["plugin", "set"] {
                 if !r[k].is_null() {
                     job[k] = r[k].clone();
                 }
-            }
-            if job["claimed_by"].is_null() {
-                job["claimed_by"] = json!(owner);
             }
             if t >= job["t_us"].as_i64().unwrap_or(i64::MIN) {
                 job["t_us"] = json!(t);
@@ -346,7 +326,7 @@ pub fn flow_json(core: &Core) -> Value {
     json!({
         "members": members,
         "relay": relay::home(core).and_then(|u| u.host_str().map(String::from)),
-        "downloads": ffmpeg::download_host().map(|host| json!({"key": "ffmpeg", "hosts": [host]})).into_iter().collect::<Vec<_>>(),
+        "download": ffmpeg::download_host(),
         "update": {"host": UPDATE_HOST},
         "time": {"host": crate::clock::HOST, "ok": crate::clock::status()["ok"] == true},
         "api": {"on": *core.api_on.lock().unwrap()},
@@ -367,8 +347,8 @@ pub fn flow_text(flow: &Value) -> String {
     out.push_str(&format!("  address lookup: relay {}\n", host(&flow["relay"])));
     out.push_str(&format!("  update check: {}\n", flow["update"]["host"].as_str().unwrap_or("?")));
     out.push_str(&format!("  time check: {}, {}\n", flow["time"]["host"].as_str().unwrap_or("?"), if flow["time"]["ok"] == true { "ok" } else { "unreachable" }));
-    let downloads: Vec<String> = flow["downloads"].as_array().into_iter().flatten().map(|d| format!("{} from {}", d["key"].as_str().unwrap_or("?"), d["hosts"].as_array().into_iter().flatten().filter_map(|h| h.as_str()).collect::<Vec<_>>().join(", "))).collect();
-    out.push_str(&format!("  downloads: {}\n", if downloads.is_empty() { "none now".to_string() } else { downloads.join("; ") }));
+    let download = flow["download"].as_str().map_or("none now".to_string(), |host| format!("ffmpeg from {host}"));
+    out.push_str(&format!("  downloads: {download}\n"));
     let api = if flow["api"]["on"] == true { "on, this PC only" } else { "off" };
     out.push_str(&format!("  local API: {api}\n"));
     out
@@ -653,9 +633,9 @@ mod tests {
     fn a_hash_failure_marks_the_last_receipt_or_adds_a_row() {
         let mut ring = VecDeque::new();
         push(&mut ring, json!({"dir": "in", "owner": short("abcdefghijklmnop"), "capture": "1", "series": "v", "n": 4, "result": "ok"}));
-        mark_bad(&mut ring, "abcdefghijklmnop", "1", "v", 4, 10);
+        mark_bad(&mut ring, "abcdefghijklmnop", "1", "v", 4);
         assert_eq!(ring[0]["result"], "hash fail");
-        mark_bad(&mut ring, "abcdefghijklmnop", "1", "m", 5, 10);
+        mark_bad(&mut ring, "abcdefghijklmnop", "1", "m", 5);
         assert_eq!(ring.len(), 2);
         assert_eq!(ring[1]["kind"], "history voice");
         assert_eq!(result(&ring, &ring[1], true), "retry");
@@ -667,14 +647,11 @@ mod tests {
         let b = [json!({"k": "job", "state": "done", "job": "j1", "t_us": 30}), json!({"k": "job", "state": "claim", "job": "j2", "t_us": 5}), json!({"k": "event", "job": "x"})];
         let jobs = jobs(&[("a".into(), &a[..]), ("b".into(), &b[..])]);
         assert_eq!(jobs.len(), 2);
-        assert_eq!(jobs[0]["job"], "j1");
-        assert_eq!(jobs[0]["claimed_by"], "a");
         assert_eq!(jobs[0]["state"], "done");
         assert_eq!(jobs[0]["by"], "b");
         assert_eq!(jobs[0]["progress"], 0.5);
         assert_eq!(jobs[0]["plugin"], "p");
-        assert_eq!(jobs[0]["records"], 3);
-        assert_eq!(jobs[1]["job"], "j2");
+        assert_eq!(jobs[1]["state"], "claim");
     }
 
     #[test]
@@ -734,7 +711,7 @@ mod tests {
         let flow = json!({
             "members": [{"id": "abcdefghijklmnop", "path": "direct", "relay": null}, {"id": "qrstuvwxyz012345", "path": "relay", "relay": "relay.example.net"}, {"id": "0123456789abcdef", "path": null, "relay": null}],
             "relay": "relay.example.net",
-            "downloads": [{"key": "ffmpeg", "hosts": ["github.com"]}],
+            "download": "github.com",
             "update": {"host": "github.com"},
             "time": {"host": "time.cloudflare.com", "ok": true},
             "api": {"on": true},
@@ -744,7 +721,7 @@ mod tests {
         assert!(hidden.contains("member abcdefghij: direct") && hidden.contains("member qrstuvwxyz: through the relay <host>") && hidden.contains("member 0123456789: offline"), "{hidden}");
         assert!(hidden.contains("update check: github.com\n") && hidden.contains("downloads: ffmpeg from github.com") && hidden.contains("local API: on, this PC only"), "{hidden}");
         assert!(hidden.contains("address lookup: relay <host>") && hidden.contains("time check: time.cloudflare.com, ok"), "{hidden}");
-        let quiet = flow_text(&json!({"members": [], "relay": null, "downloads": [], "update": {"host": "github.com"}, "time": {"host": "time.cloudflare.com", "ok": false}, "api": {"on": false}}));
+        let quiet = flow_text(&json!({"members": [], "relay": null, "download": null, "update": {"host": "github.com"}, "time": {"host": "time.cloudflare.com", "ok": false}, "api": {"on": false}}));
         assert!(quiet.contains("address lookup: relay none") && quiet.contains("downloads: none now") && quiet.contains("local API: off") && quiet.contains("time check: time.cloudflare.com, unreachable"), "{quiet}");
     }
 

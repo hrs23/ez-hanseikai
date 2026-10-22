@@ -470,10 +470,11 @@ fn snapshot(core: &Core, room: &str) -> (Vec<Log>, BTreeMap<String, Config>, Tra
 }
 
 fn room_configs(core: &Core, room: &str, logs: &[Log]) -> BTreeMap<String, Config> {
-    members_run(configs(logs, None), &room_members(core, room))
+    runnable(configs(logs, None), &room_members(core, room))
 }
 
-pub fn members_run(mut configs: BTreeMap<String, Config>, members: &[String]) -> BTreeMap<String, Config> {
+pub fn runnable(mut configs: BTreeMap<String, Config>, members: &[String]) -> BTreeMap<String, Config> {
+    configs.retain(|id, _| plugins::find(id).is_some());
     for c in configs.values_mut() {
         c.runner = c.runner.take().filter(|r| members.contains(r));
     }
@@ -585,7 +586,7 @@ fn run_parts(core: &Arc<Core>, room: &str, plugin: &'static Plugin, input: &Inpu
 fn stale(core: &Core, room: &str, plugin: &Plugin) -> bool {
     let logs = room::logs(core, room);
     let runs = room_configs(core, room, &logs).get(plugin.id).is_some_and(|c| c.runs_on(&core.me()));
-    core.joined_room().ok().as_deref() != Some(room) || core.any_recording() || !runs
+    core.check_joined(room).is_err() || core.any_recording() || !runs
 }
 
 fn watch(core: &Core, room: &str, plugin: &Plugin, job: &plugins::Job, share: (f64, f64)) -> Option<Result<Output, String>> {
@@ -885,8 +886,8 @@ mod tests {
         assert_eq!(pick("a", &logs, &inputs).as_deref(), Some("s1/a"));
         assert_eq!(pick("b", &logs, &inputs), None);
         let members = |ids: &[&str]| ids.iter().map(|id| id.to_string()).collect::<Vec<_>>();
-        assert_eq!(members_run(configs(&logs, None), &members(&["a", "b"]))[APEX].runner.as_deref(), Some("a"));
-        assert_eq!(members_run(configs(&logs, None), &members(&["b", "c"]))[APEX].runner, None);
+        assert_eq!(runnable(configs(&logs, None), &members(&["a", "b"]))[APEX].runner.as_deref(), Some("a"));
+        assert_eq!(runnable(configs(&logs, None), &members(&["b", "c"]))[APEX].runner, None);
     }
 
     #[test]
@@ -1102,6 +1103,19 @@ mod tests {
         let mut events = vec![json!({"author": "a", "run": 7, "plugin": {"id": "transcribe"}}), json!({"author": "a", "run": 6, "plugin": {"id": "transcribe"}})];
         keep_shown(&mut events, &logs, None);
         assert_eq!(events, vec![json!({"author": "a", "run": 7, "plugin": {"id": "transcribe"}})]);
+    }
+
+    #[test]
+    fn an_old_transcribe_config_runs_nothing_and_shows_no_analysis() {
+        let old = json!({"k": "plugin", "plugin": "transcribe", "on": true, "version": "1.1.0", "runner": "a", "t_us": 1});
+        let rec = json!({"k": "rec", "set": "s1", "start_us": 1});
+        let seg = json!({"k": "seg", "series": "v", "set": "s1", "n": 1, "capture": "1", "t_us": 1, "d_us": 1, "size": 1, "sha256": "x"});
+        let logs = vec![log("a", 0, vec![old, rec, seg])];
+        let configs = runnable(configs(&logs, None), &["a".to_string()]);
+        let (tracks, chosen) = (tracks(&logs, None), chosen(&logs, None));
+        assert!(!open("s1/a", "a", &configs, &tracks, &chosen));
+        let sets = room::derive_sets("r", &logs);
+        assert!(analysis("a", &HashSet::new(), &configs, &tracks, &chosen, &sets, |_, _| vec![]).is_empty());
     }
 
     #[test]

@@ -350,6 +350,7 @@ const JA = {
   "This recording is being exported. Cancel the export first.": "この録画はエクスポート中です。先にエクスポートを中止してください。",
   "This recording is still in progress.": "この録画はまだ進行中です。",
   "Today": "今日",
+  "Transcription": "文字起こし",
   "Turn off": "オフにする",
   "Turn off {name} for the room?": "ルームで {name} をオフにしますか?",
   "Turn on": "オンにする",

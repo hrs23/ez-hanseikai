@@ -86,9 +86,11 @@ pub struct Rooms {
     pub list: Vec<Room>,
 }
 
+pub const JOIN_FIRST: &str = "Join a room first.";
+
 impl Rooms {
     pub fn joined(&self) -> Result<String, String> {
-        self.active.clone().filter(|id| self.list.iter().any(|r| r.id == *id && r.invite.is_none())).ok_or_else(|| "Join a room first.".into())
+        self.active.clone().filter(|id| self.list.iter().any(|r| r.id == *id && r.invite.is_none())).ok_or_else(|| JOIN_FIRST.into())
     }
 }
 
@@ -190,7 +192,7 @@ impl Core {
     }
 
     pub fn check_joined(&self, room: &str) -> Result<(), String> {
-        if self.joined_room()? == room { Ok(()) } else { Err("Join a room first.".into()) }
+        self.joined_room().and_then(|joined| if joined == room { Ok(()) } else { Err(JOIN_FIRST.into()) })
     }
 
     pub fn in_room(&self, room: &str) -> bool {
@@ -743,7 +745,7 @@ pub fn apply_stops(core: &Arc<Core>) {
 
 pub fn log_set_layout(core: &Core) {
     let active = core.active_set.lock().unwrap().clone();
-    if let Some(active) = active.filter(|a| core.joined_room().is_ok_and(|room| room == a.room)) {
+    if let Some(active) = active.filter(|a| core.check_joined(&a.room).is_ok()) {
         core.append_log(&active.room, &json!({"k": "layout", "set": active.id, "t_us": now_us(), "layout": *core.layout.lock().unwrap()}));
     }
 }
@@ -1970,7 +1972,7 @@ pub mod tests {
         let room = |id: &str, pending: bool| Room { id: id.into(), invite: pending.then(|| ("peer".to_string(), "token".to_string())), ..Default::default() };
         let rooms = |active: Option<&str>| Rooms { active: active.map(String::from), list: vec![room("r1", false), room("pending-ab", true)] };
         for active in [None, Some("pending-ab"), Some("r9")] {
-            assert_eq!(rooms(active).joined(), Err("Join a room first.".to_string()), "{active:?}");
+            assert_eq!(rooms(active).joined(), Err(JOIN_FIRST.to_string()), "{active:?}");
         }
         assert_eq!(rooms(Some("r1")).joined(), Ok("r1".to_string()));
     }

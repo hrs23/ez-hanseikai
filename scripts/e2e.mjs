@@ -599,7 +599,8 @@ async function allSee(list, label, seconds, probe) {
 const meshed = (list, room, seconds = DIAL_S * 2) => allSee(list, "connected to each other", within(seconds), (st, app) => (!room || (st.room?.id === room && !st.room.pending)) && connected(st, list.filter((x) => x !== app).map((x) => x.id)));
 
 async function refusedOutsideARoom(app) {
-  const writes = [["add_event", { kind: "note", text: "x", target: {}, values: null }], ["create_invite", { reuse: false }], ["put_board_card", { room: "r1", card: "", text: "x" }], ["start_recording", {}]];
+  const room = (await state(app)).room?.id || "";
+  const writes = [["add_event", { kind: "note", text: "x", target: {}, values: null }], ["create_invite", { reuse: false }], ["put_board_card", { room, card: "", text: "x" }], ["start_recording", {}]];
   for (const [op, args] of writes) {
     const said = await invoke(app, op, args).then(() => "", (e) => String(e.message || e));
     check(said.includes("Join a room first."), `${app.key}'s ${op} outside a room: ${brief(said)}`);
@@ -681,7 +682,8 @@ async function live(ctx) {
     a = await launch("a");
     b = await launch("b");
     await refusedOutsideARoom(a);
-    check(!fs.existsSync(path.join(a.data, "rooms", "solo")), "a write without a room made a room folder");
+    const rooms = path.join(a.data, "rooms");
+    check(!fs.existsSync(rooms) || !fs.readdirSync(rooms).length, "a write without a room made a room folder");
   });
 
   await step("recording alone, the player follows the picture as it grows", async () => {

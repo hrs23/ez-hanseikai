@@ -51,13 +51,13 @@ function extensionRecordings(p) {
   return el("div", { className: "psec" }, el("div", { className: "h3", textContent: t("Recordings") }), ...rows.map(({ s, a }) => el("div", { className: "wrow" }, el("b", { textContent: sessionName(s.id) }), el("span", { className: a.state === "failed" ? "warn" : "muted", textContent: analysisReason(a, nameOf) }), el("span", { className: "sp" }), a.state === "failed" ? el("button", { className: "sm", textContent: t("Retry"), onclick: () => retryAnalysis(s, p.id) }) : null)));
 }
 function extensionRow(p) {
-  const open = openExtensions.has(p.id);
+  const open = p.on && openExtensions.has(p.id);
   const line = extensionLine(p, nameOf);
   const toggle = el("input", { type: "checkbox", className: "switch", role: "switch", checked: p.on, ariaLabel: t(p.name), onclick: (e) => e.stopPropagation(), onchange: (e) => { const on = e.target.checked; askRoom(t(on ? "Turn on {name} for the room?" : "Turn off {name} for the room?", { name: t(p.name) }), t(on ? "Turn on" : "Turn off"), () => savePlugin(p, on)); } });
-  const head = el("div", { className: "phead click", onclick: () => { if (open) openExtensions.delete(p.id); else openExtensions.add(p.id); store("ext-open", [...openExtensions]); delete sigs.roomtab; renderRoom(); } },
+  const head = el("div", { className: "phead" + (p.on ? " click" : ""), onclick: p.on ? () => { if (open) openExtensions.delete(p.id); else openExtensions.add(p.id); store("ext-open", [...openExtensions]); delete sigs.roomtab; renderRoom(); } : null },
     el("span", { className: "pic" }, icon("puzzle")), el("div", { className: "pt" }, el("b", { textContent: t(p.name) }), el("span", { textContent: t(p.summary) })), sampleOf(p.sample), el("span", { className: "sp" }),
-    line ? el("span", { className: p.on && (!p.runner || p.failed) ? "warn" : "muted", textContent: line }) : null, toggle, icon(open ? "chevron-up" : "chevron-down", "sm"));
-  const body = open && p.on ? el("div", { className: "pbody" }, el("div", { className: "psec" }, extensionRunner(p)), extensionRecordings(p)) : null;
+    line ? el("span", { className: p.on && (!p.runner || p.failed) ? "warn" : "muted", textContent: line }) : null, toggle, p.on ? icon(open ? "chevron-up" : "chevron-down", "sm") : null);
+  const body = open ? el("div", { className: "pbody" }, el("div", { className: "psec" }, extensionRunner(p)), extensionRecordings(p)) : null;
   return el("div", { className: "plug" + (open ? " open" : "") }, head, body);
 }
 function renderExtensions() {
