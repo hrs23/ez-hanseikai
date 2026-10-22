@@ -129,6 +129,8 @@ const JA = {
   "Continue": "続ける",
   "Copied": "コピーしました",
   "Copy": "コピー",
+  "Copy text": "テキストをコピー",
+  "Go to this moment": "この場面へ移動",
   "Copy ID": "IDをコピー",
   "Copy invite code": "招待コードをコピー",
   "Copy link": "リンクをコピー",

@@ -22,6 +22,19 @@ function eventText(e) {
   return [e.text, scalars(e.values)].filter(Boolean).join(" ") || kindLabel(e.kind);
 }
 
+function noteCount(s, byKey = idx.byKey) {
+  return s.events.filter((k) => { const e = byKey.get(k); return e && e.kind === "note"; }).length;
+}
+
+function matchCount(s, byKey = idx.byKey) {
+  return s.events.filter((k) => { const e = byKey.get(k); return e && e.plugin && (e.tags || []).includes(MATCH_TAG); }).length;
+}
+
+function rowActions(n) {
+  const own = !!n.mine && n.kind !== "mark";
+  return [n.seekable && n.m !== null && "go", n.text && "copy", n.m !== null && "link", own && "edit", own && "delete"].filter(Boolean);
+}
+
 function momentLink(set, m, view) {
   return `ezh://moment/${encodeURIComponent(set)}/${Math.round(m * 10) / 10}/${view || "all"}`;
 }

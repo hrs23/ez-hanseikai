@@ -113,12 +113,6 @@ function renderStartButton() {
   else b.replaceChildren(el("i", { className: "rd" }), el("span", { textContent: state === "debrief" ? t("Record debrief") : t("Start recording") }));
 }
 
-function noteCount(s) {
-  return s.events.filter((k) => { const e = idx.byKey.get(k); return e && e.kind === "note"; }).length;
-}
-function matchCount(s) {
-  return s.events.filter((k) => { const e = idx.byKey.get(k); return e && e.plugin && (e.tags || []).includes(MATCH_TAG); }).length;
-}
 function receiving(s) {
   const p = s.progress;
   if (!onThisPc(s) || !p.total || p.have >= p.total) { delete rates[s.id]; return null; }

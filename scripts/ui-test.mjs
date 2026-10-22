@@ -11,7 +11,7 @@ const source = ["util.js", "i18n.js", "live.js", "media.js", "layout.js", "dock.
 const memory = new Map();
 const localStorage = { getItem: (k) => memory.get(k) ?? null, setItem: (k, v) => memory.set(k, v) };
 const context = vm.createContext({ localStorage, window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id, location: { search: "" } });
-const ui$ = vm.runInContext(`${source}\n({ INK_TOOLS, INK_TOOL_TITLE, nextInkTool, LIMITS, escapeStep, cleanText, single, changed, matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, rowHit, formatWhen, fullWhen, sessionWhen, keysOf, hotkeyRows, memberStatus, windowTitle, longId, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, analysisPill, analysisSub, analysisActions, analysisDetails, analysisDetailText, runningMark, cardParts, dropPos, dropSlot, boardSpan, boardFont, cellSpan, fitFont, deletePreview, cleanupPicked, cleanupTotal, cleanupHead, cleanupDone, exportChoice, exportArgs, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, voiceTone, known, VOICE_SIDES, VOICE_TONES, VOICE_SIDE_DEFAULT, VOICE_TONE_DEFAULT, minimapRect, talking, stillTalking, markSpeak, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, nextChip, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ INK_TOOLS, INK_TOOL_TITLE, nextInkTool, LIMITS, escapeStep, cleanText, single, changed, matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, rowHit, rowActions, noteCount, matchCount, formatWhen, fullWhen, sessionWhen, keysOf, hotkeyRows, memberStatus, windowTitle, longId, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, analysisPill, analysisSub, analysisActions, analysisDetails, analysisDetailText, runningMark, cardParts, dropPos, dropSlot, boardSpan, boardFont, cellSpan, fitFont, deletePreview, cleanupPicked, cleanupTotal, cleanupHead, cleanupDone, exportChoice, exportArgs, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, voiceTone, known, VOICE_SIDES, VOICE_TONES, VOICE_SIDE_DEFAULT, VOICE_TONE_DEFAULT, minimapRect, talking, stillTalking, markSpeak, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, nextChip, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 test("a changed() check against a tile's own store reports again on a rebuilt tile", () => {
   const first = {};
   assert.equal(ui$.changed("what", [1], first), true);
@@ -123,6 +123,24 @@ test("a click on a timeline row jumps only when it is not on a control, a select
   assert.equal(ui$.rowHit(on({}), false, false), false);
   assert.equal(ui$.rowHit(on(null), true, false), false);
   assert.equal(ui$.rowHit(on(null), false, true), false);
+});
+
+test("a timeline row menu lists only what its row can do", () => {
+  const row = (o) => [...ui$.rowActions({ seekable: true, m: 5, text: "x", mine: true, kind: "note", ...o })];
+  assert.deepEqual(row({}), ["go", "copy", "link", "edit", "delete"]);
+  assert.deepEqual(row({ mine: false }), ["go", "copy", "link"]);
+  assert.deepEqual(row({ kind: "mark", text: "" }), ["go", "link"]);
+  assert.deepEqual(row({ seekable: false, m: null }), ["copy", "edit", "delete"]);
+});
+
+test("counts leave out drawings, deleted notes and events that are gone", () => {
+  const byKey = new Map([["a", { kind: "note" }], ["b", { kind: "drawing" }], ["c", { kind: "note" }], ["d", { kind: "note", plugin: { id: "p" }, tags: ["match"] }]]);
+  const set = { events: ["a", "b", "c", "d", "gone"] };
+  assert.equal(ui$.noteCount(set, byKey), 3);
+  assert.equal(ui$.matchCount(set, byKey), 1);
+  byKey.delete("c");
+  byKey.delete("b");
+  assert.equal(ui$.noteCount(set, byKey), 2);
 });
 
 test("a time is shown with its date, never with relative words", () => {

@@ -1013,6 +1013,19 @@ function eventRow(n) {
   const by = el("span", { className: "by", title: n.who }, n.plugin ? el("i", { className: "dt", style: "background:var(--muted)" }) : dot(n.author));
   const row = el("div", { className: "ev" + (sys ? " sys" : "") + (n.role === "chapter" ? " chapter" : "") }, at, tx, by);
   if (n.seekable && n.m !== null) clickable(row, () => goTo(n));
+  row.oncontextmenu = (e) => {
+    e.preventDefault();
+    const label = { go: "Go to this moment", copy: "Copy text", link: "Copy link to this moment", edit: "Edit", delete: "Delete" };
+    const icons = { go: "play", copy: "copy", link: "link", edit: "edit", delete: "trash" };
+    const run = {
+      go: () => goTo(n),
+      copy: () => navigator.clipboard.writeText(n.text).then(() => flash(t("Copied"))).catch(fail),
+      link: () => navigator.clipboard.writeText(momentLink(n.setId, n.m, null)).then(() => flash(t("Link copied"))).catch(fail),
+      edit: () => editNote(n, row),
+      delete: () => deleteNote(n),
+    };
+    openMenu(rowActions(n).map((a) => ({ label: t(label[a]), icon: icons[a], run: run[a], danger: a === "delete" })), e);
+  };
   if (n.mine && n.kind !== "mark") {
     const acts = el("span", { className: "acts" });
     acts.append(iconButton("edit", t("Edit"), () => editNote(n, row)), iconButton("trash", t("Delete"), () => deleteNote(n)));
