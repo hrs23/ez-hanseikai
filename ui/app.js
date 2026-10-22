@@ -124,7 +124,6 @@ function iconButton(name, label, onclick, cls = "icon sm") {
 function pill(cls, iconName, text) {
   return el("span", { className: "pill " + cls }, iconName ? icon(iconName, "sm") : null, text);
 }
-const dot = (id) => el("i", { className: "dt", style: `background:${colorOf(colorIndex(id))}` });
 
 function tile(s, key) {
   if (s.tiles[key]) return s.tiles[key];
@@ -930,7 +929,7 @@ function renderReview(shown) {
   const list = chip ? [] : matchChapters(matchEnds(items), total(), !!set.live);
   if (!changed("review", [shown, list, lang, selected, st.colors, st.names, plugins.map((p) => p.name), chip])) return;
   shown = shown.filter((n) => chipMatches(n, chip));
-  const starts = list.map((c) => ({ m: c.m, row: clickable(el("div", { className: "ev sys" }, el("button", { className: "at", textContent: fmt(c.m), onclick: () => seekTo(c.m) }), el("span", { className: "tx" }, icon("flag", "sm"), matchLabel(c.n))), () => seekTo(c.m)) }));
+  const starts = list.map((c) => ({ m: c.m, row: clickable(el("div", { className: "ev sys" }, el("span"), el("button", { className: "at", textContent: fmt(c.m), onclick: () => seekTo(c.m) }), el("span", { className: "tx" }, icon("flag", "sm"), matchLabel(c.n))), () => seekTo(c.m)) }));
   const rows = [...shown.map((n) => ({ m: n.m ?? -1, row: eventRow(n) })), ...starts].sort((a, b) => a.m - b.m).map((r) => r.row);
   const bar = chip ? [el("div", { className: "chipbar" }, el("button", { type: "button", className: "tag on", textContent: (chip.kind === "tag" ? tagName(chip.value) : "@" + chip.value) + " ×", onclick: () => pickChip(chip.kind, chip.value, chip.ids) }))] : [];
   $("reviewlist").replaceChildren(...bar, ...(rows.length ? rows : [el("div", { className: "none", textContent: t("No notes yet") })]));
@@ -1008,8 +1007,9 @@ function eventRow(n) {
   const sys = !!n.plugin || n.kind === "mark";
   const tags = n.kind === "note" ? [] : shownTags(n).map((tg) => chipEl("tag", tg, tagName(tg)));
   const tx = el("span", { className: "tx" }, sys ? icon("flag", "sm") : null, ...inline(n.body, n.mentions), n.source === "ai" ? el("span", { className: "aimark", textContent: t("AI") }) : null, ...tags);
-  const by = el("span", { className: "by", title: n.who }, n.plugin ? el("i", { className: "dt", style: "background:var(--muted)" }) : dot(n.author));
-  const row = el("div", { className: "ev" + (sys ? " sys" : "") + (n.role === "chapter" ? " chapter" : "") }, at, tx, by);
+  const by = el("span", { className: "by", title: n.who }, authorOf(n).kind === "extension" ? icon("puzzle", "sm") : avatar(n.author, "xs", null, false, true));
+  tx.prepend(el("span", { className: "nm", textContent: n.who }));
+  const row = el("div", { className: "ev" + (sys ? " sys" : "") + (n.role === "chapter" ? " chapter" : "") }, by, at, tx);
   if (n.seekable && n.m !== null) clickable(row, () => goTo(n));
   row.oncontextmenu = (e) => {
     e.preventDefault();
