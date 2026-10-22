@@ -82,7 +82,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - playing your own recording right after it ended shows your own picture, moves on and reaches its end. `e2e` (`recover`)
 - stream: a recording folder lists its pieces from the lowest segment and the live folder its newest run, each with first times and an open tail, served whole or from a byte, and the index from a segment on; a recording plays from its own folder up to the first missing segment; ids are checked and paths decoded. `unit`
 - room: a part starts when its capture began, with the listing's size and whether its last piece is still open. `unit`
-- thumbs: the middle segment holds half of the length. `unit`
+- thumbs: the middle segment holds half of the length; the picture is scaled to cover and cropped at the centre to exactly 16:9, whatever the source shape. `unit`
 - the player plans the segment holding the moment and the next ones, continues a grown tail, ends a part where its last piece ends, and holds every tile until all can play. `ui-test`
 - the player fetches a growing recording's index from its last known piece on, and the whole index again when that piece is no longer there. `ui-test`
 - a focused player plays its own sound; otherwise the sound is the one chosen by a click, else the viewer's own, else the first player's; the view line names the first member who blocks the playback, in one sentence, and a holder reached through a relay does not count. `ui-test`

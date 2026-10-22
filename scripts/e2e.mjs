@@ -1173,8 +1173,8 @@ async function library(ctx) {
   await step("each ended recording gets a thumbnail, and the sidebar lists recordings with it", async () => {
     await waitFor("A makes the thumbnail of the set", within(30), async () => setOf(await state(a), ctx.set)?.thumb === true);
     const size = await evaluate(a, `new Promise((done) => { const i = new Image(); i.onload = () => done([i.naturalWidth, i.naturalHeight]); i.onerror = () => done(null); i.src = thumbSrc(setById(${JSON.stringify(ctx.set)})); })`);
-    check(size && size[0] > 0 && size[1] > 0, `the page could not load the thumbnail: ${brief(size)}`);
-    const file = fs.readFileSync(path.join(roomDir(a, ctx.room), "thumbs", `${ctx.set}.jpg`));
+    check(size && size[0] === 480 && size[1] === 270, `the page could not load the thumbnail: ${brief(size)}`);
+    const file = fs.readFileSync(path.join(roomDir(a, ctx.room), "thumbs", `${ctx.set}.16x9.jpg`));
     check(file[0] === 0xff && file[1] === 0xd8 && file.length > 500, "the thumbnail file is not a JPEG");
     await waitFor("A's sidebar lists every recording with a thumbnail", within(UI_REFRESH_S * 5), () => evaluate(a, `!!$("sessions").querySelector(".srow:not(.liverow) .thumb img") && !$("recsopen") && $("sessions").querySelectorAll(".srow:not(.liverow)").length === recordingRows().length`));
     await evaluate(a, `$("sidenav").querySelector("[data-nav=members]").click(); true`);
@@ -1745,7 +1745,7 @@ async function library(ctx) {
     await confirmDeletion(a, bare, "This deletes it completely");
     await allSee(all, "the recording nobody else holds gone from the list", within(LOG_SYNC_S * 3), (st) => !setOf(st, bare));
     check(logOf(a, ctx.room, a.id).some((r) => r.k === "set_del" && r.set === bare), "A did not log the removal");
-    check(mediaLeft(a, bare) === 0 && !fs.existsSync(path.join(roomDir(a, ctx.room), "recordings", bare)) && !fs.existsSync(path.join(roomDir(a, ctx.room), "thumbs", `${bare}.jpg`)), "A kept media or the thumbnail");
+    check(mediaLeft(a, bare) === 0 && !fs.existsSync(path.join(roomDir(a, ctx.room), "recordings", bare)) && !fs.existsSync(path.join(roomDir(a, ctx.room), "thumbs", `${bare}.16x9.jpg`)), "A kept media or the thumbnail");
     await waitFor("B's sidebar drops the recording nobody else holds", within(UI_REFRESH_S * 5), () => evaluate(b, `![...document.querySelectorAll("#sessions .srow")].some((r) => r.textContent.includes(sessionName(${JSON.stringify(bare)})))`));
   });
 

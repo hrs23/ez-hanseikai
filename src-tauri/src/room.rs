@@ -1279,6 +1279,7 @@ pub fn board_cards(events: &[Value], members: &[String]) -> Vec<Value> {
 fn remove_recording(room_dir: &Path, set: &str) {
     let _ = std::fs::remove_dir_all(recording_dir(room_dir, set));
     let _ = std::fs::remove_file(crate::thumbs::path(room_dir, set));
+    let _ = std::fs::remove_file(crate::thumbs::old_path(room_dir, set));
 }
 
 pub fn sweep(room_dir: &Path, gone: &HashSet<String>, recording: Option<&str>) -> Vec<String> {
@@ -1712,7 +1713,7 @@ pub mod tests {
     #[test]
     fn deleting_a_recording_removes_only_its_folder_and_thumbnail() {
         let dir = temp("sweep");
-        let names = ["recordings/s1/a/1/v/000001.m4s", "recordings/s1/b/2/m/init.mp4", "thumbs/s1.jpg", "recordings/s2/a/1/v/000001.m4s", "thumbs/s2.jpg", "recordings/s3/a/1/v/000001.m4s", "standby/a/1/v/000002.m4s", "a/1/v/000001.m4s", "sets/s1/a.mp4", "logs/a.bin"];
+        let names = ["recordings/s1/a/1/v/000001.m4s", "recordings/s1/b/2/m/init.mp4", "thumbs/s1.16x9.jpg", "recordings/s2/a/1/v/000001.m4s", "thumbs/s2.16x9.jpg", "recordings/s3/a/1/v/000001.m4s", "standby/a/1/v/000002.m4s", "a/1/v/000001.m4s", "sets/s1/a.mp4", "logs/a.bin"];
         seed(&dir, names);
         remove_recording(&dir, "s1");
         assert_eq!(present(&dir, &names), &names[3..]);

@@ -42,7 +42,7 @@ rooms/<room>/
   recordings/<set>/<member id>/<capture id>/<series>/init.mp4
   recordings/<set>/<member id>/<capture id>/<series>/000001.m4s
   standby/<member id>/<capture id>/<series>/...
-  thumbs/<set>.jpg
+  thumbs/<set>.16x9.jpg
 ```
 
 - A series is fMP4: `init.mp4` and numbered segments (`000001.m4s`, `000002.m4s`, ...) of four one-second fragments each. `init.mp4` followed by the segments 1..n, concatenated in order, is a playable file. Codecs are H.264, HEVC or AV1, and AAC.

@@ -9,6 +9,7 @@ use crate::{data, ffmpeg, proc, stream, Core};
 const EVERY: Duration = Duration::from_secs(5);
 const RUN_LIMIT: Duration = Duration::from_secs(30);
 const WIDTH: u32 = 480;
+const HEIGHT: u32 = 270;
 const QUALITY: &str = "5";
 pub const DIR: &str = "thumbs";
 
@@ -21,7 +22,15 @@ enum Pick {
 }
 
 pub fn path(room_dir: &Path, set: &str) -> PathBuf {
+    room_dir.join(DIR).join(format!("{set}.16x9.jpg"))
+}
+
+pub fn old_path(room_dir: &Path, set: &str) -> PathBuf {
     room_dir.join(DIR).join(format!("{set}.jpg"))
+}
+
+fn filter() -> String {
+    format!("scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,crop={WIDTH}:{HEIGHT}")
 }
 
 pub fn middle(durations: &[i64]) -> Option<usize> {
@@ -78,7 +87,7 @@ fn make(core: &Core, room: &str, set: &Set, f: &File, capture: &str, index: usiz
     let made = dir.join(format!("{}.tmp.jpg", set.id));
     std::fs::write(&source, bytes).map_err(|e| e.to_string())?;
     let mut command = Command::new(ffmpeg::path());
-    command.args(["-v", "error", "-y", "-i"]).arg(&source).args(["-frames:v", "1", "-vf", &format!("scale={WIDTH}:-2"), "-q:v", QUALITY]).arg(&made);
+    command.args(["-v", "error", "-y", "-i"]).arg(&source).args(["-frames:v", "1", "-vf", &filter(), "-q:v", QUALITY]).arg(&made);
     let ran = proc::run(&mut command, proc::BELOW_NORMAL, RUN_LIMIT);
     let _ = std::fs::remove_file(&source);
     let result = ran.and_then(|_| if made.exists() { std::fs::rename(&made, &out).map_err(|e| e.to_string()) } else { Err("no picture".into()) });
@@ -98,6 +107,7 @@ fn make_missing(core: &Core) {
     let Some(room) = core.room_id() else { return };
     for set in room::sets(core, &room, &room::logs(core, &room)) {
         let key = format!("{room}/{}", set.id);
+        let _ = std::fs::remove_file(old_path(&core.room_dir(&room), &set.id));
         if set.recording() || path(&core.room_dir(&room), &set.id).exists() || given_up(&key) {
             continue;
         }
@@ -126,6 +136,12 @@ pub fn keeper(core: Arc<Core>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_picture_is_scaled_to_cover_and_cropped_to_16_by_9_at_the_centre() {
+        assert_eq!(filter(), "scale=480:270:force_original_aspect_ratio=increase,crop=480:270");
+        assert_eq!(WIDTH * 9, HEIGHT * 16);
+    }
 
     #[test]
     fn the_middle_segment_holds_half_of_the_length() {
