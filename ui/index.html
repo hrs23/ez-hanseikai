@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<div id="notices" class="notices"></div>
 <main id="start" class="start" hidden>
   <div class="scard">
     <div class="brand"><svg class="logo" viewBox="0 0 256 256" aria-hidden="true"><path d="M232 24H64L24 64V192L64 232H232V192H80L64 176V80L80 64H232ZM232 108H148V84L92 128L148 172V148H232Z"/></svg><b id="brand"></b></div>
@@ -14,10 +15,10 @@
     <div id="nameshow" class="nameshow"><span id="nameav"></span><b id="nametext"></b><button id="nameedit" class="icon sm" data-icon="edit" data-t-label="Change name" data-t-title="Change name"></button></div>
     <div id="startpending" class="pending" hidden><i class="dot wait"></i><span id="pendingtext"></span><button id="pendingcancel" data-t="Cancel">Cancel</button></div>
     <div id="startform">
+      <div class="row"><input id="joincode" class="lg grow" autocomplete="off" data-t-placeholder="Invite code" data-t-label="Invite code"><button id="join" class="lg" data-t="Join a room">Join a room</button></div>
+      <div class="or" data-t="or">or</div>
+      <button id="newroom" class="lg wide"><span data-icon="plus"></span><span data-t="Create a room">Create a room</span></button>
       <div id="roomsbox" class="rooms"><div class="lab" data-t="Recent rooms">Recent rooms</div><div id="roomlist"></div></div>
-      <div id="roomsor" class="or" data-t="or">or</div>
-      <div class="row"><input id="joincode" class="lg grow" autocomplete="off" data-t-placeholder="Invite code" data-t-label="Invite code"><button id="join" class="lg" data-t="Join">Join</button></div>
-      <button id="newroom" class="lg wide"><span data-icon="plus"></span><span data-t="Create room">Create room</span></button>
     </div>
   </div>
 </main>
@@ -53,8 +54,6 @@
   <div id="splitter" class="splitter" role="separator" aria-orientation="vertical" tabindex="0" data-t-label="Sidebar width"></div>
 
   <section class="main">
-    <div id="notices" class="notices"></div>
-
     <div id="roompage" class="page room" hidden>
       <div class="mhead">
         <h1 id="homename"></h1>
@@ -215,7 +214,6 @@
 <dialog id="deletedlg" class="wide">
   <h2 id="deltitle"></h2>
   <div id="dellist" class="dellist"></div>
-  <div class="stays"><div><span data-icon="check" data-icon-class="sm"></span><span data-t="Notes, marks, drawings, debriefs and the game plan stay">Notes, marks, drawings, debriefs and the game plan stay</span></div><div><span data-icon="check" data-icon-class="sm"></span><span data-t="Others keep theirs. Download brings it back from anyone who has it">Others keep theirs. Download brings it back from anyone who has it</span></div></div>
   <div class="row end"><button id="delno" data-t="Cancel">Cancel</button><button id="delyes" class="danger"></button></div>
 </dialog>
 <dialog id="diagdlg" class="diag">
@@ -225,7 +223,7 @@
 </dialog>
 <dialog id="resetdlg">
   <h2 data-t="Reset the app?">Reset the app?</h2>
-  <p class="muted" data-t="Settings, downloads and logs are removed and the app restarts.">Settings, downloads and logs are removed and the app restarts.</p>
+  <p class="muted" data-t="Settings, downloads and logs are removed.">Settings, downloads and logs are removed.</p>
   <label class="check"><input id="keeprooms" type="checkbox" checked><span data-t="Keep my ID, rooms and recordings">Keep my ID, rooms and recordings</span></label>
   <div class="row end"><button id="resetno" data-t="Cancel">Cancel</button><button id="resetyes" class="danger" data-t="Reset">Reset</button></div>
 </dialog>
@@ -237,7 +235,6 @@
 </dialog>
 <dialog id="confirm">
   <h2 id="confirmtitle"></h2>
-  <p id="confirmtext" class="muted" hidden></p>
   <div class="row end"><button id="confirmno" data-t="Cancel">Cancel</button><button id="confirmyes"></button></div>
 </dialog>
 <input id="imagefile" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>

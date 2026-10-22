@@ -47,7 +47,6 @@ function renderStart() {
   $("join").disabled = !named || !$("joincode").value.trim();
   const others = st.rooms.filter((r) => !r.id.startsWith("pending-")).sort((a, b) => (b.used_us || 0) - (a.used_us || 0));
   $("roomsbox").hidden = !others.length;
-  $("roomsor").hidden = !others.length;
   if (!changed("rooms", [others.map((r) => [r.id, r.name, stamp(r.icon), r.used_us]), lang])) return;
   $("roomlist").replaceChildren(...others.map((r, i) => {
     const enter = () => run("enter_room", { id: r.id }, openLive);
@@ -59,7 +58,7 @@ function renderStart() {
   }));
 }
 async function deleteRoom(room) {
-  if (await ask(t("Leave {room} and delete its recordings and notes on this PC? You need an invite code to come back. Other members keep theirs.", { room: room.name }), t("Delete"), true)) run("remove_room", { id: room.id });
+  if (await ask(t("Leave {room} and delete its recordings and notes on this PC?", { room: room.name }), t("Delete"), true)) run("remove_room", { id: room.id });
 }
 const leaveRoom = () => st.room && run("close_room", { id: st.room.id }, openLive);
 function joinWith(input) {
@@ -71,7 +70,7 @@ const copyInvite = () => invoke("create_invite", { reuse: true }).then((code) =>
 const cancelInvite = () => run("cancel_invites", null, () => { flash(t("Invite cancelled")); refresh(); });
 const createRoom = () => invoke("create_room", { name: "" }).then(() => { openLive(); return refresh().then(copyInvite); }).catch(fail);
 async function removeMember(id) {
-  if (await ask(t("Remove {name} from the room?", { name: nameOf(id) }), t("Remove from room"), true, t("Everyone stops sending to them. What they already have stays with them."))) { drawerFor = null; run("remove_peer", { id }); }
+  if (await ask(t("Remove {name} from the room?", { name: nameOf(id) }), t("Remove from room"), true)) { drawerFor = null; run("remove_peer", { id }); }
 }
 let iconDraft = "";
 function roomDirty() {
@@ -389,7 +388,7 @@ $("apidoc").onclick = () => dialog("open_link", { url: `${apiUrl(st.api.address)
 $("apion").onchange = () => run("set_api", { on: $("apion").checked });
 $("apicopy").onclick = () => invoke("api_info").then((info) => navigator.clipboard.writeText(info.token)).then(() => flash(t("Token copied"))).catch(fail);
 $("apinew").onclick = async () => {
-  if (await ask(t("Make a new token?"), t("New token"), false, t("Programs using the old token stop working."))) run("new_api_token", null, () => flash(t("New token made")));
+  if (await ask(t("Make a new token?"), t("New token"), false)) run("new_api_token", null, () => flash(t("New token made")));
 };
 $("name").onchange = () => run("set_name", { name: $("name").value });
 $("avatarimage").onclick = () => pickImage((image) => run("set_profile", { avatar: image }));

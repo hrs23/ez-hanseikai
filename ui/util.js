@@ -8,7 +8,7 @@ const setFull = (on) => invoke("set_fullscreen", { on, window: boardWindow ? "bo
 
 function el(tag, props = {}, ...children) {
   const e = Object.assign(document.createElement(tag), props);
-  e.append(...children.filter((c) => c !== null && c !== undefined && c !== false));
+  e.append(...children.flat().filter((c) => c !== null && c !== undefined && c !== false));
   return e;
 }
 function svg(tag, attrs = {}, ...children) {

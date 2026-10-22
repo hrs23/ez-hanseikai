@@ -127,7 +127,6 @@ function renderStartButton() {
   $("standby").replaceChildren(icon("radio", "sm"), el("span", { textContent: `${t("Standby")} · ${t("{n} online", { n: online })}` }));
   if (state === "end") b.replaceChildren(el("i", { className: "recdot" }), el("span", { textContent: t("Stop recording") }), el("span", { className: "timer", id: "livetimer", textContent: fmt((nowUs() - st.active_set.start_us) / 1e6) }));
   else b.replaceChildren(el("i", { className: "rd" }), el("span", { textContent: state === "review" ? t("Record debrief") : t("Start recording") }));
-  b.title = state === "start" ? t("Starts recording for everyone. Everything until Stop recording is one recording; matches are chapters in it.") : state === "review" ? t("Records everyone's voice and what the Watch Party watches, with no picture.") : "";
 }
 function startMenu(anchor) {
   openMenu([{ label: debriefNow() ? t("Switch to recording") : t("Switch to debrief"), icon: "mic", run: () => { debriefMode = !debriefNow(); delete sigs.startbtn; renderStartButton(); } }], anchor);
@@ -231,7 +230,7 @@ function renderDock() {
     $("screencap").className = "cap " + state;
     $("screenicon").replaceChildren(icon(!c.source ? "monitor-off" : c.source.kind === "display" ? "monitor" : "window"));
     $("screentitle").textContent = sourceLabel(c);
-    $("screensub").textContent = sub;
+    $("screensub").textContent = $("screensub").title = sub;
     $("screenbtn").title = c.source && !c.source_lost ? t("Stop sending your screen") : t("Choose what to send");
   }
   const mute = c.mix.mic.muted;
@@ -250,12 +249,11 @@ function renderDock() {
   if (changed("net", [relay, lang])) {
     $("netbadge").hidden = !relay;
     $("netbadge").replaceChildren(icon("relay", "sm"), t("Via relay"));
-    $("netbadge").title = t("Where data goes");
   }
 }
 
 async function stopScreen() {
-  if (st.recording && !(await ask(t("Stop sending your screen?"), t("Stop"), false, t("Your part of the recording goes on with your voice only.")))) return;
+  if (st.recording && !(await ask(t("Stop sending your screen?"), t("Stop"), false))) return;
   run("set_source", { source: null });
 }
 function popHead(text) {

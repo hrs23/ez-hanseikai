@@ -1129,7 +1129,7 @@ fn remove_set(core: &Core, room: &str, set: &str, complete: bool) -> Result<bool
         return Err("This recording is still in progress.".into());
     }
     if core.in_use(room, set) {
-        return Err("This recording is being exported. Cancel the export first.".into());
+        return Err("This recording is being exported. Try again when it finishes.".into());
     }
     core.want.lock().unwrap().insert(want_key(room, set), false);
     crate::jobs::cancel_set(room, set);

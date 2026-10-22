@@ -31,7 +31,7 @@ function sampleOf(kind) {
   return kind === "chapters" ? el("div", { className: "sample chapters" }, el("i", { className: "fill" }), ...[24, 52, 81].map((x) => el("b", { style: `left:${x}%` }))) : null;
 }
 function askRoom(title, action, then) {
-  ask(title, action, false, t("Applies to everyone in the room.")).then((yes) => { if (yes) then(); else { delete sigs.roomtab; renderRoom(); } });
+  ask(title, action).then((yes) => { if (yes) then(); else { delete sigs.roomtab; renderRoom(); } });
 }
 function savePlugin(p, on) {
   return invoke("set_room_plugin", { id: p.id, on }).then(pollPlugins).catch(fail);

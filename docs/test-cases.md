@@ -176,3 +176,4 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - shell: colors are written blue first for windows; translations are unique and fall back to english; the start command says what it records; only plain web links open; the hotkey needs ctrl or alt; closing asks only while work would be lost; clocks read like the player. `unit`
 - sources: a closed window is never replaced by another window of the same program. `unit`
 - days read as today, yesterday or a date; shortcuts need Ctrl or Alt and read like the native menu; the pages call a recording a recording, never a session; every English phrase and fixed message has a Japanese one and every Japanese entry is used; every end-to-end step is named in docs/test-cases.md. `ui-test`
+- start page: an update or video-tools notice shows before any room is open; the two main actions read Join a room and Create a room. `manual` (UI walkthrough harness)

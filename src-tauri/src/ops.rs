@@ -116,7 +116,7 @@ fn remove_room(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     let id: String = arg(&args, "id")?;
     room::listed(core, &id)?;
     if core.export.lock().unwrap().as_ref().is_some_and(|e| e.set.0 == id) {
-        return Err("This recording is being exported. Cancel the export first.".into());
+        return Err("This recording is being exported. Try again when it finishes.".into());
     }
     room::forget_room(core, &id);
     jobs::release_room(&id);

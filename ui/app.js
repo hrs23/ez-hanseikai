@@ -299,9 +299,10 @@ function tickLive() {
   }
 }
 function liveWhat(p) {
-  if (p.me && !p.sharing) return [el("button", { className: "pick", onclick: (e) => { e.stopPropagation(); openSource($("screenmore")); } }, icon("monitor"), t("Select screen"))];
+  const problem = p.me && captureProblem(st.capture);
+  if (p.me && (!p.sharing || problem)) return [el("button", { className: "pick", onclick: (e) => { e.stopPropagation(); openSource($("screenmore")); } }, icon("monitor"), problem || t("Select screen"))];
   if (!p.online || !p.sharing) return [];
-  return [el("span", { textContent: (p.me && captureProblem(st.capture)) || (p.relayed ? t("No picture via relay") : t("Starting…")) })];
+  return [el("span", { textContent: (p.relayed ? t("No picture via relay") : t("Starting…")) })];
 }
 function liveState(p) {
   if (p.file) return "video";
@@ -329,7 +330,7 @@ function renderLive() {
       tl.problem.textContent = problem || "";
       tl.problem.hidden = !problem;
     }
-    tl.box.classList.toggle("wait", state === "select" || state === "starting");
+    tl.box.classList.toggle("wait", state === "select" || state === "starting" || (state === "quiet" && p.sharing));
     tl.box.classList.toggle("hatch", state === "away" || state === "quiet");
     tl.box.classList.toggle("off", state === "away");
     tl.box.classList.toggle("mine", state === "select");
@@ -1377,11 +1378,9 @@ function toggleSidebar() {
   renderShell();
 }
 
-function ask(title, action, danger, text) {
+function ask(title, action, danger) {
   const d = $("confirm");
   $("confirmtitle").textContent = title;
-  $("confirmtext").hidden = !text;
-  $("confirmtext").textContent = text || "";
   $("confirmyes").textContent = action;
   $("confirmyes").className = danger ? "danger" : "primary";
   d.showModal();
@@ -1461,8 +1460,7 @@ async function toggleRecording(kind) {
   const debrief = !ending && (kind ? kind === "debrief" : debriefNow());
   const title = ending ? t("Stop recording for everyone?") : debrief ? t("Record the debrief for everyone?") : t("Start recording for everyone?");
   const action = ending ? t("Stop recording") : debrief ? t("Record debrief") : t("Start recording");
-  const text = ending ? t("Recording stops for everyone.") : debrief ? t("Only the voice and the viewing flow are recorded.") : t("Everyone in the room starts recording.");
-  if (!(await ask(title, action, ending, text))) return;
+  if (!(await ask(title, action, ending))) return;
   debriefMode = null;
   run(ending ? "stop_recording" : "start_recording", ending ? null : { debrief });
 }
