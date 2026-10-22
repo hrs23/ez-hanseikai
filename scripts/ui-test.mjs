@@ -558,7 +558,7 @@ test("an avatar shows the image, a built-in shape or the initial; an unknown sha
   const draw = (code) => vm.runInContext(code, ctx);
   const bolt = draw(`avatar("me", "sm")`);
   assert.deepEqual([bolt.find("path").length, bolt.textContent, bolt.style.background], [1, "", "var(--member-sky)"]);
-  assert.equal(draw(`avatar("me", "sm")`).find("path")[0].attributes.d, draw(`FACES.robot`));
+  assert.equal(draw(`avatar("me", "sm")`).find("path")[0].attributes.d, draw(`FACES.tiger`));
   assert.equal(draw(`avatar("ren")`).find("img")[0].src, image);
   for (const id of ["koya", "mia"]) assert.deepEqual([draw(`avatar("${id}")`).textContent, draw(`avatar("${id}")`).find("img").length], [id === "koya" ? "K" : "M", 0]);
   const room = draw(`roomIcon({ name: "Practice", icon: "" }, "sm")`);
