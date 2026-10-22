@@ -141,7 +141,7 @@ function renderMembers() {
     const version = me ? st.version : p && p.version;
     const tr = el("tr", { className: "pick" + (drawerFor === id ? " sel" : "") + (state.kind === "off" ? " dim" : ""), tabIndex: 0 },
       el("td", {}, el("span", { className: "who" }, me ? el("button", { className: "plain", ariaLabel: t("Avatar"), onclick: (e) => { e.stopPropagation(); openSettings("general"); } }, avatar(id, "", "on")) : avatar(id, "", p && p.connected ? "on" : null), el("b", { textContent: nameOf(id) }), me ? el("span", { className: "pill gray", textContent: t("You") }) : null)),
-      el("td", {}, el("span", { className: "mono", textContent: `${id.slice(0, 4)}·${id.slice(4, 8)}·${id.slice(8, 12)}` }), iconButton("copy", t("Copy ID"), (e) => { e.stopPropagation(); navigator.clipboard.writeText(id).then(() => flash(t("ID copied"))); })),
+      el("td", {}, el("span", { className: "mono", textContent: longId(id) }), iconButton("copy", t("Copy ID"), (e) => { e.stopPropagation(); navigator.clipboard.writeText(id).then(() => flash(t("ID copied"))); })),
       el("td", { className: "state " + state.kind }, el("i", { className: "sdot" }), state.text),
       el("td", {}, conn),
       el("td", { textContent: !me && p.connected ? `${p.rtt_ms} ms` : "" }),
@@ -186,9 +186,9 @@ function renderDrawer() {
   if (p && p.connected) {
     path = p.path === "relay" ? el("div", { className: "pathbox relay" }, el("b", {}, icon("relay", "sm"), t("Via relay server")), el("small", { textContent: [p.relay, t("end-to-end encrypted")].filter(Boolean).join(" · ") })) : el("div", { className: "pathbox direct" }, el("b", {}, icon("relay", "sm"), t("Direct")), el("small", { textContent: t("end-to-end encrypted") }));
     add(t("Round trip"), `${p.rtt_ms} ms`);
-    if (p.sent !== null && p.sent !== undefined) add(t("Sent"), bytes(p.sent));
-    if (p.received !== null && p.received !== undefined) add(t("Received"), bytes(p.received));
-    if (p.offset_us !== null && p.offset_us !== undefined) add(t("Clock offset"), `${p.offset_us >= 0 ? "+" : "−"}${(Math.abs(p.offset_us) / 1e6).toFixed(2)} s`);
+    if (p.sent != null) add(t("Sent"), bytes(p.sent));
+    if (p.received != null) add(t("Received"), bytes(p.received));
+    if (p.offset_us != null) add(t("Clock offset"), `${p.offset_us >= 0 ? "+" : "−"}${(Math.abs(p.offset_us) / 1e6).toFixed(2)} s`);
   } else if (!me) path = el("div", { className: "pathbox off" }, el("b", { textContent: memberOf(id).status.text }));
   add(t("Version"), (me ? st.version : p && p.version) || "—");
   const measuring = !!speed && speed.id === id && !speed.line;
@@ -196,7 +196,7 @@ function renderDrawer() {
   const lines = checks[id];
   const checkBox = [el("div", { className: "h3", textContent: t("Checks") }), ...(lines ? lines.filter((l) => l.level !== "info").map((l) => el("div", { className: "line lv-" + l.level }, icon({ ok: "ok", warn: "alert", fail: "fail" }[l.level] || "info", "sm"), el("span", { textContent: t(l.text, l.args) }))) : checking[id] ? [el("div", { className: "line" }, icon("spinner", "sm spin"), t("Checking…"))] : []), el("div", { className: "row" }, el("button", { className: "sm", disabled: !!checking[id] || (!me && !(p && p.connected)), onclick: () => checkMember(id) }, icon("refresh", "sm"), t("Check again")), me ? "" : el("button", { className: "sm", disabled: measuring || !(p && p.connected), onclick: () => measureSpeed(id) }, icon("activity", "sm"), measuring ? t("Measuring…") : t("Measure speed")))];
   box.replaceChildren(
-    el("div", { className: "dhead" }, avatar(id, "xl"), el("div", { className: "t" }, el("b", { textContent: nameOf(id) }), el("small", { className: "mono", textContent: `${id.slice(0, 4)}·${id.slice(4, 8)}·${id.slice(8, 12)}` })), iconButton("x", t("Close"), () => { drawerFor = null; delete sigs.roomtab; renderRoom(); })),
+    el("div", { className: "dhead" }, avatar(id, "xl"), el("div", { className: "t" }, el("b", { textContent: nameOf(id) }), el("small", { className: "mono", textContent: longId(id) })), iconButton("x", t("Close"), () => { drawerFor = null; delete sigs.roomtab; renderRoom(); })),
     path || "",
     el("dl", { className: "kv" }, ...kv),
     receivingFrom.length ? el("div", { className: "h3", textContent: t("Receiving") }) : "",
@@ -215,7 +215,7 @@ function openSettings(pane) {
   $("relays").value = st.relays.join("\n");
   $("hotkey").textContent = st.hotkey;
   $("hotkeyerr").hidden = true;
-  $("myid").textContent = st.id.match(/.{4}/g).slice(0, 4).join("·");
+  $("myid").textContent = longId(st.id, 4);
   $("myid").title = st.id;
   invoke("data_info").then((info) => { $("datadir").textContent = info.dir; }).catch(warn);
   $("version").textContent = st.version;
@@ -296,7 +296,7 @@ function renderStorage() {
   $("oldfiles").lastChild.textContent = t("Delete old files ({size})", { size: bytes(old) });
   const seg = (cls, n) => { const i = el("i", { className: cls }); i.style.width = (n / totalBytes) * 100 + "%"; return i; };
   $("usage").replaceChildren(seg("app", used), seg("other", other));
-  const free = d.hours_left !== null && d.hours_left !== undefined ? t("Free {free} · about {h} h of recording", { free: bytes(d.free), h: Math.floor(d.hours_left) }) : t("Free {free}", { free: bytes(d.free) });
+  const free = d.hours_left != null ? t("Free {free} · about {h} h of recording", { free: bytes(d.free), h: Math.floor(d.hours_left) }) : t("Free {free}", { free: bytes(d.free) });
   $("legend").replaceChildren(el("span", {}, el("i", { className: "app" }), `${st.app} ${bytes(used)}`), el("span", {}, el("i", { className: "other" }), t("Other files {size}", { size: bytes(other) })), el("span", { className: "sp" }), el("span", {}, el("i", { className: "free" }), free));
   $("selold").textContent = t("All but newest {n}", { n: KEEP_NEWEST });
   for (const id of [...picked]) if (!sets.some((s) => s.id === id)) picked.delete(id);

@@ -22,7 +22,6 @@ const CHAPTERS: &str = "chapters.vtt";
 const WATCH: &str = "watch.json";
 const TOLERANCE_S: f64 = 0.05;
 const DEFAULT_SIZE: (u32, u32) = (1280, 720);
-const MATCH_TAG: &str = "match";
 const FEED_CHUNK: u64 = 1 << 20;
 const CONNECT_WAIT: Duration = Duration::from_secs(120);
 const POLL: Duration = Duration::from_millis(50);
@@ -204,7 +203,7 @@ fn events_to_items(events: &[Value], set: &Set, owners: &[String]) -> (Vec<Note>
             (_, Some(end)) if e["file"].is_null() && !text.is_empty() && at(end) > at(local) => chapters.push(Cue { from_s: at(local), to_s: at(end), text }),
             (_, Some(_)) => {}
             (kind @ ("note" | "mark"), None) if !plugin && (kind == "mark" || !text.is_empty()) => notes.push(Note { at_s: at(local), kind: kind.into(), text, tags }),
-            (_, None) if plugin && tags.iter().any(|t| t == MATCH_TAG) => ends.push(at(local)),
+            (_, None) if room::match_end(e).is_some() => ends.push(at(local)),
             _ => {}
         }
     }
@@ -225,19 +224,9 @@ fn events_to_items(events: &[Value], set: &Set, owners: &[String]) -> (Vec<Note>
     (notes, chapters, subtitles)
 }
 
-fn accept_until(listener: &TcpListener, deadline: Instant, keep_going: impl Fn() -> bool) -> Option<std::net::TcpStream> {
-    listener.set_nonblocking(true).ok()?;
-    loop {
-        match listener.accept() {
-            Ok((stream, _)) => return stream.set_nonblocking(false).ok().map(|_| stream),
-            Err(_) if Instant::now() < deadline && keep_going() => std::thread::sleep(POLL),
-            Err(_) => return None,
-        }
-    }
-}
-
 fn feed(core: Arc<Core>, listener: TcpListener, pieces: Vec<Piece>) {
-    let Some(mut stream) = accept_until(&listener, Instant::now() + CONNECT_WAIT, || core.export.lock().unwrap().is_some()) else { return };
+    let deadline = Instant::now() + CONNECT_WAIT;
+    let Some(mut stream) = proc::accept(&listener, || Instant::now() < deadline && core.export.lock().unwrap().is_some()) else { return };
     let total = stream::size(&pieces);
     let mut at = 0;
     while at < total {
@@ -247,12 +236,6 @@ fn feed(core: Arc<Core>, listener: TcpListener, pieces: Vec<Piece>) {
         }
         at += bytes.len() as u64;
     }
-}
-
-fn ffmpeg_command() -> Command {
-    let mut command = Command::new(ffmpeg::path());
-    command.args(["-hide_banner", "-loglevel", "error", "-nostats", "-progress", "pipe:1", "-y"]);
-    command
 }
 
 fn listen(command: &mut Command, inputs: impl IntoIterator<Item = Vec<Piece>>) -> Result<Vec<(TcpListener, Vec<Piece>)>, String> {
@@ -303,7 +286,7 @@ fn tracks(core: &Core, room_id: &str, set: &Set, f: &File) -> (Vec<Captured>, (u
             kbps = kbps.max(source_kbps(cap));
         }
         for series in SERIES {
-            let mut segs = f.segs.iter().filter(|s| s.capture == capture && s.series == series);
+            let mut segs = f.segs_of(capture, series);
             let Some(first) = segs.next() else { continue };
             let end_us = segs.fold(first.t_us + first.d_us, |end, s| end.max(s.t_us + s.d_us));
             let pieces = stream::set_pieces(core, room_id, f, capture, series);
@@ -323,7 +306,7 @@ fn emit(core: &Core, percent: f64, done: bool, error: Option<String>) {
 }
 
 pub fn check(core: &Core) -> Result<(), String> {
-    if core.active_set.lock().unwrap().is_some() {
+    if core.any_recording() {
         return Err("Stop recording before exporting.".into());
     }
     if core.export.lock().unwrap().is_some() {
@@ -431,8 +414,8 @@ fn encode_args(graph: &str, mapped_audio: bool, video: Option<Vec<String>>, tota
 }
 
 fn run_job(core: &Arc<Core>, set: &(String, String), job: Job, work: &Path, done: usize, jobs: usize, owned: &mut bool) -> Result<(), String> {
-    let mut command = ffmpeg_command();
-    command.current_dir(work);
+    let mut command = ffmpeg::command("error");
+    command.args(["-nostats", "-progress", "pipe:1"]).current_dir(work);
     let feeds = listen(&mut command, job.feeds)?;
     command.args(&job.args).args(["-movflags", "+faststart", "-f", "mp4"]).arg(&job.partial);
     let (stdout, stderr) = begin(core, set.clone(), &mut command, *owned)?;

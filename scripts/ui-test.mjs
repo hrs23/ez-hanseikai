@@ -325,18 +325,6 @@ test("the new Diagnostics texts have Japanese translations", () => {
   for (const word of ["PCs", "Hardware", "Graphics", "Encoder", "CPU", "Memory", "Display", "Windows version", "Capture", "Clock", "Clocks", "Members", "Address lookup", "Update check", "Time check", "Downloads", "Local API"]) assert.ok(word in ui$.JA, word);
 });
 
-test("every fixed text has a Japanese translation", () => {
-  const used = new Set();
-  for (const f of ["app.js", "faces.js", "side.js", "pages.js", "board.js", "extensions.js", "events.js", "util.js", "draw.js", "ai.js", "members.js", "recordings.js", "diag.js", "markdown.js"]) {
-    const s = read(f);
-    for (const m of s.matchAll(/\bt\(\s*"((?:[^"\\]|\\.)*)"/g)) used.add(JSON.parse(`"${m[1]}"`));
-    for (const m of s.matchAll(/\bt\([^)]*\?\s*"((?:[^"\\]|\\.)*)"\s*:\s*"((?:[^"\\]|\\.)*)"/g)) { used.add(JSON.parse(`"${m[1]}"`)); used.add(JSON.parse(`"${m[2]}"`)); }
-  }
-  for (const m of read("index.html").matchAll(/data-t(?:-title|-placeholder|-label)?="([^"]*)"/g)) used.add(m[1]);
-  const missing = [...used].filter((k) => !(k in ui$.JA));
-  assert.deepEqual(missing, []);
-});
-
 test("a focused player plays its own sound; otherwise the chosen player, else the viewer's own, else the first", () => {
   assert.equal(ui$.soundKey(3, ["a", "b", "c"], "a", "b"), "c");
   assert.equal(ui$.soundKey(0, ["a", "b", "c"], "b", "c"), "c");
@@ -388,13 +376,34 @@ test("the pages call a recording a recording, never a session", () => {
   for (const [en, ja] of [["Start recording", "録画開始"], ["Stop recording", "録画終了"], ["Recordings", "録画一覧"], ["Recording", "録画中"], ["Standby", "待機中"], ["Jump to latest", "最新に戻る"]]) assert.equal(ui$.JA[en], ja);
 });
 
-test("every English phrase in the pages has a Japanese one", () => {
+const sourceFiles = (dir, ext) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? sourceFiles(path.join(dir, e.name), ext) : e.name.endsWith(ext) ? [path.join(dir, e.name)] : []));
+const literals = (text) => [...text.matchAll(/"((?:[^"\\\n]|\\.)*)"/g)].map((m) => m[1]);
+
+test("every English phrase in the pages has a Japanese one, and every Japanese entry is used", () => {
   const files = fs.readdirSync(ui).filter((f) => f.endsWith(".js") && f !== "i18n.js");
-  const used = new Set();
-  for (const f of files) for (const m of read(f).matchAll(/\bt\("((?:[^"\\]|\\.)*)"/g)) used.add(JSON.parse(`"${m[1]}"`));
-  for (const m of read("index.html").matchAll(/data-t(?:-title|-placeholder|-label)?="([^"]*)"/g)) used.add(m[1].replaceAll("&amp;", "&"));
-  const missing = [...used].filter((k) => !(k in ui$.JA));
-  assert.deepEqual(missing, []);
+  const html = read("index.html");
+  const rust = sourceFiles(path.join(ui, "..", "src-tauri", "src"), ".rs").map((f) => fs.readFileSync(f, "utf8").split("#[cfg(test)]")[0]);
+  const text = (m) => JSON.parse(`"${m}"`);
+  const marked = [...html.matchAll(/data-t(?:-title|-placeholder|-label)?="([^"]*)"/g)].map((m) => m[1].replaceAll("&amp;", "&"));
+  const phrases = new Set(marked);
+  for (const s of files.map(read)) {
+    for (const m of s.matchAll(/\bt\(\s*"((?:[^"\\]|\\.)*)"/g)) phrases.add(text(m[1]));
+    for (const m of s.matchAll(/\bt\([^)]*\?\s*"((?:[^"\\]|\\.)*)"\s*:\s*"((?:[^"\\]|\\.)*)"/g)) [m[1], m[2]].forEach((x) => phrases.add(text(x)));
+  }
+  const messages = new Set();
+  for (const s of rust) {
+    for (const m of s.matchAll(/(?:Err\(|ok_or\(|ok_or_else\(\|\| |return Err\()"((?:[^"\\]|\\.)*)"/g)) messages.add(text(m[1]));
+    for (const m of s.matchAll(/"((?:[A-Z][^"{}\\]*)\.)"(?:\.into\(\)|\.to_string\(\))/g)) messages.add(text(m[1]));
+  }
+  const fixed = [...messages].filter((x) => /^[A-Z]/.test(x) && x.includes(" ") && !x.includes("{"));
+  assert.ok(fixed.length > 5, `found ${fixed.length} messages`);
+  assert.deepEqual([...phrases, ...fixed].filter((x) => !(x in ui$.JA)), []);
+  const strings = new Set([...files.flatMap((f) => literals(read(f))), ...marked, ...rust.flatMap(literals)].map((x) => x.replaceAll("_", " ").toLowerCase()));
+  assert.deepEqual(Object.keys(ui$.JA).filter((k) => !strings.has(k.toLowerCase())), []);
+});
+
+test("the folder export is a menu action of the page", () => {
+  assert.match(read("pages.js"), /"export-folder":/);
 });
 
 const info = { on: true, address: "127.0.0.1:47625", token: "0123456789abcdef" };
@@ -461,22 +470,6 @@ test("an imported recording is named by its title and the others by their time",
   assert.equal(ui$.sessionName("2026-10-19 12-30-00"), "Scrim vs Team B");
   assert.match(ui$.sessionName("2026-10-19 13-00-00", new Date(2026, 9, 19)), /^Today 13:00$/);
   ui$.setTitles({});
-});
-
-test("the folder export action, the old files button and their phrases exist", () => {
-  assert.match(read("index.html"), /id="oldfiles"/);
-  assert.match(read("pages.js"), /"export-folder":/);
-  for (const word of ["Imported", "Imported by {name}", "Export to folder…", "Delete old files ({size})", "Delete old files?"]) assert.ok(word in ui$.JA, word);
-});
-
-test("every fixed message the export code can send has a Japanese one", () => {
-  const source = fs.readFileSync(path.join(ui, "..", "src-tauri", "src", "export.rs"), "utf8").split("#[cfg(test)]")[0];
-  const used = new Set();
-  for (const m of source.matchAll(/(?:Err\(|ok_or\(|ok_or_else\(\|\| |return Err\()"((?:[^"\\]|\\.)*)"/g)) used.add(JSON.parse(`"${m[1]}"`));
-  for (const m of source.matchAll(/"((?:[A-Z][^"{}\\]*)\.)"(?:\.into\(\)|\.to_string\(\))/g)) used.add(JSON.parse(`"${m[1]}"`));
-  const fixed = [...used].filter((x) => /^[A-Z]/.test(x) && x.includes(" ") && !x.includes("{"));
-  assert.ok(fixed.length > 5, `found ${fixed.length} messages`);
-  assert.deepEqual(fixed.filter((x) => !(x in ui$.JA)), []);
 });
 
 test("a member row says one short state", () => {

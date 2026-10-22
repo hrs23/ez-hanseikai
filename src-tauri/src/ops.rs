@@ -12,25 +12,25 @@ use crate::{api, audio, check, clean_name, clean_note, clean_text, data, debug, 
 pub type Op = fn(&Arc<Core>, Value) -> Result<Value, String>;
 
 pub const OPS: &[(&str, Op)] = &[
-    ("create_room", create_room),
-    ("join_room", join_room),
-    ("enter_room", enter_room),
+    ("create_room", |c, a| room::create_room(c, &arg::<String>(&a, "name")?).map(|id| json!(id))),
+    ("join_room", |c, a| null(room::join_room(c, &arg::<String>(&a, "code")?))),
+    ("enter_room", |c, a| null(room::enter_room(c, &arg::<String>(&a, "id")?))),
     ("close_room", close_room),
     ("remove_room", remove_room),
-    ("rename_room", rename_room),
-    ("set_room_icon", set_room_icon),
+    ("rename_room", |c, a| null(room::rename_room(c, &arg::<String>(&a, "name")?))),
+    ("set_room_icon", |c, a| null(room::set_room_icon(c, &arg::<String>(&a, "icon")?))),
     ("create_invite", create_invite),
     ("cancel_invites", cancel_invites),
     ("answer_ask", answer_ask),
     ("remove_peer", remove_peer),
     ("check_peer", check_peer),
-    ("measure_speed", measure_speed),
-    ("start_recording", start_recording),
+    ("measure_speed", |c, a| tauri::async_runtime::block_on(net::measure_speed(c, &arg::<String>(&a, "id")?)).ok_or_else(|| "No answer".into())),
+    ("start_recording", |c, a| null(room::start_set(c, arg(&a, "debrief")?))),
     ("stop_recording", stop_recording),
     ("mark", mark),
-    ("list_sources", list_sources),
+    ("list_sources", |_, _| Ok(json!(with_sizes(sources::list(), &display_sizes())))),
     ("set_source", set_source),
-    ("list_mics", list_mics),
+    ("list_mics", |_, _| Ok(json!(audio::list_mics()))),
     ("set_mic", set_mic),
     ("set_mix", set_mix),
     ("set_quality", set_quality),
@@ -40,13 +40,13 @@ pub const OPS: &[(&str, Op)] = &[
     ("set_name", set_name),
     ("set_profile", set_profile),
     ("set_language", set_language),
-    ("set_hotkey", set_hotkey),
+    ("set_hotkey", |c, a| null(shell::set_hotkey(c, &arg::<String>(&a, "keys")?))),
     ("set_channel", set_channel),
     ("set_layout", set_layout),
-    ("check_update", check_update),
+    ("check_update", |c, _| Ok(json!(find_update(c)?.map(|u| u.version)))),
     ("install_update", install_update),
-    ("data_info", data_info),
-    ("delete_old_files", delete_old_files),
+    ("data_info", |c, _| Ok(json!({"dir": c.dir, "used_bytes": data::used_bytes(&c.dir), "old_bytes": data::old_bytes(&c.dir), "free_bytes": c.free_bytes.load(Ordering::Relaxed)}))),
+    ("delete_old_files", |c, _| data::delete_old_files(c).map(|freed| json!({"freed": freed}))),
     ("reset", reset),
     ("dismiss_recovery", dismiss_recovery),
     ("retry_ffmpeg", retry_ffmpeg),
@@ -55,8 +55,7 @@ pub const OPS: &[(&str, Op)] = &[
     ("delete_ai_notes", delete_ai_notes),
     ("put_board_card", put_board_card),
     ("open_board_window", open_board_window),
-    ("set_fullscreen", set_fullscreen),
-    ("log_layout", log_layout),
+    ("set_fullscreen", |c, a| null(shell::set_fullscreen(&c.app, &arg::<String>(&a, "window")?, arg(&a, "on")?))),
     ("party_on", party_on),
     ("party_act", party_act),
     ("party_typing", party_typing),
@@ -66,17 +65,17 @@ pub const OPS: &[(&str, Op)] = &[
     ("set_plugin_runner", jobs::set_plugin_runner),
     ("prepare_plugin", jobs::prepare_plugin),
     ("retry_job", jobs::retry_job),
-    ("delete_set", delete_set),
-    ("download_set", download_set),
+    ("delete_set", |c, a| room::delete_set(c, &arg::<String>(&a, "room")?, &arg::<String>(&a, "set")?).map(|deleted| json!(deleted))),
+    ("download_set", |c, a| null(room::download_set(c, &arg::<String>(&a, "room")?, &arg::<String>(&a, "set")?))),
     ("focus_set", focus_set),
-    ("export_check", export_check),
+    ("export_check", |c, _| null(export::check(c))),
     ("export_folder", export_folder),
     ("set_api", set_api),
     ("set_api_lan", set_api_lan),
     ("new_api_token", new_api_token),
     ("api_info", api_info),
-    ("api_reference", api_reference),
-    ("state", state),
+    ("api_reference", |_, _| Ok(json!(api::reference()))),
+    ("state", |c, _| Ok(room::state_json(c))),
     ("debug_view", debug::debug_view),
     ("debug_report", debug::debug_report),
 ];
@@ -85,13 +84,17 @@ pub fn find(name: &str) -> Option<Op> {
     OPS.iter().find(|(known, _)| *known == name).map(|(_, op)| *op)
 }
 
+fn null<T>(result: Result<T, String>) -> Result<Value, String> {
+    result.map(|_| Value::Null)
+}
+
 pub fn arg<T: DeserializeOwned>(args: &Value, name: &str) -> Result<T, String> {
     serde_json::from_value(args[name].clone()).map_err(|_| format!("{name} is missing or not valid."))
 }
 
-fn recording(args: &Value) -> Result<(String, String), String> {
+pub fn recording_ids(core: &Core, args: &Value) -> Result<(String, String), String> {
     let (room, set): (String, String) = (arg(args, "room")?, arg(args, "set")?);
-    if room::valid_id(&room) && room::valid_id(&set) { Ok((room, set)) } else { Err("That recording is not on this PC.".into()) }
+    if room::valid_id(&room) && room::valid_id(&set) && core.room(&room).is_some() { Ok((room, set)) } else { Err("That recording is not on this PC.".into()) }
 }
 
 pub fn warm(core: &Core) {
@@ -102,18 +105,6 @@ pub fn warm(core: &Core) {
     });
 }
 
-fn create_room(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    room::create_room(core, &arg::<String>(&args, "name")?).map(|id| json!(id))
-}
-
-fn join_room(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    room::join_room(core, &arg::<String>(&args, "code")?).map(|_| Value::Null)
-}
-
-fn enter_room(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    room::enter_room(core, &arg::<String>(&args, "id")?).map(|_| Value::Null)
-}
-
 fn close_room(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     room::leave_room(core, &arg::<String>(&args, "id")?);
     Ok(Value::Null)
@@ -121,9 +112,7 @@ fn close_room(core: &Arc<Core>, args: Value) -> Result<Value, String> {
 
 fn remove_room(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     let id: String = arg(&args, "id")?;
-    if !core.rooms.lock().unwrap().list.iter().any(|r| r.id == id) {
-        return Err("That room is not in your list.".into());
-    }
+    room::listed(core, &id)?;
     if core.export.lock().unwrap().as_ref().is_some_and(|e| e.set.0 == id) {
         return Err("This recording is being exported. Cancel the export first.".into());
     }
@@ -132,14 +121,6 @@ fn remove_room(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     core.removed_rooms.lock().unwrap().insert(id);
     room::sweep_removed(core);
     Ok(Value::Null)
-}
-
-fn rename_room(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    room::rename_room(core, &arg::<String>(&args, "name")?).map(|_| Value::Null)
-}
-
-fn set_room_icon(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    room::set_room_icon(core, &arg::<String>(&args, "icon")?).map(|_| Value::Null)
 }
 
 fn create_invite(core: &Arc<Core>, args: Value) -> Result<Value, String> {
@@ -174,11 +155,6 @@ fn remove_peer(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     Ok(Value::Null)
 }
 
-fn measure_speed(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    let id: String = arg(&args, "id")?;
-    tauri::async_runtime::block_on(net::measure_speed(core, &id)).ok_or_else(|| "No answer".into())
-}
-
 fn check_peer(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     let id: String = arg(&args, "id")?;
     if id != core.me() {
@@ -186,10 +162,6 @@ fn check_peer(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     }
     warm(core);
     Ok(json!(check::run(core)))
-}
-
-fn start_recording(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    room::start_set(core, arg(&args, "debrief")?).map(|_| Value::Null)
 }
 
 fn stop_recording(core: &Arc<Core>, _: Value) -> Result<Value, String> {
@@ -224,10 +196,6 @@ fn with_sizes(mut list: Vec<Value>, sizes: &[(u32, u32)]) -> Vec<Value> {
     list
 }
 
-fn list_sources(_: &Arc<Core>, _: Value) -> Result<Value, String> {
-    Ok(json!(with_sizes(sources::list(), &display_sizes())))
-}
-
 fn set_source(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     let source = args["source"].clone();
     if !sources::valid(&source) {
@@ -236,10 +204,6 @@ fn set_source(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     tracing::info!("capture source chosen: {}", if source.is_null() { "none" } else { source["kind"].as_str().unwrap_or_default() });
     *core.engine.source.lock().unwrap() = source;
     Ok(Value::Null)
-}
-
-fn list_mics(_: &Arc<Core>, _: Value) -> Result<Value, String> {
-    Ok(json!(audio::list_mics()))
 }
 
 fn set_mic(core: &Arc<Core>, args: Value) -> Result<Value, String> {
@@ -328,12 +292,8 @@ fn set_language(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     }
     *core.language.lock().unwrap() = language;
     core.save_settings();
-    shell::rebuild_menus(&core.app, core);
+    let _ = shell::install_menus(&core.app, core);
     Ok(Value::Null)
-}
-
-fn set_hotkey(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    shell::set_hotkey(core, &arg::<String>(&args, "keys")?).map(|_| Value::Null)
 }
 
 fn set_channel(core: &Arc<Core>, args: Value) -> Result<Value, String> {
@@ -373,10 +333,6 @@ fn find_update(core: &Core) -> Result<Option<tauri_plugin_updater::Update>, Stri
     tauri::async_runtime::block_on(updater.check()).map_err(|e| e.to_string())
 }
 
-fn check_update(core: &Arc<Core>, _: Value) -> Result<Value, String> {
-    Ok(json!(find_update(core)?.map(|u| u.version)))
-}
-
 fn install_update(core: &Arc<Core>, _: Value) -> Result<Value, String> {
     update_allowed(core)?;
     let update = find_update(core)?.ok_or("No update is available.")?;
@@ -392,14 +348,6 @@ fn install_update(core: &Arc<Core>, _: Value) -> Result<Value, String> {
         data::forget_resume(&core.dir);
     }
     installed.map(|_| Value::Null)
-}
-
-fn data_info(core: &Arc<Core>, _: Value) -> Result<Value, String> {
-    Ok(json!({"dir": core.dir, "used_bytes": data::used_bytes(&core.dir), "old_bytes": data::old_bytes(&core.dir), "free_bytes": core.free_bytes.load(Ordering::Relaxed)}))
-}
-
-fn delete_old_files(core: &Arc<Core>, _: Value) -> Result<Value, String> {
-    data::delete_old_files(core).map(|freed| json!({"freed": freed}))
 }
 
 fn reset(core: &Arc<Core>, args: Value) -> Result<Value, String> {
@@ -452,7 +400,7 @@ fn event_action(core: &Arc<Core>, args: Value) -> Result<Value, String> {
 }
 
 fn delete_ai_notes(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    let (room, set) = recording(&args)?;
+    let (room, set) = recording_ids(core, &args)?;
     core.append_log(&room, &json!({"k": "ai_del", "set": set, "t_us": now_us()}));
     party::send(core);
     Ok(Value::Null)
@@ -495,15 +443,6 @@ fn open_board_window(core: &Arc<Core>, _: Value) -> Result<Value, String> {
     Ok(Value::Null)
 }
 
-fn set_fullscreen(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    shell::set_fullscreen(&core.app, &arg::<String>(&args, "window")?, arg(&args, "on")?).map(|_| Value::Null)
-}
-
-fn log_layout(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    core.append_log(&core.active_room_id(), &json!({"k": "layout", "t_us": now_us(), "layout": args["layout"]}));
-    Ok(Value::Null)
-}
-
 fn party_on(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     let me = core.me();
     core.party.lock().unwrap().turn(arg(&args, "on")?, &me, &args["view"], &core.active_room_id(), now_us());
@@ -532,25 +471,13 @@ fn draw(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     Ok(Value::Null)
 }
 
-fn delete_set(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    room::delete_set(core, &arg::<String>(&args, "room")?, &arg::<String>(&args, "set")?).map(|deleted| json!(deleted))
-}
-
-fn download_set(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    room::download_set(core, &arg::<String>(&args, "room")?, &arg::<String>(&args, "set")?).map(|_| Value::Null)
-}
-
 fn focus_set(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     *core.focus.lock().unwrap() = arg(&args, "set")?;
     Ok(Value::Null)
 }
 
-fn export_check(core: &Arc<Core>, _: Value) -> Result<Value, String> {
-    export::check(core).map(|_| Value::Null)
-}
-
 fn export_folder(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    let (room, set) = recording(&args)?;
+    let (room, set) = recording_ids(core, &args)?;
     export::folder(core, &room, &set, Path::new(&arg::<String>(&args, "folder")?))
 }
 
@@ -586,14 +513,6 @@ fn api_info(core: &Arc<Core>, _: Value) -> Result<Value, String> {
     let on = *core.api_on.lock().unwrap();
     let lan = *core.api_lan.lock().unwrap();
     Ok(json!({"on": on, "lan": lan, "address": api::address(), "hosts": if on && lan { api::lan_addresses() } else { Vec::new() }, "token": if on { core.api_token.lock().unwrap().clone() } else { String::new() }, "error": core.api_error.lock().unwrap().clone()}))
-}
-
-fn api_reference(_: &Arc<Core>, _: Value) -> Result<Value, String> {
-    Ok(json!(api::reference()))
-}
-
-fn state(core: &Arc<Core>, _: Value) -> Result<Value, String> {
-    Ok(room::state_json(core))
 }
 
 #[cfg(test)]

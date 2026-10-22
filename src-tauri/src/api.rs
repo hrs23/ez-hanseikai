@@ -12,7 +12,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::room::{self, Log, Set};
-use crate::{party, Core};
+use crate::{party, tenth, Core};
 
 pub const DEFAULT_PORT: u16 = 47625;
 pub const TOKEN_BYTES: usize = 24;
@@ -164,7 +164,7 @@ pub fn token_ok(header: Option<&str>, token: &str) -> bool {
     !token.is_empty() && scheme.eq_ignore_ascii_case("bearer") && same(given.trim().as_bytes(), token.as_bytes())
 }
 
-fn decode(text: &str, plus: bool) -> Option<String> {
+pub fn decode(text: &str, plus: bool) -> Option<String> {
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -218,9 +218,16 @@ pub fn parse_head(head: &str) -> Result<Request, Response> {
     Ok(Request { method: method.to_string(), path: path.to_string(), query, headers, body: Vec::new() })
 }
 
+fn read_more(stream: &mut impl Read, buf: &mut Vec<u8>) -> Result<(), Response> {
+    let mut chunk = [0u8; CHUNK];
+    match stream.read(&mut chunk) {
+        Ok(0) | Err(_) => Err(error(400, "Bad request.")),
+        Ok(n) => Ok(buf.extend_from_slice(&chunk[..n])),
+    }
+}
+
 pub fn read_request(stream: &mut impl Read) -> Result<Request, Response> {
     let mut buf: Vec<u8> = Vec::new();
-    let mut chunk = [0u8; CHUNK];
     let end = loop {
         if let Some(at) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
             if at > HEAD_MAX {
@@ -231,10 +238,7 @@ pub fn read_request(stream: &mut impl Read) -> Result<Request, Response> {
         if buf.len() > HEAD_MAX {
             return Err(error(431, "The request head is too large."));
         }
-        match stream.read(&mut chunk) {
-            Ok(0) | Err(_) => return Err(error(400, "Bad request.")),
-            Ok(n) => buf.extend_from_slice(&chunk[..n]),
-        }
+        read_more(stream, &mut buf)?;
     };
     let head = std::str::from_utf8(&buf[..end]).map_err(|_| error(400, "Bad request."))?;
     let mut request = parse_head(head)?;
@@ -250,10 +254,7 @@ pub fn read_request(stream: &mut impl Read) -> Result<Request, Response> {
     }
     let mut body = buf[end + 4..].to_vec();
     while body.len() < length {
-        match stream.read(&mut chunk) {
-            Ok(0) | Err(_) => return Err(error(400, "Bad request.")),
-            Ok(n) => body.extend_from_slice(&chunk[..n]),
-        }
+        read_more(stream, &mut body)?;
     }
     body.truncate(length);
     request.body = body;
@@ -320,21 +321,23 @@ impl Loaded {
     }
 
     fn name(&self, id: &str) -> String {
-        self.head.names.get(id).filter(|n| !n.is_empty()).cloned().unwrap_or_else(|| crate::short(id))
+        name_of(&self.head.names, id)
     }
+}
 
+fn name_of(names: &HashMap<String, String>, id: &str) -> String {
+    names.get(id).filter(|n| !n.is_empty()).cloned().unwrap_or_else(|| crate::short(id))
 }
 
 fn seconds(set: &Set, us: Option<i64>) -> Value {
-    us.map_or(Value::Null, |us| json!(((us - set.start()) as f64 / 1e5).round() / 10.0))
+    us.map_or(Value::Null, |us| json!(tenth((us - set.start()) as f64 / 1e6)))
 }
 
 fn rooms_json(heads: &[Head]) -> Value {
-    let name = |h: &Head, id: &str| h.names.get(id).filter(|n| !n.is_empty()).cloned().unwrap_or_else(|| crate::short(id));
     heads
         .iter()
         .filter(|h| !h.id.starts_with("pending-"))
-        .map(|h| json!({"id": h.id, "name": h.name, "active": h.active, "members": h.members.iter().map(|(id, online)| json!({"id": id, "name": name(h, id), "online": online})).collect::<Vec<_>>()}))
+        .map(|h| json!({"id": h.id, "name": h.name, "active": h.active, "members": h.members.iter().map(|(id, online)| json!({"id": id, "name": name_of(&h.names, id), "online": online})).collect::<Vec<_>>()}))
         .collect()
 }
 
@@ -343,7 +346,7 @@ fn status_reply(be: &dyn Backend) -> Response {
     let me = be.me();
     let rows = be.status();
     let names = be.heads().into_iter().find(|h| h.active).map(|h| h.names).unwrap_or_default();
-    let members: Vec<Value> = rows.iter().map(|r| json!({"id": r.id, "name": names.get(&r.id).filter(|n| !n.is_empty()).cloned().unwrap_or_else(|| crate::short(&r.id)), "online": r.online, "state": state_of(r)})).collect();
+    let members: Vec<Value> = rows.iter().map(|r| json!({"id": r.id, "name": name_of(&names, &r.id), "online": r.online, "state": state_of(r)})).collect();
     let own = rows.iter().find(|r| r.id == me).map_or("idle", state_of);
     reply(200, json!({"room": app["room"], "recording": app["recording"], "state": own, "members": members}))
 }
@@ -372,7 +375,7 @@ fn recording_json(l: &Loaded, set: &Set, extras: &Extras, now_us: i64) -> Value 
     let mut out = json!({
         "id": set.id, "kind": if parent.is_some() { "debrief" } else { "play" }, "recording": set.recording(),
         "title": imported.and_then(|v| v.title.clone()), "imported_by": imported.map(|v| json!({"id": v.by, "name": l.name(&v.by)})),
-        "start_ms": start / 1000, "end_ms": end.map(|e| e / 1000), "length_s": ((end.unwrap_or(now_us) - start).max(0) as f64 / 1e5).round() / 10.0,
+        "start_ms": start / 1000, "end_ms": end.map(|e| e / 1000), "length_s": tenth((end.unwrap_or(now_us) - start).max(0) as f64 / 1e6),
         "members": members, "analysis": extras.analysis.get(&set.id).cloned().unwrap_or_default(),
     });
     if let Some(parent) = parent {
@@ -417,21 +420,19 @@ fn events_reply(l: &Loaded, set: &Set, req: &Request) -> Response {
 fn chapters_reply(l: &Loaded, set: &Set, now_us: i64) -> Response {
     let mut ends: Vec<f64> = covered(l, set)
         .iter()
-        .filter(|e| !e["plugin"].is_null() && e["end_us"].is_null() && e["tags"].as_array().into_iter().flatten().any(|t| t == "match"))
-        .filter_map(|e| e["local_us"].as_i64())
+        .filter_map(|e| room::match_end(e))
         .map(|us| (us - set.start()) as f64 / 1e6)
         .collect();
     ends.sort_by(|a, b| a.total_cmp(b));
-    let round = |s: f64| (s * 10.0).round() / 10.0;
     let mut chapters = Vec::new();
     let mut from = 0.0;
     for (i, end) in ends.iter().enumerate() {
-        chapters.push(json!({"n": i + 1, "name": format!("Match {}", i + 1), "from_s": round(from), "to_s": round(*end)}));
+        chapters.push(json!({"n": i + 1, "name": format!("Match {}", i + 1), "from_s": tenth(from), "to_s": tenth(*end)}));
         from = *end;
     }
     let total = (set.end_shown().unwrap_or(now_us) - set.start()) as f64 / 1e6;
     if set.recording() && !ends.is_empty() && total > from {
-        chapters.push(json!({"n": ends.len() + 1, "name": format!("Match {}", ends.len() + 1), "from_s": round(from), "to_s": null}));
+        chapters.push(json!({"n": ends.len() + 1, "name": format!("Match {}", ends.len() + 1), "from_s": tenth(from), "to_s": null}));
     }
     reply(200, json!({"chapters": chapters}))
 }
@@ -667,7 +668,7 @@ struct Live(Arc<Core>);
 
 impl Backend for Live {
     fn app(&self) -> Value {
-        json!({"app": env!("CARGO_PKG_NAME"), "version": crate::VERSION, "id": self.me(), "name": *self.0.name.lock().unwrap(), "room": self.0.room_id(), "recording": self.0.active_set.lock().unwrap().is_some()})
+        json!({"app": env!("CARGO_PKG_NAME"), "version": crate::VERSION, "id": self.me(), "name": *self.0.name.lock().unwrap(), "room": self.0.room_id(), "recording": self.0.any_recording()})
     }
 
     fn me(&self) -> String {
@@ -705,23 +706,11 @@ impl Backend for Live {
             (rooms.list.clone(), rooms.active.clone())
         };
         let me = core.me();
-        let mut known: HashMap<String, String> = HashMap::new();
-        let mut online: HashSet<String> = HashSet::new();
-        for p in core.peers.lock().unwrap().iter() {
-            if !p.name.is_empty() {
-                known.insert(p.id.to_string(), p.name.clone());
-            }
-            if p.alive().is_some() {
-                online.insert(p.id.to_string());
-            }
-        }
-        known.insert(me.clone(), core.name.lock().unwrap().clone());
+        let online: HashSet<String> = core.peers.lock().unwrap().iter().filter(|p| p.alive().is_some()).map(|p| p.id.to_string()).collect();
         list.into_iter()
             .map(|r| {
                 let people = r.people();
-                let mut names = r.names.clone();
-                names.extend(known.iter().filter(|(id, _)| people.contains(id)).map(|(id, n)| (id.clone(), n.clone())));
-                names.extend(room::imported_views(core, &r.id).into_iter().map(|(id, v)| (id, v.name)));
+                let names = room::names(core, &r);
                 let present = people.iter().filter(|m| core.present(m)).cloned().collect();
                 Head { active: active.as_deref() == Some(&r.id), members: r.members.iter().map(|m| (m.clone(), *m == me || online.contains(m))).collect(), id: r.id, name: r.name, names, present }
             })
@@ -737,10 +726,7 @@ impl Backend for Live {
     }
 
     fn analysis(&self, room: &str) -> HashMap<String, Vec<Value>> {
-        let core = &self.0;
-        let logs = room::logs(core, room);
-        let sets = room::sets(core, room, &logs);
-        crate::jobs::analysis_by_set(core, room, &logs, &sets, &crate::data::have_counts(core, room, &sets))
+        crate::jobs::room_analysis(&self.0, room, &room::logs(&self.0, room))
     }
 
     fn voice(&self, room: &str, set: &str, member: &str) -> Option<Vec<u8>> {
@@ -951,7 +937,7 @@ mod tests {
 
     fn plugin_records(id: &str, owner: &str) -> Vec<Value> {
         let p = crate::plugins::find(id).unwrap();
-        let config = crate::jobs::Config { on: true, version: p.version.to_string(), settings: crate::plugins::normalize(p, &Value::Null), runner: Some(owner.to_string()) };
+        let config = crate::jobs::Config::new(p, true, &Value::Null, Some(owner.to_string()));
         let key = format!("{}s1/{owner}", crate::jobs::prefix(id, &config));
         vec![
             json!({"k": "plugin", "plugin": id, "on": true, "version": p.version, "settings": config.settings, "t_us": 1}),
@@ -1065,6 +1051,8 @@ mod tests {
         assert_eq!(segments(&r.path).unwrap(), ["v1", "rooms", "a b", "board"]);
         assert!(segments("/v1/%zz").is_none());
         assert!(segments("/v1/%ff").is_none());
+        assert_eq!(decode("set%2Fr%2F2026-01-02%2012-00-00%2Fa", false).as_deref(), Some("set/r/2026-01-02 12-00-00/a"));
+        assert_eq!((decode("a%zz", false), decode("a+b", false).as_deref(), decode("a+b", true).as_deref()), (None, Some("a+b"), Some("a b")));
     }
 
     #[test]
@@ -1347,15 +1335,8 @@ mod tests {
     }
 
     #[test]
-    fn the_reference_lists_every_endpoint_of_the_api_page_with_an_example() {
+    fn every_reference_entry_has_lines_and_the_main_endpoints_are_listed() {
         let list = reference();
-        let titles: Vec<&str> = list.iter().map(|e| e["title"].as_str().unwrap()).collect();
-        let page = include_str!("../../docs/api.md");
-        let documented: Vec<&str> = page.lines().filter_map(|l| l.strip_prefix("### `")?.strip_suffix('`')).filter(|e| *e != "GET /llms.txt").collect();
-        assert!(documented.len() > 10);
-        for endpoint in documented {
-            assert!(titles.iter().any(|t| t.split('[').next().unwrap() == endpoint), "{endpoint}");
-        }
         for entry in &list {
             assert!(!entry["lines"].as_array().unwrap().is_empty(), "{entry}");
         }

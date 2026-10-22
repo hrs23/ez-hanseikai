@@ -196,7 +196,7 @@ pub fn ended(seconds: u64, first: Counts, last: Counts) -> Option<String> {
 pub fn tick(core: &Core) {
     let frames = |i: usize| debug::FRAMES[i].load(Ordering::Relaxed);
     let counts = Counts { taken: frames(debug::TAKEN), encoded: frames(debug::ENCODED), dropped: frames(debug::DROPPED) };
-    let recording = core.active_set.lock().unwrap().is_some();
+    let recording = core.any_recording();
     let (live, line) = RATES.lock().unwrap().tick((now_us() / 1000) as u64, recording, counts, record::FPS as f64);
     *LIVE.lock().unwrap() = live;
     if let Some(line) = line {

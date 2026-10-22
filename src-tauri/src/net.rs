@@ -325,7 +325,7 @@ async fn follow(core: &Core, conn: &Connection, send: &mut SendStream, req: &Val
     let current = || core.engine.live().filter(|l| l.room == room && l.capture == capture);
     let sets = if own { Vec::new() } else { room::sets(core, &room, &room::logs(core, &room)) };
     let file = sets.iter().filter(|s| set.as_ref() == Some(&s.id)).flat_map(|s| s.files.iter()).find(|f| f.owner == owner);
-    let held = |n: u32| file.and_then(|f| f.segs.iter().find(|g| g.capture == capture && g.series == series && g.n == n)).is_some_and(|g| data::has(&core.files, &dir, &seg_name(n), Some(g.size)));
+    let held = |n: u32| file.and_then(|f| f.segs_of(&capture, &series).find(|g| g.n == n)).is_some_and(|g| data::has(&core.files, &dir, &seg_name(n), Some(g.size)));
     if req["init"] == true {
         let ok = own || file.is_some_and(|f| data::has(&core.files, &dir, INIT, f.init(&capture, &series).map(|(size, _)| size)));
         if !ok || !send_file(core, send, 0, &dir.join(INIT), 0, !live, &|| false, &what).await? {
@@ -439,7 +439,7 @@ async fn handle(core: Arc<Core>, conn: Connection, mut send: SendStream, mut rec
         }
         Some("report") => {
             let c = core.clone();
-            let text = tokio::task::spawn_blocking(move || debug::shared_report(&c)).await?;
+            let text = tokio::task::spawn_blocking(move || debug::report_text(&c, None)).await?;
             send.write_all(text.as_bytes()).await?;
             debug::event(&core, Instant::now(), format!("{}: sent our report", short(from)));
         }

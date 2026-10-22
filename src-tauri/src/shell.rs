@@ -7,7 +7,7 @@ use std::time::Duration;
 use serde_json::Value;
 use tauri::menu::{Menu, MenuBuilder, MenuItem, MenuItemBuilder, SubmenuBuilder};
 use tauri::{AppHandle, Emitter, Manager, Wry};
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+use tauri_plugin_dialog::{DialogExt, FileDialogBuilder, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Modifiers, Shortcut};
 use tauri_plugin_notification::NotificationExt;
 
@@ -16,7 +16,7 @@ use crate::{language, room, Core, REPO, VERSION};
 pub const DEFAULT_HOTKEY: &str = "Ctrl+Alt+M";
 const BOARD: &str = "board";
 const STATUS_POLL: Duration = Duration::from_secs(1);
-const JA: [(&str, &str); 46] = [
+const JA: [(&str, &str); 47] = [
     ("Already running with this data folder.", "このデータフォルダですでに動いています。"),
     ("EZ Hanseikai", "EZ反省会"),
     ("File", "ファイル"),
@@ -63,8 +63,8 @@ const JA: [(&str, &str); 46] = [
     ("Import", "インポート"),
     ("Version", "バージョン"),
     ("Moment marked", "マークしました"),
+    ("{name} wants to join", "{name} が参加を希望しています"),
 ];
-const JA_WANTS: (&str, &str) = ("{name} wants to join", "{name} が参加を希望しています");
 
 struct Items {
     toggle: Option<MenuItem<Wry>>,
@@ -92,33 +92,25 @@ pub fn tell(app: &AppHandle, lang: &str, text: &str) {
     app.dialog().message(text).title(app_name(app, lang)).kind(MessageDialogKind::Info).buttons(MessageDialogButtons::Ok).blocking_show();
 }
 
-fn documents(app: &AppHandle) -> Option<PathBuf> {
-    app.path().document_dir().ok()
+fn file_dialog(app: &AppHandle) -> FileDialogBuilder<Wry> {
+    let dialog = app.dialog().file();
+    match app.path().document_dir() {
+        Ok(dir) => dialog.set_directory(dir),
+        Err(_) => dialog,
+    }
 }
 
 pub fn save_file(app: &AppHandle, name: &str) -> Option<PathBuf> {
     let ext = Path::new(name).extension().and_then(|e| e.to_str()).unwrap_or_default();
-    let mut dialog = app.dialog().file().set_file_name(name).add_filter(ext.to_uppercase(), &[ext]);
-    if let Some(dir) = documents(app) {
-        dialog = dialog.set_directory(dir);
-    }
-    dialog.blocking_save_file().and_then(|p| p.into_path().ok())
+    file_dialog(app).set_file_name(name).add_filter(ext.to_uppercase(), &[ext]).blocking_save_file().and_then(|p| p.into_path().ok())
 }
 
 pub fn pick_folder(app: &AppHandle) -> Option<PathBuf> {
-    let mut dialog = app.dialog().file();
-    if let Some(dir) = documents(app) {
-        dialog = dialog.set_directory(dir);
-    }
-    dialog.blocking_pick_folder().and_then(|p| p.into_path().ok())
+    file_dialog(app).blocking_pick_folder().and_then(|p| p.into_path().ok())
 }
 
 fn open_file(app: &AppHandle, kind: &str, ext: &str) -> Option<PathBuf> {
-    let mut dialog = app.dialog().file().add_filter(kind, &[ext]);
-    if let Some(dir) = documents(app) {
-        dialog = dialog.set_directory(dir);
-    }
-    dialog.blocking_pick_file().and_then(|p| p.into_path().ok())
+    file_dialog(app).add_filter(kind, &[ext]).blocking_pick_file().and_then(|p| p.into_path().ok())
 }
 
 pub fn notify(app: &AppHandle, title: &str, body: &str) {
@@ -274,7 +266,7 @@ fn arm_hotkey(app: &AppHandle, text: &str, on: bool) -> bool {
 
 pub fn set_hotkey(core: &Core, text: &str) -> Result<(), String> {
     hotkey(text).ok_or("Use Ctrl or Alt with a key.")?;
-    let recording = core.active_set.lock().unwrap().is_some();
+    let recording = core.any_recording();
     if !arm_hotkey(&core.app, text, true) {
         let old = core.hotkey.lock().unwrap().clone();
         arm_hotkey(&core.app, &old, recording);
@@ -283,7 +275,7 @@ pub fn set_hotkey(core: &Core, text: &str) -> Result<(), String> {
     arm_hotkey(&core.app, text, recording);
     *core.hotkey.lock().unwrap() = text.to_string();
     core.save_settings();
-    rebuild_menus(&core.app, core);
+    let _ = install_menus(&core.app, core);
     Ok(())
 }
 
@@ -364,9 +356,9 @@ fn build_menu(app: &AppHandle, lang: &str, toggle: &MenuItem<Wry>, mark: &MenuIt
     MenuBuilder::new(app).items(&[&file, &room, &session, &view, &help]).build()
 }
 
-fn install_menus(app: &AppHandle, core: &Core) -> tauri::Result<()> {
+pub fn install_menus(app: &AppHandle, core: &Core) -> tauri::Result<()> {
     let lang = language(core);
-    let recording = core.active_set.lock().unwrap().is_some();
+    let recording = core.any_recording();
     let text = toggle_text(recording, core.party.lock().unwrap().reviewing());
     let keys = core.hotkey.lock().unwrap().clone();
     let toggle = item(app, &lang, "toggle-recording", text, None)?;
@@ -379,10 +371,6 @@ fn install_menus(app: &AppHandle, core: &Core) -> tauri::Result<()> {
     }
     *ITEMS.lock().unwrap() = Items { toggle: Some(toggle), mark: Some(mark) };
     Ok(())
-}
-
-pub fn rebuild_menus(app: &AppHandle, core: &Core) {
-    let _ = install_menus(app, core);
 }
 
 pub fn clock(seconds: i64) -> String {
@@ -412,7 +400,7 @@ fn ask_names(core: &Core) -> Vec<(String, String)> {
 }
 
 fn wants_text(lang: &str, name: &str) -> String {
-    if lang == "ja" { JA_WANTS.1 } else { JA_WANTS.0 }.replace("{name}", name)
+    tr(lang, "{name} wants to join").replace("{name}", name)
 }
 
 pub fn setup(app: &tauri::App, core: Arc<Core>) -> tauri::Result<()> {
@@ -447,7 +435,7 @@ pub fn setup(app: &tauri::App, core: Arc<Core>) -> tauri::Result<()> {
         let mut last = None;
         let mut asked: HashSet<String> = HashSet::new();
         loop {
-            let recording = core.active_set.lock().unwrap().is_some();
+            let recording = core.any_recording();
             let reviewing = core.party.lock().unwrap().reviewing();
             let lang = language(&core);
             let hotkey = core.hotkey.lock().unwrap().clone();

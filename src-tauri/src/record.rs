@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -283,9 +283,9 @@ impl Engine {
         }
     }
 
-    pub fn gain(&self, track: usize) -> (f32, bool) {
+    pub fn gain(&self, track: usize) -> (f64, bool) {
         let mix = self.mix.lock().unwrap();
-        (mix[MIX_KEYS[track]]["volume"].as_f64().unwrap_or(1.0) as f32, mix[MIX_KEYS[track]]["muted"].as_bool().unwrap_or(false))
+        (mix[MIX_KEYS[track]]["volume"].as_f64().unwrap_or(1.0), mix[MIX_KEYS[track]]["muted"].as_bool().unwrap_or(false))
     }
 
     pub fn quality_now(&self) -> String {
@@ -334,7 +334,7 @@ pub fn thin(receivers: &[[Option<Instant>; 2]], now: Instant) -> bool {
 pub fn lower_if_thin(core: &Core) {
     let now = Instant::now();
     let receivers: Vec<[Option<Instant>; 2]> = core.peers.lock().unwrap().iter().filter(|p| p.picture() && p.served.is_some_and(|s| now.duration_since(s) < THIN_WINDOW)).map(|p| p.drops).collect();
-    if !thin(&receivers, now) || core.active_set.lock().unwrap().is_some() {
+    if !thin(&receivers, now) || core.any_recording() {
         return;
     }
     let e = &core.engine;
@@ -363,12 +363,11 @@ fn stalled(window: bool, capturing: bool, quiet: Duration) -> bool {
 pub fn capture_json(core: &Core, live: Option<Value>) -> Value {
     let e = &core.engine;
     let mix = |track: usize| {
-        let m = e.mix.lock().unwrap()[MIX_KEYS[track]].clone();
-        json!({"volume": m["volume"].as_f64().unwrap_or(1.0), "muted": m["muted"].as_bool().unwrap_or(false)})
+        let (volume, muted) = e.gain(track);
+        json!({"volume": volume, "muted": muted})
     };
     json!({
         "source": e.source.lock().unwrap().clone(),
-        "source_kind": e.names.lock().unwrap().kind.clone(),
         "source_lost": e.source_lost.load(Ordering::Relaxed),
         "sharing": core.sharing_live(),
         "working": e.working(),
@@ -423,8 +422,7 @@ pub fn usable_codecs(core: &Core) -> Vec<String> {
 
 fn encode_command(size: (u32, u32), out: (u32, u32), kbps: u32, chosen: (&str, &str, f64), inputs: [u16; 2], outputs: [u16; 2]) -> Command {
     let (rate, channels, fps) = (SAMPLE_RATE.to_string(), CHANNELS.to_string(), FPS.to_string());
-    let mut command = Command::new(ffmpeg::path());
-    command.args(["-hide_banner", "-loglevel", "warning", "-y"]);
+    let mut command = ffmpeg::command("warning");
     if crate::test_mode() {
         command.args(["-re", "-f", "lavfi", "-i", &format!("testsrc2=size={}x{}:rate={fps}", size.0, size.1)]);
         for hz in TEST_TONES_HZ {
@@ -463,8 +461,7 @@ fn encode_command(size: (u32, u32), out: (u32, u32), kbps: u32, chosen: (&str, &
 }
 
 fn voice_command(input: u16, output: u16) -> Command {
-    let mut command = Command::new(ffmpeg::path());
-    command.args(["-hide_banner", "-loglevel", "warning", "-y"]);
+    let mut command = ffmpeg::command("warning");
     if crate::test_mode() {
         command.args(["-re", "-f", "lavfi", "-i", &format!("sine=frequency={}:sample_rate={SAMPLE_RATE}", TEST_TONES_HZ[1])]);
     } else {
@@ -476,21 +473,6 @@ fn voice_command(input: u16, output: u16) -> Command {
         .stdin(Stdio::null())
         .stderr(Stdio::piped());
     command
-}
-
-fn accept(listener: &TcpListener, closed: &AtomicBool) -> Option<TcpStream> {
-    listener.set_nonblocking(true).ok()?;
-    while !closed.load(Ordering::Relaxed) {
-        match listener.accept() {
-            Ok((stream, _)) => {
-                stream.set_nonblocking(false).ok()?;
-                return Some(stream);
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => thread::sleep(POLL),
-            Err(_) => return None,
-        }
-    }
-    None
 }
 
 fn ensure_rec(core: &Core, room: &str, set: &str, start_us: i64, meta: &Value) {
@@ -601,7 +583,7 @@ impl Sink {
         for (track, listener) in listeners.into_iter().enumerate() {
             let sink = sink.clone();
             thread::spawn(move || {
-                if let Some(stream) = accept(&listener, &sink.closed) {
+                if let Some(stream) = proc::accept(&listener, || !sink.closed.load(Ordering::Relaxed)) {
                     let _ = stream.set_write_timeout(Some(STALL_AFTER * 2));
                     if let Ok(closer) = stream.try_clone() {
                         sink.closers.lock().unwrap().push(closer);
@@ -625,7 +607,7 @@ impl Sink {
     }
 
     fn read_output(&self, core: &Core, which: usize, listener: TcpListener) {
-        if let Some(mut stream) = accept(&listener, &self.closed) {
+        if let Some(mut stream) = proc::accept(&listener, || !self.closed.load(Ordering::Relaxed)) {
             let mut splitter = media::Splitter::default();
             let mut buf = vec![0u8; READ_CHUNK];
             loop {
@@ -849,9 +831,7 @@ impl Sink {
             let _ = reader.join();
         }
     }
-}
 
-impl Sink {
     fn debug_json(&self) -> Value {
         let series: Vec<Value> = (0..SERIES.len())
             .map(|i| {
@@ -901,7 +881,7 @@ pub(crate) fn current_sink(core: &Arc<Core>, canvas: Option<(u32, u32)>) -> Opti
     let e = &core.engine;
     let want = want(core);
     let usable = usable_codecs(core);
-    let recording = core.active_set.lock().unwrap().is_some();
+    let recording = core.any_recording();
     let mut slot = e.sink.lock().unwrap();
     let stale = slot.as_ref().map(|sink| {
         let resized = !recording && canvas.is_some_and(|c| scaled(c, quality_width(&sink.quality)) != sink.out);
@@ -1022,18 +1002,15 @@ fn skip(logged: &HashSet<String>, r: &Recovered) -> bool {
 }
 
 fn rec_ends(own: &[Value], room: &str) -> Vec<Value> {
-    let mut last: HashMap<&str, &Value> = HashMap::new();
-    for r in own.iter().filter(|r| r["k"] == "rec" || r["k"] == "rec_end") {
-        if let Some(set) = r["set"].as_str() {
-            last.insert(set, r);
-        }
-    }
-    let mut out = Vec::new();
-    for (set, rec) in last.into_iter().filter(|(_, r)| r["k"] == "rec") {
-        let end = own.iter().filter(|r| r["k"] == "seg" && r["set"] == set).filter_map(|r| Some(r["t_us"].as_i64()? + r["d_us"].as_i64()?)).max();
-        out.push(json!({"k": "rec_end", "set": set, "room": room, "t_us": end.or(rec["start_us"].as_i64()).unwrap_or_else(now_us)}));
-    }
-    out
+    let sets: BTreeSet<&str> = own.iter().filter(|r| r["k"] == "rec").filter_map(|r| r["set"].as_str()).collect();
+    sets.into_iter()
+        .filter(|set| room::joined(own, set))
+        .map(|set| {
+            let start = own.iter().rev().find(|r| r["k"] == "rec" && r["set"] == set).and_then(|r| r["start_us"].as_i64());
+            let end = own.iter().filter(|r| r["k"] == "seg" && r["set"] == set).filter_map(|r| Some(r["t_us"].as_i64()? + r["d_us"].as_i64()?)).max();
+            json!({"k": "rec_end", "set": set, "room": room, "t_us": end.or(start).unwrap_or_else(now_us)})
+        })
+        .collect()
 }
 
 pub fn recover(core: &Core) {
@@ -1096,7 +1073,7 @@ fn meters(core: Arc<Core>) {
     loop {
         thread::sleep(Duration::from_millis(1000 / LEVELS_PER_SECOND));
         let [app, mic] = [APP, MIC].map(|t| f32::from_bits(core.engine.peaks[t].swap(0, Ordering::Relaxed)));
-        let active = core.active_set.lock().unwrap().is_some() && !core.engine.gain(MIC).1;
+        let active = core.any_recording() && !core.engine.gain(MIC).1;
         if let Some(on) = speech.step(Instant::now(), mic, active) {
             net::broadcast(&core, json!({"t": "speaking", "on": on}));
             let _ = core.app.emit("speaking", json!({"from": core.me(), "on": on}));

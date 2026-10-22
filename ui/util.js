@@ -58,6 +58,7 @@ function stored(key, fallback) {
 function store(key, value) {
   try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { console.warn(e); }
 }
+const longId = (id, groups = 3) => String(id).match(/.{4}/g).slice(0, groups).join("·");
 const shortId = (id) => `${String(id).slice(0, 4)}·${String(id).slice(4, 8)}`;
 const warn = (e) => console.warn(e);
 const playFailed = (e) => { if (e.name !== "AbortError" && e.name !== "NotAllowedError") warn(e); };

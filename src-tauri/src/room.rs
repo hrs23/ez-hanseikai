@@ -138,31 +138,46 @@ fn civil(days: i64) -> (i64, i64, i64) {
     (yoe + era * 400 + i64::from(m <= 2), m, d)
 }
 
-pub fn wall_clock(now_us: i64, tz_offset_s: i64) -> String {
-    let local = now_us + tz_offset_s * 1_000_000;
-    let secs = local.div_euclid(1_000_000);
+fn civil_time(secs: i64) -> (i64, i64, i64, i64, i64, i64) {
     let (y, m, d) = civil(secs.div_euclid(86400));
     let rest = secs.rem_euclid(86400);
-    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.{:03}", rest / 3600, rest % 3600 / 60, rest % 60, local.rem_euclid(1_000_000) / 1000)
+    (y, m, d, rest / 3600, rest % 3600 / 60, rest % 60)
+}
+
+const MATCH_TAG: &str = "match";
+
+pub fn match_end(event: &Value) -> Option<i64> {
+    let tagged = event["tags"].as_array().into_iter().flatten().any(|t| t == MATCH_TAG);
+    event["local_us"].as_i64().filter(|_| !event["plugin"].is_null() && event["end_us"].is_null() && tagged)
+}
+
+pub fn wall_clock(now_us: i64, tz_offset_s: i64) -> String {
+    let local = now_us + tz_offset_s * 1_000_000;
+    let (y, m, d, h, min, s) = civil_time(local.div_euclid(1_000_000));
+    format!("{y:04}-{m:02}-{d:02}T{h:02}:{min:02}:{s:02}.{:03}", local.rem_euclid(1_000_000) / 1000)
 }
 
 pub fn set_id_for(now_us: i64, tz_offset_s: i64) -> String {
-    let secs = now_us / 1_000_000 + tz_offset_s;
-    let (y, m, d) = civil(secs.div_euclid(86400));
-    let rest = secs.rem_euclid(86400);
-    format!("{y:04}-{m:02}-{d:02} {:02}-{:02}-{:02}", rest / 3600, rest % 3600 / 60, rest % 60)
+    let (y, m, d, h, min, s) = civil_time(now_us / 1_000_000 + tz_offset_s);
+    format!("{y:04}-{m:02}-{d:02} {h:02}-{min:02}-{s:02}")
 }
 
 impl Core {
+    pub fn room(&self, id: &str) -> Option<Room> {
+        self.rooms.lock().unwrap().list.iter().find(|r| r.id == id).cloned()
+    }
+
     pub fn active_room(&self) -> Option<Room> {
-        let rooms = self.rooms.lock().unwrap();
-        let id = rooms.active.as_ref()?;
-        rooms.list.iter().find(|r| &r.id == id).cloned()
+        let id = self.rooms.lock().unwrap().active.clone()?;
+        self.room(&id)
     }
 
     pub fn room_id(&self) -> Option<String> {
-        let rooms = self.rooms.lock().unwrap();
-        rooms.active.clone().filter(|id| rooms.list.iter().any(|r| &r.id == id))
+        self.active_room().map(|r| r.id)
+    }
+
+    pub fn any_recording(&self) -> bool {
+        self.active_set.lock().unwrap().is_some()
     }
 
     pub fn active_room_id(&self) -> String {
@@ -318,13 +333,15 @@ pub fn join_room(core: &Arc<Core>, code: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub fn listed(core: &Core, id: &str) -> Result<Room, String> {
+    core.room(id).ok_or_else(|| "That room is not in your list.".into())
+}
+
 pub fn enter_room(core: &Arc<Core>, id: &str) -> Result<(), String> {
     if core.room_id().as_deref() == Some(id) {
         return Ok(());
     }
-    if !core.rooms.lock().unwrap().list.iter().any(|r| r.id == id) {
-        return Err("That room is not in your list.".into());
-    }
+    listed(core, id)?;
     open(core, id);
     Ok(())
 }
@@ -538,7 +555,7 @@ pub fn shares(room: &Room, asker: &str, of: &str) -> bool {
 }
 
 pub fn may_share(core: &Core, room: &str, asker: &str, of: &str) -> bool {
-    valid_id(room) && member_id(of) && core.rooms.lock().unwrap().list.iter().find(|r| r.id == room).is_some_and(|r| shares(r, asker, of))
+    valid_id(room) && member_id(of) && core.room(room).is_some_and(|r| shares(&r, asker, of))
 }
 
 #[derive(Debug, PartialEq)]
@@ -797,6 +814,10 @@ pub fn view_info(records: &[Value]) -> Option<ViewInfo> {
 }
 
 impl File {
+    pub fn segs_of<'a>(&'a self, capture: &'a str, series: &'a str) -> impl Iterator<Item = &'a Seg> {
+        self.segs.iter().filter(move |s| s.capture == capture && s.series == series)
+    }
+
     pub fn series(&self, series: &str) -> Vec<&Seg> {
         self.segs.iter().filter(|s| s.series == series).collect()
     }
@@ -819,7 +840,7 @@ impl File {
     pub fn total(&self) -> u64 {
         let mut total: u64 = self.segs.iter().map(|s| s.size).sum();
         for capture in self.captures() {
-            for series in SERIES.iter().filter(|x| self.segs.iter().any(|s| s.capture == capture && s.series == **x)) {
+            for series in SERIES.iter().filter(|x| self.segs_of(capture, x).next().is_some()) {
                 total += self.init(capture, series).map_or(0, |(size, _)| size);
             }
         }
@@ -875,7 +896,7 @@ pub fn logs(core: &Core, room: &str) -> Vec<Log> {
             offsets.insert(short(p.id), offset);
         }
     }
-    let people = core.rooms.lock().unwrap().list.iter().find(|r| r.id == room).map(Room::people).unwrap_or_default();
+    let people = core.room(room).map(|r| r.people()).unwrap_or_default();
     let me = core.me();
     let mut out = vec![Log { owner: me.clone(), offset_us: 0, records: own }];
     for id in people.iter().filter(|id| member_id(id) && **id != me) {
@@ -891,7 +912,7 @@ pub fn logs(core: &Core, room: &str) -> Vec<Log> {
 }
 
 pub fn imported_views(core: &Core, room: &str) -> HashMap<String, ViewInfo> {
-    let people = core.rooms.lock().unwrap().list.iter().find(|r| r.id == room).map(|r| r.removed.clone()).unwrap_or_default();
+    let people = core.room(room).map(|r| r.removed).unwrap_or_default();
     people.into_iter().filter(|id| member_id(id)).filter_map(|id| Some((id.clone(), view_info(&core.room_log(room, &id))?))).collect()
 }
 
@@ -1196,7 +1217,7 @@ pub fn sweep_dropped(core: &Core, room: &str, logs: &[Log]) {
 
 pub fn sweep_removed(core: &Core) {
     let removed = core.removed_rooms.lock().unwrap().clone();
-    for id in removed.iter().filter(|id| valid_id(id) && !core.rooms.lock().unwrap().list.iter().any(|r| &r.id == *id)) {
+    for id in removed.iter().filter(|id| valid_id(id) && core.room(id).is_none()) {
         if core.room_dir(id).exists() {
             data::remove_room(core, id);
         }
@@ -1239,7 +1260,7 @@ fn parts_json(room: &str, set: &Set, f: &File, size_of: &dyn Fn(&str, &str) -> (
     for capture in f.captures() {
         let Some(start_us) = f.caps.get(capture).and_then(|cap| cap["start_us"].as_i64()) else { continue };
         let mut part = json!({"capture": capture});
-        for series in SERIES.iter().filter(|series| f.segs.iter().any(|s| s.capture == capture && s.series == **series)) {
+        for series in SERIES.iter().filter(|series| f.segs_of(capture, series).next().is_some()) {
             let (size, open) = size_of(capture, series);
             part[series] = json!({"path": format!("set/{room}/{}/{}/{series}/{capture}", set.id, f.owner), "start_us": start_us, "size": size, "open": open});
         }
@@ -1333,28 +1354,25 @@ fn last_used(core: &Core, room: &str) -> Option<i64> {
     std::fs::metadata(core.log_path(room, &core.me())).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_micros() as i64)
 }
 
+pub fn names(core: &Core, room: &Room) -> HashMap<String, String> {
+    let people = room.people();
+    let mut names = room.names.clone();
+    names.extend(core.peers.lock().unwrap().iter().filter(|p| !p.name.is_empty() && people.contains(&p.id.to_string())).map(|p| (p.id.to_string(), p.name.clone())));
+    names.insert(core.me(), core.name.lock().unwrap().clone());
+    names.extend(imported_views(core, &room.id).into_iter().map(|(id, v)| (id, v.name)));
+    names
+}
+
 pub fn state_json(core: &Core) -> Value {
     let room_id = core.active_room_id();
     let my_id = core.ep.id().to_string();
     let active = core.active_room();
-    let mut names: HashMap<String, String> = active.as_ref().map(|r| r.names.clone()).unwrap_or_default();
-    let mut peers: Vec<Value> = core
-        .peers
-        .lock()
-        .unwrap()
-        .iter()
-        .map(|p| {
-            if !p.name.is_empty() {
-                names.insert(p.id.to_string(), p.name.clone());
-            }
-            peer_json(p)
-        })
-        .collect();
+    let mut peers: Vec<Value> = core.peers.lock().unwrap().iter().map(peer_json).collect();
     for p in peers.iter_mut().filter(|p| p["sharing"] == true) {
         p["live"] = json!(stream::live_json(core, &room_id, p["id"].as_str().unwrap_or_default()));
     }
+    let mut names = active.as_ref().map(|r| names(core, r)).unwrap_or_default();
     names.insert(my_id.clone(), "You".to_string());
-    names.extend(imported_views(core, &room_id).into_iter().map(|(id, v)| (id, v.name)));
     let logs = logs(core, &room_id);
     keep_room(core, &room_id, latest_name(&logs).as_deref(), Some(&latest_icon(&logs)));
     let active = core.active_room();
@@ -1412,8 +1430,7 @@ pub fn state_json(core: &Core) -> Value {
         "disk": disk,
         "channel": *core.channel.lock().unwrap(),
         "previous_version": core.previous_version,
-        "codec": ffmpeg::pick(&core.codecs.lock().unwrap()).1,
-        "recording": core.active_set.lock().unwrap().is_some(),
+        "recording": core.any_recording(),
         "capture": record::capture_json(core, stream::live_json(core, &room_id, &my_id)),
         "active_set": core.active_set_json(),
         "room": active.map(|r| json!({"id": r.id, "name": r.name, "icon": r.icon, "pending": r.invite.is_some(), "waiting": r.waiting})),

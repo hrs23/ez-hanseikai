@@ -1,4 +1,5 @@
 use std::io::Read;
+use std::net::{TcpListener, TcpStream};
 use std::os::windows::io::AsRawHandle;
 use std::os::windows::process::CommandExt;
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -86,6 +87,17 @@ pub fn wait_until(wait: Duration, poll: Duration, mut done: impl FnMut() -> bool
         std::thread::sleep(poll);
     }
     false
+}
+
+pub fn accept(listener: &TcpListener, keep_going: impl Fn() -> bool) -> Option<TcpStream> {
+    listener.set_nonblocking(true).ok()?;
+    loop {
+        match listener.accept() {
+            Ok((stream, _)) => return stream.set_nonblocking(false).ok().map(|_| stream),
+            Err(_) if keep_going() => std::thread::sleep(POLL),
+            Err(_) => return None,
+        }
+    }
 }
 
 pub fn spawn(command: &mut Command, flags: u32) -> std::io::Result<Process> {

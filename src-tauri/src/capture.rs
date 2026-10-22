@@ -270,7 +270,7 @@ impl GraphicsCaptureApiHandler for Capture {
         let core = self.core.clone();
         let e = &core.engine;
         *e.fresh.lock().unwrap() = Instant::now();
-        let recording = core.active_set.lock().unwrap().is_some();
+        let recording = core.any_recording();
         let canvas = {
             let mut canvas = e.canvas.lock().unwrap();
             if !recording || canvas.is_none() {

@@ -58,10 +58,14 @@ pub fn leftovers(dir: &Path, exporting: bool, now: SystemTime) -> Vec<PathBuf> {
     out
 }
 
+fn remove_path(path: &Path) -> std::io::Result<()> {
+    if path.is_dir() { std::fs::remove_dir_all(path) } else { std::fs::remove_file(path) }
+}
+
 fn cleanup(core: &Core) {
     let exporting = core.export.lock().unwrap().is_some();
     for path in leftovers(&core.dir, exporting, SystemTime::now()) {
-        let removed = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
+        let removed = remove_path(&path);
         if removed.is_ok() {
             debug::event(core, core.started, format!("removed {}", path.strip_prefix(&core.dir).unwrap_or(&path).display()));
         }
@@ -125,7 +129,7 @@ fn remove_old(dir: &Path, files: &Files) -> (u64, Option<String>) {
     let (mut freed, mut failure) = (0, None);
     for path in old_files(dir) {
         let size = size_of(&path);
-        match if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) } {
+        match remove_path(&path) {
             Ok(()) => {
                 forget(files, &path);
                 freed += size;
@@ -217,7 +221,7 @@ pub fn reset(dir: &Path, keep_rooms: bool) {
         if ["EBWebView", LOCK, debug::CRASH].contains(&name.as_str()) || debug::LOG_FILES.contains(&name.as_str()) || (keep_rooms && rooms.contains(&name.as_str())) {
             continue;
         }
-        let _ = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
+        let _ = remove_path(&path);
     }
 }
 
@@ -426,7 +430,7 @@ pub fn remove_room(core: &Core, room: &str) {
 pub fn keeper(core: Arc<Core>) {
     let mut aged: Option<Instant> = None;
     loop {
-        if core.disk_full() && core.active_set.lock().unwrap().is_some() {
+        if core.disk_full() && core.any_recording() {
             room::end_set(&core, false, None);
             *core.notice.lock().unwrap() = "Recording stopped: the disk is almost full.".into();
         }
@@ -549,7 +553,7 @@ mod tests {
         assert_eq!(relative(&dir, old_files(&dir)), older);
         assert!(leftovers(&dir, true, SystemTime::now()).is_empty());
         for path in leftovers(&dir, false, SystemTime::now() + OLD_AFTER + Duration::from_secs(60)) {
-            let _ = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
+            let _ = remove_path(&path);
         }
         assert_eq!(room::sweep(&dir.join("rooms/r"), &["s3".to_string()].into(), None), ["s3"]);
         assert_eq!(found.iter().map(|r| (r.room.as_str(), r.set.as_str(), r.capture.as_str(), r.series, r.n)).collect::<Vec<_>>(), [("r", "s2", "3000", "v", 2)]);

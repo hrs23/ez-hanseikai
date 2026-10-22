@@ -8,15 +8,14 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use tauri::Emitter;
 
 use crate::plugins::{self, Found, Media, Output, Plugin, Reply};
 use crate::room::{self, File, Log, Seg, Set, SERIES};
-use crate::ops::arg;
+use crate::ops::{arg, recording_ids};
 use crate::{data, ffmpeg, hex, now_us, party, stream, Core};
 
 const CHECK: Duration = Duration::from_secs(2);
-const EMIT_EVERY: Duration = Duration::from_millis(250);
+const WAIT_STEP: Duration = Duration::from_millis(250);
 const SETTINGS_HASH_BYTES: usize = 6;
 const STOP_WAIT: Duration = Duration::from_secs(10);
 pub const UNFINISHED_MAX: u32 = 2;
@@ -27,6 +26,20 @@ pub struct Config {
     pub version: String,
     pub settings: Value,
     pub runner: Option<String>,
+}
+
+impl Config {
+    pub fn new(plugin: &Plugin, on: bool, settings: &Value, runner: Option<String>) -> Self {
+        Config { on, version: plugin.version.into(), settings: plugins::normalize(plugin, settings), runner }
+    }
+
+    fn runs_on(&self, me: &str) -> bool {
+        self.on && self.runner.as_deref() == Some(me)
+    }
+}
+
+fn settings_of(plugin: &Plugin, config: Option<&Config>) -> Value {
+    config.map_or_else(|| plugins::normalize(plugin, &Value::Null), |c| c.settings.clone())
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -272,11 +285,11 @@ pub fn next(
 }
 
 fn runs_here(me: &str, bundled: &[(&str, &str, bool)], ready: impl Fn(&str, &Value) -> bool, id: &str, config: &Config) -> bool {
-    config.on && bundled.iter().any(|(b, version, _)| *b == id && *version == config.version) && config.runner.as_deref() == Some(me) && ready(id, &config.settings)
+    config.runs_on(me) && bundled.iter().any(|(b, version, _)| *b == id && *version == config.version) && ready(id, &config.settings)
 }
 
 pub fn runner_wants(me: &str, configs: &BTreeMap<String, Config>) -> bool {
-    configs.values().any(|c| c.on && c.runner.as_deref() == Some(me))
+    configs.values().any(|c| c.runs_on(me))
 }
 
 pub fn abandoned(me: &str, tracks: &Tracks) -> Vec<Value> {
@@ -427,7 +440,7 @@ pub fn span(segs: &[&Seg], offset_us: i64) -> Option<(i64, i64)> {
 }
 
 fn series(core: &Core, room: &str, f: &File, capture: &str, series: &str) -> Option<Vec<PathBuf>> {
-    let count = f.segs.iter().filter(|s| s.capture == capture && s.series == series).count();
+    let count = f.segs_of(capture, series).count();
     if count == 0 {
         return Some(Vec::new());
     }
@@ -448,7 +461,7 @@ pub fn inputs(core: &Core, room: &str, logs: &[Log], locate: impl Fn(&str) -> bo
             let mut parts = Vec::new();
             let mut complete = true;
             for capture in f.captures() {
-                let segs: Vec<&Seg> = f.segs.iter().filter(|s| s.capture == capture && s.series == SERIES[0]).collect();
+                let segs: Vec<&Seg> = f.segs_of(capture, SERIES[0]).collect();
                 let Some((start_us, end_us)) = span(&segs, f.offset_us) else { continue };
                 let mut part = Part { start_us, end_us, ..Default::default() };
                 if here {
@@ -468,7 +481,7 @@ pub fn inputs(core: &Core, room: &str, logs: &[Log], locate: impl Fn(&str) -> bo
 }
 
 pub fn open(file: &str, me: &str, configs: &BTreeMap<String, Config>, tracks: &Tracks, chosen: &HashMap<String, String>) -> bool {
-    configs.iter().any(|(id, c)| c.on && c.runner.as_deref() == Some(me) && counts(id, file, chosen) && tracks.get(&(id.clone(), file.to_string())).is_none_or(|t| t.open_for(me).is_some()))
+    configs.iter().any(|(id, c)| c.runs_on(me) && counts(id, file, chosen) && tracks.get(&(id.clone(), file.to_string())).is_none_or(|t| t.open_for(me).is_some()))
 }
 
 fn snapshot(core: &Core, room: &str) -> (Vec<Log>, BTreeMap<String, Config>, Tracks) {
@@ -516,23 +529,8 @@ fn present(core: &Core, id: &str, settings: &Value) -> bool {
 
 fn room_members(core: &Core, room: &str) -> Vec<String> {
     let me = core.me();
-    let others: Vec<String> = core.rooms.lock().unwrap().list.iter().find(|r| r.id == room).map(|r| r.members.iter().map(|m| m.to_string()).filter(|m| *m != me).collect()).unwrap_or_default();
+    let others: Vec<String> = core.room(room).map(|r| r.members.into_iter().filter(|m| *m != me).collect()).unwrap_or_default();
     std::iter::once(me).chain(others).collect()
-}
-
-fn recording(core: &Core) -> bool {
-    core.active_set.lock().unwrap().is_some()
-}
-
-fn running_json() -> Value {
-    match RUNNING.lock().unwrap().as_ref() {
-        Some(r) => json!({"room": r.room, "job": r.key, "plugin": r.plugin, "file": r.file, "run": r.run, "progress": r.progress}),
-        None => Value::Null,
-    }
-}
-
-fn emit(core: &Core) {
-    let _ = core.app.emit("job", running_json());
 }
 
 pub fn worker(core: Arc<Core>) {
@@ -561,7 +559,7 @@ fn tick(core: &Arc<Core>, room: &str) {
     }
     let chosen = chosen(&logs, None);
     let inputs = inputs(core, room, &logs, |file| open(file, &me, &configs, &tracks, &chosen));
-    let pick = next(&me, recording(core), &bundled(), |id, s| present(core, id, s), &configs, &tracks, &chosen, &inputs);
+    let pick = next(&me, core.any_recording(), &bundled(), |id, s| present(core, id, s), &configs, &tracks, &chosen, &inputs);
     let Some(pick) = pick else { return };
     let (Some(plugin), Some(config)) = (plugins::find(&pick.plugin), configs.get(&pick.plugin)) else { return };
     work(core, room, plugin, config, &pick.key, &inputs[pick.input]);
@@ -574,7 +572,6 @@ fn work(core: &Arc<Core>, room: &str, plugin: &'static Plugin, config: &Config, 
     CANCEL.store(false, Ordering::Relaxed);
     tracing::info!("job {key} started on {}", input.file);
     *RUNNING.lock().unwrap() = Some(Running { room: room.into(), key: key.into(), plugin: plugin.id.into(), file: input.file.clone(), run, progress: 0.0 });
-    emit(core);
     let work = work_root(core).join(run.to_string());
     let outcome = run_parts(core, room, plugin, config, input, &work);
     let about = json!({"plugin": plugin.id, "version": plugin.version, "file": input.file});
@@ -598,7 +595,6 @@ fn work(core: &Arc<Core>, room: &str, plugin: &'static Plugin, config: &Config, 
     }
     let _ = std::fs::remove_dir_all(work);
     *RUNNING.lock().unwrap() = None;
-    emit(core);
 }
 
 type Results = (Vec<(i64, Found)>, BTreeMap<String, String>, String);
@@ -636,8 +632,8 @@ fn run_parts(core: &Arc<Core>, room: &str, plugin: &'static Plugin, config: &Con
 
 fn stale(core: &Core, room: &str, plugin: &Plugin) -> bool {
     let logs = room::logs(core, room);
-    let runs = room_configs(core, room, &logs).get(plugin.id).is_some_and(|c| c.on && c.runner.as_deref() == Some(core.me().as_str()));
-    core.active_room_id() != room || (recording(core) && !plugin.live) || !runs
+    let runs = room_configs(core, room, &logs).get(plugin.id).is_some_and(|c| c.runs_on(&core.me()));
+    core.active_room_id() != room || (core.any_recording() && !plugin.live) || !runs
 }
 
 fn watch(core: &Core, room: &str, plugin: &Plugin, job: &plugins::Job, share: (f64, f64)) -> Option<Result<Output, String>> {
@@ -646,7 +642,7 @@ fn watch(core: &Core, room: &str, plugin: &Plugin, job: &plugins::Job, share: (f
         Err(e) => return Some(Err(e.to_string())),
     };
     let rx = plugins::replies(process.child.stdout.take().unwrap());
-    let (mut checked, mut emitted) = (Instant::now(), Instant::now());
+    let mut checked = Instant::now();
     loop {
         if checked.elapsed() >= CHECK {
             checked = Instant::now();
@@ -663,10 +659,6 @@ fn watch(core: &Core, room: &str, plugin: &Plugin, job: &plugins::Job, share: (f
             Ok(Reply::Progress(p)) => {
                 if let Some(r) = RUNNING.lock().unwrap().as_mut() {
                     r.progress = share.0 + p * share.1;
-                }
-                if emitted.elapsed() >= EMIT_EVERY {
-                    emitted = Instant::now();
-                    emit(core);
                 }
             }
             Ok(Reply::Done(output)) => {
@@ -718,18 +710,21 @@ pub fn analysis_by_set(core: &Core, room: &str, logs: &[Log], sets: &[Set], mine
     phases.into_iter().map(|(set, list)| { let json = analysis_json(&list, running.as_ref(), &set); (set, json) }).collect()
 }
 
+pub fn room_analysis(core: &Core, room: &str, logs: &[Log]) -> HashMap<String, Vec<Value>> {
+    let sets = room::sets(core, room, logs);
+    analysis_by_set(core, room, logs, &sets, &data::have_counts(core, room, &sets))
+}
+
 pub fn plugins_json(core: &Core, room: &str) -> Vec<Value> {
     let logs = room::logs(core, room);
     let configs = room_configs(core, room, &logs);
-    let sets = room::sets(core, room, &logs);
-    let mine = data::have_counts(core, room, &sets);
-    let by_set = analysis_by_set(core, room, &logs, &sets, &mine);
+    let by_set = room_analysis(core, room, &logs);
     let count = |id: &str, states: &[&str]| by_set.values().filter(|list| list.iter().any(|a| a["plugin"] == id && states.contains(&a["state"].as_str().unwrap_or_default()))).count();
     plugins::ALL
         .iter()
         .map(|p| {
             let config = configs.get(p.id);
-            let settings = config.map_or_else(|| plugins::normalize(p, &Value::Null), |c| c.settings.clone());
+            let settings = settings_of(p, config);
             let missing = plugins::missing(p, &plugin_dir(core, p.id), &settings);
             let waiting_for = by_set.values().flatten().find(|a| a["plugin"] == p.id && !a["waiting_for"].is_null()).map(|a| a["waiting_for"].clone());
             let mut v = plugins::manifest(p);
@@ -757,7 +752,7 @@ pub fn set_room_plugin(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     let room = core.active_room_id();
     let logs = room::logs(core, &room);
     let runner = room_configs(core, &room, &logs).remove(plugin.id).and_then(|c| c.runner).unwrap_or_else(|| core.me());
-    let config = Config { on: arg(&args, "on")?, version: plugin.version.into(), settings: plugins::normalize(plugin, &args["settings"]), runner: Some(runner) };
+    let config = Config::new(plugin, arg(&args, "on")?, &args["settings"], Some(runner));
     core.append_log(&room, &plugin_record(plugin.id, &config, change_time(now_us(), &logs, plugin.id)));
     Ok(Value::Null)
 }
@@ -771,7 +766,7 @@ fn plugin_record(id: &str, config: &Config, t_us: i64) -> Value {
 }
 
 fn runner_record(plugin: &Plugin, runner: String, logs: &[Log], now: i64) -> Value {
-    let config = configs(logs, None).remove(plugin.id).unwrap_or_else(|| Config { on: false, version: plugin.version.into(), settings: plugins::normalize(plugin, &Value::Null), runner: None });
+    let config = configs(logs, None).remove(plugin.id).unwrap_or_else(|| Config::new(plugin, false, &Value::Null, None));
     plugin_record(plugin.id, &Config { runner: Some(runner), ..config }, change_time(now, logs, plugin.id))
 }
 
@@ -789,7 +784,7 @@ pub fn set_plugin_runner(core: &Arc<Core>, args: Value) -> Result<Value, String>
 
 pub fn prepare_plugin(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     let plugin = plugins::find(&arg::<String>(&args, "id")?).ok_or("Unknown extension.")?;
-    let settings = configs(&room::logs(core, &core.active_room_id()), None).get(plugin.id).map_or_else(|| plugins::normalize(plugin, &Value::Null), |c| c.settings.clone());
+    let settings = settings_of(plugin, configs(&room::logs(core, &core.active_room_id()), None).get(plugin.id));
     let dir = plugin_dir(core, plugin.id);
     plugins::fetch_group(plugin.id, &dir, &plugins::missing(plugin, &dir, &settings)).map(|_| Value::Null)
 }
@@ -806,11 +801,8 @@ pub fn retries(configs: &BTreeMap<String, Config>, chosen: &HashMap<String, Stri
 }
 
 pub fn retry_job(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    let (room, set): (String, String) = (arg(&args, "room")?, arg(&args, "set")?);
+    let (room, set) = recording_ids(core, &args)?;
     let plugin: Option<String> = arg(&args, "plugin")?;
-    if !room::valid_id(&room) || !room::valid_id(&set) || !core.rooms.lock().unwrap().list.iter().any(|r| r.id == room) {
-        return Err("That recording is not on this PC.".into());
-    }
     let logs = room::logs(core, &room);
     let found = room::sets(core, &room, &logs).into_iter().find(|s| s.id == set).ok_or("That recording is not on this PC.")?;
     for record in retries(&room_configs(core, &room, &logs), &chosen(&logs, None), &found, plugin.as_deref()) {
@@ -836,7 +828,7 @@ pub fn stop_now(core: &Core) {
 fn wait_idle(busy: impl Fn(Option<&str>) -> bool) {
     let started = Instant::now();
     while busy(WORK.lock().unwrap().as_deref()) && started.elapsed() < STOP_WAIT {
-        std::thread::sleep(EMIT_EVERY);
+        std::thread::sleep(WAIT_STEP);
     }
 }
 

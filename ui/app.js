@@ -47,7 +47,6 @@ let volume = stored("volume", 1);
 let sessionSound = stored("sessionSound", true);
 let gameSound = stored("gameSound", null);
 let seekRun = null;
-let bezelTimer = 0;
 const BEZEL_MS = 500;
 let muted = false;
 let live = false;
@@ -57,9 +56,6 @@ let partyLast = null;
 let partyLayout = null;
 let drag = null;
 let items = [];
-let osdTimer = null;
-let whoTimer = null;
-let toastTimer = null;
 let idleTimer = null;
 let undo = null;
 let available = null;
@@ -121,6 +117,7 @@ function iconButton(name, label, onclick, cls = "icon sm") {
 function pill(cls, iconName, text) {
   return el("span", { className: "pill " + cls }, iconName ? icon(iconName, "sm") : null, text);
 }
+const dot = (id) => el("i", { className: "dt", style: `background:${colorOf(colorIndex(id))}` });
 
 function tile(s, key) {
   if (s.tiles[key]) return s.tiles[key];
@@ -192,7 +189,7 @@ function setView(s, view) {
   s.view = Math.max(0, Math.min(view, s.keys.length));
   if (s.view) s.last = s.view;
   place(s);
-  if (s === play) { applyAudio(); renderViews(); logLayout(); share(); }
+  if (s === play) { applyAudio(); renderViews(); share(); }
 }
 function tileAt(s, x, y) {
   return Object.entries(s.tiles).find(([, tl]) => { const r = tl.box.getBoundingClientRect(); return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom; });
@@ -251,15 +248,9 @@ function saveLayout(s, mode, slots) {
     else if (set) store("layout/" + set.id, { mode, slots, order: s.keys });
   }
   place(s);
-  if (s === play) logLayout();
 }
 const fromSaved = (l) => ({ mode: (l && l.mode) || "grid", slots: (l && l.slots) || 0, order: (l && l.order) || [] });
 const playLayout = (set) => fromSaved(stored("layout/" + set.id, null) || set.layout);
-function logLayout() {
-  const set = playSet();
-  const size = (key, sideName) => Math.round(play.tiles[key] ? play.tiles[key].box[sideName] : 0);
-  if (set) quiet("log_layout", { layout: { set: set.id, mode: play.view ? "focus" : play.mode, slots: play.slots, tiles: play.keys.map((key, i) => ({ id: key, index: i, w: size(key, "clientWidth"), h: size(key, "clientHeight") })) } });
-}
 
 function recOf(id) {
   const set = liveSet();
@@ -489,7 +480,6 @@ function renderPlayer() {
 }
 function renderTransport(set, idle) {
   const liveSetShown = !!(set && set.live);
-  const tot = total();
   const edge = liveEdge(total(), nowM());
   if (set && !set.live) live = false;
   for (const id of ["play", "back", "fwd", "addnote", "mixbtn", "cc", "seek", "lane", "chapters", "matchchip"]) $(id).classList.toggle("nodisp", idle);
@@ -514,9 +504,7 @@ function debriefChip(set, list) {
   return el("button", { className: "sm", title: t("Export…"), onclick: () => exportDebriefs(set, list) }, icon("mic", "sm"), text);
 }
 function viewChip(set, line) {
-  const chip = pill(line.kind === "away" ? "warn" : "gray", line.kind === "receiving" ? "spinner" : line.kind === "away" ? "alert" : "download", line.text);
-  if (line.action) chip.append(" · ", el("button", { className: "sm", textContent: line.action, onclick: () => run("download_set", { room: set.room, set: set.id }) }));
-  return chip;
+  return el("span", { className: "pill " + (line.kind === "away" ? "warn" : "gray") }, ...lineNodes(set, line, line.kind === "receiving" ? "spinner" : line.kind === "away" ? "alert" : "download", " · "));
 }
 function headerChips(set) {
   const a = st.active_set;
@@ -644,8 +632,12 @@ function stepSet(dir) {
   if (next) { openSession(next.id); osd(sessionName(next.id)); }
 }
 
+function lineNodes(set, line, iconName, sep = "") {
+  const action = line.action ? [sep, el("button", { className: "sm", textContent: line.action, onclick: (e) => { e.stopPropagation(); run("download_set", { room: set.room, set: set.id }); } })] : [];
+  return [icon(iconName, "sm"), line.text, ...action];
+}
 function whatNodes(what, line, set) {
-  if (line) return [icon(line.kind === "away" ? "alert" : "download", "sm"), line.text, line.action ? el("button", { className: "sm", textContent: line.action, onclick: (e) => { e.stopPropagation(); run("download_set", { room: set.room, set: set.id }); } }) : ""];
+  if (line) return lineNodes(set, line, line.kind === "away" ? "alert" : "download");
   return what === "voice" ? [icon("mic", "sm"), t("Voice only")] : [t("Waiting for {name}…", { name: what })];
 }
 function tick() {
@@ -689,15 +681,14 @@ function tick() {
   }
   if (st.active_set) tickSide();
   if (away) return;
-  const tott = total(list);
   $("clocknow").textContent = fmt(m);
-  $("clocktotal").textContent = ` / ${fmt(tott)}`;
-  const frac = tott ? Math.min(1, m / tott) : 0;
+  $("clocktotal").textContent = ` / ${fmt(tot)}`;
+  const frac = tot ? Math.min(1, m / tot) : 0;
   $("seek").querySelector(".fill").style.width = frac * 100 + "%";
   $("seek").querySelector(".thumb").style.left = frac * 100 + "%";
-  $("seek").querySelector(".grow").style.left = (tott ? Math.min(1, received(list) / tott) : 1) * 100 + "%";
+  $("seek").querySelector(".grow").style.left = (tot ? Math.min(1, received(list) / tot) : 1) * 100 + "%";
   $("seek").classList.toggle("paused", !clock.playing);
-  $("seek").setAttribute("aria-valuemax", Math.round(tott));
+  $("seek").setAttribute("aria-valuemax", Math.round(tot));
   $("seek").setAttribute("aria-valuenow", Math.round(m));
   $("seek").setAttribute("aria-valuetext", fmt(m));
   if (changed("playicon", [clock.playing])) $("play").replaceChildren(icon(clock.playing ? "pause" : "play"));
@@ -705,12 +696,15 @@ function tick() {
   renderMoment(m);
 }
 
+function hideAfter(box, ms, then) {
+  clearTimeout(box.hideTimer);
+  box.hideTimer = setTimeout(() => { box.hidden = true; if (then) then(); }, ms);
+}
 function osd(text, who) {
   $("osdtext").textContent = text;
   $("osdav").replaceChildren(who ? avatar(who, "sm") : "");
   $("osd").hidden = false;
-  clearTimeout(osdTimer);
-  osdTimer = setTimeout(() => { $("osd").hidden = true; }, OSD_MS);
+  hideAfter($("osd"), OSD_MS);
 }
 function seekWho(who, m) {
   const box = $("seekwho");
@@ -720,8 +714,7 @@ function seekWho(who, m) {
   box.style.left = Math.max(0, Math.min(100, (m / tot) * 100)) + "%";
   box.style.setProperty("--c", colorOf(colorIndex(who)));
   box.hidden = false;
-  clearTimeout(whoTimer);
-  whoTimer = setTimeout(() => { box.hidden = true; }, SEEKWHO_MS);
+  hideAfter(box, SEEKWHO_MS);
 }
 function setUndo(fn) {
   undo = { fn, at: Date.now() };
@@ -739,8 +732,7 @@ function bezel(...children) {
   b.hidden = true;
   void b.offsetWidth;
   b.hidden = false;
-  clearTimeout(bezelTimer);
-  bezelTimer = setTimeout(() => { b.hidden = true; seekRun = null; }, BEZEL_MS);
+  hideAfter(b, BEZEL_MS, () => { seekRun = null; });
 }
 function apply(cmd, m, who, prev = { playing: clock.playing, m: nowM() }) {
   live = false;
@@ -905,7 +897,7 @@ function renderConvo(speech) {
   if (!changed("convo", [speech.map((n) => [n.key, n.m, n.speaker, n.body]), lang, st.colors])) return;
   if (!speech.length) { $("convolist").replaceChildren(el("div", { className: "none", textContent: t("No transcript yet") })); return; }
   $("convolist").replaceChildren(...speech.map((n) => {
-    const row = el("div", { className: "ev talk", tabIndex: 0 }, el("span", { className: "at", textContent: fmt(n.m) }), el("span", { className: "tx" }, el("span", { className: "who" }, el("i", { style: `background:${colorOf(colorIndex(n.file || n.author))}` }), n.speaker), el("span", { textContent: n.body })));
+    const row = el("div", { className: "ev talk", tabIndex: 0 }, el("span", { className: "at", textContent: fmt(n.m) }), el("span", { className: "tx" }, el("span", { className: "who" }, dot(n.file || n.author), n.speaker), el("span", { textContent: n.body })));
     row.dataset.key = n.key;
     row.onclick = () => seekTo(n.m);
     return row;
@@ -924,7 +916,7 @@ function renderReviewTab() {
   const cur = list.find((c) => c.m <= now && now < c.end);
   const sig = [list, notes.map((n) => [n.key, n.m, n.body, n.author, n.source]), pending, cur && cur.n, lang, st.colors, st.names, plugins.map((p) => p.name)];
   if (!changed("reviewtab", sig)) return;
-  const noteRow = (n) => el("div", { className: "ev" }, el("button", { className: "at", textContent: fmt(n.m), onclick: () => seekTo(n.m) }), el("span", { className: "tx" }, ...inline(n.body), n.source === "ai" ? el("span", { className: "aimark", textContent: t("AI") }) : null, el("span", { className: "by" }, el("i", { className: "dt", style: `background:${colorOf(colorIndex(n.author))}` }), n.who)));
+  const noteRow = (n) => el("div", { className: "ev" }, el("button", { className: "at", textContent: fmt(n.m), onclick: () => seekTo(n.m) }), el("span", { className: "tx" }, ...inline(n.body), n.source === "ai" ? el("span", { className: "aimark", textContent: t("AI") }) : null, el("span", { className: "by" }, dot(n.author), n.who)));
   const groups = list.length ? list.map((c) => ({ title: t("Match {n}", { n: c.n }), range: `${fmt(c.m)}–${fmt(c.end)}`, m: c.m, cur: cur === c, rows: [...notes.filter((n) => n.m >= c.m && n.m < c.end).map(noteRow), ...ends.filter((e) => Math.abs(e.m - c.end) < JUMP_MIN).map((e) => el("div", { className: "ev sys" }, el("button", { className: "at", textContent: fmt(e.m), onclick: () => seekTo(e.m) }), el("span", { className: "tx" }, icon("flag", "sm"), t("Match end"))))] })) : [{ title: t("Whole recording"), range: fmt(tot), m: 0, cur: true, rows: notes.map(noteRow) }];
   const out = pending.map((a) => el("div", { className: "ev sys analysis" }, icon(a.state === "failed" ? "alert" : "cpu", "sm"), el("span", { className: "tx " + (a.state === "failed" ? "warn" : "muted"), textContent: `${t(pluginName(a.plugin))} · ${analysisReason(a, nameOf)}` }), a.state === "failed" ? el("button", { className: "sm", textContent: t("Retry"), onclick: () => retryAnalysis(set, a.plugin) }) : null));
   out.push(...groups.map((g) => el("div", { className: "match" + (g.cur ? " cur" : "") },
@@ -949,8 +941,7 @@ function eventRow(n) {
   const body = n.role === "drawing" ? [t("Drawing") + (n.count > 1 ? ` ×${n.count}` : "")] : inline(n.body);
   const tags = n.kind === "note" ? [] : (n.tags || []).map((tg) => el("button", { className: "tag", textContent: tagName(tg), onclick: (e) => { e.stopPropagation(); filterTag(tg); } }));
   const tx = el("span", { className: "tx" }, sys ? icon("flag", "sm") : null, ...body, n.source === "ai" ? el("span", { className: "aimark", textContent: t("AI") }) : null, ...tags);
-  const dot = el("i", { className: "dt", style: `background:${n.plugin ? "var(--muted)" : colorOf(colorIndex(n.author))}` });
-  const by = el("span", { className: "by" }, dot, n.who);
+  const by = el("span", { className: "by" }, n.plugin ? el("i", { className: "dt", style: "background:var(--muted)" }) : dot(n.author), n.who);
   const row = el("div", { className: "ev" + (sys ? " sys" : "") + (n.role === "chapter" ? " chapter" : "") }, at, tx, by);
   if (n.mine && n.kind !== "mark") {
     const acts = el("span", { className: "acts" });
@@ -1223,8 +1214,7 @@ function flash(msg, kind = "info", action = null) {
   $("toastaction").hidden = !action;
   if (action) { $("toastaction").textContent = action.label; $("toastaction").onclick = () => { $("toast").hidden = true; action.run(); }; }
   $("toast").hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { $("toast").hidden = true; }, TOAST_MS);
+  hideAfter($("toast"), TOAST_MS);
 }
 function codeText(m) {
   if (m.code === "removed") return t("{by} removed {name} from the room", m);
@@ -1253,10 +1243,13 @@ function renderNotices() {
     n.action ? el("button", { className: "sm" + (n.action.primary ? " primary" : ""), textContent: n.action.label, onclick: n.action.run }) : null,
     n.sticky ? null : iconButton("x", t("Close"), () => { dismissed.add(n.key); delete sigs.notices; renderNotices(); }))));
 }
+async function pickExportFolder() {
+  await invoke("export_check");
+  return dialog("pick_folder");
+}
 async function exportDebriefs(set, list) {
   try {
-    await invoke("export_check");
-    const folder = await dialog("pick_folder");
+    const folder = await pickExportFolder();
     if (!folder) return;
     for (const d of list) await invoke("export_folder", { room: d.room, set: d.id, folder: `${folder}\\${d.id}` });
     flash(t("Export finished"));
@@ -1264,7 +1257,7 @@ async function exportDebriefs(set, list) {
 }
 function exportFolder(set) {
   if (!set) { flash(t("Open a recording first")); return; }
-  invoke("export_check").then(() => dialog("pick_folder")).then((folder) => {
+  pickExportFolder().then((folder) => {
     if (!folder) return;
     exporting = { set: set.id, percent: 0 };
     refresh();
@@ -1500,8 +1493,8 @@ $("layoutplay").onclick = (e) => pickLayout(current(), e.currentTarget);
 $("scope").onchange = () => { scope = $("scope").value; renderEvents(); };
 for (const b of $("tools").querySelectorAll("[data-tool]")) b.onclick = () => { ink.tool = b.dataset.tool; renderTools(); };
 $("clearink").onclick = () => clearInk(false);
-$("toast").onmouseenter = () => clearTimeout(toastTimer);
-$("toast").onmouseleave = () => { toastTimer = setTimeout(() => { $("toast").hidden = true; }, TOAST_MS); };
+$("toast").onmouseenter = () => clearTimeout($("toast").hideTimer);
+$("toast").onmouseleave = () => hideAfter($("toast"), TOAST_MS);
 function seekFrac(x) {
   const r = $("seek").getBoundingClientRect();
   return Math.max(0, Math.min(1, (x - r.left) / r.width));

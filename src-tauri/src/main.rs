@@ -264,7 +264,7 @@ impl Core {
     }
 
     pub fn log_ready(&self, room: &str) -> bool {
-        !self.rooms.lock().unwrap().list.iter().any(|r| r.id == room && r.members.len() > 1)
+        self.room(room).is_none_or(|r| r.members.len() < 2)
             || (file_len(&self.log_path(room, &self.me())) > 0 && !self.pending_path(room).exists())
     }
 

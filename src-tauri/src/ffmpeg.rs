@@ -99,6 +99,12 @@ pub fn prepare(status: &Mutex<String>) {
     probe_encoders();
 }
 
+pub fn command(level: &str) -> Command {
+    let mut command = Command::new(path());
+    command.args(["-hide_banner", "-loglevel", level, "-y"]);
+    command
+}
+
 pub fn retry() {
     RETRY.store(true, Ordering::Relaxed);
 }

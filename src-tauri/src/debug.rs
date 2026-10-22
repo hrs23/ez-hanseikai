@@ -713,10 +713,6 @@ pub fn combine(own: String, others: Vec<(String, String)>) -> String {
     out
 }
 
-pub fn shared_report(core: &Core) -> String {
-    report_text(core, None)
-}
-
 fn describe(conn: &Connection, out: &mut String) {
     out.push_str(&format!("connection to {}\n", conn.remote_id().fmt_short()));
     for p in path_json(conn) {
@@ -750,7 +746,7 @@ pub fn text(core: &Core) -> String {
     let room = core.active_room_id();
     let logs = room::logs(core, &room);
     for set in room::sets_json(core, &room, &logs, &[]) {
-        out.push_str(&format!("set {} {}\n", set["id"].as_str().unwrap_or_default(), set["status"].as_str().unwrap_or_default()));
+        out.push_str(&format!("set {}\n", set["id"].as_str().unwrap_or_default()));
         for p in set["players"].as_array().into_iter().flatten() {
             out.push_str(&format!(
                 "  {} have {} of {} B in {} parts verified by {}\n",
@@ -847,10 +843,13 @@ fn known_names(core: &Core) -> Vec<String> {
     names
 }
 
+fn last<T>(mut items: Vec<T>, count: usize) -> Vec<T> {
+    items.drain(..items.len().saturating_sub(count));
+    items
+}
+
 pub fn errors(log: &str) -> Vec<&str> {
-    let mut out: Vec<&str> = log.lines().filter(|l| l.contains(" WARN ") || l.contains(" ERROR ")).collect();
-    out.drain(..out.len().saturating_sub(ERRORS_KEPT));
-    out
+    last(log.lines().filter(|l| l.contains(" WARN ") || l.contains(" ERROR ")).collect(), ERRORS_KEPT)
 }
 
 pub fn job_line(job: &Value) -> String {
@@ -867,8 +866,7 @@ fn jobs_text(core: &Core) -> String {
 
 pub fn report_text(core: &Core, check: Option<&str>) -> String {
     let log = fs::read_to_string(core.dir.join("log.txt")).unwrap_or_default();
-    let recent: Vec<&str> = log.lines().rev().take(REPORT_LINES).collect();
-    let recent: Vec<&str> = recent.into_iter().rev().collect();
+    let recent = last(log.lines().collect(), REPORT_LINES);
     let mut out = String::new();
     out.push_str(&format!("{} {} on {} {}\n", env!("CARGO_PKG_NAME"), crate::VERSION, std::env::consts::OS, command_line("cmd", &["/c", "ver"])));
     out.push_str(&format!("previous version {}\n", if core.previous_version.is_empty() { "none" } else { &core.previous_version }));

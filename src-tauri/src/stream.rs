@@ -76,26 +76,6 @@ pub fn live_json(core: &Core, room: &str, owner: &str) -> Option<Value> {
     (pieces.len() > 1).then(|| json!({"path": format!("live/{room}/{owner}/{capture}"), "size": size(&pieces), "start_us": start_us}))
 }
 
-fn decode(path: &str) -> String {
-    let bytes = path.as_bytes();
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        let hex = (bytes[i] == b'%').then(|| path.get(i + 1..i + 3)).flatten().and_then(|h| u8::from_str_radix(h, 16).ok());
-        match hex {
-            Some(b) => {
-                out.push(b);
-                i += 3;
-            }
-            None => {
-                out.push(bytes[i]);
-                i += 1;
-            }
-        }
-    }
-    String::from_utf8_lossy(&out).to_string()
-}
-
 #[derive(Debug, PartialEq)]
 enum Target<'a> {
     Live { room: &'a str, owner: &'a str, capture: &'a str },
@@ -154,8 +134,12 @@ fn serve(files: &data::Files, indexes: &Indexes, dir: &Path, live: bool, kind: &
     (from <= bytes.len()).then(|| (kind, bytes.split_off(from)))
 }
 
+fn decoded(path: &str) -> Option<String> {
+    crate::api::decode(path.trim_start_matches('/'), false)
+}
+
 fn answer(core: &Core, path: &str, from: usize) -> Option<(&'static str, Vec<u8>)> {
-    let path = decode(path.trim_start_matches('/'));
+    let path = decoded(path)?;
     let (found, what) = target(&path.split('/').collect::<Vec<_>>())?;
     match found {
         Target::Live { room, owner, capture } => {
@@ -184,7 +168,7 @@ pub fn read(pieces: &[Piece], start: u64, len: u64) -> std::io::Result<Vec<u8>> 
 }
 
 fn thumb(core: &Core, path: &str) -> Option<Vec<u8>> {
-    let path = decode(path.trim_start_matches('/'));
+    let path = decoded(path)?;
     let parts: Vec<&str> = path.split('/').collect();
     match parts.as_slice() {
         ["thumb", room, set] if valid_id(room) && valid_id(set) => std::fs::read(crate::thumbs::path(&core.room_dir(room), set)).ok(),
@@ -293,11 +277,5 @@ mod tests {
         for bad in [format!("live/../{owner}/1000/index"), format!("live/room/nobody/1000/index"), format!("live/room/{owner}/10x/index"), format!("set/room/set/{owner}/x/1000/init"), format!("set/room/a%2Fb/{owner}/v/1000/init"), format!("set/room/set/{owner}/v/1000"), format!("live/room/{owner}/1000/index/more")] {
             assert!(split(bad.clone()).is_none(), "{bad}");
         }
-    }
-
-    #[test]
-    fn paths_are_decoded() {
-        assert_eq!(decode("set%2Fr%2F2026-01-02%2012-00-00%2Fa"), "set/r/2026-01-02 12-00-00/a");
-        assert_eq!(decode("a%zz"), "a%zz");
     }
 }

@@ -133,6 +133,7 @@ fn run(core: &Core, track: usize, key: &str, stop: &AtomicBool) {
         }
         let whole = bytes.len() / FLOAT_FRAME_BYTES * FLOAT_FRAME_BYTES;
         let (volume, muted) = e.gain(track);
+        let volume = volume as f32;
         let mut peak = 0f32;
         raw.clear();
         raw.extend(bytes.drain(..whole));
