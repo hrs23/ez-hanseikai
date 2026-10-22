@@ -1504,7 +1504,9 @@ async function library(ctx) {
     const all = [a, b, c];
     await allSee(all, "watching the set together", within(PARTY_REPEAT_S + UI_REFRESH_S * 2), (st) => st.party.on && st.party.shared.set === ctx.set);
     check(await evaluate(a, `startState() === "review" && $("startbtn").textContent === t("Record debrief")`), "A's start button does not offer to record the debrief");
-    check(await evaluate(a, `page === "player" && !$("debrief").hidden && $("debrief").title === t("Record debrief")`), "the player does not offer to record a debrief");
+    await evaluate(a, `openSession(${JSON.stringify(ctx.set)}); true`);
+    check(await evaluate(a, `!$("debrief").hidden && $("debrief").title === t("Record debrief")`), "the player does not offer to record a debrief");
+    await evaluate(a, `go("room"); true`);
     await evaluate(a, `$("startmore").click(); true`);
     check(await evaluate(a, `[...$("menu").querySelectorAll("button")].map((b) => b.textContent).join() === t("Switch to recording")`), "the record menu does not offer to switch back to recording while watching together");
     await evaluate(a, `closeMenu(); true`);
