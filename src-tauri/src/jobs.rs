@@ -703,9 +703,25 @@ fn holders_of(core: &Core, mine: &HashMap<String, u64>) -> impl Fn(&Set, &File) 
 pub fn analysis_by_set(core: &Core, room: &str, logs: &[Log], sets: &[Set], mine: &HashMap<String, u64>) -> HashMap<String, Vec<Value>> {
     let configs = room_configs(core, room, logs);
     let local = gate(core.any_recording(), ffmpeg::present());
-    let phases = analysis(&core.me(), now_us(), &online(core), &configs, &tracks(logs, None), &chosen(logs, None), sets, local.as_ref(), holders_of(core, mine));
+    let tracks = tracks(logs, None);
+    let phases = analysis(&core.me(), now_us(), &online(core), &configs, &tracks, &chosen(logs, None), sets, local.as_ref(), holders_of(core, mine));
     let running = RUNNING.lock().unwrap();
-    phases.into_iter().map(|(set, list)| { let json = analysis_json(&list, running.as_ref(), &set); (set, json) }).collect()
+    phases
+        .into_iter()
+        .map(|(set, list)| {
+            let mut json = analysis_json(&list, running.as_ref(), &set);
+            if let Some(files) = sets.iter().find(|s| s.id == set).map(|s| &s.files) {
+                for a in json.iter_mut().filter(|a| a["state"] == "done" || a["state"] == "failed") {
+                    let plugin = a["plugin"].as_str().unwrap_or_default().to_string();
+                    let at = files.iter().filter_map(|f| tracks.get(&(plugin.clone(), format!("{set}/{}", f.owner)))).filter_map(|t| t.latest.as_ref()).map(|l| l.at.0).max();
+                    if let Some(at) = at {
+                        a["at_us"] = json!(at);
+                    }
+                }
+            }
+            (set, json)
+        })
+        .collect()
 }
 
 pub fn room_analysis(core: &Core, room: &str, logs: &[Log]) -> HashMap<String, Vec<Value>> {

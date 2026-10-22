@@ -23,6 +23,42 @@ function analysisReason(a, name) {
   if (a.reason === "ffmpeg") return t("Waiting for the video tools");
   return a.waiting_for ? t("Waiting for {name}'s PC", { name: name(a.waiting_for) }) : t("Waiting");
 }
+function analysisPill(a) {
+  if (a.state === "done") return { text: t("Done"), tone: "ok" };
+  if (a.state === "failed") return { text: t("Failed"), tone: "warn" };
+  if (a.state === "running") return { text: analyzing(a), tone: "run" };
+  return { text: a.state === "idle" ? t("Not analyzed") : t("Waiting"), tone: "gray" };
+}
+function analysisSub(a, runner, name) {
+  if (a.state === "running") return runner ? t("{name}'s PC", { name: name(runner) }) : "";
+  if (a.state === "failed") return a.reason === "missing" ? t("File missing") : a.error || "";
+  if (a.state !== "left") return "";
+  const reason = analysisReason(a, name);
+  return reason === t("Waiting") ? "" : reason;
+}
+function analysisActions(a) {
+  return [
+    { id: "details" },
+    ...(a.state === "running" ? [] : [{ id: "again", disabled: a.state === "left" }]),
+    ...(a.state === "failed" && a.error ? [{ id: "copy" }] : []),
+  ];
+}
+function analysisDetails(a, o) {
+  const pct = typeof a.progress === "number" ? `${Math.floor(a.progress * 100)}%` : "";
+  const rows = [
+    ["name", t("Extension"), [o.name, o.version].filter(Boolean).join(" ")],
+    ["state", t("State"), analysisPill(a).text],
+    ["reason", t("Reason"), a.state === "done" || a.state === "idle" ? "" : analysisReason(a, o.who)],
+    ["runner", t("Runner"), o.runner ? o.who(o.runner) : ""],
+    ["recording", t("Recording"), o.recording],
+    ["finished", t("Finished"), a.at_us && o.finished ? o.finished(a.at_us) : ""],
+    ["progress", t("Progress"), a.state === "running" ? pct : ""],
+    ["results", t("Results"), o.results ? String(o.results) : ""],
+    ["error", t("Error"), a.error || ""],
+  ];
+  return rows.filter((r) => r[2]).map(([key, label, value]) => ({ key, label, value }));
+}
+const analysisDetailText = (rows) => rows.map((r) => `${r.label}: ${r.value}`).join("\n");
 const runningMark = (s) => { const a = (s.analysis || []).find((x) => x.state === "running"); return a ? analyzing(a) : null; };
 function analysisState(a, runner, name) {
   if (a.state === "done") return t("Done");

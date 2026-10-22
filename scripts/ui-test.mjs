@@ -11,7 +11,7 @@ const source = ["util.js", "i18n.js", "live.js", "media.js", "layout.js", "dock.
 const memory = new Map();
 const localStorage = { getItem: (k) => memory.get(k) ?? null, setItem: (k, v) => memory.set(k, v) };
 const context = vm.createContext({ localStorage, window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id, location: { search: "" } });
-const ui$ = vm.runInContext(`${source}\n({ INK_TOOLS, INK_TOOL_TITLE, nextInkTool, LIMITS, escapeStep, cleanText, single, changed, matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, rowHit, formatWhen, fullWhen, sessionWhen, keysOf, hotkeyRows, memberStatus, windowTitle, longId, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, runningMark, cardParts, dropPos, dropSlot, boardSpan, boardFont, cellSpan, fitFont, deletePreview, cleanupPicked, cleanupTotal, cleanupHead, cleanupDone, exportChoice, exportArgs, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, voiceTone, known, VOICE_SIDES, VOICE_TONES, VOICE_SIDE_DEFAULT, VOICE_TONE_DEFAULT, minimapRect, talking, stillTalking, markSpeak, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, nextChip, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ INK_TOOLS, INK_TOOL_TITLE, nextInkTool, LIMITS, escapeStep, cleanText, single, changed, matchEnds, noteMoments, progressText, matchChapters, stepTarget, matchTargets, rowHit, formatWhen, fullWhen, sessionWhen, keysOf, hotkeyRows, memberStatus, windowTitle, longId, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, analysisPill, analysisSub, analysisActions, analysisDetails, analysisDetailText, runningMark, cardParts, dropPos, dropSlot, boardSpan, boardFont, cellSpan, fitFont, deletePreview, cleanupPicked, cleanupTotal, cleanupHead, cleanupDone, exportChoice, exportArgs, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, voiceTone, known, VOICE_SIDES, VOICE_TONES, VOICE_SIDE_DEFAULT, VOICE_TONE_DEFAULT, minimapRect, talking, stillTalking, markSpeak, seekSum, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, nextChip, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 test("a changed() check against a tile's own store reports again on a rebuilt tile", () => {
   const first = {};
   assert.equal(ui$.changed("what", [1], first), true);
@@ -947,6 +947,28 @@ test("an extension row says one thing: no runner, what failed, who it waits for,
   for (const state of ["left", "done", "failed", "idle"]) assert.equal(ui$.runningMark({ analysis: [{ state }] }), null);
   assert.equal(ui$.runningMark({}), null);
   assert.equal(ui$.analysisState({ state: "idle" }, "a", name), "Not analyzed");
+  const pill = (a) => plain(ui$.analysisPill(a));
+  assert.deepEqual(pill({ state: "done" }), { text: "Done", tone: "ok" });
+  assert.deepEqual(pill({ state: "failed" }), { text: "Failed", tone: "warn" });
+  assert.deepEqual(pill({ state: "running", progress: 0.5 }), { text: "Analyzing 50%", tone: "run" });
+  assert.deepEqual(pill({ state: "left" }), { text: "Waiting", tone: "gray" });
+  assert.deepEqual(pill({ state: "idle" }), { text: "Not analyzed", tone: "gray" });
+  assert.equal(ui$.analysisSub({ state: "running" }, "a", name), "Ren's PC");
+  assert.equal(ui$.analysisSub({ state: "failed", error: "boom" }, "a", name), "boom");
+  assert.equal(ui$.analysisSub({ state: "failed", reason: "missing" }, "a", name), "File missing");
+  assert.equal(ui$.analysisSub({ state: "left", reason: "receiving" }, "a", name), "Receiving");
+  assert.equal(ui$.analysisSub({ state: "left" }, "a", name), "");
+  assert.equal(ui$.analysisSub({ state: "done" }, "a", name), "");
+  const ids = (a) => plain(ui$.analysisActions(a)).map((x) => x.id + (x.disabled ? "!" : ""));
+  assert.deepEqual(ids({ state: "done" }), ["details", "again"]);
+  assert.deepEqual(ids({ state: "idle" }), ["details", "again"]);
+  assert.deepEqual(ids({ state: "running" }), ["details"]);
+  assert.deepEqual(ids({ state: "left" }), ["details", "again!"]);
+  assert.deepEqual(ids({ state: "failed", error: "boom" }), ["details", "again", "copy"]);
+  assert.deepEqual(ids({ state: "failed", reason: "missing" }), ["details", "again"]);
+  const rows = ui$.analysisDetails({ state: "failed", error: "boom", at_us: 5 }, { name: "Apex matches", version: "1", who: name, runner: "a", recording: "Rec", finished: () => "Oct 23 00:01", results: 3 });
+  assert.deepEqual(plain(rows).map((r) => r.key), ["name", "state", "reason", "runner", "recording", "finished", "results", "error"]);
+  assert.equal(ui$.analysisDetailText(rows), "Extension: Apex matches 1\nState: Failed\nReason: Failed\nRunner: Ren\nRecording: Rec\nFinished: Oct 23 00:01\nResults: 3\nError: boom");
   ui$.setLanguage("ja");
   assert.equal(line({ left: 3 }), "残り3件 · Ren のPC");
   assert.equal(ui$.analysisReason({ state: "left", reason: "recording" }, name), "録画が終わるのを待っています");

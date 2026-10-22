@@ -1549,7 +1549,7 @@ async function library(ctx) {
     for (const app of all) await waitFor(`${app.key} links the review to the recording it was about`, within(LOG_SYNC_S * 2), async () => setOf(await state(app), ctx.review)?.of === ctx.set);
     await waitFor("A lists the recording and not its debrief, which the recording's panel lists", within(UI_REFRESH_S * 3), () => evaluate(a, `recordingRows().every((r) => r.id !== ${JSON.stringify(ctx.review)}) && debriefsOf(${JSON.stringify(ctx.set)}).length === 1`));
     await evaluate(a, `openSession(${JSON.stringify(ctx.set)}); true`);
-    await waitFor("A's panel lists the debrief with its start, length and Save under the timeline", within(UI_REFRESH_S * 3), () => evaluate(a, `!$("debriefs").hidden && $("debriefs").querySelectorAll(".drow").length === 1 && $("debriefs").textContent.includes(sessionWhen(${JSON.stringify(ctx.review)})) && $("debriefs").textContent.includes(t("Save")) && !$("pchips").textContent.includes(t("Debrief"))`));
+    await waitFor("A's panel lists the debrief with its start, length and Save under the timeline", within(UI_REFRESH_S * 3), () => evaluate(a, `!$("debriefs").hidden && $("debriefs").querySelectorAll(".prow").length === 1 && $("debriefs").textContent.includes(sessionWhen(${JSON.stringify(ctx.review)})) && $("debriefs").textContent.includes(t("Save")) && !$("pchips").textContent.includes(t("Debrief"))`));
     ctx.notes.push(`debrief with ${logOf(a, ctx.room, a.id).filter((r) => r.k === "party" && r.set === ctx.review).length} party records of A linked to its recording`);
   });
 

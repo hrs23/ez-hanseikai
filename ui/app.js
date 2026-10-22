@@ -938,21 +938,48 @@ function renderReview(shown) {
   $("reviewlist").replaceChildren(...bar, ...(rows.length ? rows : [el("div", { className: "none", textContent: t("No notes yet") })]));
   for (const b of $("reviewlist").querySelectorAll(".ev .tag")) b.classList.toggle("on", chipIs(chip, b.dataset.kind, b.dataset.value));
 }
+function sectionHead(name, title, n) {
+  return el("div", { className: "phd" }, icon(name, "sm"), el("span", { textContent: title }), n ? el("span", { className: "pill gray", textContent: String(n) }) : null);
+}
+function progressBar(a) {
+  return typeof a.progress === "number" ? el("div", { className: "bar" }, el("i", { style: `width:${Math.floor(a.progress * 100)}%` })) : null;
+}
+function analysisMenu(set, a, e) {
+  const info = () => ({ name: pluginName(a.plugin), version: (plugins.find((p) => p.id === a.plugin) || {}).version, who: nameOf, runner: (plugins.find((p) => p.id === a.plugin) || {}).runner, recording: sessionName(set.id), finished: (us) => formatWhen(new Date(us / 1000), new Date(), lang), results: items.filter((n) => n.plugin && n.plugin.id === a.plugin).length });
+  const run = {
+    details: { label: t("Details"), icon: "info", run: () => showDetails(a, analysisDetails(a, info())) },
+    again: { label: t("Run again"), icon: "rotate-cw", run: () => retryAnalysis(set, a.plugin) },
+    copy: { label: t("Copy error"), icon: "copy", run: () => navigator.clipboard.writeText(a.error).then(() => flash(t("Copied"))).catch(fail) },
+  };
+  openMenu(analysisActions(a).map((x) => ({ ...run[x.id], disabled: x.disabled })), e);
+}
+function showDetails(a, rows) {
+  $("detailbody").replaceChildren(...rows.flatMap((r) => [el("dt", { textContent: r.label }), el("dd", {}, r.key === "runner" ? nameChip(avatar(plugins.find((p) => p.id === a.plugin).runner, "sm", null, false, true), r.value) : r.value)]));
+  $("detailcopy").onclick = () => navigator.clipboard.writeText(analysisDetailText(rows)).then(() => flash(t("Copied"))).catch(fail);
+  $("detaildlg").showModal();
+}
 function renderAnalysis(set) {
   const list = set ? set.analysis || [] : [];
   $("analysis").hidden = !list.length;
-  if (!changed("analysis", [list, plugins.map((p) => [p.id, p.name, p.runner]), st.names, lang])) return;
-  $("analysis").replaceChildren(el("div", { className: "h3", textContent: t("Analysis") }), ...list.map((a) => el("div", { className: "drow" + (a.state === "failed" ? " warn" : "") },
-    icon(a.state === "done" ? "check" : a.state === "failed" ? "alert" : "cpu", "sm"), el("span", { textContent: t(pluginName(a.plugin)) }), el("span", { className: "sp" }),
-    el("span", { className: a.state === "failed" ? "" : "muted", textContent: analysisState(a, (plugins.find((p) => p.id === a.plugin) || {}).runner, nameOf) }),
-    a.state === "failed" || a.state === "idle" ? el("button", { className: "sm", textContent: t(a.state === "idle" ? "Analyze" : "Retry"), onclick: () => retryAnalysis(set, a.plugin) }) : null)));
+  if (!changed("analysis", [list, plugins.map((p) => [p.id, p.name, p.runner, p.version]), st.names, lang, items.length])) return;
+  $("analysis").replaceChildren(sectionHead("cpu", t("Analysis"), list.length), ...list.map((a) => {
+    const runner = (plugins.find((p) => p.id === a.plugin) || {}).runner;
+    const pill = analysisPill(a);
+    const sub = analysisSub(a, runner, nameOf);
+    const row = el("div", { className: "prow " + a.state, tabIndex: 0, oncontextmenu: (e) => { e.preventDefault(); analysisMenu(set, a, e); } },
+      el("span", { className: "pic" }, icon(a.state === "done" ? "check" : a.state === "failed" ? "alert" : a.state === "running" ? "spinner" : "cpu", "sm")),
+      el("div", { className: "ptx" }, el("div", { className: "nm", textContent: pluginName(a.plugin) }), el("div", { className: "meta" }, el("span", { className: "pill state " + pill.tone, textContent: pill.text }), sub ? el("span", { className: "sub", textContent: sub, title: sub }) : null), progressBar(a)),
+      a.state === "failed" || a.state === "idle" ? el("button", { className: "sm", textContent: t(a.state === "idle" ? "Analyze" : "Retry"), onclick: () => retryAnalysis(set, a.plugin) }) : null);
+    return row;
+  }));
 }
 function renderDebriefs(set) {
   const list = set ? debriefsOf(set.id) : [];
   $("debriefs").hidden = !list.length;
   if (!changed("debriefs", [list.map((d) => [d.id, d.end_us, onThisPc(d)]), lang])) return;
-  $("debriefs").replaceChildren(el("div", { className: "h3", textContent: t("Debrief recordings") }), ...list.map((d) => el("div", { className: "drow" },
-    icon("mic", "sm"), el("span", { textContent: t("{m} min", { m: Math.max(1, Math.round(((d.end_us || nowUs()) - d.start_us) / 6e7)) }) }), el("span", { className: "muted", textContent: `· ${sessionWhen(d.id)}`, title: fullWhen(sessionStart(d.id)) }), el("span", { className: "sp" }),
+  $("debriefs").replaceChildren(sectionHead("mic", t("Debrief recordings"), list.length), ...list.map((d) => el("div", { className: "prow" },
+    el("span", { className: "pic" }, icon("mic", "sm")),
+    el("div", { className: "ptx" }, el("div", { className: "nm" }, el("span", { textContent: t("{m} min", { m: Math.max(1, Math.round(((d.end_us || nowUs()) - d.start_us) / 6e7)) }) }), el("span", { className: "muted", textContent: ` · ${sessionWhen(d.id)}`, title: fullWhen(sessionStart(d.id)) }))),
     downloadButton(d) || el("button", { className: "sm", textContent: t("Save"), onclick: () => exportFolder(d) }))));
 }
 function timeText(n) {

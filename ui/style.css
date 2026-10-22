@@ -519,13 +519,24 @@ body.boardwin .side, body.boardwin .splitter, body.boardwin .notices, body.board
 
 .panel { width: var(--panel); flex: none; border-left: 1px solid var(--line); background: var(--surface); display: flex; flex-direction: column; min-height: 0; }
 body.nopanel .panel { display: none; }
-.phd { padding: var(--s4) var(--s3) var(--s1); font-weight: var(--w-semibold); flex: none; }
+.phd { display: flex; align-items: center; gap: var(--s2); padding: var(--s4) var(--s3) var(--s1); font-weight: var(--w-semibold); flex: none; }
+.phd svg { color: var(--muted); }
+.plow .phd { padding: 0 var(--s3) var(--s1); }
 .plow { flex: 0 1 auto; max-height: 45%; overflow-y: auto; border-top: 1px solid var(--line); padding: var(--s2) var(--s3) var(--s5); }
 .plow:not(:has(> :not([hidden]))) { display: none; }
-.plow > :not([hidden]) ~ :not([hidden]) { margin-top: var(--s4); }
-.drow { display: flex; align-items: center; gap: var(--s2); padding: var(--s0) 0; font-size: var(--t-sm); }
-.drow svg { color: var(--muted); flex: none; }
-.drow.warn, .drow.warn svg { color: var(--warn); }
+.plow > :not([hidden]) ~ :not([hidden]) { margin-top: var(--s3); }
+.prow { display: flex; align-items: center; gap: var(--s2); padding: var(--s1) var(--s2) var(--s1) var(--s3); border-radius: var(--r-sm); font-size: var(--t-md); }
+.prow:hover, .prow:focus-visible { background: var(--hover-bg); }
+.prow .pic { width: 24px; height: 24px; border-radius: var(--r-full); display: grid; place-items: center; flex: none; background: var(--raised-2); color: var(--muted); }
+.prow.done .pic { background: var(--ok-soft); color: var(--ok); }
+.prow.failed .pic { background: var(--warn-soft); color: var(--warn); }
+.prow.running .pic { background: var(--raised-2); color: var(--accent); }
+.prow .ptx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.prow .nm { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prow .sub { min-width: 0; color: var(--muted); font-size: var(--t-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prow .meta { display: flex; align-items: center; gap: var(--s2); min-width: 0; }
+.prow .bar { margin-top: 2px; }
+.pill.run { background: var(--raised-2); color: var(--accent); }
 .list { flex: 1; overflow-y: auto; padding: var(--s2) var(--s3) var(--s3); min-height: 0; }
 .panel > .review { min-height: 120px; display: grid; grid-template-columns: minmax(48px, max-content) minmax(0, 1fr) auto; align-content: start; }
 .review > * { grid-column: 1 / -1; }
