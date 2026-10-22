@@ -49,7 +49,7 @@ let seekRun = null;
 const BEZEL_MS = 500;
 let muted = false;
 let live = false;
-let watchParty = stored("watchParty", true);
+let watchParty = false;
 let partyFrom = null;
 let partyLast = null;
 let partyLayout = null;
@@ -555,7 +555,6 @@ function renderParty(set) {
 function setParty(on) {
   watchParty = on;
   partyFrom = null;
-  store("watchParty", watchParty);
   delete sigs.wpbox;
   joinParty().then(refresh);
 }

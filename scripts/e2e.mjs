@@ -1116,6 +1116,7 @@ async function recover(ctx) {
     const ended = setOf(await state(a), ctx.set);
     ctx.durationS = (ended.end_us - ended.start_us) / 1e6;
     const far = Math.max(0, ctx.durationS - FAR_FROM_END_S);
+    check(!(await evaluate(a, `watchParty`)), "the app starts in the Watch Party");
     await evaluate(a, `setParty(false); openSession(${JSON.stringify(ctx.set)}); act("seek", ${far}); act("play", ${far}); true`);
     const own = `(() => { const v = play.tiles[st.id].media.video; return v.videoWidth > 0 && !v.paused && v.readyState >= 3 ? v.currentTime : 0; })()`;
     const shown = await waitFor("A's own tile plays right after the stop", within(PLAY_START_S), () => evaluate(a, own));
@@ -1158,8 +1159,8 @@ async function library(ctx) {
 
   await step("stopping a recording opens it from the start for everyone in the Watch Party, and leaves a PC already watching that recording where it is", async () => {
     const all = [a, b, c];
-    await evaluate(a, `openLive(); selectSet(null); true`);
-    await evaluate(b, `openNow(); true`);
+    await evaluate(a, `setParty(true); openLive(); selectSet(null); true`);
+    await evaluate(b, `setParty(true); openNow(); true`);
     await evaluate(c, `setParty(false); openSession(${JSON.stringify(ctx.set)}); setClock(false, ${STAY_AT_S}); true`);
     for (const app of [a, b]) check(await evaluate(app, `page === "player" && showingNow()`), `${app.key} does not show Live before the stop`);
     await invoke(a, "stop_recording");

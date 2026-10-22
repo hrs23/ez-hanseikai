@@ -91,6 +91,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 
 ## Watch Party
 
+- the app starts outside Watch Party, and joining is the Join button. `e2e` (`library`)
 - Watch Party converges on a seek and a play, and a member who joins midway converges too. `e2e` (`library`)
 - stopping a recording opens it from the start for everyone in the Watch Party, and leaves a PC already watching that recording where it is. `e2e` (`library`)
 - a session started while watching together records voices and the Watch Party; ending a debrief moves nobody, not even a PC on Live. `e2e` (`library`)
