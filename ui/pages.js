@@ -239,7 +239,7 @@ function renderHotkeys() {
 function renderSettings() {
   if (!$("settings").open) return;
   const q = st.capture.quality;
-  for (const b of $("quality").children) press(b, b.dataset.q === q.id);
+  pick($("quality"), q.id, (id) => run("set_quality", { id }));
   $("qinfo").textContent = [q.width ? `${q.width} × ${q.height}` : "", `${q.fps} fps`, `${(q.kbps / 1000).toFixed(1)} Mbit/s`, String(q.codec).toUpperCase()].filter(Boolean).join(" · ");
   if (document.activeElement !== $("limit")) $("limit").value = st.limit_mbps || "";
   if (document.activeElement !== $("apion")) $("apion").checked = st.api.on;
@@ -413,15 +413,12 @@ $("avatarimage").onclick = () => pickImage((image) => run("set_profile", { avata
 $("avatarclear").onclick = () => run("set_profile", { avatar: "" });
 $("language").onchange = () => run("set_language", { language: $("language").value });
 function pressVoice() {
-  for (const b of $("voiceside").children) press(b, b.dataset.v === voiceSide);
-  for (const b of $("voicetone").children) press(b, b.dataset.v === voiceToneChoice);
+  pick($("voiceside"), voiceSide, (v) => { voiceSide = v; store("voiceSide", voiceSide); pressVoice(); applyAudio(); });
+  pick($("voicetone"), voiceToneChoice, (v) => { voiceToneChoice = v; store("voiceTone", voiceToneChoice); pressVoice(); applyAudio(); });
 }
-for (const b of $("voiceside").children) b.onclick = () => { voiceSide = b.dataset.v; store("voiceSide", voiceSide); pressVoice(); applyAudio(); };
-for (const b of $("voicetone").children) b.onclick = () => { voiceToneChoice = b.dataset.v; store("voiceTone", voiceToneChoice); pressVoice(); applyAudio(); };
 $("sessionsound").onchange = () => { sessionSound = $("sessionsound").checked; store("sessionSound", sessionSound); };
 $("copyid").onclick = () => navigator.clipboard.writeText(st.id).then(() => flash(t("ID copied")));
 $("opendata").onclick = $("storeopen").onclick = () => dialog("open_data_folder").catch(fail);
-for (const b of $("quality").children) b.onclick = () => run("set_quality", { id: b.dataset.q });
 $("relays").onchange = () => run("set_relays", { urls: $("relays").value.split("\n").map((u) => cleanText(u, LIMITS.relay)) });
 $("limit").onchange = () => run("set_limit", { mbps: $("limit").value ? Number($("limit").value) : null });
 $("checkupdate").onclick = () => checkUpdate(true);

@@ -70,6 +70,12 @@ function press(e, on) {
   e.classList.toggle("on", on);
   e.setAttribute("aria-pressed", on);
 }
+function pick(box, value, onPick) {
+  for (const b of box.children) {
+    press(b, b.dataset.v === value);
+    b.onclick = () => onPick(b.dataset.v);
+  }
+}
 const composing = (e) => e.isComposing || e.keyCode === 229;
 function nativeKey(e) {
   const a = document.activeElement;
