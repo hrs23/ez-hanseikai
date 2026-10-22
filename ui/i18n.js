@@ -70,6 +70,7 @@ const JA = {
   "Active": "実行中・待ち",
   "Hear this": "この音を聞く",
   "Watch together": "いっしょに見る",
+  "Watch Party": "Watch Party",
   "Add note": "メモを追加",
   "Add note (C)": "メモを追加 (C)",
   "Address lookup": "アドレスの検索",

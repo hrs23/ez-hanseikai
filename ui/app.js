@@ -174,6 +174,13 @@ function place(s) {
   while (s.free.length > r.free.length) s.free.pop().remove();
   while (s.free.length < r.free.length) s.free.push(s.el.appendChild(el("div", { className: "tile blank" })));
   r.free.forEach((b, i) => at(s.free[i], b));
+  if (s === play) {
+    const all = [...r.tiles, ...r.free];
+    if (all.length) {
+      s.el.parentElement.style.setProperty("--pt", Math.min(...all.map((b) => b.y)) + "px");
+      s.el.parentElement.style.setProperty("--pr", s.el.clientWidth - Math.max(...all.map((b) => b.x + b.w)) + "px");
+    }
+  }
   if (s === play && st) renderInk();
 }
 for (const s of [rec, play]) new ResizeObserver(() => place(s)).observe(s.el);
@@ -434,7 +441,7 @@ function openMix(anchor) {
   const keys = play.keys;
   const heard = soundKey(play.view, keys, st.id, gameSound);
   const pick = (key) => el("button", { className: "icon sm" + (key === heard ? " on" : ""), title: t("Hear this"), ariaLabel: t("Hear this"), onclick: () => { chooseSound(key); openMix(anchor); } }, icon("volume-2", "sm"));
-  showPop([el("div", { className: "head" }, el("b", { textContent: t("Volume per member") })), ...keys.flatMap((key) => [el("div", { className: "who" }, avatar(key, "sm"), el("span", { className: "nm", textContent: nameOf(key) }), keys.length > 1 && !play.view ? pick(key) : null), mixRow(key, "app", t("App sound")), mixRow(key, "voice", t("Voice"))])], anchor, true);
+  showPop([el("div", { className: "head" }, el("b", { textContent: t("Volume per member") })), el("div", { className: "mixgrid" }, ...keys.map((key) => el("div", { className: "mixm" }, el("div", { className: "who" }, avatar(key, "sm"), el("span", { className: "nm", textContent: nameOf(key) }), keys.length > 1 && !play.view ? pick(key) : null), mixRow(key, "app", t("App sound")), mixRow(key, "voice", t("Voice")))))], anchor, true, keys.length > 2 ? "wide" : "");
 }
 function openMore(anchor) {
   openMenu([
@@ -448,7 +455,7 @@ function showPop(children, anchor, above, cls = "") {
   pop.replaceChildren(...children);
   pop.hidden = false;
   const r = anchor.getBoundingClientRect();
-  pop.style.left = Math.max(4, Math.min(r.left, innerWidth - pop.offsetWidth - 4)) + "px";
+  pop.style.left = Math.max(8, Math.min(r.left, innerWidth - pop.offsetWidth - 8)) + "px";
   const top = above ? r.top - pop.offsetHeight - 6 : r.bottom + 6;
   pop.style.top = Math.max(4, Math.min(top, innerHeight - pop.offsetHeight - 4)) + "px";
 }
@@ -563,9 +570,9 @@ function renderParty(set) {
   if (changed("partystatus", [status, st.names, lang])) $("partystatus").replaceChildren(...status.map((s) => pill("gray", "spinner", t("Catching up with {name}", { name: nameOf(s.who) }))));
   if (!changed("wpbox", [on, others, st.names, lang])) return;
   if (on) {
-    box.replaceChildren(el("div", { className: "wpbar" }, icon("users", "sm"), el("span", { textContent: "Watch Party" }), avatars([st.id, ...others]), el("button", { className: "sm", onclick: () => setParty(false) }, icon("logout", "sm"), t("Leave"))));
+    box.replaceChildren(el("div", { className: "wpbar" }, icon("users", "sm"), el("span", { textContent: t("Watch Party") }), avatars([st.id, ...others]), el("button", { className: "sm", onclick: () => setParty(false) }, icon("logout", "sm"), t("Leave"))));
   } else {
-    box.replaceChildren(el("button", { className: "wpoff", onclick: () => setParty(true) }, icon("users", "sm"), el("span", { textContent: "Watch Party" }), others.length ? avatars(others) : null, el("span", { className: "join", textContent: t("Join") })));
+    box.replaceChildren(el("button", { className: "wpoff", onclick: () => setParty(true) }, icon("users", "sm"), el("span", { textContent: t("Watch Party") }), others.length ? avatars(others) : null, el("span", { className: "join", textContent: t("Join") })));
   }
 }
 function setParty(on) {
@@ -1128,7 +1135,7 @@ function openMenu(list, at, keepFocus) {
   m.hidden = false;
   const r = at instanceof Event && at.clientX ? { left: at.clientX, bottom: at.clientY, top: at.clientY, right: at.clientX } : (at instanceof Event ? at.currentTarget || at.target : at).getBoundingClientRect();
   const sideways = !(at instanceof Event) && at.closest && at.closest(".menu");
-  m.style.left = Math.max(4, Math.min(sideways ? r.right + 4 : r.left, innerWidth - m.offsetWidth - 4)) + "px";
+  m.style.left = Math.max(8, Math.min(sideways ? r.right + 4 : r.left, innerWidth - m.offsetWidth - 8)) + "px";
   const below = sideways ? r.top : r.bottom + 4;
   m.style.top = (below + m.offsetHeight > innerHeight - 4 ? Math.max(4, r.top - m.offsetHeight - 4) : below) + "px";
   const first = m.querySelector("button:not(:disabled)");

@@ -73,9 +73,11 @@ function roomDirty() {
   const name = cleanText($("roomnameinput").value, LIMITS.room);
   $("roomsave").disabled = !name || (name === st.room.name && iconDraft === st.room.icon);
 }
+const roomPresetBtns = [];
 function showIconDraft() {
   $("roomiconshow").replaceChildren(roomIcon({ id: st.room.id, name: $("roomnameinput").value, icon: iconDraft }, "xl"));
   $("roomiconclear").hidden = !iconDraft;
+  roomPresetBtns.forEach(([b, name]) => press(b, iconDraft === presetImage(name)));
   roomDirty();
 }
 function openRoomSettings() {
@@ -362,7 +364,8 @@ $("joincode").onkeydown = (e) => { if (e.key === "Enter" && !composing(e) && !$(
 $("pendingcancel").onclick = () => st.room && run("remove_room", { id: st.room.id });
 $("roomnameinput").oninput = showIconDraft;
 $("roomiconpick").onclick = () => pickImage((image) => { iconDraft = image; showIconDraft(); });
-$("roomfacegrid").replaceChildren(...ROOM_PRESETS.map((name, i) => el("button", { className: "facebtn", ariaLabel: `${t("Room icon")} ${i + 1}`, onclick: () => { iconDraft = presetImage(name); showIconDraft(); } }, presetTile(name, "lg"))));
+roomPresetBtns.push(...ROOM_PRESETS.map((name, i) => [el("button", { className: "facebtn", ariaLabel: `${t("Room icon")} ${i + 1}`, onclick: () => { iconDraft = presetImage(name); showIconDraft(); } }, presetTile(name, "lg")), name]));
+$("roomfacegrid").replaceChildren(...roomPresetBtns.map(([b]) => b));
 $("roomiconclear").onclick = () => { iconDraft = ""; showIconDraft(); };
 $("roomnameinput").onkeydown = (e) => { if (e.key === "Enter" && !composing(e) && !$("roomsave").disabled) $("roomsave").click(); };
 $("roomsave").onclick = single(async () => {
