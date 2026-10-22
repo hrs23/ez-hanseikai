@@ -85,7 +85,6 @@ const JA = {
   "An invite code is open": "招待コードが有効です",
   "Another app uses that shortcut.": "そのショートカットは別のアプリが使っています。",
   "In use by another app": "別のアプリが使用中",
-  "Shortcut {keys} is used by another app": "ショートカット {keys} は別のアプリが使っています",
   "Unknown shortcut.": "不明なショートカットです。",
   "Microphone / screen while recording": "録画中のマイク / 画面",
   "Apex matches": "Apex の試合終了検知",

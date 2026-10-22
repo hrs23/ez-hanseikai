@@ -1304,13 +1304,7 @@ function refresh() {
 }
 let refreshing = null;
 let refreshAgain = false;
-let takenShown = "";
-function warnTaken() {
-  const taken = st.recording ? takenKeys(st.hotkeys) : "";
-  if (taken && taken !== takenShown) flash(t("Shortcut {keys} is used by another app", { keys: taken }), "error");
-  takenShown = taken;
-}
-const steps = () => [renderShell, renderStart, renderSide, renderNotices, warnTaken, renderPlayer, renderEvents, renderTools, renderRoom, renderRecovery, renderOpenDialogs];
+const steps = () => [renderShell, renderStart, renderSide, renderNotices, renderPlayer, renderEvents, renderTools, renderRoom, renderRecovery, renderOpenDialogs];
 async function update() {
   st = await invoke("state");
   clockShift = st.now_us - Date.now() * 1000;

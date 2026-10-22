@@ -86,7 +86,6 @@ let titles = {};
 const sessionName = (id, now = new Date()) => titles[id] || `${dayLabel(sessionDay(id), now, language)} ${sessionClock(id)}`;
 const HOTKEY_LABELS = { mark: "Mark this moment" };
 const hotkeyRows = (hotkeys) => hotkeys.map((h) => ({ ...h, label: HOTKEY_LABELS[h.action] || h.action, changed: h.keys !== h.default, warning: h.taken ? "In use by another app" : "" }));
-const takenKeys = (hotkeys) => hotkeyRows(hotkeys).filter((h) => h.taken).map((h) => `${h.keys} (${t(h.label)})`).join(", ");
 function keysOf(e) {
   const named = { " ": "Space", ArrowLeft: "Left", ArrowRight: "Right", ArrowUp: "Up", ArrowDown: "Down" };
   const code = e.code || "";

@@ -15,8 +15,8 @@ use tauri_plugin_notification::NotificationExt;
 use crate::{language, Core, REPO, VERSION};
 
 type Action = fn(&Arc<Core>) -> Option<&'static str>;
-pub const HOTKEYS: [(&str, &str, Action); 1] = [("mark", "Ctrl+Alt+K", mark)];
-const OLD_DEFAULTS: [&str; 1] = ["Ctrl+Alt+M"];
+pub const HOTKEYS: [(&str, &str, Action); 1] = [("mark", "Ctrl+Alt+M", mark)];
+const OLD_DEFAULTS: [&str; 1] = ["Ctrl+Alt+K"];
 pub type Hotkeys = [String; 1];
 pub type Taken = [bool; 1];
 const BOARD: &str = "board";
@@ -849,14 +849,14 @@ mod tests {
         let keys = load_hotkeys(&Value::Null);
         assert_eq!(keys, HOTKEYS.map(|(_, default, _)| default.to_string()));
         assert_eq!(check_hotkey("Shift+M"), Err("Use Ctrl or Alt with a key."));
-        assert!(check_hotkey("Ctrl+Alt+K").is_ok());
+        assert!(check_hotkey("Ctrl+Alt+M").is_ok());
         assert!(check_hotkey("Super+F9").is_ok());
     }
 
     #[test]
     fn a_shortcut_another_app_holds_is_reported_only_while_armed() {
-        let keys = ["Ctrl+Alt+K"];
-        let held = hotkey("Ctrl+Alt+K").unwrap();
+        let keys = ["Ctrl+Alt+M"];
+        let held = hotkey("Ctrl+Alt+M").unwrap();
         assert_eq!(arm(&keys, true, |s| s != held), [true]);
         assert_eq!(arm(&keys, true, |_| true), [false]);
         assert_eq!(arm(&keys, false, |_| -> bool { panic!("armed while off") }), [false]);
@@ -869,9 +869,9 @@ mod tests {
         let keys = load_hotkeys(&json!({"hotkeys": {"mark": "Alt+F9", "screen": "Ctrl+Shift+O"}}));
         assert_eq!(keys, ["Alt+F9"]);
         let keys = load_hotkeys(&json!({"hotkeys": {"mark": "M"}}));
-        assert_eq!(keys, ["Ctrl+Alt+K"]);
-        let keys = load_hotkeys(&json!({"hotkeys": {"mark": "Ctrl+Alt+M"}}));
-        assert_eq!(keys, ["Ctrl+Alt+K"]);
+        assert_eq!(keys, ["Ctrl+Alt+M"]);
+        let keys = load_hotkeys(&json!({"hotkeys": {"mark": "Ctrl+Alt+K"}}));
+        assert_eq!(keys, ["Ctrl+Alt+M"]);
     }
 
     #[test]
