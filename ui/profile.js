@@ -77,15 +77,15 @@ function renderMemberProfile() {
   const measuring = !!speed && speed.id === id && !speed.line;
   if (speed && speed.id === id && speed.line) add(t("Speed"), speed.line);
   box.replaceChildren(
-    el("div", { className: "pband", style: `--mc:${colorOf(colorIndex(id))}` }, iconButton("x", t("Close"), () => box.close(), "icon sm close")),
-    el("div", { className: "phead" },
+    el("div", { className: "prband", style: `--mc:${colorOf(colorIndex(id))}` }, iconButton("x", t("Close"), () => box.close(), "icon sm close")),
+    el("div", { className: "prhead" },
       avatar(id, "xxl", online ? "on" : null, false, true),
       me ? el("button", { className: "sm", onclick: () => { box.close(); openSettings("general"); } }, icon("edit", "sm"), t("Edit profile")) : ""),
-    el("div", { className: "pname" },
+    el("div", { className: "prname" },
       el("h2", { textContent: nameOf(id) }),
       el("div", { className: "row" }, idText(id, "small"), iconButton("copy", t("Copy ID"), () => navigator.clipboard.writeText(id).then(() => flash(t("ID copied"))).catch(fail))),
       el("div", { className: "state " + state.kind, title: state.title || "" }, el("i", { className: "sdot" }), state.text)),
-    el("div", { className: "pbody" },
+    el("div", { className: "prbody" },
       el("dl", { className: "kv" }, ...kv),
       receivingFrom.length ? el("div", { className: "h3", textContent: t("Receiving") }) : "",
       ...receivingFrom.map(({ s, x }) => el("div", { className: "recvrow" }, el("div", { className: "row" }, el("span", { textContent: sessionName(s.id) }), el("span", { className: "sp" }), el("span", { className: "muted", textContent: `${Math.floor((x.have / x.total) * 100)}%` })), el("div", { className: "bar" }, el("i", { style: `width:${(x.have / x.total) * 100}%` })))),
@@ -117,10 +117,10 @@ function renderRoomProfile() {
     return row;
   });
   box.replaceChildren(
-    el("div", { className: "pband room" }, iconButton("x", t("Close"), () => box.close(), "icon sm close")),
-    el("div", { className: "phead" }, roomIcon(st.room, "xxl"), el("button", { className: "sm", onclick: () => { box.close(); openRoomSettings(); } }, icon("edit", "sm"), t("Edit"))),
-    el("div", { className: "pname" }, el("h2", { textContent: st.room.name }), el("div", { className: "muted", textContent: t("{n} members · {m} online", { n: ids.length, m: online }) })),
-    el("div", { className: "pbody" }, el("div", { className: "plist" }, ...rows)),
+    el("div", { className: "prband room" }, iconButton("x", t("Close"), () => box.close(), "icon sm close")),
+    el("div", { className: "prhead" }, roomIcon(st.room, "xxl"), el("button", { className: "sm", onclick: () => { box.close(); openRoomSettings(); } }, icon("edit", "sm"), t("Edit"))),
+    el("div", { className: "prname" }, el("h2", { textContent: st.room.name }), el("div", { className: "muted", textContent: t("{n} members · {m} online", { n: ids.length, m: online }) })),
+    el("div", { className: "prbody" }, el("div", { className: "plist" }, ...rows)),
     el("div", { className: "row foot" }, el("span", { className: "sp" }), el("button", { className: "sm primary", onclick: copyInvite }, icon("user-plus", "sm"), t("Copy invite code"))),
   );
 }
