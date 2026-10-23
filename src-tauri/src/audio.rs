@@ -7,7 +7,7 @@ use std::time::Instant;
 use serde_json::{json, Value};
 use wasapi::{initialize_mta, AudioCaptureClient, AudioClient, DeviceEnumerator, Direction, Handle, SampleType, StreamMode, WaveFormat};
 
-use crate::record::{Err, APP, MIC, RESCAN_EVERY};
+use crate::record::{Err, APP, MIC, MIX_KEYS, RESCAN_EVERY};
 use crate::Core;
 
 pub const SAMPLE_RATE: usize = 48000;
@@ -100,7 +100,7 @@ fn read(opened: &Opened, bytes: &mut VecDeque<u8>) -> Result<(), Err> {
 
 fn run(core: &Core, track: usize, key: &str, stop: &AtomicBool) {
     if let Err(err) = initialize_mta().ok() {
-        tracing::warn!("audio {track} failed: {err}");
+        tracing::warn!("{} sound capture could not start: {err}", MIX_KEYS[track]);
         return;
     }
     let e = &core.engine;
@@ -113,13 +113,17 @@ fn run(core: &Core, track: usize, key: &str, stop: &AtomicBool) {
         if source.is_none() && tried.is_none_or(|t| t.elapsed() > RESCAN_EVERY) {
             tried = Some(Instant::now());
             source = open(core, track, key).unwrap_or_else(|err| {
-                tracing::debug!("audio source {track} unavailable: {err}");
+                tracing::debug!("{} sound source unavailable: {err}", MIX_KEYS[track]);
                 None
             });
+            if source.is_some() {
+                tracing::info!("{} sound capture started", MIX_KEYS[track]);
+            }
         }
         match &source {
             Some(opened) => {
-                if read(opened, &mut bytes).is_err() {
+                if let Err(err) = read(opened, &mut bytes) {
+                    tracing::info!("{} sound capture stopped: {err}", MIX_KEYS[track]);
                     source = None;
                     bytes.clear();
                 }

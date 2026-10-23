@@ -1,12 +1,13 @@
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use iroh::Watcher;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
+use crate::noise::{self, Repeats};
 use crate::{api, audio, clean_name, cleanup, clean_note, clean_text, data, debug, export, ffmpeg, jobs, merge, net, now_us, party, record, relay, room, shell, sources, Core, BOARD_MAX, EVENT_KINDS, NAME_MAX, NOTE_MAX, REPO, VALUES_MAX};
 
 pub type Op = fn(&Arc<Core>, Value) -> Result<Value, String>;
@@ -88,12 +89,34 @@ pub const OPS: &[(&str, Op)] = &[
     ("ui_commands", |c, _| Ok(c.ui.lock().unwrap()["commands"].clone())),
     ("ui_state", |c, _| Ok(c.ui.lock().unwrap()["state"].clone())),
     ("ui_do", ui_do),
-    ("player_log", |_, a| {
-        let text: String = arg(&a, "text")?;
-        tracing::info!("player: {}", text.chars().filter(|c| !c.is_control()).take(300).collect::<String>());
-        Ok(Value::Null)
-    }),
+    ("ui_log", ui_log),
 ];
+
+const UI_LINE_MAX: usize = 300;
+const FAILURE_LOG_EVERY: Duration = Duration::from_secs(60);
+static FAILURES: Mutex<Option<Repeats>> = Mutex::new(None);
+
+/// A line from the page for the app log, at the level it names; the page keeps to its own budget of lines.
+fn ui_log(_: &Arc<Core>, a: Value) -> Result<Value, String> {
+    let text: String = arg(&a, "text")?;
+    let text: String = text.chars().filter(|c| !c.is_control()).take(UI_LINE_MAX).collect();
+    match a["level"].as_str().unwrap_or("info") {
+        "error" => tracing::error!("ui: {text}"),
+        "warn" => tracing::warn!("ui: {text}"),
+        "debug" => tracing::debug!("ui: {text}"),
+        _ => tracing::info!("ui: {text}"),
+    }
+    Ok(Value::Null)
+}
+
+/// Notes an operation the page asked for that failed, once a minute per operation. Most are refusals shown to the user, so this is info.
+pub fn log_failure(name: &str, error: &str) {
+    let held = FAILURES.lock().unwrap().get_or_insert_with(|| Repeats::new(FAILURE_LOG_EVERY)).note(name, std::time::Instant::now());
+    if let Some(held) = held {
+        let error: String = error.chars().filter(|c| !c.is_control()).take(UI_LINE_MAX).collect();
+        tracing::info!("{}", noise::with_held(&format!("{name} failed: {error}"), held));
+    }
+}
 
 pub fn find(name: &str) -> Option<Op> {
     OPS.iter().find(|(known, _)| *known == name).map(|(_, op)| *op)

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 use windows_capture::monitor::Monitor;
 
+use crate::noise::{self, Repeats};
 use crate::{clean_text, debug, ffmpeg, now_us, record};
 use crate::Core;
 
@@ -19,6 +20,7 @@ const KEEPING_UP: f64 = 0.5;
 const DROP_SHARE: u64 = 4;
 const RECOVERED: f64 = 0.8;
 const MIN_REPORTED_S: u64 = 5;
+const MINUTE_MS: u64 = 60_000;
 const SCRIPT: &str = "[Console]::OutputEncoding=[Text.Encoding]::UTF8;$g=@(Get-CimInstance Win32_VideoController|ForEach-Object{@{n=$_.Name;d=$_.DriverVersion}});$c=(Get-CimInstance Win32_Processor|Select-Object -First 1).Name;$o=Get-CimInstance Win32_OperatingSystem;@{gpu=$g;cpu=$c;os=$o.Caption;ver=$o.Version;kb=$o.TotalVisibleMemorySize}|ConvertTo-Json -Compress";
 const VIRTUAL_GPUS: [&str; 4] = ["basic", "remote", "virtual", "mirror"];
 const VENDORS: [(&str, &str, &[&str]); 3] = [("nvenc", "NVENC", &["nvidia", "geforce"]), ("amf", "AMF", &["amd", "radeon"]), ("qsv", "QSV", &["intel"])];
@@ -35,7 +37,7 @@ pub struct Hardware {
 static HARDWARE: OnceLock<Hardware> = OnceLock::new();
 static LIVE: Mutex<Option<Live>> = Mutex::new(None);
 static RATES: Mutex<Rates> = Mutex::new(Rates::new());
-static SLOW: Mutex<Option<Limiter>> = Mutex::new(None);
+static SLOW: Mutex<Option<Repeats>> = Mutex::new(None);
 
 fn text_of(v: &Value) -> String {
     clean_text(v.as_str().unwrap_or_default(), TEXT_MAX)
@@ -113,7 +115,12 @@ pub struct Rates {
     samples: VecDeque<(u64, Counts)>,
     start: Option<(u64, Counts)>,
     collapsed: bool,
+    good: Option<f64>,
+    slow: Option<(u64, f64)>,
+    minute: Option<(u64, Counts)>,
 }
+
+pub type Line = (tracing::Level, String);
 
 fn per_second(from: u64, to: u64, span_ms: u64) -> f64 {
     to.saturating_sub(from) as f64 * 1000.0 / span_ms.max(1) as f64
@@ -121,15 +128,18 @@ fn per_second(from: u64, to: u64, span_ms: u64) -> f64 {
 
 impl Rates {
     pub const fn new() -> Self {
-        Self { samples: VecDeque::new(), start: None, collapsed: false }
+        Self { samples: VecDeque::new(), start: None, collapsed: false, good: None, slow: None, minute: None }
     }
 
-    pub fn tick(&mut self, now_ms: u64, recording: bool, c: Counts, target: f64) -> (Option<Live>, Option<String>) {
+    pub fn tick(&mut self, now_ms: u64, recording: bool, c: Counts, target: f64) -> (Option<Live>, Vec<Line>) {
         if !recording {
             self.samples.clear();
             self.collapsed = false;
+            self.good = None;
+            self.slow = None;
+            self.minute = None;
             let line = self.start.take().and_then(|(at, first)| ended(now_ms.saturating_sub(at) / 1000, first, c));
-            return (None, line);
+            return (None, line.map(|l| (tracing::Level::INFO, l)).into_iter().collect());
         }
         let (at, first) = *self.start.get_or_insert((now_ms, c));
         self.samples.push_back((now_ms, c));
@@ -140,19 +150,38 @@ impl Rates {
         let span = now_ms.saturating_sub(then);
         let dropped = c.dropped.saturating_sub(first.dropped);
         if span < MIN_SPAN_MS {
-            return (None, None);
+            return (None, Vec::new());
         }
         let (captured, encoded) = (per_second(old.taken, c.taken, span), per_second(old.encoded, c.encoded, span));
         let lost = c.dropped.saturating_sub(old.dropped);
         let behind = captured >= BUSY_FPS && (encoded < captured * KEEPING_UP || lost * DROP_SHARE > c.taken.saturating_sub(old.taken));
-        let mut line = None;
+        let after = now_ms.saturating_sub(at) / 1000;
+        let mut lines = Vec::new();
         if behind && !self.collapsed {
             self.collapsed = true;
-            line = Some(format!("capture is falling behind after {} s: captured {captured:.1} fps, encoded {encoded:.1} fps of {target:.0}, dropped {lost} frames in the last {} s", now_ms.saturating_sub(at) / 1000, span / 1000));
+            lines.push((tracing::Level::WARN, format!("capture is falling behind after {after} s: captured {captured:.1} fps, encoded {encoded:.1} fps of {target:.0}, dropped {lost} frames in the last {} s", span / 1000)));
         } else if self.collapsed && !behind && encoded >= target * RECOVERED {
             self.collapsed = false;
         }
-        (Some(Live { fps: captured, dropped }), line)
+        if captured >= target * RECOVERED {
+            if let Some((since, _)) = self.slow.take() {
+                lines.push((tracing::Level::INFO, format!("capture rate is back to {captured:.1} fps after {} s", now_ms.saturating_sub(since) / 1000)));
+            }
+            self.good = Some(captured);
+        } else if captured < BUSY_FPS && self.slow.is_none() {
+            if let Some(before) = self.good.take() {
+                self.slow = Some((now_ms, before));
+                lines.push((tracing::Level::WARN, format!("capture rate fell from {before:.1} to {captured:.1} fps after {after} s of recording (a still screen also sends few frames)")));
+            }
+        }
+        let (minute_at, minute_first) = *self.minute.get_or_insert((now_ms, c));
+        let minute_span = now_ms.saturating_sub(minute_at);
+        if minute_span >= MINUTE_MS {
+            let rate = |a: u64, b: u64| per_second(a, b, minute_span);
+            lines.push((tracing::Level::DEBUG, format!("capture in the last minute: captured {:.1} fps, encoded {:.1} fps, dropped {} frames", rate(minute_first.taken, c.taken), rate(minute_first.encoded, c.encoded), c.dropped.saturating_sub(minute_first.dropped))));
+            self.minute = Some((now_ms, c));
+        }
+        (Some(Live { fps: captured, dropped }), lines)
     }
 }
 
@@ -169,23 +198,16 @@ pub fn tick(core: &Core) {
     let frames = |i: usize| debug::FRAMES[i].load(Ordering::Relaxed);
     let counts = Counts { taken: frames(debug::TAKEN), encoded: frames(debug::ENCODED), dropped: frames(debug::DROPPED) };
     let recording = core.any_recording();
-    let (live, line) = RATES.lock().unwrap().tick((now_us() / 1000) as u64, recording, counts, record::FPS as f64);
+    let (live, lines) = RATES.lock().unwrap().tick((now_us() / 1000) as u64, recording, counts, record::FPS as f64);
     *LIVE.lock().unwrap() = live;
-    if let Some(line) = line {
-        tracing::warn!("{line}");
-    }
-}
-
-#[derive(Default)]
-pub struct Limiter(HashMap<String, Instant>);
-
-impl Limiter {
-    pub fn allow(&mut self, key: &str, now: Instant) -> bool {
-        if self.0.get(key).is_some_and(|t| now.saturating_duration_since(*t) < SLOW_LOG_EVERY) {
-            return false;
+    for (level, line) in lines {
+        if level == tracing::Level::WARN {
+            tracing::warn!("{line}");
+        } else if level == tracing::Level::INFO {
+            tracing::info!("{line}");
+        } else {
+            tracing::debug!("{line}");
         }
-        self.0.insert(key.to_string(), now);
-        true
     }
 }
 
@@ -195,8 +217,9 @@ pub fn slow_line(peer: &str, took: Duration, queued: usize) -> Option<String> {
 
 pub fn slow_send(peer: &str, took: Duration, queued: usize) {
     let Some(line) = slow_line(peer, took, queued) else { return };
-    if SLOW.lock().unwrap().get_or_insert_with(Limiter::default).allow(peer, Instant::now()) {
-        tracing::warn!("{line}");
+    let held = SLOW.lock().unwrap().get_or_insert_with(|| Repeats::new(SLOW_LOG_EVERY)).note(peer, Instant::now());
+    if let Some(held) = held {
+        tracing::warn!("{}", noise::with_held(&line, held));
     }
 }
 
@@ -254,20 +277,20 @@ mod tests {
     fn a_healthy_recording_logs_nothing_until_it_ends() {
         let mut m = Rates::new();
         for s in 0..=10u64 {
-            let (live, line) = m.tick(s * 1000, true, counts(s * 30, s * 30, 0), 30.0);
-            assert!(line.is_none());
+            let (live, lines) = m.tick(s * 1000, true, counts(s * 30, s * 30, 0), 30.0);
+            assert!(lines.is_empty(), "{lines:?}");
             assert_eq!(live.is_some(), s >= 2);
         }
-        let (live, line) = m.tick(11_000, false, counts(330, 330, 0), 30.0);
+        let (live, lines) = m.tick(11_000, false, counts(330, 330, 0), 30.0);
         assert!(live.is_none());
-        assert_eq!(line.unwrap(), "recording of 11 s ended: captured 30.0 fps, encoded 30.0 fps, dropped 0 frames");
+        assert_eq!(lines[0].1, "recording of 11 s ended: captured 30.0 fps, encoded 30.0 fps, dropped 0 frames");
     }
 
     #[test]
     fn an_idle_screen_is_not_a_collapse() {
         let mut m = Rates::new();
         for s in 0..=20u64 {
-            assert!(m.tick(s * 1000, true, counts(0, s * 10, 0), 30.0).1.is_none());
+            assert!(m.tick(s * 1000, true, counts(0, s * 10, 0), 30.0).1.is_empty());
         }
     }
 
@@ -283,9 +306,7 @@ mod tests {
             } else {
                 dropped += 28;
             }
-            if let (_, Some(line)) = m.tick(s * 1000, true, counts(taken, encoded, dropped), 30.0) {
-                lines.push((s, line));
-            }
+            lines.extend(m.tick(s * 1000, true, counts(taken, encoded, dropped), 30.0).1.into_iter().map(|(_, line)| (s, line)));
         }
         assert_eq!(lines.len(), 1, "{lines:?}");
         assert!((10..=13).contains(&lines[0].0), "{lines:?}");
@@ -294,11 +315,30 @@ mod tests {
         for s in 41..=60u64 {
             taken += 30;
             dropped += 28;
-            if let (_, Some(line)) = m.tick(s * 1000, true, counts(taken, encoded, dropped), 30.0) {
-                again.push(line);
-            }
+            again.extend(m.tick(s * 1000, true, counts(taken, encoded, dropped), 30.0).1.into_iter().filter(|(level, _)| *level != tracing::Level::DEBUG));
         }
         assert_eq!(again.len(), 1);
+    }
+
+    #[test]
+    fn a_capture_rate_that_falls_to_nearly_nothing_is_logged_once_with_its_recovery() {
+        let mut m = Rates::new();
+        let mut lines = Vec::new();
+        let mut taken = 0;
+        for s in 0..=120u64 {
+            taken += if (20..80).contains(&s) { u64::from(s % 3 == 0) } else { 27 };
+            lines.extend(m.tick(s * 1000, true, counts(taken, taken, 0), 30.0).1.into_iter().map(|(level, line)| (s, level, line)));
+        }
+        let shown: Vec<_> = lines.iter().filter(|(_, level, _)| *level != tracing::Level::DEBUG).collect();
+        assert_eq!(shown.len(), 2, "{lines:?}");
+        assert_eq!(shown[0].1, tracing::Level::WARN);
+        assert!((21..=25).contains(&shown[0].0), "{lines:?}");
+        assert!(shown[0].2.starts_with("capture rate fell from 27.0 to "), "{lines:?}");
+        assert_eq!(shown[1].1, tracing::Level::INFO);
+        assert!(shown[1].2.starts_with("capture rate is back to 27.0 fps after "), "{lines:?}");
+        let minutes: Vec<_> = lines.iter().filter(|(_, level, _)| *level == tracing::Level::DEBUG).collect();
+        assert_eq!(minutes.len(), 1, "{lines:?}");
+        assert!(minutes[0].2.starts_with("capture in the last minute: captured "));
     }
 
     #[test]
@@ -312,11 +352,11 @@ mod tests {
     fn slow_sends_are_logged_rarely() {
         assert!(slow_line("peer", Duration::from_millis(200), 1).is_none());
         assert_eq!(slow_line("peer", Duration::from_millis(2500), 3).unwrap(), "slow send to peer: one write took 2500 ms, 3 sends queued for it");
-        let mut limiter = Limiter::default();
+        let mut r = Repeats::new(SLOW_LOG_EVERY);
         let t = Instant::now();
-        assert!(limiter.allow("a", t));
-        assert!(!limiter.allow("a", t + Duration::from_secs(5)));
-        assert!(limiter.allow("b", t + Duration::from_secs(5)));
-        assert!(limiter.allow("a", t + SLOW_LOG_EVERY));
+        assert_eq!(r.note("a", t), Some(0));
+        assert_eq!(r.note("a", t + Duration::from_secs(5)), None);
+        assert_eq!(r.note("b", t + Duration::from_secs(5)), Some(0));
+        assert_eq!(r.note("a", t + SLOW_LOG_EVERY), Some(1));
     }
 }

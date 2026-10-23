@@ -18,6 +18,7 @@ use crate::capture::{start_capture, Capture};
 use crate::ffmpeg::{self, FRAGMENTED};
 use crate::room::{self, capture_id, part_of, seg_name, INIT, RECORDINGS, SERIES};
 use crate::sources::{self, Found, Item};
+use crate::noise::Repeats;
 use crate::proc::{self, Process, BELOW_NORMAL};
 use crate::{clock, data, debug, hex, hw, media, merge, net, now_us, write_whole, Core};
 
@@ -32,6 +33,7 @@ const QUEUE_SIZE: &str = "512";
 const VOICE_FRAGMENT_US: &str = "1000000";
 const REPEAT_AFTER: Duration = Duration::from_millis(250);
 const STALLED_AFTER: Duration = Duration::from_secs(5);
+const FFMPEG_REPEAT_EVERY: Duration = Duration::from_secs(60);
 const REPEAT_POLL: Duration = Duration::from_millis(100);
 const PCM_FRAME_BYTES: u64 = 4;
 const PAD_AFTER_FRAMES: u64 = SAMPLE_RATE as u64 / 50;
@@ -358,6 +360,32 @@ fn stalled(window: bool, capturing: bool, quiet: Duration) -> bool {
     window && capturing && quiet >= STALLED_AFTER
 }
 
+/// The log line when the captured window stops or starts sending frames again; `since` holds when it stopped.
+pub fn stall_line(since: &mut Option<Instant>, stalled: bool, quiet: Duration, now: Instant) -> Option<(tracing::Level, String)> {
+    match (*since, stalled) {
+        (None, true) => {
+            *since = Some(now.checked_sub(quiet).unwrap_or(now));
+            Some((tracing::Level::WARN, format!("the captured window sent no new frame for {} s; it may be minimized, hidden or not drawing", quiet.as_secs())))
+        }
+        (Some(at), false) => {
+            *since = None;
+            Some((tracing::Level::INFO, format!("the captured window sends frames again after {} s", now.saturating_duration_since(at).as_secs())))
+        }
+        _ => None,
+    }
+}
+
+fn log_stall(core: &Core, since: &mut Option<Instant>) {
+    let e = &core.engine;
+    let quiet = e.fresh.lock().unwrap().elapsed();
+    let now_stalled = stalled(e.names.lock().unwrap().kind == "window", e.video.lock().unwrap().is_some(), quiet);
+    match stall_line(since, now_stalled, quiet, Instant::now()) {
+        Some((level, line)) if level == tracing::Level::WARN => tracing::warn!("{line}"),
+        Some((_, line)) => tracing::info!("{line}"),
+        None => {}
+    }
+}
+
 pub fn capture_json(core: &Core, live: Option<Value>) -> Value {
     let e = &core.engine;
     let mix = |track: usize| {
@@ -534,8 +562,15 @@ impl Sink {
         if let Some(stderr) = child.child.stderr.take() {
             thread::spawn(move || {
                 use std::io::BufRead;
+                let mut repeats = Repeats::new(FFMPEG_REPEAT_EVERY);
                 for line in std::io::BufReader::new(stderr).lines().map_while(Result::ok) {
-                    tracing::warn!("ffmpeg: {line}");
+                    if let Some(line) = repeats.line(&line, Instant::now()) {
+                        tracing::warn!("ffmpeg: {line}");
+                    }
+                }
+                let held = repeats.take_held();
+                if held > 0 {
+                    tracing::warn!("ffmpeg: {held} more repeated lines before it ended");
                 }
             });
         }
@@ -718,7 +753,8 @@ impl Sink {
             return;
         }
         if !finish_part(&path) {
-            tracing::warn!("could not finish {}", path.display());
+            let tail: Vec<String> = path.iter().rev().take(3).collect::<Vec<_>>().into_iter().rev().map(|p| p.to_string_lossy().into_owned()).collect();
+            tracing::error!("could not finish segment {} (renaming its .part failed), so it is left out of the recording", tail.join("/"));
             return;
         }
         match &open.set {
@@ -846,10 +882,13 @@ pub(crate) fn current_sink(core: &Arc<Core>, canvas: Option<(u32, u32)>) -> Opti
         let requality = !recording && e.quality_now() != sink.quality;
         let kind = want.as_ref().map(|(room, voice)| (room.as_str(), *voice)) != Some((sink.room.as_str(), sink.voice));
         let rebased = sink.start.get().is_some_and(|(at, at_us)| clock::stepped(*at_us, now_us(), at.elapsed()));
-        (sink.dead.load(Ordering::Relaxed), !sink.voice && (resized || codec || requality) || kind || rebased)
+        let dead = sink.dead.load(Ordering::Relaxed);
+        let why = [(dead, "the encoder ended"), (kind, "what is captured changed"), (rebased, "the clock was set"), (!sink.voice && resized, "the picture size changed"), (!sink.voice && codec, "the encoder changed"), (!sink.voice && requality, "the quality changed")];
+        (dead, !sink.voice && (resized || codec || requality) || kind || rebased, why.into_iter().find(|(on, _)| *on).map_or("", |(_, why)| why))
     });
-    if let Some((dead, changed)) = stale.filter(|(dead, changed)| *dead || *changed) {
+    if let Some((dead, changed, why)) = stale.filter(|(dead, changed, _)| *dead || *changed) {
         let old = slot.take().unwrap();
+        tracing::info!("capture {} stopped: {why}", old.capture);
         if dead {
             old.child.lock().unwrap().kill();
             if !changed {
@@ -884,6 +923,7 @@ pub fn retire(core: &Core) {
         slot.take().filter(|_| stale)
     };
     if let Some(old) = old {
+        tracing::info!("capture {} stopped: it is no longer wanted", old.capture);
         old.finish();
     }
 }
@@ -1132,6 +1172,7 @@ pub fn supervise(core: Arc<Core>) {
     let e = &core.engine;
     let mut scanned: Option<(Value, Instant)> = None;
     let mut found: Option<Found> = None;
+    let mut stalled_since = None;
     loop {
         let source = e.source.lock().unwrap().clone();
         let ended = e.video.lock().unwrap().as_ref().is_some_and(Video::finished);
@@ -1146,6 +1187,7 @@ pub fn supervise(core: Arc<Core>) {
         }
         ensure_video(&core, found.as_ref().filter(|_| want(&core).is_some_and(|(_, voice)| !voice) && ffmpeg::encoders_ready()));
         check_sink(&core);
+        log_stall(&core, &mut stalled_since);
         hw::tick(&core);
         thread::sleep(SUPERVISE_EVERY);
     }
@@ -1170,6 +1212,21 @@ mod tests {
         assert_eq!(speech.step(at(500), 0.5, true), Some(true));
         assert_eq!(speech.step(at(510), 0.5, false), Some(false));
         assert_eq!(speech.step(at(520), 0.5, false), None);
+    }
+
+    #[test]
+    fn a_window_that_stops_sending_frames_is_logged_once_with_its_return() {
+        let secs = Duration::from_secs;
+        let t = Instant::now();
+        let mut since = None;
+        let (level, line) = stall_line(&mut since, true, secs(5), t).unwrap();
+        assert_eq!(level, tracing::Level::WARN);
+        assert!(line.starts_with("the captured window sent no new frame for 5 s"));
+        assert!(stall_line(&mut since, true, secs(30), t + secs(25)).is_none());
+        let (level, line) = stall_line(&mut since, false, secs(0), t + secs(40)).unwrap();
+        assert_eq!(level, tracing::Level::INFO);
+        assert_eq!(line, "the captured window sends frames again after 45 s");
+        assert!(stall_line(&mut since, false, secs(0), t + secs(41)).is_none());
     }
 
     #[test]

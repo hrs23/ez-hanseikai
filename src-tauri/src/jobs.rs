@@ -602,7 +602,7 @@ fn work(core: &Arc<Core>, room: &str, plugin: &'static Plugin, key: &str, input:
             finish(core, room, plugin, key, run, input, &found, &tags)
         }
         Some(Err(error)) => {
-            tracing::warn!("job {key} failed: {error}");
+            tracing::error!("job {key} failed: {error}");
             let mut record = job_record("fail", key, run, about);
             record["error"] = json!(error);
             core.append_log(room, &record);

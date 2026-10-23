@@ -16,6 +16,7 @@ mod jobs;
 mod log;
 mod media;
 mod net;
+mod noise;
 mod ops;
 mod party;
 mod plugins;
@@ -388,7 +389,11 @@ async fn off_thread<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static
 async fn call(core: State<'_, Arc<Core>>, name: String, args: Value) -> Result<Value, String> {
     let op = ops::find(&name).ok_or("No such operation.")?;
     let core = core.inner().clone();
-    off_thread(move || op(&core, args)).await?
+    let result = off_thread(move || op(&core, args)).await?;
+    if let Err(e) = &result {
+        ops::log_failure(&name, e);
+    }
+    result
 }
 
 #[tauri::command]

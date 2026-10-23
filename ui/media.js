@@ -5,7 +5,6 @@ const RETRY_MS = 3000;
 const HOLD_MAX_MS = 1000;
 const SEEK_TOLERANCE = 0.05;
 const DRIFT_MAX = 0.4;
-const LOG_LINES_PER_MIN = 20;
 const LONG_TASK_MS = 100;
 const PROBE_MS = 1000;
 const HAVE_FUTURE_DATA = 3;
@@ -219,22 +218,12 @@ function aim(s, t) {
 }
 
 const aheadOf = (v) => Math.max(0, bufferedEnd(v) - v.currentTime).toFixed(1);
-const logBudget = { from: 0, n: 0, skipped: 0 };
-function playerLog(text) {
-  const now = Date.now();
-  if (now - logBudget.from >= 60000) {
-    const skipped = logBudget.skipped;
-    Object.assign(logBudget, { from: now, n: 0, skipped: 0 });
-    if (skipped) playerLog(`${skipped} lines skipped`);
-  }
-  if (logBudget.n >= LOG_LINES_PER_MIN) { logBudget.skipped++; return; }
-  logBudget.n++;
-  quiet("player_log", { text });
-}
+// Player lines for the app log: stalls and the codec at info, the rest at debug.
+const playerLog = (text, level = "debug") => appLog(level, `player ${text}`);
 function videoEvent(s, type) {
   const v = s.video;
   if (type === "seeking" && Date.now() - s.seekedAt < 200) return;
-  playerLog(`${s.label} ${type} t=${v.currentTime.toFixed(2)} ahead=${aheadOf(v)} rs=${v.readyState}`);
+  playerLog(`${s.label} ${type} t=${v.currentTime.toFixed(2)} ahead=${aheadOf(v)} rs=${v.readyState}`, type === "seeking" ? "debug" : "info");
 }
 function playerProbe(slots, tiles, minimap) {
   const lost = [];
@@ -261,7 +250,7 @@ async function probeDecode(s, type) {
   probed.add(type);
   try {
     const info = await navigator.mediaCapabilities.decodingInfo({ type: "media-source", video: { contentType: type, ...CODEC_PROBE } });
-    playerLog(`decode ${type.replace(/^.*codecs=/, "")} supported=${info.supported} smooth=${info.smooth} powerEfficient=${info.powerEfficient}`);
+    playerLog(`decode ${type.replace(/^.*codecs=/, "")} supported=${info.supported} smooth=${info.smooth} powerEfficient=${info.powerEfficient}`, "info");
   } catch (e) {
     warn(e);
   }

@@ -490,7 +490,7 @@ fn outcome(core: &Core, tail: JoinHandle<String>, partial: &Path, path: &Path) -
     } else if ok {
         finish(partial, path, || !cancelled(core)).map_err(|e| if cancelled(core) { "Export cancelled".to_string() } else { format!("Export failed: {e}") })
     } else {
-        tracing::warn!("export failed: {text}");
+        tracing::warn!("export: ffmpeg stopped with: {}", text.trim());
         Err(format!("Export failed: {}", text.lines().last().unwrap_or("ffmpeg stopped")))
     };
     let _ = std::fs::remove_file(partial);
@@ -594,9 +594,16 @@ struct Part {
 pub fn run_all(core: &Arc<Core>, key: (String, String), jobs: Vec<Job>, work: &Path, dir: &Path) -> Result<(), String> {
     let count = jobs.len();
     let mut owned = false;
+    let started = std::time::Instant::now();
     let failure = jobs.into_iter().enumerate().try_for_each(|(n, job)| run_job(core, &key, job, work, n, count, &mut owned)).err();
     if owned {
         end(core);
+    }
+    let took = started.elapsed().as_secs();
+    match &failure {
+        None => tracing::info!("export of {} done: {count} files in {took} s", key.1),
+        Some(e) if e.contains("cancelled") || e.contains("already running") => tracing::info!("export of {} not done after {took} s: {e}", key.1),
+        Some(e) => tracing::error!("export of {} failed after {took} s: {e}", key.1),
     }
     let Some(e) = failure else { return Ok(()) };
     let _ = std::fs::remove_dir_all(dir);

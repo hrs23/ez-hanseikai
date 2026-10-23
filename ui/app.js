@@ -1457,7 +1457,7 @@ async function update() {
   importedIds = new Set(st.sets.flatMap((x) => x.players.filter((p) => p.imported).map((p) => p.owner)));
   for (const p of st.peers) if (p.speaking) speaking.add(p.id); else speaking.delete(p.id);
   if (lang !== st.lang) { lang = st.lang; setLanguage(lang); for (const k of Object.keys(sigs)) delete sigs[k]; }
-  if (boardWindow) { for (const step of [renderShell, renderBoard]) try { step(); } catch (e) { console.error(e); } return; }
+  if (boardWindow) { for (const step of [renderShell, renderBoard]) try { step(); } catch (e) { logError(e, `board ${step.name}`); } return; }
   if (!ready) { ready = true; pollPlugins(); }
   if (selected && !setById(selected)) selected = null;
   if (!st.recording) played = false;
@@ -1474,7 +1474,7 @@ async function update() {
   const roomId = st.room ? st.room.id : "";
   if (partyRoom !== roomId) { partyRoom = roomId; editing = null; if (roomId) await joinParty(); st = await invoke("state"); idx = indexOf(st); }
   if (!drag && watchParty && st.party.on && !sameParty(st.party.shared, partyLast)) applyParty(st.party.shared);
-  for (const step of steps()) try { step(); } catch (e) { console.error(e); }
+  for (const step of steps()) try { step(); } catch (e) { logError(e, `render ${step.name || "step"}`); }
   markLive();
   if (restored) saveLast();
   else { restored = true; if (inRoom()) restoreLast(); }

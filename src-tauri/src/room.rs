@@ -333,8 +333,15 @@ pub fn apply_active(core: &Arc<Core>) {
     }
 }
 
+/// A room ID for the log; a room still being joined is named by its invite, which stays out of the log.
+fn room_label(id: &str) -> &str {
+    if id.starts_with("pending-") { "being joined" } else { id }
+}
+
 pub fn leave(core: &Arc<Core>) {
-    core.rooms.lock().unwrap().active = None;
+    if let Some(id) = core.rooms.lock().unwrap().active.take() {
+        tracing::info!("left room {}", room_label(&id));
+    }
     core.save_rooms();
     end_set(core, false, None);
     apply_active(core);
@@ -347,6 +354,7 @@ fn open(core: &Arc<Core>, id: &str) {
     }
     core.rooms.lock().unwrap().active = Some(id.to_string());
     core.save_rooms();
+    tracing::info!("entered room {}", room_label(id));
     apply_active(core);
 }
 
@@ -367,6 +375,7 @@ pub fn create_room(core: &Arc<Core>, name: &str) -> Result<String, String> {
         n => n,
     };
     activate(core, Room { id: id.clone(), name, members: vec![core.ep.id().to_string()], ..Default::default() });
+    tracing::info!("created room {id}");
     Ok(id)
 }
 
@@ -386,6 +395,7 @@ pub fn join_room(core: &Arc<Core>, code: &str) -> Result<(), String> {
     let (id, token) = invite_parts(code).ok_or_else(bad)?;
     id.parse::<EndpointId>().ok().filter(|id| *id != core.ep.id()).ok_or_else(bad)?;
     let members = vec![core.ep.id().to_string(), id.clone()];
+    tracing::info!("joining a room through {}", short(&id));
     let invite = Some((id, token.clone()));
     activate(core, Room { id: format!("pending-{token}"), name: "Joining...".into(), members, invite, ..Default::default() });
     Ok(())
@@ -412,6 +422,7 @@ pub fn leave_room(core: &Arc<Core>, id: &str) {
 
 pub fn forget_room(core: &Arc<Core>, id: &str) {
     leave_room(core, id);
+    tracing::info!("removed room {} from the list", room_label(id));
     core.rooms.lock().unwrap().list.retain(|r| r.id != id);
     core.save_rooms();
     if id.starts_with("pending-") {
@@ -606,6 +617,7 @@ pub fn remove_member(core: &Arc<Core>, id: &str) -> Result<(), String> {
     if id.parse::<EndpointId>().is_err() || id == core.me() {
         return Ok(());
     }
+    tracing::info!("removed {} from room {room}", short(id));
     core.append_log(&room, &json!({"k": "remove", "member": id, "t_us": now_us()}));
     net::broadcast(core, json!({"t": "remove", "room": room, "member": id}));
     apply_removals(core);

@@ -579,7 +579,10 @@ async fn join(core: &Arc<Core>, from: EndpointId, mut send: SendStream, mut recv
         room::ask_step(&mut invites, &mut asks, &room_id, token, &id, &name)
     };
     let reply = match &step {
-        room::Step::Refused => json!({"ok": false}),
+        room::Step::Refused => {
+            tracing::info!("refused a join from {}: the invite is not valid", short(&id));
+            json!({"ok": false})
+        }
         room::Step::Wait(changed) => {
             if *changed {
                 send_asks(core);
@@ -587,6 +590,7 @@ async fn join(core: &Arc<Core>, from: EndpointId, mut send: SendStream, mut recv
             json!({"wait": true})
         }
         room::Step::Declined => {
+            tracing::info!("declined a join from {} to room {room_id}", short(&id));
             send_asks(core);
             json!({"declined": true})
         }
@@ -854,7 +858,7 @@ async fn fetch(core: Arc<Core>, conn: Connection, req: Value, expect: HashMap<u3
     let started = Instant::now();
     let what = format!("{} {} {} from {}", req["set"].as_str().unwrap_or_default(), short(req["owner"].as_str().unwrap_or_default()), req["series"], req["from"]);
     match receive(&core, &conn, req, expect).await {
-        Ok(got) => debug::event(&core, started, format!("{what}: fetched {got} B from {}", short(conn.remote_id()))),
+        Ok(got) => tracing::debug!("{what}: fetched {got} B from {} (+{:.2}s)", short(conn.remote_id()), started.elapsed().as_secs_f64()),
         Err(e) => debug::event(&core, started, format!("{what}: fetch from {} stopped: {e}", short(conn.remote_id()))),
     }
     core.following.lock().unwrap().remove(&key);
@@ -962,6 +966,7 @@ async fn present_invite(core: &Arc<Core>, id: &EndpointId, conn: &Connection) ->
         let Ok(reply) = request(conn, &json!({"t": "join", "token": token, "name": name})).await else { return false };
         let Ok(reply) = serde_json::from_slice::<Value>(&reply) else { return false };
         if reply["declined"] == true {
+            tracing::info!("the request to join through {} was declined", short(id));
             room::forget_room(core, &pending);
             *core.notice.lock().unwrap() = "Your request to join was declined.".into();
             return false;
@@ -974,6 +979,7 @@ async fn present_invite(core: &Arc<Core>, id: &EndpointId, conn: &Connection) ->
             continue;
         }
         if reply["ok"] == false {
+            tracing::info!("the invite through {} was refused: it is no longer valid", short(id));
             room::forget_room(core, &pending);
             *core.notice.lock().unwrap() = "That invite code can no longer be used. Ask for a new one.".into();
             return false;

@@ -111,7 +111,10 @@ pub fn prepare(status: &Mutex<String>) {
         *status.lock().unwrap() = "downloading".into();
         tracing::info!("downloading ffmpeg");
         match download(dir) {
-            Ok(()) => *FAILED.lock().unwrap() = None,
+            Ok(()) => {
+                tracing::info!("ffmpeg downloaded");
+                *FAILED.lock().unwrap() = None;
+            }
             Err(e) => {
                 failures += 1;
                 let wait = retry_after(failures);
@@ -152,7 +155,7 @@ pub fn convert_picture(bytes: &[u8]) -> Result<Vec<u8>, String> {
                 match proc::run(&mut command, proc::BELOW_NORMAL, PICTURE_WAIT) {
                     Ok(_) => std::fs::read(&output).ok(),
                     Err(e) => {
-                        tracing::info!("ffmpeg could not open the picture (grid {grid}): {e}");
+                        tracing::debug!("ffmpeg could not open the picture (grid {grid}): {e}");
                         None
                     }
                 }
@@ -221,7 +224,7 @@ fn works(name: &str) -> bool {
     command.args(["-v", "quiet", "-f", "lavfi", "-i", PROBE_SOURCE, "-t", "1", "-c:v", name, "-f", "null", "-"]).stdout(Stdio::null());
     let ok = proc::run(&mut command, proc::BELOW_NORMAL, PROBE_WAIT);
     if let Err(e) = &ok {
-        tracing::info!("encoder {name}: {e}");
+        tracing::debug!("encoder {name} is not usable: {e}");
     }
     ok.is_ok()
 }
@@ -273,6 +276,8 @@ pub fn probe_encoders() {
             results
         }
     };
+    let usable: Vec<&str> = results.iter().filter(|(_, ok)| *ok).map(|(name, _)| *name).collect();
+    tracing::info!("usable encoders: {}", if usable.is_empty() { "none".to_string() } else { usable.join(", ") });
     let _ = RESULTS.set(results);
 }
 

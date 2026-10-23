@@ -144,6 +144,28 @@ function store(key, value) {
 const longId = (id) => (String(id).match(/.{1,4}/g) || []).slice(0, 3).join("·");
 const idText = (id, tag = "span") => el(tag, { className: "mono", textContent: longId(id), title: id });
 const warn = (e) => console.warn(e);
+const LOG_LINES_PER_MIN = 20;
+const logBudgets = { loud: { from: 0, n: 0, skipped: 0 }, rest: { from: 0, n: 0, skipped: 0 } };
+// A line for the app log at level error, warn, info or debug. Each of errors and warnings, and the rest, gets at most LOG_LINES_PER_MIN lines a minute; the others are counted.
+function appLog(level, text) {
+  const budget = logBudgets[level === "error" || level === "warn" ? "loud" : "rest"];
+  const now = Date.now();
+  if (now - budget.from >= 60000) {
+    const skipped = budget.skipped;
+    Object.assign(budget, { from: now, n: 0, skipped: 0 });
+    if (skipped) appLog(level, `${skipped} lines like this skipped in the last minute`);
+  }
+  if (budget.n >= LOG_LINES_PER_MIN) { budget.skipped++; return; }
+  budget.n++;
+  invoke("ui_log", { level, text: String(text) }).catch(warn);
+}
+const errorLine = (e) => (e && e.stack ? String(e.stack).split("\n").slice(0, 3).map((x) => x.trim()).join(" | ") : String((e && e.message) || e));
+// Logs an error the page caught, so a broken view shows up in the app log and not only in the console.
+const logError = (e, where) => { console.error(e); appLog("error", `${where}: ${errorLine(e)}`); };
+if (typeof window.addEventListener === "function") {
+  window.addEventListener("error", (ev) => appLog("error", `uncaught: ${ev.error ? errorLine(ev.error) : ev.message} (${String(ev.filename || "").split("/").pop()}:${ev.lineno})`));
+  window.addEventListener("unhandledrejection", (ev) => appLog("warn", `unhandled rejection: ${errorLine(ev.reason)}`));
+}
 const playFailed = (e) => { if (e.name !== "AbortError" && e.name !== "NotAllowedError") warn(e); };
 const sessionDay = (id) => id.slice(0, 10);
 const clockOf = (date) => `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
