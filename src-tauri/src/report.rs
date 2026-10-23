@@ -52,7 +52,11 @@ pub fn feedback_snap(core: &Arc<Core>) -> Value {
 }
 
 pub fn feedback_preview(core: &Arc<Core>, _: Value) -> Result<Value, String> {
-    let diagnostics = fit(&debug::diagnostics(core, false)?, DIAG_MAX);
+    let diagnostics = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| debug::diagnostics(core, false))) {
+        Ok(Ok(text)) => fit(&text, DIAG_MAX),
+        Ok(Err(err)) => format!("diagnostics failed: {err}"),
+        Err(_) => "diagnostics failed".to_string(),
+    };
     let log = debug::report_log(core);
     let log_bytes = log.len();
     let mut shown = SHOWN.lock().unwrap();

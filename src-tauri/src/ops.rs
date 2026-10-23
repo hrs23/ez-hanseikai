@@ -135,7 +135,13 @@ pub fn recording_ids(core: &Core, args: &Value) -> Result<(String, String), Stri
     if room::valid_id(&room) && room::valid_id(&set) && core.room(&room).is_some() { Ok((room, set)) } else { Err("That recording is not on this PC.".into()) }
 }
 
+static WARMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Waits once per run for the network to come up, so an offline PC does not make every check and report wait.
 pub fn warm(core: &Core) {
+    if WARMED.swap(true, Ordering::Relaxed) {
+        return;
+    }
     let wait = Duration::from_secs(6);
     tauri::async_runtime::block_on(async {
         let _ = tokio::time::timeout(wait, core.ep.online()).await;

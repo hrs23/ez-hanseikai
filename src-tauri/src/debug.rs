@@ -45,6 +45,7 @@ pub static FRAME_BUSY: Mutex<Option<Instant>> = Mutex::new(None);
 
 static TRANSFERS: Mutex<VecDeque<Value>> = Mutex::new(VecDeque::new());
 static ACTIVE: Mutex<Vec<(u64, Value)>> = Mutex::new(Vec::new());
+const MESSAGE_KINDS_MAX: usize = 64;
 static MESSAGES: Mutex<BTreeMap<(String, String), (u64, u64)>> = Mutex::new(BTreeMap::new());
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -110,14 +111,6 @@ impl<'a> MakeWriter<'a> for RollingFile {
 
 pub fn init(dir: &Path) {
     let tz = data::tz_offset_seconds();
-    let Ok(writer) = RollingFile::open(dir) else { return };
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(format!("warn,{}=debug", env!("CARGO_CRATE_NAME"))));
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_writer(writer)
-        .with_ansi(false)
-        .with_timer(Wall(tz))
-        .init();
     let crash = dir.join(CRASH);
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -126,6 +119,14 @@ pub fn init(dir: &Path) {
         tracing::error!("{text}");
         previous(info);
     }));
+    let Ok(writer) = RollingFile::open(dir) else { return };
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(format!("warn,{}=debug", env!("CARGO_CRATE_NAME"))));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(writer)
+        .with_ansi(false)
+        .with_timer(Wall(tz))
+        .init();
 }
 
 pub const CRASH_SEEN: &str = "crash-seen.txt";
@@ -265,7 +266,11 @@ pub fn log_transfer(dir: &str, peer: impl std::fmt::Display, of: &str, bytes: us
 
 pub fn message(dir: &str, kind: Option<&str>, bytes: usize) {
     let mut all = MESSAGES.lock().unwrap();
-    let entry = all.entry((dir.to_string(), kind.unwrap_or("?").to_string())).or_default();
+    let mut key = (dir.to_string(), kind.unwrap_or("?").to_string());
+    if all.len() >= MESSAGE_KINDS_MAX && !all.contains_key(&key) {
+        key.1 = "other".into();
+    }
+    let entry = all.entry(key).or_default();
     entry.0 += 1;
     entry.1 += bytes as u64;
 }
@@ -695,7 +700,7 @@ fn jobs_text(logs: &[room::Log]) -> String {
 }
 
 pub fn report_text(core: &Core, check: Option<&str>) -> String {
-    let log = fs::read_to_string(core.dir.join("log.txt")).unwrap_or_default();
+    let log = String::from_utf8_lossy(&fs::read(core.dir.join("log.txt")).unwrap_or_default()).into_owned();
     let recent = last(log.lines().collect(), REPORT_LINES);
     let mut out = String::new();
     out.push_str(&format!("{} {} on {} {}\n", env!("CARGO_PKG_NAME"), crate::VERSION, std::env::consts::OS, command_line("cmd", &["/c", "ver"])));
