@@ -22,6 +22,13 @@ pub struct Plugin {
     pub sample: &'static str,
     pub version: &'static str,
     pub kind: Kind,
+    pub options: &'static [Choice],
+}
+
+pub struct Choice {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub empty: &'static str,
 }
 
 pub enum Kind {
@@ -87,7 +94,7 @@ pub fn manifest(plugin: &Plugin) -> Value {
         Kind::View(view) => Some(view),
         Kind::Analysis(_) => None,
     };
-    json!({"id": plugin.id, "name": plugin.name, "summary": plugin.summary, "sample": plugin.sample, "version": plugin.version, "view": view})
+    json!({"id": plugin.id, "name": plugin.name, "summary": plugin.summary, "sample": plugin.sample, "version": plugin.version, "view": view, "options": plugin.options.iter().map(|o| json!({"id": o.id, "name": o.name, "empty": o.empty})).collect::<Vec<_>>()})
 }
 
 pub fn child() -> Option<i32> {

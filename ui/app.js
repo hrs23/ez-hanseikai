@@ -223,14 +223,16 @@ function place(s) {
   if (s === play && st) renderInk();
 }
 function miniKey() {
-  const key = st && !play.view && plugins.some((p) => p.view === "minimap" && p.on) && soundKey(0, play.keys, st.id, gameSound);
+  const on = plugins.find((p) => p.view === "minimap" && p.on);
+  const chosen = on && on.settings && on.settings.source;
+  const key = st && !play.view && on && (play.keys.includes(chosen) ? chosen : soundKey(0, play.keys, st.id, gameSound));
   return key && play.tiles[key] && play.tiles[key].media.video.videoWidth ? key : null;
 }
 function showMini(key, b) {
   const m = play.mini || (play.mini = { gen: 0, video: null, sigs: {}, canvas: el("canvas"), av: el("span"), name: el("span", { className: "nm" }) });
   if (!m.box) play.el.append((m.box = el("div", { className: "tile mini" }, el("div", { className: "nl" }, m.av, m.name), el("div", { className: "pic" }, m.canvas))));
   m.box.hidden = !key;
-  m.name.textContent = t("Minimap");
+  m.name.textContent = key ? `${t("Minimap")} · ${nameOf(key)}` : t("Minimap");
   if (key && changed("av", [key, nameOf(key), look(key)], m.sigs)) m.av.replaceChildren(avatar(key, "sm"));
   m.side = key ? b.h : 0;
   const v = key ? play.tiles[key].media.video : null;
