@@ -145,7 +145,7 @@ function tile(s, key) {
       if (tl.drew) { tl.drew = false; return; }
       chooseSound(key);
     };
-    tl.box.ondblclick = (e) => { if (!e.target.closest(".nl") && !tl.drew) toggleFull(); };
+    tl.box.ondblclick = (e) => { if (e.target.closest(".nl") || tl.drew) return; if (full) toggleFull(); else focus(); };
     tl.box.oncontextmenu = (e) => { e.preventDefault(); stageMenu(e, key); };
   } else {
     tl.box.onclick = (e) => { if (e.target.closest(".choose")) return; focus(); };
