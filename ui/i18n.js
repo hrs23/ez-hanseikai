@@ -144,6 +144,7 @@ const JA = {
   "Sent only to {host}, only when you press Send. Recordings, notes and game screens are never sent, and there is no reply.": "{host} にだけ、送るを押したときだけ送ります。録画・メモ・ゲームの画面は送りません。返事はありません。",
   "Feedback is not set up in this build.": "このビルドではフィードバックを送れません。",
   "Thanks, sent": "送りました。ありがとうございます",
+  "Thanks, sent as {id}": "送りました（ID {id}）。ありがとうございます",
   "Report…": "報告…",
   "Send": "送る",
   "Write a comment or include the diagnostics.": "コメントを書くか、診断を付けてください。",

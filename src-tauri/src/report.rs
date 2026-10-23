@@ -37,7 +37,8 @@ $request.ReadWriteTimeout = 30000
 $request.ContentLength = $bytes.Length
 $stream = $request.GetRequestStream()
 try { $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
-$request.GetResponse().Dispose()
+$response = $request.GetResponse()
+try { [Console]::Error.Write((New-Object IO.StreamReader($response.GetResponseStream())).ReadToEnd()) } finally { $response.Dispose() }
 "#;
 
 /// What the dialog showed and Send sends: the diagnostics, the window picture and the gzipped log.
@@ -112,16 +113,27 @@ pub fn send_feedback(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     let sent = proc::run(&mut command, 0, SEND_WAIT);
     let _ = std::fs::remove_file(&path);
     match sent {
-        Ok(_) => {
-            tracing::info!("feedback sent ({kind}, diagnostics {with_diag}, picture {with_image})");
+        Ok(reply) => {
+            // The script writes the server's reply to stderr, the one stream proc::run keeps.
+            let id = reply_id(&reply);
+            tracing::info!("feedback sent as {} ({kind}, diagnostics {with_diag}, picture {with_image})", id.as_deref().unwrap_or("?"));
             *SHOWN.lock().unwrap() = (String::new(), None, Vec::new());
-            Ok(Value::Null)
+            Ok(json!({"id": id}))
         }
         Err(e) => {
             tracing::warn!("feedback not sent: {}", e.lines().last().unwrap_or_default());
             Err(send_error(&e).into())
         }
     }
+}
+
+/// The report's ID from the server's reply: the time it arrived, like 20261023-232413 (or 20261023-232413-2).
+fn reply_id(reply: &str) -> Option<String> {
+    let id = serde_json::from_str::<Value>(reply.trim()).ok()?["id"].as_str()?.to_string();
+    let parts: Vec<&str> = id.split('-').collect();
+    let digits = |p: &str, n: usize| p.len() == n && p.bytes().all(|b| b.is_ascii_digit());
+    let ok = matches!(parts.as_slice(), [d, t] if digits(d, 8) && digits(t, 6)) || matches!(parts.as_slice(), [d, t, n] if digits(d, 8) && digits(t, 6) && !n.is_empty() && n.len() <= 3 && digits(n, n.len()));
+    ok.then_some(id)
 }
 
 pub fn send_error(e: &str) -> &'static str {
@@ -255,6 +267,15 @@ mod tests {
         assert_eq!(rgb(&bgra, (2, 2), 2), (vec![20, 10, 0], (1, 1)));
         let png = png(&[1, 2, 3], (1, 1)).unwrap();
         assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+    }
+
+    #[test]
+    fn the_report_id_is_read_from_the_reply() {
+        assert_eq!(reply_id(r#"{"ok": true, "id": "20261023-232413"}"#).as_deref(), Some("20261023-232413"));
+        assert_eq!(reply_id("{\"ok\": true, \"id\": \"20261023-232413-2\"}\n").as_deref(), Some("20261023-232413-2"));
+        assert_eq!(reply_id(r#"{"ok": true, "id": "<b>x</b>"}"#), None);
+        assert_eq!(reply_id(r#"{"ok": true}"#), None);
+        assert_eq!(reply_id("not json"), None);
     }
 
     #[test]

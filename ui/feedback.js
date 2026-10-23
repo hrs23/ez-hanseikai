@@ -33,9 +33,9 @@ $("fbcomment").oninput = $("fbdiag").onchange = $("fbimage").onchange = renderFe
 $("fbsend").onclick = single(async () => {
   $("fbsend").disabled = true;
   try {
-    await dialog("send_feedback", { args: { kind: feedback.kind, comment: $("fbcomment").value, diagnostics: $("fbdiag").checked, image: $("fbimage").checked } });
+    const sent = await dialog("send_feedback", { args: { kind: feedback.kind, comment: $("fbcomment").value, diagnostics: $("fbdiag").checked, image: $("fbimage").checked } });
     $("feedbackdlg").close();
-    flash(t("Thanks, sent"));
+    flash(sent?.id ? t("Thanks, sent as {id}", { id: sent.id }) : t("Thanks, sent"));
   } catch (e) {
     flash(e, "error");
     renderFeedback();

@@ -222,7 +222,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - C's disk is full during the recording: its part ends with a notice, the others go on, and C completes its copy once there is room. `e2e` (`recover`)
 - Diagnostics is a checklist of this PC and the connection with how you are connected, Settings > Privacy shows what goes where, and the report is masked. `e2e` (`library`)
 - Help > Send feedback… (Ctrl+Shift+F, also over an open dialog, with the error on screen copied into the comment) and Report… on an error open one dialog, with the window picture taken before it opens: kind (Problem, Request, Comment), comment, diagnostics (on), a picture of the app window (off) and what is sent; Send needs a comment or the diagnostics. `ui-test`
-- a feedback report keeps only a known kind, a comment cut at its limit and what was ticked, with the gzipped log going with the diagnostics; the window picture is RGB PNG shrunk to a width limit; send errors say what to do; a long report loses its middle and keeps the top and the newest log. `unit`
+- a feedback report keeps only a known kind, a comment cut at its limit and what was ticked, with the gzipped log going with the diagnostics; the window picture is RGB PNG shrunk to a width limit; the report's ID (the time it arrived) is read from the reply and nothing else is taken as one; send errors say what to do; a long report loses its middle and keeps the top and the newest log. `unit`
 - feedback is sent only from the window, never through the local API. `unit`
 - The first start shows the Windows firewall prompt and the app works after Allow. `manual`
 - The first start downloads ffmpeg, checks it and keeps retrying with no network. `manual`
