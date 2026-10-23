@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 use crate::proc::{self, Process, IDLE, NO_WINDOW};
 
 mod apex;
+mod apex_fights;
 mod excitement;
 
 pub const FLAG: &str = "--plugin";
@@ -88,7 +89,7 @@ pub enum Reply {
     Failed(String),
 }
 
-pub const ALL: [Plugin; 3] = [excitement::PLUGIN, apex::PLUGIN, apex::MINIMAP];
+pub const ALL: [Plugin; 5] = [excitement::PLUGIN, apex::PLUGIN, apex_fights::DOWNS, apex_fights::KILLS, apex::MINIMAP];
 
 pub fn find(id: &str) -> Option<&'static Plugin> {
     ALL.iter().find(|p| p.id == id)
