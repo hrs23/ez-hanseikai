@@ -527,8 +527,12 @@ fn home() -> String {
     std::env::var("USERPROFILE").unwrap_or_default()
 }
 
-pub fn redact(text: &str, home: &str, names: &[String]) -> String {
-    let text = hide_home(&hide_addresses(text), home);
+pub fn redact(text: &str, home: &str, names: &[String], ids: &[String]) -> String {
+    let mut text = hide_home(&hide_addresses(text), home);
+    for (i, id) in ids.iter().enumerate().filter(|(_, id)| !id.is_empty()) {
+        let label = if i == 0 { "<this PC>".to_string() } else { format!("<member {i}>") };
+        text = text.replace(id.as_str(), &label).replace(short(id).as_str(), &label);
+    }
     let mut text = replace_all(&text, &[(format!(r"(?i)\b[a-z]:\\{PATH_END}+").as_str(), "<path>"), (r"\b[0-9a-f]{64}\b", "<id>")]);
     let mut names: Vec<&String> = names.iter().filter(|n| n.chars().count() >= NAME_MIN_CHARS).collect();
     names.sort_by_key(|n| std::cmp::Reverse(n.len()));
@@ -536,6 +540,19 @@ pub fn redact(text: &str, home: &str, names: &[String]) -> String {
         text = text.replace(name.as_str(), "<name>");
     }
     text
+}
+
+fn known_ids(core: &Core) -> Vec<String> {
+    let mut ids = vec![core.ep.id().to_string()];
+    let mut others: Vec<String> = core.peers.lock().unwrap().iter().map(|p| p.id.to_string()).collect();
+    for r in core.rooms.lock().unwrap().list.iter() {
+        others.extend(r.names.keys().cloned());
+    }
+    others.retain(|id| *id != ids[0]);
+    others.sort();
+    others.dedup();
+    ids.extend(others);
+    ids
 }
 
 fn known_names(core: &Core) -> Vec<String> {
@@ -588,7 +605,7 @@ pub fn report_text(core: &Core, check: Option<&str>) -> String {
     out.push_str(&tail(&core.dir.join(CRASH), CRASH_TAIL));
     out.push_str("\n\nrecent log\n");
     out.push_str(&recent.join("\n"));
-    redact(&out, &home(), &known_names(core))
+    redact(&out, &home(), &known_names(core), &known_ids(core))
 }
 
 #[cfg(test)]
@@ -658,16 +675,25 @@ mod tests {
     fn reports_hide_addresses_ids_and_names() {
         let id = "a".repeat(64);
         let text = format!("from 203.0.113.20:5000 via https://relay.example.net/x by {id} at C:\\Users\\someone\\data named Ren and Rena");
-        let out = redact(&text, "", &["Ren".into(), "Rena".into(), "x".into()]);
+        let out = redact(&text, "", &["Ren".into(), "Rena".into(), "x".into()], &[]);
         assert!(!out.contains("203.0") && !out.contains("relay.example") && !out.contains(&id) && !out.contains("someone") && !out.contains("Ren"), "{out}");
         assert!(out.contains("<name> and <name>") && out.contains("<path> named"), "{out}");
+    }
+
+    #[test]
+    fn reports_label_known_members_instead_of_their_ids() {
+        let mine = "m".repeat(64);
+        let theirs = format!("t{}", "u".repeat(63));
+        let text = format!("peer {} sent to {} ({})", short(&theirs), short(&mine), theirs);
+        let out = redact(&text, "", &[], &[mine, theirs.clone()]);
+        assert_eq!(out, "peer <member 1> sent to <this PC> (<member 1>)");
     }
 
     #[test]
     fn reports_hide_a_user_folder_with_spaces() {
         for home in ["C:\\Users\\Taro Yamada", "C:\\Users\\山田\u{3000}太郎"] {
             let text = format!("data folder {home}\\AppData\\Local\\app ready\nencoder x ({}\\AppData\\ffmpeg.exe)\nopen \"{}\\\\v\"", home.to_lowercase(), home.replace('\\', "\\\\"));
-            let out = redact(&text, home, &[]);
+            let out = redact(&text, home, &[], &[]);
             assert!(!out.to_lowercase().contains("yamada") && !out.contains("山田") && !out.contains("太郎"), "{out}");
             assert!(out.contains("data folder <path> ready") && out.contains("(<path>)") && out.contains("open \"<path>\""), "{out}");
         }
