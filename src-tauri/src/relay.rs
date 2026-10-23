@@ -8,6 +8,7 @@ use tokio::time::{sleep, Instant};
 use crate::{debug, Core};
 
 const RELAY_EVERY: Duration = Duration::from_secs(300);
+const RELAY_RETRY: Duration = Duration::from_secs(60);
 const RELAY_WAIT: Duration = Duration::from_secs(10);
 const RELAY_POLL: Duration = Duration::from_millis(500);
 
@@ -104,6 +105,25 @@ async fn choose(ep: &Endpoint, map: &mut Vec<RelayUrl>, group: &[RelayUrl]) {
     *map = group.to_vec();
 }
 
+/// Whether this PC holds a home relay of the map within the wait, so a relay that is reconnecting (restarted for an update, a short network drop) is not given up at once.
+async fn home_within(core: &Core, map: &[RelayUrl], wait: Duration) -> bool {
+    let until = Instant::now() + wait;
+    loop {
+        if home(core).is_some_and(|h| map.contains(&h)) {
+            return true;
+        }
+        if Instant::now() >= until {
+            return false;
+        }
+        sleep(RELAY_POLL).await;
+    }
+}
+
+/// When to look at the relays again: soon while a preferred one is not in use, so it is back within a minute once it answers.
+pub fn recheck(map: &[RelayUrl], candidates: &[Vec<RelayUrl>]) -> Duration {
+    if candidates.first().is_none_or(|best| best.as_slice() == map) { RELAY_EVERY } else { RELAY_RETRY }
+}
+
 pub async fn keep(core: Arc<Core>) {
     let mut map = public();
     loop {
@@ -111,7 +131,7 @@ pub async fn keep(core: Arc<Core>) {
         let last = candidates.len() - 1;
         for (i, group) in candidates.iter().enumerate() {
             if *group == map {
-                if home(&core).is_some_and(|h| map.contains(&h)) {
+                if home_within(&core, &map, RELAY_WAIT).await {
                     break;
                 }
                 continue;
@@ -123,7 +143,7 @@ pub async fn keep(core: Arc<Core>) {
             }
         }
         tokio::select! {
-            _ = sleep(RELAY_EVERY) => {}
+            _ = sleep(recheck(&map, &candidates)) => {}
             _ = core.relay_wake.notified() => {}
         }
     }
@@ -143,6 +163,9 @@ mod tests {
         assert_eq!(list[2], public());
         assert!(list[2].len() > 1 && !list[2].contains(&custom[0]));
         assert_eq!(groups(&[]), vec![public()]);
+        assert_eq!(recheck(&public(), &groups(&[])), RELAY_EVERY);
+        assert_eq!(recheck(&list[0], &list), RELAY_EVERY);
+        assert_eq!(recheck(&public(), &list), RELAY_RETRY);
         assert!(parse(&[format!("https://{}.example.org", "a".repeat(URL_MAX))]).is_err());
         assert_eq!(parse(&vec!["https://relay.example.org".to_string(); URLS_MAX + 1]), Err("Use one relay server.".into()));
         assert_eq!(parse(&["x".repeat(500)]).unwrap_err().len(), "Not a relay URL: ".len() + 40);

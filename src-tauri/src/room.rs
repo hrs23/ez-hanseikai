@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use iroh::EndpointId;
 use serde::{Deserialize, Serialize};
@@ -20,6 +20,7 @@ pub const LOGS: &str = "logs";
 pub const PENDING: &str = "pending.bin";
 pub const TOKEN_BYTES: usize = 8;
 pub const UNREACHABLE_AFTER: Duration = Duration::from_secs(60);
+pub const ASK_STALE: Duration = Duration::from_secs(120);
 const ROOM_ID_BYTES: usize = 4;
 const TITLE_MAX: usize = 80;
 pub const CODE_MAX: usize = 1024;
@@ -84,6 +85,7 @@ pub struct Ask {
     pub id: String,
     pub name: String,
     pub answer: Option<bool>,
+    pub seen: Instant,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -645,12 +647,12 @@ pub enum Step {
     Admitted,
 }
 
-pub fn ask_step(invites: &mut Vec<(String, String)>, asks: &mut Vec<Ask>, room: &str, token: &str, id: &str, name: &str) -> Step {
+pub fn ask_step(invites: &mut Vec<(String, String)>, asks: &mut Vec<Ask>, room: &str, token: &str, id: &str, name: &str, now: Instant) -> Step {
     if !invites.iter().any(|(t, r)| t == token && r == room) {
         return Step::Refused;
     }
     let Some(i) = asks.iter().position(|a| a.token == token) else {
-        asks.push(Ask { token: token.to_string(), id: id.to_string(), name: name.to_string(), answer: None });
+        asks.push(Ask { token: token.to_string(), id: id.to_string(), name: name.to_string(), answer: None, seen: now });
         return Step::Wait(true);
     };
     if asks[i].id != id {
@@ -660,6 +662,7 @@ pub fn ask_step(invites: &mut Vec<(String, String)>, asks: &mut Vec<Ask>, room: 
         None => {
             let changed = asks[i].name != name;
             asks[i].name = name.to_string();
+            asks[i].seen = now;
             Step::Wait(changed)
         }
         Some(approve) => {
@@ -668,6 +671,13 @@ pub fn ask_step(invites: &mut Vec<(String, String)>, asks: &mut Vec<Ask>, room: 
             if approve { Step::Admitted } else { Step::Declined }
         }
     }
+}
+
+/// Drops the join requests whose joiner stopped asking (the app closed or the network went), so nobody is left approving someone who is gone. The invite still works if they ask again.
+pub fn drop_stale_asks(asks: &mut Vec<Ask>, now: Instant) -> bool {
+    let before = asks.len();
+    asks.retain(|a| a.answer.is_some() || now.saturating_duration_since(a.seen) < ASK_STALE);
+    asks.len() != before
 }
 
 pub fn answer_ask(asks: &mut [Ask], id: &str, approve: bool) -> bool {
@@ -1905,7 +1915,7 @@ pub mod tests {
     }
 
     fn ask(invites: &mut Vec<(String, String)>, asks: &mut Vec<Ask>, token: &str, id: &str) -> Step {
-        ask_step(invites, asks, "r", token, id, "Ren")
+        ask_step(invites, asks, "r", token, id, "Ren", Instant::now())
     }
 
     #[test]
@@ -1924,7 +1934,24 @@ pub mod tests {
         answer_ask(&mut asks, "z", false);
         assert_eq!(ask(&mut invites, &mut asks, "t2", "z"), Step::Declined);
         assert!(invites.is_empty() && asks.is_empty());
-        assert_eq!(ask_step(&mut vec![("t3".into(), "other".into())], &mut asks, "r", "t3", "x", ""), Step::Refused);
+        assert_eq!(ask_step(&mut vec![("t3".into(), "other".into())], &mut asks, "r", "t3", "x", "", Instant::now()), Step::Refused);
+    }
+
+    #[test]
+    fn a_join_request_nobody_repeats_is_dropped_and_the_invite_still_works() {
+        let mut invites = vec![("t1".to_string(), "r".to_string()), ("t2".to_string(), "r".to_string())];
+        let mut asks = Vec::new();
+        let start = Instant::now();
+        let at = |s: u64| start + Duration::from_secs(s);
+        assert_eq!(ask_step(&mut invites, &mut asks, "r", "t1", "x", "Ren", at(0)), Step::Wait(true));
+        assert_eq!(ask_step(&mut invites, &mut asks, "r", "t2", "y", "Mio", at(0)), Step::Wait(true));
+        assert!(answer_ask(&mut asks, "y", true));
+        assert_eq!(ask_step(&mut invites, &mut asks, "r", "t1", "x", "Ren", at(100)), Step::Wait(false));
+        assert!(!drop_stale_asks(&mut asks, at(100 + ASK_STALE.as_secs() - 1)));
+        assert!(drop_stale_asks(&mut asks, at(100 + ASK_STALE.as_secs())));
+        assert_eq!(asks.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(), ["y"]);
+        assert_eq!(ask_step(&mut invites, &mut asks, "r", "t1", "x", "Ren", at(500)), Step::Wait(true));
+        assert_eq!(ask_step(&mut invites, &mut asks, "r", "t2", "y", "Mio", at(500)), Step::Admitted);
     }
 
     #[test]

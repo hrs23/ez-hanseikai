@@ -37,6 +37,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const MISMATCH_WAIT: Duration = Duration::from_secs(10);
 const OFFSET_SAMPLES: usize = 8;
 const HELLO_EVERY: u32 = 3;
+const SYNC_STRIKES: u32 = 3;
 const MEASURE_FIRST: u32 = 5;
 const MEASURE_EVERY: u32 = 15;
 const BYTES_PER_MBIT: f64 = 125_000.0;
@@ -353,6 +354,22 @@ async fn follow(core: &Core, conn: &Connection, send: &mut SendStream, req: &Val
     Ok(())
 }
 
+#[derive(Debug, PartialEq)]
+pub enum SetMove {
+    Begin,
+    Switch,
+    Keep,
+}
+
+/// What a member does when it hears of a recording: join it when none runs here, and when two started at once, everyone ends up in the one that started last (the higher id on a tie).
+pub fn set_move(running: Option<(i64, &str)>, heard: (i64, &str)) -> SetMove {
+    match running {
+        None => SetMove::Begin,
+        Some(r) if r < heard => SetMove::Switch,
+        Some(_) => SetMove::Keep,
+    }
+}
+
 fn react_to_set(core: &Arc<Core>, set: &Value) {
     let (Some(id), Some(room)) = (set["id"].as_str(), set["room"].as_str()) else { return };
     if !valid_id(id) || !core.in_room(room) {
@@ -364,14 +381,14 @@ fn react_to_set(core: &Arc<Core>, set: &Value) {
     }
     let (by, start_us, voice) = (set["by"].as_str().unwrap_or_default().to_string(), set["start_us"].as_i64().unwrap_or(0), set["voice"] == true);
     let of = set["of"].as_str().filter(|of| valid_id(of)).map(String::from);
-    let newer = match core.active_set.lock().unwrap().as_ref() {
-        None => false,
-        Some(a) if (a.start_us, a.id.as_str()) < (start_us, id) => true,
-        Some(_) => return,
-    };
-    if !newer {
-        let _ = room::begin_set(core, room, id, &by, start_us, voice, of);
-        return;
+    let running = core.active_set.lock().unwrap().as_ref().map(|a| (a.start_us, a.id.clone()));
+    match set_move(running.as_ref().map(|(t, id)| (*t, id.as_str())), (start_us, id)) {
+        SetMove::Keep => return,
+        SetMove::Begin => {
+            let _ = room::begin_set(core, room, id, &by, start_us, voice, of);
+            return;
+        }
+        SetMove::Switch => {}
     }
     let (core, room, id) = (core.clone(), room.to_string(), id.to_string());
     std::thread::spawn(move || {
@@ -550,7 +567,9 @@ pub async fn measure_speed(core: &Arc<Core>, id: &str) -> Option<Value> {
 }
 
 pub fn pending_asks(core: &Core) -> Vec<Value> {
-    core.asks.lock().unwrap().iter().filter(|a| a.answer.is_none()).map(|a| json!({"id": a.id, "name": a.name})).collect()
+    let mut asks = core.asks.lock().unwrap();
+    room::drop_stale_asks(&mut asks, Instant::now());
+    asks.iter().filter(|a| a.answer.is_none()).map(|a| json!({"id": a.id, "name": a.name})).collect()
 }
 
 pub fn send_asks(core: &Arc<Core>) {
@@ -577,7 +596,7 @@ async fn join(core: &Arc<Core>, from: EndpointId, mut send: SendStream, mut recv
     let step = {
         let mut invites = core.invites.lock().unwrap();
         let mut asks = core.asks.lock().unwrap();
-        room::ask_step(&mut invites, &mut asks, &room_id, token, &id, &name)
+        room::ask_step(&mut invites, &mut asks, &room_id, token, &id, &name, Instant::now())
     };
     let reply = match &step {
         room::Step::Refused => {
@@ -724,6 +743,11 @@ fn open_part(part: &Path, at: Option<u64>) -> std::io::Result<std::fs::File> {
         file.seek(SeekFrom::End(0))?;
     }
     Ok(file)
+}
+
+/// A new connection to a member tries again the copies that failed their check, which may have come from a file still being written.
+fn forget_bad(bad: &Mutex<HashSet<(String, PathBuf)>>, peer: &str) {
+    bad.lock().unwrap().retain(|(p, _)| p != peer);
 }
 
 fn finish_copy(bad: &Mutex<HashSet<(String, PathBuf)>>, peer: &str, path: &Path, expect: Option<&(u64, String)>, resumed: bool) -> std::io::Result<Option<u64>> {
@@ -996,11 +1020,33 @@ async fn present_invite(core: &Arc<Core>, id: &EndpointId, conn: &Connection) ->
     }
 }
 
+/// Whether to give up a connection after this round of sync: a closed connection at once, a failing one only after a few rounds in a row, so one slow answer does not cut a member off.
+pub fn give_up(strikes: &mut u32, failed: bool, closed: bool) -> bool {
+    if !failed {
+        *strikes = 0;
+        return false;
+    }
+    *strikes += 1;
+    closed || *strikes >= SYNC_STRIKES
+}
+
+/// Notes a pull of one member's log; true when it is the first failure of a run, the only one worth logging.
+pub fn first_failure(failing: &mut HashSet<String>, of: &str, failed: bool) -> bool {
+    if !failed {
+        failing.remove(of);
+        return false;
+    }
+    failing.insert(of.to_string())
+}
+
 async fn sync(core: &Arc<Core>, id: &EndpointId, conn: &Connection) -> Result<()> {
     let mut samples = Vec::new();
     let mut tick = 0u32;
+    let mut strikes = 0u32;
+    let mut failing = HashSet::new();
     let Some(room) = core.room_id() else { return Ok(()) };
     let mut told = Some(holdings(core));
+    let started = Instant::now();
     loop {
         if test_flag(&core.dir, "offline") {
             anyhow::bail!("offline");
@@ -1010,8 +1056,9 @@ async fn sync(core: &Arc<Core>, id: &EndpointId, conn: &Connection) -> Result<()
             hello(core, id, conn).await;
             told = Some(held);
         }
+        let mut failure = None;
         if tick < MEASURE_FIRST || tick % MEASURE_EVERY == 0 {
-            measure(core, id, conn, &room, &mut samples).await?;
+            failure = measure(core, id, conn, &room, &mut samples).await.err();
         }
         tick += 1;
         let via = id.to_string();
@@ -1024,11 +1071,25 @@ async fn sync(core: &Arc<Core>, id: &EndpointId, conn: &Connection) -> Result<()
             })
             .collect();
         for pull in pulls {
-            if let Ok((Err(e), of)) = pull.await {
-                if of == via {
-                    return Err(e);
+            let Ok((result, of)) = pull.await else { continue };
+            if first_failure(&mut failing, &of, result.is_err()) {
+                if let Err(e) = &result {
+                    debug::event(core, started, format!("{}: pulling the log of {} failed: {e}", short(id), if of == via { "this member".to_string() } else { short(&of) }));
                 }
             }
+            if of == via {
+                if let Err(e) = result {
+                    failure = failure.or(Some(e));
+                }
+            }
+        }
+        if let Some(e) = failure {
+            if give_up(&mut strikes, true, conn.close_reason().is_some()) {
+                return Err(e);
+            }
+            debug::event(core, started, format!("{}: sync round failed ({strikes} of {SYNC_STRIKES}): {e}", short(id)));
+        } else {
+            give_up(&mut strikes, false, false);
         }
         room::apply_removals(core);
         room::apply_stops(core);
@@ -1081,6 +1142,7 @@ async fn run(core: &Arc<Core>, id: EndpointId, conn: Connection, outgoing: bool)
     let label = format!("{} {}", short(&id), if outgoing { "outgoing" } else { "incoming" });
     debug::event(core, started, format!("{label}: connected"));
     watch_paths(core, &conn, label.clone());
+    forget_bad(&core.bad, &id.to_string());
     let serving = tokio::spawn(serve(core.clone(), conn.clone()));
     if present_invite(core, &id, &conn).await {
         match hello(core, &id, &conn).await {
@@ -1186,7 +1248,10 @@ mod tests {
         assert_eq!(finish(&other, b"evil", Some(&good), true), (Some(4), None, false));
         assert_eq!(finish(&other, b"live", None, false), (None, Some(b"live".to_vec()), false));
         assert_eq!(finish(&init, b"tini", Some(&good), false), (Some(4), None, false));
-        assert_eq!(*bad.lock().unwrap(), HashSet::from([("a".to_string(), init)]));
+        assert_eq!(*bad.lock().unwrap(), HashSet::from([("a".to_string(), init.clone())]));
+        bad.lock().unwrap().insert(("b".to_string(), init.clone()));
+        forget_bad(&bad, "a");
+        assert_eq!(*bad.lock().unwrap(), HashSet::from([("b".to_string(), init)]));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1203,6 +1268,50 @@ mod tests {
         let speed = speed_json(2_500_000, Duration::from_secs(2), 1_250_000, Duration::from_millis(500), 19, "direct");
         assert_eq!(speed, json!({"up_mbps": 10.0, "down_mbps": 20.0, "rtt_ms": 19, "path": "direct"}));
         assert_eq!(speed_json(1, Duration::ZERO, 0, Duration::ZERO, 0, "relay")["down_mbps"], 0.0);
+    }
+
+    #[test]
+    fn sync_gives_up_after_a_few_failed_rounds_in_a_row_or_at_once_when_closed() {
+        let mut strikes = 0;
+        assert!(!give_up(&mut strikes, true, false));
+        assert!(!give_up(&mut strikes, true, false));
+        assert!(!give_up(&mut strikes, false, false));
+        assert_eq!(strikes, 0);
+        assert!((1..SYNC_STRIKES).all(|_| !give_up(&mut strikes, true, false)));
+        assert!(give_up(&mut strikes, true, false));
+        let mut strikes = 0;
+        assert!(give_up(&mut strikes, true, true));
+        assert!(!give_up(&mut 0, false, true));
+    }
+
+    #[test]
+    fn a_failing_log_pull_is_reported_once_per_run() {
+        let mut failing = HashSet::new();
+        assert!(first_failure(&mut failing, "c", true));
+        assert!(!first_failure(&mut failing, "c", true));
+        assert!(first_failure(&mut failing, "d", true));
+        assert!(!first_failure(&mut failing, "c", false));
+        assert!(first_failure(&mut failing, "c", true));
+        assert!(!first_failure(&mut failing, "e", false));
+    }
+
+    #[test]
+    fn recordings_started_at_once_end_up_as_one_on_every_member() {
+        let starts = [(100, "a"), (100, "b"), (90, "c")];
+        let orders: [[usize; 3]; 6] = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
+        for own in 0..starts.len() {
+            for order in orders {
+                let mut running = Some(starts[own]);
+                for heard in order.map(|i| starts[i]) {
+                    if matches!(set_move(running, heard), SetMove::Begin | SetMove::Switch) {
+                        running = Some(heard);
+                    }
+                }
+                assert_eq!(running, Some((100, "b")), "member {own} hearing {order:?}");
+            }
+        }
+        assert_eq!(set_move(None, (5, "x")), SetMove::Begin);
+        assert_eq!(set_move(Some((5, "x")), (5, "x")), SetMove::Keep);
     }
 
     #[test]
