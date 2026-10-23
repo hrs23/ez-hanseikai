@@ -527,7 +527,8 @@ test("feedback shows what is sent, needs a comment or the diagnostics, and an er
   const html = read("index.html");
   assert.deepEqual([...html.match(/id="fbkind"[^]*?<\/div>/)[0].matchAll(/data-v="(\w+)"/g)].map((m) => m[1]), ["bug", "idea", "comment"]);
   assert.match(html, /id="fbdiag" type="checkbox" checked/);
-  assert.match(html, /id="fbimage" type="checkbox">/);
+  assert.match(html, /id="fbimage" type="checkbox" checked>/);
+  assert.match(html, /id="fbbtn"[^>]*data-icon="message"/);
 });
 
 test("the new Diagnostics texts have Japanese translations", () => {

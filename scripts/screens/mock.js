@@ -55,6 +55,7 @@
     check: () => { const L = (level, text, args) => ({ level, text, args: args || {} }); const I = (item, lines) => ({ item, level: lines.some((l) => l.level === "warn") ? "warn" : "ok", lines }); return { pc: [I("Windows", [L("ok", "Windows build {build}", { build: 26100 })]), I("WebView2", [L("ok", "WebView2 {version}", { version: "130.0" })]), I("Screen capture", [L("ok", "Screen capture works")]), I("App sound", [L("ok", "App sound works")]), I("Encoder", [L("ok", "NVIDIA NVENC")])], net: [I("UDP", [L("ok", "UDP works")]), I("Direct connections", [L("warn", "This network changes the address per destination")]), I("Relay server", [L("ok", "Reachable")])] }; },
     export_target: () => "C:\\Users\\user\\Videos",
     party_on: () => null,
+    feedback_snap: () => "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="320" height="200"><rect width="320" height="200" fill="#1b1f27"/><rect x="0" y="0" width="70" height="200" fill="#232833"/></svg>'),
   };
   const call = async (name, args) => {
     const o = window.__mock.overrides[name];

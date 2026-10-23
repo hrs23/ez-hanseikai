@@ -17,9 +17,8 @@ async function openFeedback(kind = "bug", comment = "") {
   feedback = { kind: Object.hasOwn(FEEDBACK_NAMES, kind) ? kind : "bug", shown: null, image: null };
   $("fbcomment").value = comment;
   $("fbdiag").checked = true;
-  $("fbimage").checked = false;
   $("fbpreview").open = false;
-  if (!$("feedbackdlg").open) feedback.image = await dialog("feedback_snap").catch(() => null);
+  if (!$("feedbackdlg").open) { feedback.image = await dialog("feedback_snap").catch(() => null); $("fbimage").checked = true; }
   renderFeedback();
   const ask = dialog("feedback_preview");
   if (!$("feedbackdlg").open) $("feedbackdlg").showModal();
@@ -42,3 +41,4 @@ $("fbsend").onclick = single(async () => {
   }
 });
 menuActions.feedback = () => openFeedback("bug", shownError(lastError, !$("toast").hidden));
+$("fbbtn").onclick = () => menuActions.feedback();

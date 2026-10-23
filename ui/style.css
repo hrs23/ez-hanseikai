@@ -276,7 +276,7 @@ body.noside .side, body.boardfull .side, body.noside .splitter, body.boardfull .
 .net.relay, .table td .net.warn { color: var(--warn); background: var(--warn-soft); cursor: pointer; }
 .table td .net.ok { color: var(--ok); cursor: pointer; }
 .net svg { width: 12px; height: 12px; }
-.me #gear { flex: none; }
+.metools { flex: none; display: flex; }
 
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
 .notices { flex: none; display: flex; flex-direction: column; }

@@ -423,6 +423,7 @@ const JA = {
   "Sent": "送信",
   "Settings": "設定",
   "Settings (Ctrl+,)": "設定 (Ctrl+,)",
+  "Send feedback (Ctrl+Shift+F)": "フィードバックを送る (Ctrl+Shift+F)",
   "Select all": "すべて選択",
   "Settings and downloads are removed. Files of older versions and leftovers of deleted recordings go to the Recycle Bin.": "設定とダウンロードしたものを消します。古い版のファイルと、削除した録画の残りはごみ箱に移します。",
   "Shortcuts": "ショートカット",

@@ -48,8 +48,11 @@
         <span class="t"><b id="mename"></b><small id="meid"></small></span>
         <button id="apibadge" class="apibadge" hidden data-t-title="The local API is on" data-t-label="The local API is on"><span data-icon="terminal" data-icon-class="sm"></span>API</button>
         <button id="netbadge" class="net" hidden></button>
-        <button id="aibtn" class="icon sm" aria-haspopup="menu" data-icon="bot" data-t-label="AI" data-t-title="AI"></button>
-        <button id="gear" class="icon sm" data-icon="gear" data-t-label="Settings" data-t-title="Settings (Ctrl+,)"></button>
+        <span class="metools">
+          <button id="fbbtn" class="icon sm" data-icon="message" data-t-label="Send feedback" data-t-title="Send feedback (Ctrl+Shift+F)"></button>
+          <button id="aibtn" class="icon sm" aria-haspopup="menu" data-icon="bot" data-t-label="AI" data-t-title="AI"></button>
+          <button id="gear" class="icon sm" data-icon="gear" data-t-label="Settings" data-t-title="Settings (Ctrl+,)"></button>
+        </span>
       </div>
     </div>
   </aside>
@@ -220,7 +223,7 @@
   <div id="fbkind" class="seg" role="radiogroup" data-t-label="Kind"><button data-v="bug" data-t="Problem">Problem</button><button data-v="idea" data-t="Request">Request</button><button data-v="comment" data-t="Comment">Comment</button></div>
   <textarea id="fbcomment" class="fbcomment" data-t-placeholder="What happened, or what would you like?" data-t-label="Comment"></textarea>
   <label class="check"><input id="fbdiag" type="checkbox" checked><span data-t="Include diagnostics (names, IDs and addresses hidden)">Include diagnostics (names, IDs and addresses hidden)</span></label>
-  <label class="check"><input id="fbimage" type="checkbox"><span data-t="Include a picture of the app window">Include a picture of the app window</span></label>
+  <label class="check"><input id="fbimage" type="checkbox" checked><span data-t="Include a picture of the app window">Include a picture of the app window</span></label>
   <details id="fbpreview" class="fbpreview"><summary data-t="What is sent">What is sent</summary><img id="fbimg" alt="" hidden><pre id="fbtext"></pre></details>
   <p id="fbnote" class="muted"></p>
   </div>
