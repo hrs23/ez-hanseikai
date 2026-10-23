@@ -1,6 +1,13 @@
 name: test
 
-on: push
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      send_report:
+        description: Send one test feedback report to the real report server from the e2e library part
+        type: boolean
+        default: false
 
 jobs:
   test:
@@ -107,6 +114,7 @@ jobs:
         env:
           E2E_OUT: ${{ runner.temp }}/e2e
           E2E_PART: ${{ matrix.part }}
+          E2E_SEND_REPORT: ${{ inputs.send_report && matrix.part == 'library' && format('{0} run {1}', github.sha, github.run_id) || '' }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: failure()
         with:

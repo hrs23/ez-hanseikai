@@ -1743,6 +1743,14 @@ async function library(ctx) {
     await evaluate(a, `$("diagdlg").close(); true`);
   });
 
+  if (process.env.E2E_SEND_REPORT) await step("a test feedback report with the diagnostics and log goes to the real report server", async () => {
+    const comment = `[e2e] test report ${process.env.E2E_SEND_REPORT}`;
+    await evaluate(a, `dialog("feedback_snap").then(() => dialog("feedback_preview")).then(() => true)`);
+    const sent = await evaluate(a, `dialog("send_feedback", { args: { kind: "comment", comment: ${JSON.stringify(comment)}, diagnostics: true, image: true } })`);
+    check(/^\d{8}-\d{6}(-\d+)?$/.test(sent?.id || ""), `the report server gave no ID: ${brief(sent)}`);
+    say(`report ${sent.id} arrived: ${comment}`);
+  });
+
   await step("the set exports to a folder of plain files lined up on its start", async () => {
     const start = setOf(await state(a), ctx.set).start_us;
     await invoke(a, "add_event", { kind: "note", text: "Warm up", target: { set: ctx.set, from_us: start, to_us: start + 3e6 }, values: null });
