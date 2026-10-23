@@ -177,7 +177,7 @@ function sessionRow(s) {
 function renderSessions() {
   if (!inRoom()) return;
   const rows = recordingRows();
-  const sig = [rows.map(rowSignature), page, nowView, selected, partyFrom, st.active_set, st.active_set && st.party.watching[st.active_set.id], st.peers.map((p) => p.connected), lang, looks(), st.names];
+  const sig = [rows.map(rowSignature), page, nowView, selected, partyFrom, st.active_set, st.active_set && st.party.watching[st.active_set.id], st.active_set && !st.active_set.voice && matchNow(nowM()), st.peers.map((p) => p.connected), lang, looks(), st.names];
   if (!changed("sessions", sig)) return;
   $("sessions").replaceChildren(...(st.active_set ? [liveRow()] : []), ...rows.map((r) => sessionRow(r.s)), rows.length || st.active_set ? "" : el("div", { className: "none", textContent: t("No recordings yet") }));
 }

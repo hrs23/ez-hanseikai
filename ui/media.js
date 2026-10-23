@@ -90,7 +90,11 @@ function broken(s) {
 function drop(s) {
   if (!s) return;
   detach(s);
-  if (s.tap) s.tap.out.disconnect();
+  if (s.tap) {
+    s.tap.out.disconnect();
+    s.tap.gain.disconnect();
+    for (const n of s.tap.nodes || []) n.disconnect();
+  }
   s.video.remove();
 }
 

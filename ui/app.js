@@ -138,10 +138,9 @@ function tile(s, key) {
   if (s === play) {
     tl.box.onpointerdown = (e) => inkDown(tl, e);
     tl.box.onpointermove = inkMove;
-    tl.box.onpointerup = (e) => { if (inkUp(e)) tl.drew = true; };
+    tl.box.onpointerup = (e) => { if (inkUp(e)) tl.drewAt = Date.now(); };
     tl.box.onpointercancel = tl.box.onlostpointercapture = inkUp;
-    tl.box.onclick = () => { tl.drew = false; };
-    tl.box.ondblclick = (e) => { if (e.target.closest(".nl") || tl.drew) return; if (full) toggleFull(); else focus(); };
+    tl.box.ondblclick = (e) => { if (e.target.closest(".nl") || Date.now() - (tl.drewAt || 0) < 2 * DOUBLE_CLICK_MS) return; if (full) toggleFull(); else focus(); };
     tl.box.oncontextmenu = (e) => { e.preventDefault(); stageMenu(e, key); };
   } else {
     tl.box.onclick = (e) => { if (e.target.closest(".choose")) return; focus(); };
@@ -710,8 +709,9 @@ function selectSet(id) {
   clock.playing = false;
   clock.m = positions.has(id) ? Math.max(0, (positions.get(id) - base()) / 1e6) : 0;
   live = false;
-  delete sigs.events;
   delete sigs.views;
+  peek.at = null;
+  $("peek").hidden = true;
   ink.live.clear();
   ink.press = null;
   play.view = 0;
@@ -895,7 +895,7 @@ function act(cmd, m, prev) {
   share();
 }
 listenMain("party", () => refresh());
-const togglePlay = () => act(clock.playing ? "pause" : "play", nowM());
+const togglePlay = () => act(clock.playing ? "pause" : "play", !clock.playing && !playSet()?.live && total() && nowM() >= total() ? 0 : nowM());
 const seekTo = (m) => act("seek", Math.max(0, m));
 function seekEdge(end) {
   if (end && playSet().live) { goLive(); share(); renderPlayer(); return; }
@@ -1135,7 +1135,8 @@ function editNote(n, row) {
     done = true;
     const text = cleanText(input.value, LIMITS.note);
     if (save && text && text !== n.text) run("event_action", { kind: "edit", id: n.id, text });
-    delete sigs.events;
+    input.remove();
+    delete sigs.review;
     renderEvents();
   };
   input.onkeydown = (e) => {
