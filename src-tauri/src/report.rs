@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use crate::ops::arg;
 use crate::{debug, proc, Core, VERSION};
 
-pub const URL: &str = "https://ezh-relay.hiros.page:8444/v1/report";
+pub const URL: &str = "https://ezh.hiros.page:8444/v1/report";
 
 pub fn url() -> Option<&'static str> {
     Some(URL)
