@@ -138,7 +138,7 @@ function renderMembers() {
     const version = me ? st.version : p && p.version;
     const tr = el("tr", { className: "pick" + (state.kind === "off" ? " dim" : ""), tabIndex: 0 },
       el("td", {}, withClass(nameChip(me ? el("button", { className: "plain", ariaLabel: t("Avatar"), onclick: (e) => { e.stopPropagation(); openSettings("general"); } }, avatar(id, "", "on", false, true)) : avatar(id, "", p && p.connected ? "on" : null, false, true), nameOf(id), me ? el("span", { className: "pill gray", textContent: t("You") }) : null), "who")),
-      el("td", {}, idText(id), iconButton("copy", t("Copy ID"), (e) => { e.stopPropagation(); navigator.clipboard.writeText(id).then(() => flash(t("ID copied"))).catch(fail); })),
+      el("td", {}, idText(id), iconButton("copy", t("Copy ID"), (e) => { e.stopPropagation(); copyText(id, t("ID copied")); })),
       el("td", { className: "state " + state.kind, title: state.title || "" }, el("i", { className: "sdot" }), state.text),
       el("td", {}, conn),
       el("td", { textContent: !me && p.connected ? `${p.rtt_ms} ms` : "" }),
@@ -301,9 +301,6 @@ function confirmDelete(ids) {
   };
   $("deletedlg").showModal();
 }
-async function deleteSession(set) {
-  if (set) confirmDelete([set.id]);
-}
 
 function openDiagnostics() {
   if (!$("diagdlg").open) $("diagdlg").showModal();
@@ -395,7 +392,7 @@ $("promptcopy").onclick = () => navigator.clipboard.writeText(aiCopyText($("prom
 $("apidoc").onclick = () => dialog("open_link", { url: `${apiUrl(st.api.address)}/llms.txt` }).catch(fail);
 $("apion").onchange = () => run("set_api", { on: $("apion").checked });
 $("notifyjoins").onchange = () => run("set_notify_joins", { on: $("notifyjoins").checked });
-$("apicopy").onclick = () => invoke("api_info").then((info) => navigator.clipboard.writeText(info.token)).then(() => flash(t("Token copied"))).catch(fail);
+$("apicopy").onclick = () => invoke("api_info").then((info) => copyText(info.token, t("Token copied"))).catch(fail);
 $("apinew").onclick = async () => {
   if (await ask(t("Make a new token?"), t("New token"), false)) run("new_api_token", null, () => flash(t("New token made")));
 };
@@ -407,7 +404,7 @@ function pressVoice() {
   pick($("voicetone"), voiceToneChoice, (v) => { voiceToneChoice = v; store("voiceTone", voiceToneChoice); pressVoice(); applyAudio(); });
 }
 $("sessionsound").onchange = () => { sessionSound = $("sessionsound").checked; store("sessionSound", sessionSound); };
-$("copyid").onclick = () => navigator.clipboard.writeText(st.id).then(() => flash(t("ID copied"))).catch(fail);
+$("copyid").onclick = () => copyText(st.id, t("ID copied"));
 $("opendata").onclick = () => dialog("open_data_folder").catch(fail);
 let relayCustom = false;
 function renderRelay() {
@@ -452,7 +449,7 @@ const menuActions = {
   "rename-room": openRoomSettings,
   "leave-room": closeRoom,
   "add-note": openQuick,
-  "delete-session": () => deleteSession(playSet()),
+  "delete-session": () => { if (playSet()) confirmDelete([playSet().id]); },
   "page-live": () => navigate("live"),
   "page-board": () => navigate("board"),
   "page-members": () => navigate("members"),

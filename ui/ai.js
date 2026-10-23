@@ -82,5 +82,5 @@ async function summarizeDebrief(id) {
   const info = await invoke("api_info").catch(fail);
   if (!info || !st.room) return;
   if (!info.on) { flash(t("Turn on the local API")); return; }
-  navigator.clipboard.writeText(aiPrompt(aiDebrief(), info, st.room, id)).then(() => flash(t("Prompt copied"))).catch(fail);
+  copyText(aiPrompt(aiDebrief(), info, st.room, id), t("Prompt copied"));
 }

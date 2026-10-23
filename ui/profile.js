@@ -83,7 +83,7 @@ function renderMemberProfile() {
       me ? el("button", { className: "sm", onclick: () => { box.close(); openSettings("general"); } }, icon("edit", "sm"), t("Edit profile")) : ""),
     el("div", { className: "prname" },
       el("h2", { textContent: nameOf(id) }),
-      el("div", { className: "row" }, idText(id, "small"), iconButton("copy", t("Copy ID"), () => navigator.clipboard.writeText(id).then(() => flash(t("ID copied"))).catch(fail))),
+      el("div", { className: "row" }, idText(id, "small"), iconButton("copy", t("Copy ID"), () => copyText(id, t("ID copied")))),
       el("div", { className: "state " + state.kind, title: state.title || "" }, el("i", { className: "sdot" }), state.text)),
     el("div", { className: "prbody" },
       el("dl", { className: "kv" }, ...kv),

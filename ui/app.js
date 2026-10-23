@@ -91,6 +91,7 @@ const people = () => [st.id, ...st.peers.map((p) => p.id)];
 const liveSet = () => st.sets.find((s) => s.live) || null;
 const inRoom = () => !!st && !!st.room && !st.room.pending;
 const fail = (e) => flash(e, "error", { label: t("Report…"), run: () => openFeedback("bug", errorReport(e)) });
+const copyText = (text, message) => navigator.clipboard.writeText(text).then(() => flash(message)).catch(fail);
 const run = (cmd, args, then = refresh) => invoke(cmd, args).then(then).catch(fail);
 const quiet = (cmd, args) => invoke(cmd, args).catch(warn);
 const showingNow = () => nowView || !playSet();
@@ -911,11 +912,8 @@ function jump(delta) {
 
 function indexOf(state) {
   const byKey = new Map(state.events.map((e) => [e.key, e]));
-  const setOfKey = new Map();
-  for (const s of state.sets) for (const k of s.events) if (!setOfKey.has(k)) setOfKey.set(k, s);
-  return { byKey, setOfKey, items: new Map() };
+  return { byKey, items: new Map() };
 }
-const setOf = (e) => idx.setOfKey.get(e.key) || null;
 const setLength = (s) => fmt(((s.end_us || nowUs()) - s.start_us) / 1e6);
 const pluginName = (id, stored) => t((plugins.find((p) => p.id === id) || {}).name || stored || id);
 const viewContext = () => ({ me: st.id, name: nameOf, online: (id) => id === st.id || sendsPicture(peerOf(id)) });
@@ -981,13 +979,13 @@ function analysisMenu(set, a, e) {
   const run = {
     details: { label: t("Details"), icon: "info", run: () => showDetails(a, analysisDetails(a, info())) },
     again: { label: t("Run again"), icon: "rotate-cw", run: () => retryAnalysis(set, a.plugin) },
-    copy: { label: t("Copy error"), icon: "copy", run: () => navigator.clipboard.writeText(a.error).then(() => flash(t("Copied"))).catch(fail) },
+    copy: { label: t("Copy error"), icon: "copy", run: () => copyText(a.error, t("Copied")) },
   };
   openMenu(analysisActions(a).map((x) => ({ ...run[x.id], disabled: x.disabled })), e);
 }
 function showDetails(a, rows) {
   $("detailbody").replaceChildren(...rows.flatMap((r) => [el("dt", { textContent: r.label }), el("dd", {}, r.key === "runner" ? nameChip(avatar(plugins.find((p) => p.id === a.plugin).runner, "sm", null, false, true), r.value) : r.value)]));
-  $("detailcopy").onclick = () => navigator.clipboard.writeText(analysisDetailText(rows)).then(() => flash(t("Copied"))).catch(fail);
+  $("detailcopy").onclick = () => copyText(analysisDetailText(rows), t("Copied"));
   $("detaildlg").showModal();
 }
 function renderAnalysis(set) {
@@ -1062,8 +1060,8 @@ function eventRow(n) {
     const icons = { go: "play", copy: "copy", link: "link", edit: "edit", delete: "trash" };
     const run = {
       go: () => goTo(n),
-      copy: () => navigator.clipboard.writeText(n.text).then(() => flash(t("Copied"))).catch(fail),
-      link: () => navigator.clipboard.writeText(momentLink(n.setId, n.m, null)).then(() => flash(t("Link copied"))).catch(fail),
+      copy: () => copyText(n.text, t("Copied")),
+      link: () => copyText(momentLink(n.setId, n.m, null), t("Link copied")),
       edit: () => editNote(n, row),
       delete: () => deleteNote(n),
     };
