@@ -253,7 +253,8 @@ fn set_source(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     let mut last = core.engine.last_source.lock().unwrap();
     core.engine.pick_up.store(false, Ordering::Relaxed);
     *core.engine.source.lock().unwrap() = source.clone();
-    if !source.is_null() && *last != source {
+    // Turning the screen off also forgets the last source, so a restart does not start sending it again.
+    if *last != source {
         *last = source;
         drop(last);
         core.save_settings();
