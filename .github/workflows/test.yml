@@ -9,6 +9,10 @@ on:
         type: boolean
         default: false
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: windows-latest
@@ -87,18 +91,24 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22
+      - name: Read the ffmpeg build the app pins
+        id: pin
+        shell: bash
+        run: |
+          echo "url=$(sed -n 's/^const URL: &str = "\(.*\)";/\1/p' src-tauri/src/ffmpeg.rs)" >> "$GITHUB_OUTPUT"
+          echo "sha=$(sed -n 's/^const SHA256: &str = "\(.*\)";/\1/p' src-tauri/src/ffmpeg.rs)" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         id: ffmpeg
         with:
           path: ffmpeg
-          key: ffmpeg-8.1-essentials
+          key: ffmpeg-${{ steps.pin.outputs.sha }}
       - name: Download ffmpeg
         if: steps.ffmpeg.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           $ProgressPreference = 'SilentlyContinue'
-          Invoke-WebRequest -UseBasicParsing -Uri https://github.com/GyanD/codexffmpeg/releases/download/8.1/ffmpeg-8.1-essentials_build.zip -OutFile ffmpeg.zip
-          if ((Get-FileHash ffmpeg.zip -Algorithm SHA256).Hash.ToLower() -ne '8748283d821613d930b0e7be685aaa9df4ca6f0ad4d0c42fd02622b3623463c6') { throw 'checksum mismatch' }
+          Invoke-WebRequest -UseBasicParsing -Uri '${{ steps.pin.outputs.url }}' -OutFile ffmpeg.zip
+          if ((Get-FileHash ffmpeg.zip -Algorithm SHA256).Hash.ToLower() -ne '${{ steps.pin.outputs.sha }}') { throw 'checksum mismatch' }
           Expand-Archive ffmpeg.zip unpacked
           New-Item -ItemType Directory ffmpeg | Out-Null
           Get-ChildItem unpacked -Recurse -Include ffmpeg.exe, ffprobe.exe | Move-Item -Destination ffmpeg
@@ -132,8 +142,69 @@ jobs:
             ${{ runner.temp }}/e2e/*.txt
             ${{ runner.temp }}/e2e/*.json
 
+  install:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+      - name: Read the ffmpeg build the app pins
+        id: pin
+        shell: bash
+        run: |
+          echo "url=$(sed -n 's/^const URL: &str = "\(.*\)";/\1/p' src-tauri/src/ffmpeg.rs)" >> "$GITHUB_OUTPUT"
+          echo "sha=$(sed -n 's/^const SHA256: &str = "\(.*\)";/\1/p' src-tauri/src/ffmpeg.rs)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        id: ffmpeg
+        with:
+          path: ffmpeg
+          key: ffmpeg-${{ steps.pin.outputs.sha }}
+      - name: Download ffmpeg
+        if: steps.ffmpeg.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -UseBasicParsing -Uri '${{ steps.pin.outputs.url }}' -OutFile ffmpeg.zip
+          if ((Get-FileHash ffmpeg.zip -Algorithm SHA256).Hash.ToLower() -ne '${{ steps.pin.outputs.sha }}') { throw 'checksum mismatch' }
+          Expand-Archive ffmpeg.zip unpacked
+          New-Item -ItemType Directory ffmpeg | Out-Null
+          Get-ChildItem unpacked -Recurse -Include ffmpeg.exe, ffprobe.exe | Move-Item -Destination ffmpeg
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: installer
+          path: nsis
+      - name: Install silently
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem nsis -Filter *-setup.exe | Select-Object -First 1
+          $p = Start-Process -Wait -PassThru -FilePath $setup.FullName -ArgumentList '/S'
+          if ($p.ExitCode -ne 0) { throw "the installer exited with $($p.ExitCode)" }
+          Stop-Process -Name ez-hanseikai -Force -ErrorAction SilentlyContinue
+          $exe = Get-ChildItem $env:LOCALAPPDATA -Filter ez-hanseikai.exe -Recurse -Depth 2 -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $exe) { throw 'no ez-hanseikai.exe after the install' }
+          "E2E_EXE=$($exe.FullName)" >> $env:GITHUB_ENV
+          "E2E_VERSION=$((Select-String -Path src-tauri/Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value)" >> $env:GITHUB_ENV
+      - name: First run of the installed app
+        run: node scripts/e2e.mjs "$env:E2E_EXE" ffmpeg
+        env:
+          E2E_OUT: ${{ runner.temp }}/e2e
+          E2E_PART: install
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: failure()
+        with:
+          name: e2e-install
+          retention-days: 7
+          path: |
+            ${{ runner.temp }}/e2e/*.png
+            ${{ runner.temp }}/e2e/*.txt
+            ${{ runner.temp }}/e2e/*.json
+
   release:
-    needs: [test, e2e]
+    needs: [test, e2e, install]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
@@ -159,3 +230,15 @@ jobs:
           gh release view updater >/dev/null 2>&1 || gh release create updater --prerelease --title "Update manifests" --notes "Rolling manifests read by the in-app updater."
           cp latest.json latest-beta.json
           gh release upload updater latest.json latest-beta.json --clobber
+      - name: Check what the in-app updater reads
+        run: |
+          tag="v$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml)"
+          for name in latest.json latest-beta.json; do
+            for try in 1 2 3 4 5 6; do
+              curl -fsSL --retry 3 "https://github.com/$GITHUB_REPOSITORY/releases/download/updater/$name" -o served.json && jq -e --arg v "${tag#v}" '.version == $v' served.json >/dev/null && break
+              [ "$try" = 6 ] && { echo "::error::updater/$name does not offer ${tag#v}"; exit 1; }
+              sleep 10
+            done
+            jq -e '.platforms["windows-x86_64"].signature | length > 0' served.json >/dev/null || { echo "::error::updater/$name has no signature"; exit 1; }
+            curl -fsSIL --retry 3 -o /dev/null "$(jq -r '.platforms["windows-x86_64"].url' served.json)" || { echo "::error::the installer in updater/$name does not download"; exit 1; }
+          done

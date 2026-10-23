@@ -57,6 +57,7 @@ const LIVE_CATCH_UP = 1.05;
 const LIVE_SHRINK_GAP_S = 3;
 const CATCH_UP_S = 60;
 const UNREACHABLE_S = 60;
+const FFMPEG_DOWNLOAD_S = 300;
 const NTP = { c: "127.0.0.1:1" };
 const LIVE_PROBE = `(() => {
   const grid = playSet() ? play : rec;
@@ -401,6 +402,16 @@ const TILES_PROBE = `(() => {
   return { m: nowM(), playing: clock.playing, tiles: Object.values(play.tiles).map(({ media: s }) => { const want = wall - s.base; return { has: s.base !== null && !!s.index && covers(s.index, want - s.shift), into: s.index && s.index.segs.length ? want - s.shift - s.index.segs[0].t_us / 1e6 : -1, paused: s.video.paused, ready: s.video.readyState, off: s.video.currentTime - want, at: s.video.currentTime, buf: JSON.stringify(rangesOf(s.video.buffered)), dur: s.video.duration, segs: s.index ? s.index.segs.length + (s.index.open ? "+" : "") : -1, end: s.index ? endOf(s.index) : -1, shift: s.shift, seeking: s.video.seeking, err: !!s.video.error }; }) };
 })()`;
 
+const TRACE_STOPS = `(() => {
+  if (!Object.getOwnPropertyDescriptor(clock, "playing").set) {
+    let on = clock.playing;
+    Object.defineProperty(clock, "playing", { configurable: true, enumerable: true, get: () => on, set: (x) => { if (on && !x) window.e2eStops.push({ at: Math.round(performance.now()), m: clock.m, holding: holding(), stack: new Error().stack.split("\\n").slice(2, 7).map((l) => l.trim()).join(" < ") }); on = x; } });
+  }
+  window.e2eStops = [];
+  return true;
+})()`;
+const stops = (app) => evaluate(app, "window.e2eStops || []").catch((e) => e.message);
+
 async function together(app, [from, to]) {
   const wrong = [];
   let seen = null;
@@ -412,7 +423,7 @@ async function together(app, [from, to]) {
     if (!x.playing || shown.some((t) => t.paused !== shown[0].paused)) wrong.push(x);
     return shown.length > 0 && shown.every((t) => !t.paused && t.ready >= 3 && Math.abs(t.off) < 1) && x;
   }).catch((e) => { throw new Error(`${e.message} ${JSON.stringify(seen)}`); });
-  check(!wrong.length, `${app.key}'s tiles started apart or Play was undone: ${brief(wrong[0])}`);
+  if (wrong.length) fail(`${app.key}'s tiles started apart or Play was undone: ${brief(wrong[0])} stopped by ${JSON.stringify(await stops(app))}`);
   await sleep(1000);
   const later = await evaluate(app, TILES_PROBE);
   check(later.playing && later.tiles.every((t, i) => !t.has || !first.tiles[i].has || t.at > first.tiles[i].at), `${app.key}'s tiles did not move on: ${JSON.stringify([first, later])}`);
@@ -1130,9 +1141,12 @@ async function recover(ctx) {
     ctx.durationS = (ended.end_us - ended.start_us) / 1e6;
     const far = Math.max(0, ctx.durationS - FAR_FROM_END_S);
     check(!(await evaluate(a, `watchParty`)), "the app starts in the Watch Party");
-    await evaluate(a, `setParty(false); openSession(${JSON.stringify(ctx.set)}); act("seek", ${far}); act("play", ${far}); true`);
+    await evaluate(a, `setParty(false); openSession(${JSON.stringify(ctx.set)}); true`);
+    await evaluate(a, TRACE_STOPS);
+    await evaluate(a, `act("seek", ${far}); act("play", ${far}); true`);
     const own = `(() => { const v = play.tiles[st.id].media.video; return v.videoWidth > 0 && !v.paused && v.readyState >= 3 ? v.currentTime : 0; })()`;
-    const shown = await waitFor("A's own tile plays right after the stop", within(PLAY_START_S), () => evaluate(a, own));
+    const tile = `(() => { const s = play.tiles[st.id].media, v = s.video; return { m: nowM(), playing: clock.playing, paused: v.paused, ready: v.readyState, w: v.videoWidth, at: v.currentTime, seeking: v.seeking, buf: JSON.stringify(rangesOf(v.buffered)), segs: s.index ? s.index.segs.length : -1 }; })()`;
+    const shown = await waitFor("A's own tile plays right after the stop", within(PLAY_START_S), () => evaluate(a, own)).catch(async (e) => fail(`${e.message} ${brief(await evaluate(a, tile).catch((x) => x.message))} stopped by ${JSON.stringify(await stops(a))}`));
     await waitFor("A's own tile moves on", within(PLAY_START_S), async () => (await evaluate(a, own)) > shown);
     const mine = ended.players.find((p) => p.owner === a.id);
     await evaluate(a, `act("pause", ${(mine.last_us.v - ended.start_us) / 1e6 - 0.1}); true`);
@@ -1472,6 +1486,7 @@ async function library(ctx) {
   await step("a far seek and an immediate Play start every tile at once, alone and in Watch Party", async () => {
     const far = Math.max(0, ctx.durationS - FAR_FROM_END_S);
     await Promise.all([a, b, c].map((app) => evaluate(app, `openSession(${JSON.stringify(ctx.set)}); true`)));
+    await Promise.all([a, b, c].map((app) => evaluate(app, TRACE_STOPS)));
     await evaluate(a, `act("seek", ${far}); act("play", ${far}); true`);
     await together(a, [far - 1, Infinity]);
     await follow(ctx, a, [b, c], true, "nowM()");
@@ -1950,6 +1965,34 @@ async function library(ctx) {
   });
 }
 
+async function install(ctx) {
+  let a;
+  await step("the installed app starts, downloads ffmpeg on first run and checks it, and records with it", async () => {
+    check(!fs.existsSync(path.join(path.dirname(EXE), "ffmpeg.exe")), `ffmpeg is already beside ${EXE}`);
+    a = await attach(start("a"));
+    const version = process.env.E2E_VERSION;
+    const { version: running } = await state(a);
+    check(!version || running === version, `the installed app is ${running}, not ${version}`);
+    const got = path.join(a.data, "ffmpeg.exe");
+    await waitFor("A downloads ffmpeg and checks its size and SHA-256", FFMPEG_DOWNLOAD_S, async () => { const st = await state(a); check(fs.existsSync(got) && st.ffmpeg === "", brief({ status: st.ffmpeg, progress: st.ffmpeg_progress })); return true; });
+    await invoke(a, "set_name", { name: a.name });
+    await invoke(a, "set_language", { language: "en" });
+    await invoke(a, "set_quality", { id: "light" });
+    await share(a);
+    ctx.room = await invoke(a, "create_room", { name: "Practice" });
+    await allSee([a], "encoding its test source", within(COLD_START_S), (st) => st.capture.live);
+    await invoke(a, "start_recording");
+    ctx.set = (await state(a)).active_set.id;
+    await waitFor("A logs 2 segments", within(SEGMENT_S * 3), () => segsOf(logOf(a, ctx.room, a.id), ctx.set, "v").length >= 2);
+    await invoke(a, "stop_recording");
+    await allSee([a], "the recording ended", within(LOG_SYNC_S * 2), (st) => !st.active_set && setOf(st, ctx.set) && !setOf(st, ctx.set).live);
+    const missing = holdEverything([a], ctx.room, ctx.set, [a]);
+    check(!missing, missing);
+    recordedFrame(a, ctx.room, "installed-frame");
+    check(fileSize(path.join(OUT, "installed-frame.png")) > 0, "the recorded picture does not decode");
+  });
+}
+
 async function main() {
   fs.rmSync(OUT, { recursive: true, force: true });
   fs.mkdirSync(OUT, { recursive: true });
@@ -1965,7 +2008,7 @@ async function main() {
       for (const app of Object.values(apps)) kill(app);
       for (const key of Object.keys(apps)) delete apps[key];
       fs.rmSync(path.join(OUT, "apps"), { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
-      await { live, recover, library }[part](ctx);
+      await { live, recover, library, install }[part](ctx);
     }
   } catch (e) {
     failed = e;
