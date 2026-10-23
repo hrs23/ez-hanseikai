@@ -25,8 +25,10 @@ pub const CRASH: &str = "crash.txt";
 const EVENTS_KEPT: usize = 500;
 const TRANSFERS_KEPT: usize = 1500;
 const CRASH_TAIL: u64 = 256 << 10;
-// How much of the end of the log a report carries (bytes). Enough to look back well before a problem.
-const REPORT_LOG: usize = 400_000;
+const REPORT_LINES: usize = 400;
+const LEVELS: [&str; 5] = ["ERROR", "WARN", "INFO", "DEBUG", "TRACE"];
+/// The compressed log a feedback report carries, at most (the receiver takes up to 2 MB).
+pub const LOG_GZ_MAX: usize = 1_900_000;
 const ERRORS_KEPT: usize = 50;
 const JOB_LINES: usize = 40;
 const NAME_MIN_CHARS: usize = 2;
@@ -595,20 +597,81 @@ fn last<T>(mut items: Vec<T>, count: usize) -> Vec<T> {
     items
 }
 
-/// The last whole lines of the log that fit in `max` bytes.
-pub fn log_tail(log: &str, max: usize) -> &str {
-    let log = log.trim_end_matches('\n');
+/// A log line's level (0 = ERROR ... 4 = TRACE), read near the start where the formatter puts it. None for a line
+/// without one, such as a backtrace line, which belongs to the line above.
+fn level_rank(line: &str) -> Option<usize> {
+    let head = line.char_indices().nth(48).map_or(line, |(i, _)| &line[..i]);
+    LEVELS.iter().position(|l| head.contains(&format!(" {l} ")))
+}
+
+/// The share of the size each level gets first (ERROR, WARN, INFO, DEBUG, TRACE), so every level keeps some lines.
+const LEVEL_SHARE: [usize; 5] = [25, 25, 35, 15, 0];
+
+/// The log cut to about `max` bytes. Each level first gets its share, newest lines first; what is left goes to
+/// ERROR, then WARN, INFO and DEBUG, again newest first. What is kept stays in time order, and a line without a
+/// level (a backtrace) stays with the line above it.
+pub fn pick_log(log: &str, max: usize) -> String {
     if log.len() <= max {
-        return log;
+        return log.to_string();
     }
-    let mut from = log.len() - max;
-    while !log.is_char_boundary(from) {
-        from += 1;
+    let mut entries: Vec<(usize, usize, usize)> = Vec::new();
+    let mut at = 0;
+    for line in log.split_inclusive('\n') {
+        let end = at + line.len();
+        match (level_rank(line), entries.last_mut()) {
+            (None, Some(last)) => last.2 = end,
+            (rank, _) => entries.push((rank.unwrap_or(2), at, end)),
+        }
+        at = end;
     }
-    match log[from..].find('\n') {
-        Some(i) => &log[from + i + 1..],
-        None => "",
+    let mut order: Vec<usize> = (0..entries.len()).collect();
+    order.sort_by_key(|&i| (entries[i].0, std::cmp::Reverse(i)));
+    let mut keep = vec![false; entries.len()];
+    let mut share: Vec<usize> = LEVEL_SHARE.iter().map(|p| max * p / 100).collect();
+    let mut left = max;
+    for &i in &order {
+        let (rank, n) = (entries[i].0, entries[i].2 - entries[i].1);
+        if n <= share[rank] {
+            keep[i] = true;
+            share[rank] -= n;
+            left -= n;
+        }
     }
+    for &i in &order {
+        let n = entries[i].2 - entries[i].1;
+        if !keep[i] && n <= left {
+            keep[i] = true;
+            left -= n;
+        }
+    }
+    let mut out = String::from("(cut to fit: older lines were left out, lower levels first)\n");
+    for e in entries.iter().zip(&keep).filter(|(_, k)| **k).map(|(e, _)| e) {
+        out.push_str(&log[e.1..e.2]);
+    }
+    out
+}
+
+/// This PC's log (the previous file and the current one), masked like the report and gzipped, cut by level until it fits.
+pub fn report_log(core: &Core) -> Vec<u8> {
+    let mut log = String::new();
+    for name in [LOG_FILES[1], LOG_FILES[0]] {
+        log.push_str(&String::from_utf8_lossy(&fs::read(core.dir.join(name)).unwrap_or_default()));
+    }
+    let log = redact(&log, &home(), &known_names(core), &known_ids(core));
+    let mut max = log.len();
+    loop {
+        let gz = gzip(pick_log(&log, max).as_bytes());
+        if gz.len() <= LOG_GZ_MAX || max < 1 << 16 {
+            return gz;
+        }
+        max = (max as u64 * LOG_GZ_MAX as u64 / gz.len() as u64 * 9 / 10) as usize;
+    }
+}
+
+pub fn gzip(bytes: &[u8]) -> Vec<u8> {
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    let _ = gz.write_all(bytes);
+    gz.finish().unwrap_or_default()
 }
 
 pub fn errors(log: &str) -> Vec<&str> {
@@ -629,7 +692,7 @@ fn jobs_text(logs: &[room::Log]) -> String {
 
 pub fn report_text(core: &Core, check: Option<&str>) -> String {
     let log = fs::read_to_string(core.dir.join("log.txt")).unwrap_or_default();
-    let recent = log_tail(&log, REPORT_LOG);
+    let recent = last(log.lines().collect(), REPORT_LINES);
     let mut out = String::new();
     out.push_str(&format!("{} {} on {} {}\n", env!("CARGO_PKG_NAME"), crate::VERSION, std::env::consts::OS, command_line("cmd", &["/c", "ver"])));
     out.push_str(&format!("previous version {}\n", if core.previous_version.is_empty() { "none" } else { &core.previous_version }));
@@ -645,7 +708,7 @@ pub fn report_text(core: &Core, check: Option<&str>) -> String {
     out.push_str("\n\nrecent crashes\n");
     out.push_str(&tail(&core.dir.join(CRASH), CRASH_TAIL));
     out.push_str("\n\nrecent log\n");
-    out.push_str(recent);
+    out.push_str(&recent.join("\n"));
     redact(&out, &home(), &known_names(core), &known_ids(core))
 }
 
@@ -668,15 +731,35 @@ mod tests {
     }
 
     #[test]
-    fn the_log_tail_keeps_whole_lines_from_the_end() {
-        let log = "one\ntwo\nthree\n";
-        assert_eq!(log_tail(log, 100), "one\ntwo\nthree");
-        assert_eq!(log_tail(log, 9), "three");
-        assert_eq!(log_tail(log, 10), "two\nthree");
-        assert_eq!(log_tail("あいう\nえお", 7), "えお");
-        assert_eq!(log_tail("long line", 3), "");
-        assert_eq!(log_tail("a\nあい", 5), "あい");
-        assert_eq!(log_tail("a\nあい", 4), "");
+    fn a_log_over_its_size_keeps_every_level_with_errors_first_newest_first_in_time_order() {
+        let small = "t ERROR a::b: e1\n  at backtrace\nt  INFO a::b: i1\n";
+        assert_eq!(pick_log(small, 1000), small);
+        let mut log = String::new();
+        for n in 0..100 {
+            for level in ["ERROR", " INFO", "DEBUG"] {
+                log.push_str(&format!("t {level} a::b: {n:03}\n"));
+            }
+        }
+        log.push_str("t ERROR a::b: last\n  at backtrace\n");
+        let kept = pick_log(&log, log.len() / 3);
+        let lines: Vec<&str> = kept.lines().skip(1).collect();
+        let count = |l: &str| lines.iter().filter(|x| x.contains(l)).count();
+        assert!(count("ERROR") > count(" INFO") && count(" INFO") > count("DEBUG") && count("DEBUG") > 0);
+        assert!(kept.ends_with("t ERROR a::b: last\n  at backtrace\n"));
+        assert!(lines.contains(&"t DEBUG a::b: 099") && !lines.contains(&"t DEBUG a::b: 000"));
+        let nums: Vec<&str> = lines.iter().filter(|x| x.contains(" INFO")).map(|x| &x[x.len() - 3..]).collect();
+        assert!(nums.windows(2).all(|w| w[0] < w[1]));
+        assert!(kept.len() <= log.len() / 3 + 80);
+        assert_eq!(level_rank("2026-10-23 22:50:15.123  INFO x: ERROR in text"), Some(2));
+        assert_eq!(level_rank("no level here"), None);
+    }
+
+    #[test]
+    fn a_gzipped_log_reads_back() {
+        use std::io::Read;
+        let mut back = String::new();
+        flate2::read::GzDecoder::new(&gzip(b"hello log")[..]).read_to_string(&mut back).unwrap();
+        assert_eq!(back, "hello log");
     }
 
     #[test]

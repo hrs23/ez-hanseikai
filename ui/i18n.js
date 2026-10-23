@@ -139,6 +139,7 @@ const JA = {
   "Include a picture of the app window": "アプリの画面の画像を付ける",
   "What is sent": "送る中身",
   "(no comment)": "（コメントなし）",
+  "The log, masked the same way and compressed ({size})": "ログ（同じように個人情報を除いて圧縮、{size}）",
   "Preparing…": "準備中…",
   "Sent only to {host}, only when you press Send. Recordings, notes and game screens are never sent, and there is no reply.": "{host} にだけ、送るを押したときだけ送ります。録画・メモ・ゲームの画面は送りません。返事はありません。",
   "Feedback is not set up in this build.": "このビルドではフィードバックを送れません。",

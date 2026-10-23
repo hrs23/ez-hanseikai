@@ -1364,6 +1364,7 @@ version = "0.31.0"
 dependencies = [
  "anyhow",
  "crc32fast",
+ "flate2",
  "iroh",
  "png 0.17.16",
  "regex",

@@ -27,6 +27,7 @@ crc32fast = "1"
 sha2 = "0.10"
 anyhow = "1"
 png = "0.17"
+flate2 = "1"
 
 [target.'cfg(windows)'.dependencies]
 windows-capture = "2.0.1"

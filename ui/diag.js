@@ -38,9 +38,10 @@ function progressText({ n, speed, left }) {
 }
 
 const FEEDBACK_NAMES = { bug: "Problem", idea: "Request", comment: "Comment" };
-function feedbackPreview(kind, comment, diagnostics) {
+function feedbackPreview(kind, comment, diagnostics, logBytes = 0) {
   const note = comment.trim() ? comment.slice(0, LIMITS.feedback) : t("(no comment)");
-  return [`${t("Kind")}: ${t(Object.hasOwn(FEEDBACK_NAMES, kind) ? FEEDBACK_NAMES[kind] : "Problem")}`, note, diagnostics == null ? null : `---\n${diagnostics}`].filter((x) => x != null).join("\n\n");
+  const log = diagnostics != null && logBytes > 0 ? `+ ${t("The log, masked the same way and compressed ({size})", { size: bytes(logBytes) })}` : null;
+  return [`${t("Kind")}: ${t(Object.hasOwn(FEEDBACK_NAMES, kind) ? FEEDBACK_NAMES[kind] : "Problem")}`, note, log, diagnostics == null ? null : `---\n${diagnostics}`].filter((x) => x != null).join("\n\n");
 }
 function feedbackReady(comment, withDiagnostics) {
   return withDiagnostics || comment.trim() !== "";

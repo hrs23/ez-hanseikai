@@ -40,19 +40,23 @@ try { $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
 $request.GetResponse().Dispose()
 "#;
 
-static SHOWN: Mutex<(String, Option<Vec<u8>>)> = Mutex::new((String::new(), None));
+/// What the dialog showed and Send sends: the diagnostics, the window picture and the gzipped log.
+static SHOWN: Mutex<(String, Option<Vec<u8>>, Vec<u8>)> = Mutex::new((String::new(), None, Vec::new()));
 
 pub fn feedback_snap(core: &Arc<Core>) -> Value {
     let image = snap(core).ok();
     let picture = image.as_ref().map(|png| format!("data:image/png;base64,{}", base64(png)));
-    *SHOWN.lock().unwrap() = (String::new(), image);
+    *SHOWN.lock().unwrap() = (String::new(), image, Vec::new());
     json!(picture)
 }
 
 pub fn feedback_preview(core: &Arc<Core>, _: Value) -> Result<Value, String> {
     let diagnostics = fit(&debug::diagnostics(core, false)?, DIAG_MAX);
-    SHOWN.lock().unwrap().0 = diagnostics.clone();
-    Ok(json!({"diagnostics": diagnostics, "to": host()}))
+    let log = debug::report_log(core);
+    let log_bytes = log.len();
+    let mut shown = SHOWN.lock().unwrap();
+    (shown.0, shown.2) = (diagnostics.clone(), log);
+    Ok(json!({"diagnostics": diagnostics, "log_bytes": log_bytes, "to": host()}))
 }
 
 /// The text cut to `max` characters by dropping the middle, so the summary at the top and the newest log at the end both stay.
@@ -70,7 +74,8 @@ pub fn fit(text: &str, max: usize) -> String {
     out
 }
 
-pub fn body(kind: &str, comment: &str, diagnostics: Option<&str>, image: Option<&[u8]>, lang: &str) -> Result<Value, String> {
+/// The report as sent. The gzipped log goes with the diagnostics.
+pub fn body(kind: &str, comment: &str, diagnostics: Option<(&str, &[u8])>, image: Option<&[u8]>, lang: &str) -> Result<Value, String> {
     if !KINDS.contains(&kind) {
         return Err("kind is missing or not valid.".into());
     }
@@ -84,7 +89,8 @@ pub fn body(kind: &str, comment: &str, diagnostics: Option<&str>, image: Option<
     Ok(json!({
         "kind": kind,
         "comment": comment,
-        "diagnostics": diagnostics.unwrap_or_default(),
+        "diagnostics": diagnostics.map(|d| d.0).unwrap_or_default(),
+        "log": diagnostics.map(|d| d.1).filter(|log| !log.is_empty()).map(base64),
         "image": image.map(base64),
         "version": VERSION,
         "os": std::env::consts::OS,
@@ -96,9 +102,9 @@ pub fn send_feedback(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     let url = url().ok_or("Feedback is not set up in this build.")?;
     let (kind, comment): (String, String) = (arg(&args, "kind")?, arg(&args, "comment")?);
     let (with_diag, with_image): (bool, bool) = (arg(&args, "diagnostics")?, arg(&args, "image")?);
-    let (diagnostics, image) = SHOWN.lock().unwrap().clone();
+    let (diagnostics, image, log) = SHOWN.lock().unwrap().clone();
     let lang = crate::language(core);
-    let body = body(&kind, &comment, with_diag.then_some(diagnostics.as_str()), if with_image { image.as_deref() } else { None }, &lang)?;
+    let body = body(&kind, &comment, with_diag.then_some((diagnostics.as_str(), log.as_slice())), if with_image { image.as_deref() } else { None }, &lang)?;
     let path = core.dir.join("feedback.json");
     std::fs::write(&path, body.to_string()).map_err(|e| e.to_string())?;
     let mut command = Command::new("powershell");
@@ -108,7 +114,7 @@ pub fn send_feedback(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     match sent {
         Ok(_) => {
             tracing::info!("feedback sent ({kind}, diagnostics {with_diag}, picture {with_image})");
-            *SHOWN.lock().unwrap() = (String::new(), None);
+            *SHOWN.lock().unwrap() = (String::new(), None, Vec::new());
             Ok(Value::Null)
         }
         Err(e) => {
@@ -235,8 +241,10 @@ mod tests {
         let b = body("idea", &long, None, None, "ja").unwrap();
         assert_eq!(b["comment"].as_str().unwrap().chars().count(), COMMENT_MAX);
         assert_eq!((b["diagnostics"].as_str(), b["image"].is_null(), b["lang"].as_str(), b["version"].as_str()), (Some(""), true, Some("ja"), Some(VERSION)));
-        let b = body("bug", "", Some("report"), Some(&b"\x89PNG"[..]), "en").unwrap();
-        assert_eq!((b["diagnostics"].as_str(), b["image"].as_str()), (Some("report"), Some("iVBORw==")));
+        assert!(b["log"].is_null());
+        let b = body("bug", "", Some(("report", &b"\x1f\x8b"[..])), Some(&b"\x89PNG"[..]), "en").unwrap();
+        assert_eq!((b["diagnostics"].as_str(), b["image"].as_str(), b["log"].as_str()), (Some("report"), Some("iVBORw=="), Some("H4s=")));
+        assert!(body("bug", "", Some(("report", &[][..])), None, "en").unwrap()["log"].is_null());
         assert!(body("bug", "x", None, Some(vec![0; IMAGE_MAX + 1].as_slice()), "en").is_err());
     }
 

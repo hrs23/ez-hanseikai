@@ -8,7 +8,7 @@ function renderFeedback() {
   if ($("fbimage").disabled) $("fbimage").checked = false;
   $("fbimg").hidden = !$("fbimage").checked;
   if (feedback.image) $("fbimg").src = feedback.image;
-  $("fbtext").textContent = shown ? feedbackPreview(feedback.kind, $("fbcomment").value, $("fbdiag").checked ? shown.diagnostics : null) : t("Preparing…");
+  $("fbtext").textContent = shown ? feedbackPreview(feedback.kind, $("fbcomment").value, $("fbdiag").checked ? shown.diagnostics : null, shown.log_bytes) : t("Preparing…");
   $("fbnote").textContent = host ? t("Sent only to {host}, only when you press Send. Recordings, notes and game screens are never sent, and there is no reply.", { host }) : shown ? t("Feedback is not set up in this build.") : "";
   $("fbsend").disabled = !host || !feedbackReady($("fbcomment").value, $("fbdiag").checked);
 }

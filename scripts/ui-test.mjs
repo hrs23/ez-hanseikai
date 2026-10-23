@@ -453,6 +453,8 @@ test("feedback shows what is sent, needs a comment or the diagnostics, and an er
   assert.equal(ui$.feedbackPreview("idea", "More maps", null), "Kind: Request\n\nMore maps");
   assert.equal(ui$.feedbackPreview("bug", "  ", "report text"), "Kind: Problem\n\n(no comment)\n\n---\nreport text");
   assert.equal(ui$.feedbackPreview("toString", "x", null), "Kind: Problem\n\nx");
+  assert.equal(ui$.feedbackPreview("bug", "x", "report", 1500000), "Kind: Problem\n\nx\n\n+ The log, masked the same way and compressed (1.5 MB)\n\n---\nreport");
+  assert.equal(ui$.feedbackPreview("bug", "x", null, 1500000), "Kind: Problem\n\nx");
   assert.equal(ui$.feedbackPreview("comment", "x".repeat(ui$.LIMITS.feedback + 5), null).length, "Kind: Comment\n\n".length + ui$.LIMITS.feedback);
   assert.deepEqual([ui$.feedbackReady(" ", false), ui$.feedbackReady(" ", true), ui$.feedbackReady("hi", false)], [false, true, true]);
   assert.equal(ui$.errorReport(new Error("Export failed")), "Error: Export failed");
