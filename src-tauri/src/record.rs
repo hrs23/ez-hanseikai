@@ -448,6 +448,11 @@ pub fn wanted(source: bool, lost: bool, recording: Option<&str>, room: Option<St
     }
 }
 
+/// While recording with no picture size known yet (the capture did not start, or the window is minimized), the voice is recorded alone until a picture comes.
+pub fn voice_until_picture(voice: bool, recording: bool, canvas: bool, picture_on: bool) -> bool {
+    voice || recording && !canvas && !picture_on
+}
+
 fn want(core: &Core) -> Option<(String, bool)> {
     let e = &core.engine;
     let recording = core.active_set.lock().unwrap().as_ref().map(|s| s.room.clone());
@@ -892,6 +897,8 @@ pub(crate) fn current_sink(core: &Arc<Core>, canvas: Option<(u32, u32)>) -> Opti
     let usable = usable_codecs(core);
     let recording = core.any_recording();
     let mut slot = e.sink.lock().unwrap();
+    let picture_on = slot.as_ref().is_some_and(|s| !s.voice);
+    let want = want.map(|(room, voice)| (room, voice_until_picture(voice, recording, canvas.is_some(), picture_on)));
     let stale = slot.as_ref().map(|sink| {
         let resized = !recording && canvas.is_some_and(|c| scaled(c, quality_width(&sink.quality)) != sink.out);
         let codec = ffmpeg::pick(&usable).0 != sink.encoder && (!recording || !usable.iter().any(|c| c == sink.codec));
@@ -1150,7 +1157,9 @@ fn ensure_video(core: &Arc<Core>, wanted: Option<&Found>) {
     let mut video = e.video.lock().unwrap();
     if video.as_ref().is_some_and(|v| v.finished() || wanted.is_none_or(|f| f.key != v.key)) {
         if let Some(control) = video.take().unwrap().control {
-            let _ = control.stop();
+            if let Err(err) = control.stop() {
+                tracing::warn!("screen capture ended: {err}");
+            }
         }
         e.last.lock().unwrap().0 = Arc::new(Vec::new());
         *e.canvas.lock().unwrap() = None;
@@ -1314,6 +1323,15 @@ mod tests {
         assert_eq!(wanted(false, false, Some("s"), room(), false), Some(("s".into(), true)));
         assert_eq!(wanted(true, true, Some("s"), room(), false), Some(("s".into(), true)));
         assert_eq!(wanted(true, false, Some("s"), room(), true), None);
+    }
+
+    #[test]
+    fn recording_before_the_picture_size_is_known_records_the_voice() {
+        assert!(voice_until_picture(false, true, false, false));
+        assert!(!voice_until_picture(false, true, true, false));
+        assert!(!voice_until_picture(false, true, false, true));
+        assert!(!voice_until_picture(false, false, false, false));
+        assert!(voice_until_picture(true, false, true, true));
     }
 
     #[test]
