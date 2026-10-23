@@ -67,6 +67,7 @@ function dragSide(down) {
 }
 function roomMenu(anchor) {
   openMenu([
+    { label: t("Room profile"), icon: "users", run: openRoomProfile },
     { label: t("Room settings…"), icon: "gear", run: openRoomSettings },
     { label: t("Copy invite code"), icon: "user-plus", run: copyInvite },
     ...(st.invites ? [{ label: t("Cancel invite"), icon: "x", run: cancelInvite }] : []),
@@ -336,6 +337,8 @@ $("screenmore").onclick = (e) => openSource(e.currentTarget);
 $("micbtn").onclick = () => run("set_mix", { kind: "mic", volume: st.capture.mix.mic.volume, muted: !st.capture.mix.mic.muted });
 $("micmore").onclick = (e) => openMic(e.currentTarget);
 $("netbadge").onclick = () => openDiagnostics();
+$("roomfaces").onclick = (e) => { const face = e.target.closest("[data-speak]"); if (face) openProfile(face.dataset.speak); else openRoomProfile(); };
+$("meav").onclick = () => openProfile(st.id);
 $("apibadge").onclick = () => openSettings("api");
 $("gear").onclick = () => openSettings();
 $("aibtn").onclick = (e) => openAiMenu(e.currentTarget, page === "player" ? selected : null);

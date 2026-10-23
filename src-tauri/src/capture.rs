@@ -313,7 +313,7 @@ where
     }
 }
 
-pub fn check_capture() -> Vec<String> {
+pub(crate) fn check_capture() -> Vec<crate::check::Line> {
     let mut lines = Vec::new();
     let got = Arc::new(AtomicBool::new(false));
     let Ok(primary) = Monitor::primary() else {
@@ -321,17 +321,17 @@ pub fn check_capture() -> Vec<String> {
     };
     let (refused, control) = start_capture::<Probe, _>(primary, got.clone());
     if let Some(e) = refused {
-        lines.push(line("warn", format!("Capture without a border was refused ({e}); falling back to the default border")));
+        lines.push(line("warn", "Capture without a border was refused ({error}); falling back to the default border").with("error", e));
     }
     lines.push(match control {
-        Err(e) => line("fail", format!("Screen capture could not start: {e}")),
+        Err(e) => line("fail", "Screen capture could not start: {error}").with("error", e),
         Ok(control) => {
             proc::wait_until(PROBE_WAIT, POLL, || got.load(Ordering::Relaxed));
             let _ = control.stop();
             if got.load(Ordering::Relaxed) {
                 line("ok", "Screen capture started and a frame arrived")
             } else {
-                line("warn", format!("Screen capture started but no frame arrived in {seconds} s (idle or locked screen)", seconds = PROBE_WAIT.as_secs()))
+                line("warn", "Screen capture started but no frame arrived in {seconds} s (idle or locked screen)").with("seconds", PROBE_WAIT.as_secs())
             }
         }
     });

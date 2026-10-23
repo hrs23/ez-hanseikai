@@ -24,6 +24,7 @@ pub const OPS: &[(&str, Op)] = &[
     ("answer_ask", answer_ask),
     ("remove_peer", remove_peer),
     ("measure_speed", |c, a| tauri::async_runtime::block_on(net::measure_speed(c, &arg::<String>(&a, "id")?)).ok_or_else(|| "No answer".into())),
+    ("check", check),
     ("start_recording", |c, _| null(room::start_set(c))),
     ("stop_recording", stop_recording),
     ("mark", mark),
@@ -116,6 +117,16 @@ pub fn warm(core: &Core) {
         let _ = tokio::time::timeout(wait, core.ep.online()).await;
         let _ = tokio::time::timeout(wait, core.ep.net_report().initialized()).await;
     });
+}
+
+fn check(core: &Arc<Core>, args: Value) -> Result<Value, String> {
+    match args["id"].as_str().filter(|id| *id != core.me()) {
+        Some(id) => Ok(tauri::async_runtime::block_on(net::check_peer(core, id))),
+        None => {
+            warm(core);
+            Ok(crate::check::json(core))
+        }
+    }
 }
 
 fn close_room(core: &Arc<Core>, args: Value) -> Result<Value, String> {

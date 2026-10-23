@@ -67,7 +67,6 @@
       </div>
       <div class="roombody">
         <div id="roomtab" class="roomtab"></div>
-        <aside id="drawer" class="drawer" hidden></aside>
       </div>
     </div>
 
@@ -147,6 +146,7 @@
     <button data-pane="capture"><span data-icon="monitor" data-icon-class="sm"></span><span data-t="Capture">Capture</span></button>
     <button data-pane="shortcuts"><span data-icon="keyboard" data-icon-class="sm"></span><span data-t="Shortcuts">Shortcuts</span></button>
     <button data-pane="storage"><span data-icon="drive" data-icon-class="sm"></span><span data-t="Recordings">Recordings</span></button>
+    <button data-pane="data"><span data-icon="relay" data-icon-class="sm"></span><span data-t="Where data goes">Where data goes</span></button>
     <button data-pane="api"><span data-icon="terminal" data-icon-class="sm"></span><span data-t="API">API</span></button>
   </nav>
   <div class="sbody">
@@ -182,6 +182,10 @@
       <div id="storetable" class="tablebox"></div>
       <div class="row"><span id="selsum" class="muted"></span><span class="sp"></span><button id="selold"></button><button id="deletesel" class="danger"><span data-icon="trash" data-icon-class="sm"></span><span data-t="Delete recordings…">Delete recordings…</span></button></div>
     </section>
+    <section data-pane="data">
+      <h2 data-t="Where data goes">Where data goes</h2>
+      <div id="flowbody" class="flowbody"></div>
+    </section>
     <section data-pane="api">
       <h2 data-t="API">API</h2>
       <div class="srow2"><span class="lab" data-t="Local API">Local API</span><input id="apion" type="checkbox" class="switch" role="switch"></div>
@@ -203,8 +207,10 @@
 <dialog id="diagdlg" class="diag">
   <div class="dlghead"><h2 data-t="Diagnostics">Diagnostics</h2><button class="icon close" data-icon="x" data-t-label="Close"></button></div>
   <div id="diagbody" class="diagbody"></div>
-  <div class="row foot"><span class="sp"></span><button id="diagcopy"><span data-icon="copy" data-icon-class="sm"></span><span data-t="Copy report">Copy report</span></button><button id="diagsave"><span data-icon="download" data-icon-class="sm"></span><span data-t="Save as file…">Save as file…</span></button></div>
+  <div class="row foot"><button id="diagagain"><span data-icon="refresh" data-icon-class="sm"></span><span data-t="Check again">Check again</span></button><span class="sp"></span><button id="diagcopy"><span data-icon="copy" data-icon-class="sm"></span><span data-t="Copy report">Copy report</span></button><button id="diagsave"><span data-icon="download" data-icon-class="sm"></span><span data-t="Save as file…">Save as file…</span></button></div>
 </dialog>
+<dialog id="profiledlg" class="profile" data-t-label="Profile"></dialog>
+<dialog id="roomprofdlg" class="profile" data-t-label="Room profile"></dialog>
 <dialog id="feedbackdlg" class="wide">
   <div class="dlghead"><h2 data-t="Send feedback">Send feedback</h2><button class="icon close" data-icon="x" data-t-label="Close"></button></div>
   <div class="fbform">
@@ -289,6 +295,7 @@
 <script src="board.js"></script>
 <script src="ai.js"></script>
 <script src="diag.js"></script>
+<script src="profile.js"></script>
 <script src="pages.js"></script>
 <script src="feedback.js"></script>
 </body>

@@ -25,8 +25,6 @@ const SHORTCUTS = [
 
 let askName = false;
 let roomTab = "members";
-let drawerFor = null;
-let speed = null;
 let settingsPane = "general";
 let storageInfo = null;
 let storageFailed = false;
@@ -77,7 +75,7 @@ const copyInvite = () => invoke("create_invite", { reuse: true }).then((code) =>
 const cancelInvite = () => run("cancel_invites", null, () => { flash(t("Invite cancelled")); refresh(); });
 const createRoom = () => invoke("create_room", { name: "" }).then(() => { openLive(); return refresh().then(copyInvite); }).catch(fail);
 async function removeMember(id) {
-  if (await ask(t("Remove {name} from the room?", { name: nameOf(id) }), t("Remove from room"), true)) { drawerFor = null; run("remove_peer", { id }); }
+  if (await ask(t("Remove {name} from the room?", { name: nameOf(id) }), t("Remove from room"), true)) { if ($("profiledlg").open) $("profiledlg").close(); run("remove_peer", { id }); }
 }
 let iconDraft = "";
 function roomDirty() {
@@ -102,7 +100,6 @@ function openRoomSettings() {
 function showRoomTab(tab) {
   if (!inRoom()) return;
   roomTab = tab;
-  drawerFor = null;
   delete sigs.roomtab;
   go("room");
   renderRoom();
@@ -115,7 +112,6 @@ function renderRoom() {
   if (roomTab === "board") renderBoard();
   else if (roomTab === "members") renderMembers();
   else renderExtensions();
-  renderDrawer();
 }
 function memberOf(id) {
   const me = id === st.id;
@@ -125,7 +121,7 @@ function memberOf(id) {
 }
 function renderMembers() {
   const rows = people().map((id) => ({ id, p: id === st.id ? null : peerOf(id) }));
-  const sig = ["members", rows.map((r) => [r.id, memberOf(r.id).status, r.p && [r.p.connected, r.p.path, r.p.rtt_ms, r.p.version, r.p.failures]]), st.asks, st.invites, drawerFor, st.names, looks(), lang];
+  const sig = ["members", rows.map((r) => [r.id, memberOf(r.id).status, r.p && [r.p.connected, r.p.path, r.p.rtt_ms, r.p.version, r.p.failures]]), st.asks, st.invites, st.names, looks(), lang];
   if (!changed("roomtab", sig)) return;
   const out = [];
   for (const a of st.asks) {
@@ -137,9 +133,9 @@ function renderMembers() {
   const body = rows.map(({ id, p }) => {
     const me = id === st.id;
     const state = memberOf(id).status;
-    const conn = me || !p.connected ? el("span", { className: "faint", textContent: "—" }) : el("span", { className: "net " + (p.path === "relay" ? "warn" : "ok"), onclick: (e) => { e.stopPropagation(); openDiagnostics(); } }, icon("relay", "sm"), p.path === "relay" ? t("Relay") : t("Direct"));
+    const conn = me || !p.connected ? el("span", { className: "faint", textContent: "—" }) : el("span", { className: "net " + (p.path === "relay" ? "warn" : "ok"), onclick: (e) => { e.stopPropagation(); openProfile(id); } }, icon("relay", "sm"), p.path === "relay" ? t("Relay") : t("Direct"));
     const version = me ? st.version : p && p.version;
-    const tr = el("tr", { className: "pick" + (drawerFor === id ? " sel" : "") + (state.kind === "off" ? " dim" : ""), tabIndex: 0 },
+    const tr = el("tr", { className: "pick" + (state.kind === "off" ? " dim" : ""), tabIndex: 0 },
       el("td", {}, withClass(nameChip(me ? el("button", { className: "plain", ariaLabel: t("Avatar"), onclick: (e) => { e.stopPropagation(); openSettings("general"); } }, avatar(id, "", "on", false, true)) : avatar(id, "", p && p.connected ? "on" : null, false, true), nameOf(id), me ? el("span", { className: "pill gray", textContent: t("You") }) : null), "who")),
       el("td", {}, idText(id), iconButton("copy", t("Copy ID"), (e) => { e.stopPropagation(); navigator.clipboard.writeText(id).then(() => flash(t("ID copied"))).catch(fail); })),
       el("td", { className: "state " + state.kind, title: state.title || "" }, el("i", { className: "sdot" }), state.text),
@@ -147,54 +143,13 @@ function renderMembers() {
       el("td", { textContent: !me && p.connected ? `${p.rtt_ms} ms` : "" }),
       el("td", { className: version && version !== st.version ? "warn" : "", textContent: version || "—" }),
       el("td", { className: "chev" }, icon("chevron-right", "sm")));
-    const openIt = () => { drawerFor = drawerFor === id ? null : id; delete sigs.roomtab; renderRoom(); };
+    const openIt = () => openProfile(id);
     tr.onclick = openIt;
     tr.onkeydown = (e) => { if (e.key === "Enter") openIt(); };
     return tr;
   });
   out.push(el("div", { className: "tablebox" }, el("table", { className: "table" }, el("thead", {}, head), el("tbody", {}, ...body))));
   $("roomtab").replaceChildren(...out);
-}
-const speedLine = (r) => [t("Up {n} Mbit/s", { n: r.up_mbps.toFixed(1) }), t("Down {n} Mbit/s", { n: r.down_mbps.toFixed(1) }), `${r.rtt_ms} ms`, r.path === "relay" ? t("Relay") : t("Direct")].join(" · ");
-function measureSpeed(id) {
-  speed = { id, line: null };
-  delete sigs.drawer;
-  renderDrawer();
-  invoke("measure_speed", { id }).then(speedLine, () => t("No answer")).then((line) => { if (speed && speed.id === id) speed.line = line; delete sigs.drawer; renderDrawer(); });
-}
-function renderDrawer() {
-  const box = $("drawer");
-  const id = roomTab === "members" ? drawerFor : null;
-  box.hidden = !id || !people().includes(id);
-  if (box.hidden) { speed = null; return; }
-  const me = id === st.id;
-  const p = me ? null : peerOf(id);
-  const receivingFrom = st.sets.filter((s) => !s.live).flatMap((s) => s.players.filter((x) => x.owner === id && x.total && x.have < x.total).map((x) => ({ s, x })));
-  const sig = [id, p && [p.connected, p.path, p.rtt_ms, p.sent, p.received, p.offset_us, p.version], speed, receivingFrom.map((r) => [r.s.id, r.x.have]), st.names, look(id), lang];
-  if (!changed("drawer", sig)) return;
-  const kv = [];
-  const add = (k, v) => kv.push(el("dt", { textContent: k }), el("dd", { textContent: v }));
-  let path = null;
-  if (p && p.connected) {
-    path = p.path === "relay" ? el("div", { className: "pathbox relay" }, el("b", {}, icon("relay", "sm"), t("Via relay server")), el("small", { textContent: [p.relay, t("end-to-end encrypted")].filter(Boolean).join(" · ") })) : el("div", { className: "pathbox direct" }, el("b", {}, icon("relay", "sm"), t("Direct")), el("small", { textContent: t("end-to-end encrypted") }));
-    add(t("Round trip"), `${p.rtt_ms} ms`);
-    if (p.sent != null) add(t("Sent"), bytes(p.sent));
-    if (p.received != null) add(t("Received"), bytes(p.received));
-    if (p.offset_us != null) add(t("Clock offset"), `${p.offset_us >= 0 ? "+" : "−"}${(Math.abs(p.offset_us) / 1e6).toFixed(2)} s`);
-  } else if (!me) path = el("div", { className: "pathbox off" }, el("b", { textContent: memberOf(id).status.text, title: memberOf(id).status.title || "" }));
-  add(t("Version"), (me ? st.version : p && p.version) || "—");
-  const measuring = !!speed && speed.id === id && !speed.line;
-  if (speed && speed.id === id && speed.line) add(t("Speed"), speed.line);
-  box.replaceChildren(
-    el("div", { className: "dhead" }, avatar(id, "xl"), stack(nameOf(id), idText(id, "small"), true), iconButton("x", t("Close"), () => { drawerFor = null; delete sigs.roomtab; renderRoom(); })),
-    path || "",
-    el("dl", { className: "kv" }, ...kv),
-    receivingFrom.length ? el("div", { className: "h3", textContent: t("Receiving") }) : "",
-    ...receivingFrom.map(({ s, x }) => el("div", { className: "recvrow" }, el("div", { className: "row" }, el("span", { textContent: sessionName(s.id) }), el("span", { className: "sp" }), el("span", { className: "muted", textContent: `${Math.floor((x.have / x.total) * 100)}%` })), el("div", { className: "bar" }, el("i", { style: `width:${(x.have / x.total) * 100}%` })))),
-    me ? "" : el("div", { className: "row" }, el("button", { className: "sm", disabled: measuring || !(p && p.connected), onclick: () => measureSpeed(id) }, icon("activity", "sm"), measuring ? t("Measuring…") : t("Measure speed"))),
-    el("span", { className: "sp" }),
-    me ? "" : el("button", { className: "danger", onclick: () => removeMember(id), textContent: t("Remove from room…") }),
-  );
 }
 function openSettings(pane) {
   if (!st) return;
@@ -218,6 +173,7 @@ function showPane() {
   if (settingsPane === "storage") loadStorage();
   if (settingsPane === "shortcuts") renderKeys();
   renderSettings();
+  renderFlow();
 }
 function renderKeys() {
   $("keylist").replaceChildren(...SHORTCUTS.flatMap(([label, keys]) => [el("dt", { textContent: t(label) }), el("dd", {}, ...keys.map((k) => el("kbd", { textContent: k })))]));
@@ -356,11 +312,26 @@ function openDiagnostics() {
 const DIAG_FEED_MS = 2000;
 function renderDiagnostics() {
   if (!$("diagdlg").open) return;
+  fetchChecks(st.id);
+  const peers = st.peers;
+  if (!changed("diag", [checkSig(st.id), peers.map((p) => [p.id, p.connected, p.path, p.relay, p.rtt_ms, p.version]), st.names, lang])) return;
+  const head = el("tr", {}, ...["Member", "Path", "Round trip", "Version"].map((h) => el("th", { textContent: t(h) })));
+  const rows = peers.map((p) => {
+    const tr = el("tr", { className: "pick" + (p.connected ? "" : " dim") }, el("td", {}, nameChip(avatar(p.id, "", null, false, true), nameOf(p.id))), el("td", { className: p.connected ? (p.path === "relay" ? "warn" : "ok") : "faint", textContent: p.connected ? (p.path === "relay" ? [t("Relay"), p.relay].filter(Boolean).join(" ") : t("Direct")) : t("Offline") }), el("td", { textContent: p.connected ? `${p.rtt_ms} ms` : "—" }), el("td", { className: p.version && p.version !== st.version ? "warn" : "", textContent: p.version || "—" }));
+    tr.onclick = () => { $("diagdlg").close(); openProfile(p.id); };
+    return tr;
+  });
+  const members = peers.length ? [el("div", { className: "h3", textContent: t("Members") }), el("div", { className: "tablebox" }, el("table", { className: "table" }, el("thead", {}, head), el("tbody", {}, ...rows)))] : [];
+  $("diagbody").replaceChildren(...checkGroups(st.id), ...members);
+}
+// Settings > Where data goes: what this PC sends, to whom, and which servers it talks to.
+function renderFlow() {
+  if (!$("settings").open || settingsPane !== "data") return;
   if (Date.now() - flowAt >= DIAG_FEED_MS) {
     flowAt = Date.now();
-    invoke("debug_flow").then((f) => { flow = f; delete sigs.diag; renderDiagnostics(); }).catch(warn);
+    invoke("debug_flow").then((f) => { flow = f; delete sigs.flow; renderFlow(); }).catch(warn);
   }
-  if (!changed("diag", [st.peers, st.capture.sharing, flow, lang])) return;
+  if (!changed("flow", [st.peers, st.capture.sharing, flow, lang])) return;
   const peers = st.peers;
   const what = () => [st.capture.sharing ? t("Live picture and voice") : null, t("Recorded files"), t("Log")].filter(Boolean).join(" · ");
   const node = (id, sub, cls = "") => el("div", { className: "node " + cls }, avatar(id, "lg", null, false, true), stack(nameOf(id), sub));
@@ -368,7 +339,7 @@ function renderDiagnostics() {
   const diagram = el("div", { className: "flowmap" }, node(st.id, ""), el("div", { className: "links" }, ...(links.length ? links : [el("div", { className: "none", textContent: t("No other members") })])));
   const head = el("tr", {}, ...["Peer", "Path", "What is sent", "Sent", "Received"].map((h) => el("th", { textContent: t(h) })));
   const rows = peers.map((p) => el("tr", { className: p.connected ? "" : "dim" }, el("td", {}, el("b", { textContent: nameOf(p.id) })), el("td", { className: p.connected ? (p.path === "relay" ? "warn" : "ok") : "faint", textContent: p.connected ? (p.path === "relay" ? [t("Relay"), p.relay].filter(Boolean).join(" ") : t("Direct")) : t("Offline") }), el("td", { textContent: p.connected ? what() : "—" }), el("td", { textContent: p.sent != null ? bytes(p.sent) : "—" }), el("td", { textContent: p.received != null ? bytes(p.received) : "—" })));
-  $("diagbody").replaceChildren(el("div", { className: "okbox" }, ...flowRows(st, flow).map(okLine)), diagram, el("div", { className: "tablebox" }, el("table", { className: "table" }, el("thead", {}, head), el("tbody", {}, ...rows))));
+  $("flowbody").replaceChildren(el("div", { className: "okbox" }, ...flowRows(st, flow).map(okLine)), diagram, el("div", { className: "tablebox" }, el("table", { className: "table" }, el("thead", {}, head), el("tbody", {}, ...rows))));
 }
 function diagnosticsText() {
   return invoke("debug_report", { save: false });
@@ -380,7 +351,10 @@ function openReset() {
 }
 function renderOpenDialogs() {
   renderSettings();
+  renderFlow();
   renderDiagnostics();
+  renderMemberProfile();
+  renderRoomProfile();
 }
 
 for (const [id, max] of [["startname", LIMITS.name], ["name", LIMITS.name], ["roomnameinput", LIMITS.room], ["joincode", LIMITS.code], ["quicktext", LIMITS.note], ["relayurl", LIMITS.relay]]) $(id).maxLength = max;
@@ -456,6 +430,7 @@ $("limit").onchange = () => run("set_limit", { mbps: $("limit").value ? Number($
 $("checkupdate").onclick = () => checkUpdate(true);
 $("selold").onclick = () => { picked = new Set(oldSessions(st.sets.filter((s) => !s.live))); delete sigs.storage; renderStorage(); };
 $("deletesel").onclick = () => confirmDelete([...picked]);
+$("diagagain").onclick = () => fetchChecks(st.id, true);
 $("diagcopy").onclick = () => diagnosticsText().then((text) => navigator.clipboard.writeText(text)).then(() => flash(t("Copied"))).catch(fail);
 $("diagsave").onclick = () => diagnosticsText().then((text) => dialog("save_text", { name: "ez-hanseikai-diagnostics.txt", text })).then((saved) => { if (saved) flash(t("Saved")); }).catch(fail);
 $("resetyes").onclick = () => {

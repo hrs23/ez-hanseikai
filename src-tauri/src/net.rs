@@ -26,6 +26,7 @@ const RETRY_JITTER: f64 = 0.25;
 const STABLE_FOR: Duration = Duration::from_secs(10);
 const PING_WAIT: Duration = Duration::from_secs(3);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 const REQUEST_MAX: usize = 4 << 20;
 const SPEED_BYTES: usize = 2 << 20;
 const SPEED_TIMEOUT: Duration = Duration::from_secs(60);
@@ -420,6 +421,11 @@ async fn handle(core: Arc<Core>, conn: Connection, mut send: SendStream, mut rec
                 left -= k;
             }
         }
+        Some("check") => {
+            let c = core.clone();
+            let lines = tokio::task::spawn_blocking(move || crate::check::json(&c)).await?;
+            send.write_all(&serde_json::to_vec(&lines)?).await?;
+        }
         Some("report") => {
             let c = core.clone();
             let text = tokio::task::spawn_blocking(move || debug::report_text(&c, None)).await?;
@@ -502,6 +508,16 @@ async fn handle(core: Arc<Core>, conn: Connection, mut send: SendStream, mut rec
 pub fn speed_json(up_bytes: usize, up_took: Duration, down_bytes: usize, down_took: Duration, rtt_ms: u64, path: &str) -> Value {
     let mbps = |bytes: usize, took: Duration| tenth(bytes as f64 / BYTES_PER_MBIT / took.as_secs_f64().max(f64::EPSILON));
     json!({"up_mbps": mbps(up_bytes, up_took), "down_mbps": mbps(down_bytes, down_took), "rtt_ms": rtt_ms, "path": path})
+}
+
+/// A member's own check of their PC and connection, or null when they do not answer.
+pub async fn check_peer(core: &Arc<Core>, id: &str) -> Value {
+    let conn = core.peers.lock().unwrap().iter().find(|p| p.id.to_string() == id).and_then(|p| p.alive().cloned());
+    let reply = match conn {
+        Some(conn) => request_within(&conn, &json!({"t": "check"}), CHECK_TIMEOUT).await.ok(),
+        None => None,
+    };
+    reply.and_then(|b| serde_json::from_slice::<Value>(&b).ok()).filter(|v| v["pc"].is_array()).unwrap_or(Value::Null)
 }
 
 pub async fn measure_speed(core: &Arc<Core>, id: &str) -> Option<Value> {

@@ -1363,9 +1363,17 @@ async function library(ctx) {
   await step("measuring the speed to a member gives up and down in Mbit/s, the round trip and the path", async () => {
     const speed = await invoke(a, "measure_speed", { id: b.id });
     check(speed.up_mbps > 0 && speed.down_mbps > 0 && speed.rtt_ms >= 0 && speed.path === "direct", `speed ${brief(speed)}`);
-    await evaluate(a, `roomTab = "members"; drawerFor = ${JSON.stringify(b.id)}; go("room"); true`);
-    await waitFor("the member pane has Measure speed", within(UI_REFRESH_S * 5), () => evaluate(a, `[...$("drawer").querySelectorAll("button")].some((x) => x.textContent === t("Measure speed"))`));
-    await evaluate(a, `drawerFor = null; renderRoom(); true`);
+  });
+
+  await step("a member's profile shows their connection and the checks of their PC and connection", async () => {
+    const lines = await invoke(a, "check", { id: b.id });
+    check(Array.isArray(lines?.pc) && lines.pc.length > 0 && Array.isArray(lines.net) && lines.net.length > 0 && [...lines.pc, ...lines.net].every((l) => ["ok", "warn", "fail", "info"].includes(l.level) && typeof l.text === "string"), `B's checks ${brief(lines)}`);
+    await evaluate(a, `openProfile(${JSON.stringify(b.id)}); true`);
+    await waitFor("B's profile has Measure speed and B's checks", within(UI_REFRESH_S * 10), () => evaluate(a, `$("profiledlg").open && [...$("profiledlg").querySelectorAll("button")].some((x) => x.textContent === t("Measure speed")) && $("profiledlg").querySelectorAll(".okbox .ok-line").length >= 3`));
+    await screenshot(a, "profile");
+    await evaluate(a, `$("profiledlg").close(); openRoomProfile(); true`);
+    check(await evaluate(a, `$("roomprofdlg").querySelectorAll(".memrow").length === people().length`), "the room profile does not list every member");
+    await evaluate(a, `$("roomprofdlg").close(); true`);
   });
 
   await step("a relay server from the settings is tried first and a dead one is skipped, and only one can be set", async () => {
@@ -1708,9 +1716,11 @@ async function library(ctx) {
     check(await evaluate(a, `page === "player" && selected === ${JSON.stringify(ctx.set)} && !clock.playing && Math.abs(nowM() - ${SEEK_TO_S}) < 0.5`), "the window is not where ui_state says");
   });
 
-  await step("Diagnostics opens on where data goes and copies a masked report", async () => {
-    await evaluate(a, `openDiagnostics(); true`);
-    await waitFor("Diagnostics shows where data goes", within(UI_REFRESH_S * 5), () => evaluate(a, `!!$("diagbody").querySelector(".flowmap") && $("diagbody").textContent.includes(t("Time check"))`));
+  await step("Diagnostics checks this PC and the connection, Settings shows where data goes, and the report is masked", async () => {
+    await evaluate(a, `openSettings("data"); true`);
+    await waitFor("Settings shows where data goes", within(UI_REFRESH_S * 5), () => evaluate(a, `!!$("flowbody").querySelector(".flowmap") && $("flowbody").textContent.includes(t("Time check"))`));
+    await evaluate(a, `$("settings").close(); openDiagnostics(); true`);
+    await waitFor("Diagnostics shows the checks", within(UI_REFRESH_S * 10), () => evaluate(a, `$("diagbody").querySelectorAll(".okbox .ok-line").length >= 3 && !$("diagbody").querySelector(".flowmap")`));
     await screenshot(a, "diagnostics");
     const report = await evaluate(a, `diagnosticsText()`);
     check(report.includes("ez-hanseikai") && report.includes("environment check") && report.includes("jobs") && report.includes("recent log") && report.includes("\nhardware: ") && report.includes("\nwhere data goes\n"), "the report lacks its parts");

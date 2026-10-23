@@ -36,6 +36,7 @@ Fields are in the request; replies are as stated. "ok" is the two bytes `ok`.
 | `party` | `room`, `shared` (the shared Watch Party state), `heads` ({member ID: records held}), `typing` | ok |
 | `speaking` | `on` | ok. Sent by a recording member only when its voice starts or stops being heard, and with `on` false when it stops recording; the receiver keeps it until the connection closes. |
 | `draw` | `room`, `stroke` | ok |
+| `check` | none | JSON {`pc`, `net`}: the member's checks of their PC and of their connection, each a list of {`level` (ok, warn, fail, info), `text` (English, with `{name}` places), `args`}. |
 | `speed` | `bytes`, `pad` (a string that makes the request as large as the test) | `bytes` zero bytes. |
 | `report` | none | Plain text diagnostics report with names, addresses and paths removed. |
 | `asks` | `room`, `asks` (list of {`id`, `name`}) | ok |
