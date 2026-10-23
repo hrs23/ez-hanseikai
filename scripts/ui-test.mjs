@@ -447,25 +447,26 @@ test("a slot holds the others only while its data is here, it is not ready, and 
 
 test("where data goes says when a relay or a server is involved", () => {
   ui$.setLanguage("en");
-  const flow = { relay: "relay.example.net", download: null, update: { host: "github.com" }, time: { host: "time.cloudflare.com", ok: true }, api: { on: false } };
+  const flow = { relay: "relay.example.net", download: null, update: { host: "github.com" }, report: { host: "reports.example.org" }, time: { host: "time.cloudflare.com", ok: true }, api: { on: false } };
   const names = { a: "Aki", b: "Ren" };
   const direct = ui$.flowRows({ names, peers: [peerOf("a")] }, flow);
   assert.deepEqual(plain(direct[0]), { key: "Members", level: "ok", text: "All direct" });
-  assert.deepEqual(plain(direct.map((r) => r.key)), ["Members", "Address lookup", "Update check", "Time check", "Downloads"]);
-  assert.deepEqual(plain(direct[3]), { key: "Time check", level: "info", text: "time.cloudflare.com · at start and every hour" });
-  assert.deepEqual(plain(ui$.flowRows({ names, peers: [] }, { ...flow, time: { host: "time.cloudflare.com", ok: false } })[3]), { key: "Time check", level: "warn", text: "time.cloudflare.com · Unreachable" });
-  assert.equal(direct[1].text, "relay.example.net · Publishes only the relay address");
+  assert.deepEqual(plain(direct.map((r) => r.key)), ["Members", "Relay server", "Update check", "Feedback", "Time check", "Downloads"]);
+  assert.deepEqual(plain(direct[4]), { key: "Time check", level: "info", text: "time.cloudflare.com · at start and every hour" });
+  assert.deepEqual(plain(ui$.flowRows({ names, peers: [] }, { ...flow, time: { host: "time.cloudflare.com", ok: false } })[4]), { key: "Time check", level: "warn", text: "time.cloudflare.com · Unreachable" });
+  assert.equal(direct[1].text, "Default · relay.example.net · Sees only encrypted traffic");
+  assert.equal(direct[3].text, "reports.example.org · only when you send it");
   assert.equal(direct[2].text, "github.com · at start and every 4 h");
   const relayed = ui$.flowRows({ names, peers: [peerOf("a"), peerOf("b", { path: "relay", relay: "relay2.example.net" })] }, { ...flow, download: "files.example.org", api: { on: true } });
   assert.deepEqual(plain(relayed[0]), { key: "Members", level: "warn", text: "Through a relay server: Ren" });
-  assert.ok(relayed[1].text.startsWith("relay.example.net, relay2.example.net"));
-  assert.deepEqual(plain(relayed[4]), { key: "Downloads", level: "warn", text: "Downloading Video tools from files.example.org" });
-  assert.deepEqual(plain(relayed[5]), { key: "Local API", level: "info", text: "This PC only" });
+  assert.ok(relayed[1].text.startsWith("Default · relay.example.net, relay2.example.net"));
+  assert.deepEqual(plain(relayed[5]), { key: "Downloads", level: "warn", text: "Downloading Video tools from files.example.org" });
+  assert.deepEqual(plain(relayed[6]), { key: "Local API", level: "info", text: "This PC only" });
   assert.equal(ui$.flowRows({ names, peers: [] }, null)[0].text, "No one else is online");
 });
 
 test("the new Diagnostics texts have Japanese translations", () => {
-  for (const word of ["Members", "Address lookup", "Update check", "Time check", "Downloads", "Local API"]) assert.ok(word in ui$.JA, word);
+  for (const word of ["Members", "Relay server", "Update check", "Feedback", "Time check", "Downloads", "Local API"]) assert.ok(word in ui$.JA, word);
 });
 
 test("a focused player plays its own sound; otherwise the chosen player, else the viewer's own, else the first", () => {
@@ -1166,7 +1167,7 @@ const rustConst = (file, name) => Number(new RegExp(`const ${name}: usize = (\\d
 
 test("every text input limit in the page is the limit the app cuts at", () => {
   const { LIMITS } = ui$;
-  assert.deepEqual([LIMITS.name, LIMITS.card, LIMITS.room, LIMITS.note, LIMITS.board, LIMITS.code, LIMITS.relay, LIMITS.relays], [rustConst("main.rs", "NAME_MAX"), rustConst("main.rs", "NAME_MAX"), rustConst("main.rs", "ROOM_NAME_MAX"), rustConst("main.rs", "NOTE_MAX"), rustConst("main.rs", "BOARD_MAX"), rustConst("room.rs", "CODE_MAX"), rustConst("relay.rs", "URL_MAX"), rustConst("relay.rs", "URLS_MAX")]);
+  assert.deepEqual([LIMITS.name, LIMITS.card, LIMITS.room, LIMITS.note, LIMITS.board, LIMITS.code, LIMITS.relay], [rustConst("main.rs", "NAME_MAX"), rustConst("main.rs", "NAME_MAX"), rustConst("main.rs", "ROOM_NAME_MAX"), rustConst("main.rs", "NOTE_MAX"), rustConst("main.rs", "BOARD_MAX"), rustConst("room.rs", "CODE_MAX"), rustConst("relay.rs", "URL_MAX")]);
 });
 
 test("typed text is cleaned like the app cleans it: one trimmed line, no invisible characters, counted in whole characters", () => {

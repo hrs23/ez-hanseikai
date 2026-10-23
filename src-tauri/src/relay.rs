@@ -12,7 +12,7 @@ const RELAY_WAIT: Duration = Duration::from_secs(10);
 const RELAY_POLL: Duration = Duration::from_millis(500);
 
 pub const URL_MAX: usize = 256;
-pub const URLS_MAX: usize = 8;
+pub const URLS_MAX: usize = 1;
 
 pub fn url(u: &str) -> Option<RelayUrl> {
     Some(u.trim()).filter(|u| u.chars().count() <= URL_MAX)?.parse::<RelayUrl>().ok().filter(|r| r.scheme() == "https" && r.host_str().is_some())
@@ -22,7 +22,7 @@ pub fn parse(urls: &[String]) -> Result<Vec<RelayUrl>, String> {
     let shown = |u: &str| u.chars().take(40).collect::<String>();
     let list = urls.iter().map(|u| u.trim()).filter(|u| !u.is_empty()).map(|u| url(u).ok_or(format!("Not a relay URL: {}", shown(u)))).collect::<Result<Vec<_>, _>>()?;
     if list.len() > URLS_MAX {
-        return Err(format!("Use at most {URLS_MAX} relay servers."));
+        return Err("Use one relay server.".into());
     }
     Ok(list)
 }
@@ -143,7 +143,7 @@ mod tests {
         assert!(list[2].len() > 1 && !list[2].contains(&custom[0]));
         assert_eq!(groups(&[]), vec![public()]);
         assert!(parse(&[format!("https://{}.example.org", "a".repeat(URL_MAX))]).is_err());
-        assert_eq!(parse(&vec!["https://relay.example.org".to_string(); URLS_MAX + 1]), Err(format!("Use at most {URLS_MAX} relay servers.")));
+        assert_eq!(parse(&vec!["https://relay.example.org".to_string(); URLS_MAX + 1]), Err("Use one relay server.".into()));
         assert_eq!(parse(&["x".repeat(500)]).unwrap_err().len(), "Not a relay URL: ".len() + 40);
         assert_eq!(parse(&["http://relay.example.org".into()]), Err("Not a relay URL: http://relay.example.org".into()));
         assert_eq!(parse(&["relay.example.org".into()]), Err("Not a relay URL: relay.example.org".into()));

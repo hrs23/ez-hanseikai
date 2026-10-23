@@ -1,7 +1,7 @@
 const { invoke: tauriInvoke, convertFileSrc } = window.__TAURI__.core;
 const invoke = (name, args) => tauriInvoke("call", { name, args: args || {} });
 const dialog = (name, args) => tauriInvoke(name, args || {});
-const LIMITS = { name: 24, room: 40, card: 24, note: 500, board: 4000, code: 1024, relay: 256, relays: 8 };
+const LIMITS = { name: 24, room: 40, card: 24, note: 500, board: 4000, code: 1024, relay: 256 };
 const UNWANTED = /[\u0000-\u001F\u007F-\u009F\u00AD\u061C\u115F\u1160\u200B\u200E\u200F\u202A-\u202E\u2060\u2066-\u2069\u3164\uFEFF\uFFA0]/g;
 const STACKED = /[\u0300-\u036F\u1AB0-\u1AFF\u1DC0-\u1DFF\u20D0-\u20FF\uFE20-\uFE2F]{4,}/g;
 const cleanText = (raw, max) => [...String(raw).replace(/[\n\r\t]/g, " ").replace(STACKED, (run) => run.slice(0, 3)).replace(UNWANTED, "").trim()].slice(0, max).join("").trim();

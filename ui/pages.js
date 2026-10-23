@@ -199,7 +199,7 @@ function openSettings(pane) {
   $("language").value = st.language;
   $("sessionsound").checked = sessionSound;
   pressVoice();
-  $("relays").value = st.relays.join("\n");
+  renderRelay();
   renderHotkeys();
   $("myid").textContent = longId(st.id);
   $("myid").title = st.id;
@@ -377,7 +377,7 @@ function renderOpenDialogs() {
   renderDiagnostics();
 }
 
-for (const [id, max] of [["startname", LIMITS.name], ["name", LIMITS.name], ["roomnameinput", LIMITS.room], ["joincode", LIMITS.code], ["quicktext", LIMITS.note], ["relays", LIMITS.relays * (LIMITS.relay + 1)]]) $(id).maxLength = max;
+for (const [id, max] of [["startname", LIMITS.name], ["name", LIMITS.name], ["roomnameinput", LIMITS.room], ["joincode", LIMITS.code], ["quicktext", LIMITS.note], ["relayurl", LIMITS.relay]]) $(id).maxLength = max;
 $("limit").max = 100000;
 $("startname").oninput = () => renderStart();
 $("startname").onchange = () => { run("set_name", { name: cleanText($("startname").value, LIMITS.name) }); if (cleanText($("startname").value, LIMITS.name)) askName = false; };
@@ -433,7 +433,18 @@ function pressVoice() {
 $("sessionsound").onchange = () => { sessionSound = $("sessionsound").checked; store("sessionSound", sessionSound); };
 $("copyid").onclick = () => navigator.clipboard.writeText(st.id).then(() => flash(t("ID copied"))).catch(fail);
 $("opendata").onclick = $("storeopen").onclick = () => dialog("open_data_folder").catch(fail);
-$("relays").onchange = () => run("set_relays", { urls: $("relays").value.split("\n").map((u) => cleanText(u, LIMITS.relay)) });
+let relayCustom = false;
+function renderRelay() {
+  const custom = relayCustom || st.relays.length > 0;
+  pick($("relaymode"), custom ? "custom" : "default", (v) => {
+    relayCustom = v === "custom";
+    if (!relayCustom && st.relays.length) run("set_relays", { urls: [] });
+    renderRelay();
+  });
+  $("relayurl").hidden = !custom;
+  if (document.activeElement !== $("relayurl")) $("relayurl").value = st.relays[0] || "";
+}
+$("relayurl").onchange = () => run("set_relays", { urls: [cleanText($("relayurl").value, LIMITS.relay)] });
 $("limit").onchange = () => run("set_limit", { mbps: $("limit").value ? Number($("limit").value) : null });
 $("checkupdate").onclick = () => checkUpdate(true);
 $("selnone").onclick = () => { picked.clear(); delete sigs.storage; renderStorage(); };

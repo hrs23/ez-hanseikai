@@ -10,8 +10,9 @@ function flowRows(s, flow) {
   const rows = [route];
   if (!flow) return rows;
   const relay = [...new Set([flow.relay, ...relayed.map((p) => p.relay)].filter(Boolean))].join(", ");
-  rows.push({ key: "Address lookup", level: "info", text: [relay, t("Publishes only the relay address")].filter(Boolean).join(" · ") });
+  rows.push({ key: "Relay server", level: "info", text: [t(s.relays && s.relays.length ? "Custom" : "Default"), relay, t("Sees only encrypted traffic")].filter(Boolean).join(" · ") });
   rows.push({ key: "Update check", level: "info", text: t("github.com · at start and every 4 h") });
+  rows.push({ key: "Feedback", level: "info", text: t("{host} · only when you send it", { host: flow.report.host }) });
   rows.push(flow.time.ok ? { key: "Time check", level: "info", text: t("{host} · at start and every hour", { host: flow.time.host }) } : { key: "Time check", level: "warn", text: `${flow.time.host} · ${t("Unreachable")}` });
   rows.push(flow.download ? { key: "Downloads", level: "warn", text: t("Downloading {what} from {host}", { what: t("Video tools"), host: flow.download }) } : { key: "Downloads", level: "info", text: t("Video tools, only when needed") });
   if (flow.api.on) rows.push({ key: "Local API", level: "info", text: t("This PC only") });

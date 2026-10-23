@@ -1368,14 +1368,16 @@ async function library(ctx) {
     await evaluate(a, `drawerFor = null; renderRoom(); true`);
   });
 
-  await step("a relay server from the settings is tried first and a dead one is skipped", async () => {
+  await step("a relay server from the settings is tried first and a dead one is skipped, and only one can be set", async () => {
     const relayHost = async () => (await invoke(a, "debug_flow")).relay || "";
     const refused = await invoke(a, "set_relays", { urls: ["relay"] }).then(() => null, (e) => String(e.message || e));
     check(refused && refused.includes("Not a relay URL: relay"), `a non-URL was taken: ${brief(refused)}`);
-    await invoke(a, "set_relays", { urls: ["https://127.0.0.1:9/", "https://euc1-1.relay.n0.iroh.link./"] });
-    await waitFor("A's relay is the second server of its list", within(RELAY_WAIT_S * 3), async () => (await relayHost()).startsWith("euc1-1."));
+    const two = await invoke(a, "set_relays", { urls: ["https://127.0.0.1:9/", "https://127.0.0.1:10/"] }).then(() => null, (e) => String(e.message || e));
+    check(two && two.includes("Use one relay server."), `two relay servers were taken: ${brief(two)}`);
+    await invoke(a, "set_relays", { urls: ["https://127.0.0.1:9/"] });
+    await waitFor("A falls back to a public relay", within(RELAY_WAIT_S * 3), async () => { const host = await relayHost(); return host !== "" && !host.startsWith("127."); });
     check(connected(await state(a), [b.id, c.id]), "A lost a member while it changed relays");
-    check((await state(a)).relays.length === 2, "the relay list is not kept");
+    check((await state(a)).relays.length === 1, "the relay is not kept");
     await invoke(a, "set_relays", { urls: [] });
     await waitFor("A is back on the public relays", within(RELAY_WAIT_S * 3), async () => logLines(a).some((l) => l.includes("relay: the public relays")));
     check(connected(await state(a), [b.id, c.id]), "A lost a member after the relay list was cleared");

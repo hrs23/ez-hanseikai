@@ -194,7 +194,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 
 - B's time answer runs 8.2 s ahead and C gets none, and the recording still lines up. `e2e` (`live`)
 - A, B and C record the same set, C joining late only through the relay: it sends and gets voice and logs but no picture, and catches up once it comes back on a direct path. `e2e` (`recover`)
-- a relay server from the settings is tried first and a dead one is skipped. `e2e` (`library`)
+- a relay server from the settings is tried first and a dead one is skipped, and only one can be set: Settings > General > Relay server is Default (the public relays) or one URL of your own (two are refused with "Use one relay server."); Where data goes lists the relay in use with Default or Custom and "Sees only encrypted traffic", and the feedback address (ezh-reports.hiros.page, fixed) with "only when you send it". `e2e` (`library`) `ui-test`
 - measuring the speed to a member gives up and down in Mbit/s, the round trip and the path. `e2e` (`library`)
 - B loses its network while everyone records, keeps recording its part, and everything reaches everyone once it is back. `e2e` (`recover`)
 - Members on different app versions in one room keep working and ignore what they do not understand. `todo`
