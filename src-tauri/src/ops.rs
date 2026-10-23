@@ -244,7 +244,14 @@ fn set_source(core: &Arc<Core>, args: Value) -> Result<Value, String> {
         return Err("That capture source is not available.".into());
     }
     tracing::info!("capture source chosen: {}", if source.is_null() { "none" } else { source["kind"].as_str().unwrap_or_default() });
-    *core.engine.source.lock().unwrap() = source;
+    let mut last = core.engine.last_source.lock().unwrap();
+    core.engine.pick_up.store(false, Ordering::Relaxed);
+    *core.engine.source.lock().unwrap() = source.clone();
+    if !source.is_null() && *last != source {
+        *last = source;
+        drop(last);
+        core.save_settings();
+    }
     Ok(Value::Null)
 }
 

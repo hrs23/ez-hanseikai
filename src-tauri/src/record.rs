@@ -237,6 +237,8 @@ pub fn live_step(recent: &[(u32, Option<String>)], wanted: Option<&str>, n: u32)
 
 pub struct Engine {
     pub source: Mutex<Value>,
+    pub last_source: Mutex<Value>,
+    pub pick_up: AtomicBool,
     pub mic: Mutex<String>,
     pub mix: Mutex<Value>,
     pub quality: Mutex<String>,
@@ -262,6 +264,8 @@ impl Engine {
     pub fn new(settings: &Value) -> Self {
         Self {
             source: Mutex::new(Value::Null),
+            last_source: Mutex::new(settings["source"].clone()),
+            pick_up: AtomicBool::new(!settings["source"].is_null()),
             mic: Mutex::new(settings["mic"].as_str().unwrap_or_default().to_string()),
             mix: Mutex::new(starting_mix(&settings["mix"])),
             quality: Mutex::new(settings["quality"].as_str().unwrap_or(QUALITIES[1].0).to_string()),
@@ -1117,6 +1121,19 @@ fn meters(core: Arc<Core>) {
     }
 }
 
+pub fn picked_up(source: &Value, last: &Value, waiting: bool, present: impl Fn(&Value) -> bool) -> Option<Value> {
+    (source.is_null() && waiting && !last.is_null() && present(last)).then(|| last.clone())
+}
+
+fn pick_up_last(e: &Engine, source: Value) -> Value {
+    let last = e.last_source.lock().unwrap();
+    let Some(back) = picked_up(&source, &last, e.pick_up.load(Ordering::Relaxed), |s| sources::find(s, None).is_some()) else { return source };
+    tracing::info!("capture source from last time is back: {}", back["kind"].as_str().unwrap_or_default());
+    e.pick_up.store(false, Ordering::Relaxed);
+    *e.source.lock().unwrap() = back.clone();
+    back
+}
+
 fn rescan(core: &Core, source: &Value, last: Option<usize>) -> Option<Found> {
     let e = &core.engine;
     let found = sources::find(source, last);
@@ -1199,6 +1216,7 @@ pub fn supervise(core: Arc<Core>) {
         let source = e.source.lock().unwrap().clone();
         let ended = e.video.lock().unwrap().as_ref().is_some_and(Video::finished);
         if ended || scanned.as_ref().is_none_or(|(s, at)| *s != source || at.elapsed() > RESCAN_EVERY) {
+            let source = pick_up_last(e, source);
             found = rescan(&core, &source, found.as_ref().map(|f| f.key));
             scanned = Some((source, Instant::now()));
         }
@@ -1227,6 +1245,17 @@ mod tests {
     use super::*;
     use crate::log::tests::{hold, put, temp};
     use crate::media::tests::{fragment, init};
+
+    #[test]
+    fn the_last_source_comes_back_only_while_nothing_else_was_chosen_and_it_is_there() {
+        let game = json!({"kind": "window", "exe": "game.exe", "title": "Game"});
+        let there = |_: &Value| true;
+        assert_eq!(picked_up(&Value::Null, &game, true, there), Some(game.clone()));
+        assert_eq!(picked_up(&Value::Null, &game, true, |_| false), None);
+        assert_eq!(picked_up(&Value::Null, &game, false, there), None);
+        assert_eq!(picked_up(&json!({"kind": "display", "index": 1}), &game, true, there), None);
+        assert_eq!(picked_up(&Value::Null, &Value::Null, true, there), None);
+    }
 
     #[test]
     fn speaking_changes_only_when_the_mic_turns_loud_or_stays_quiet_past_the_hang() {

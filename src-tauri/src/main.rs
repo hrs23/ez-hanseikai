@@ -343,6 +343,7 @@ impl Core {
             "mic": self.engine.mic.lock().unwrap().clone(),
             "mix": self.engine.mix.lock().unwrap().clone(),
             "quality": self.engine.quality.lock().unwrap().clone(),
+            "source": self.engine.last_source.lock().unwrap().clone(),
             "language": *self.language.lock().unwrap(),
             "layout": *self.layout.lock().unwrap(),
             "hotkeys": shell::HOTKEYS.iter().zip(self.hotkeys.lock().unwrap().iter()).map(|((id, _, _), keys)| (id.to_string(), json!(keys))).collect::<serde_json::Map<_, _>>(),
@@ -602,6 +603,9 @@ pub fn clean_settings(mut settings: Value) -> Value {
     if !settings["quality"].as_str().is_some_and(|q| record::QUALITIES.iter().any(|(id, _)| *id == q)) {
         settings["quality"] = Value::Null;
     }
+    if !sources::valid(&settings["source"]) {
+        settings["source"] = Value::Null;
+    }
     settings["relays"] = json!(strings::<Vec<String>>(&settings["relays"]).iter().filter_map(|u| relay::url(u)).map(|u| u.to_string()).collect::<Vec<_>>());
     settings
 }
@@ -800,6 +804,10 @@ mod tests {
         let kept = clean_settings(json!({"limit_mbps": 8.5, "language": "ja", "quality": "high"}));
         assert_eq!((kept["limit_mbps"].as_f64(), kept["language"].as_str(), kept["quality"].as_str()), (Some(8.5), Some("ja"), Some("high")));
         assert_eq!(clean_settings(json!([1, 2])), clean_settings(json!({})));
+        let game = json!({"kind": "window", "exe": "game.exe", "title": "Game"});
+        assert_eq!(clean_settings(json!({"source": game}))["source"], game);
+        assert!(clean_settings(json!({"source": {"kind": "window", "exe": "game.exe"}}))["source"].is_null());
+        assert!(clean_settings(json!({"source": {"kind": "display", "index": 0}}))["source"].is_null());
     }
 
     #[test]
