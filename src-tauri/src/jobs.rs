@@ -968,6 +968,8 @@ mod tests {
         assert_eq!(configs(&logs, None).keys().collect::<Vec<_>>(), [APEX]);
         assert_eq!(plugins::manifest(plugins::find("apex-minimap").unwrap())["view"], "minimap");
         assert!(plugins::manifest(plugins::find(APEX).unwrap())["view"].is_null());
+        assert_eq!(plugins::manifest(plugins::find("apex-minimap").unwrap())["crop"], json!({"at": 0.04, "size": 0.235}));
+        assert!(plugins::manifest(plugins::find(APEX).unwrap())["crop"].is_null());
     }
 
     #[test]

@@ -44,13 +44,12 @@ function soundKey(view, keys, me, chosen) {
   return [chosen, me].find((k) => keys.includes(k)) || keys[0] || null;
 }
 
-const MINIMAP = { at: 0.04, size: 0.235 };
-
-function minimapRect(width, height) {
-  if (!(width > 0 && height > 0)) return null;
-  const at = MINIMAP.at * height;
-  const side = Math.min(MINIMAP.size * height, width - at);
-  return side > 0 ? { x: at / width, y: MINIMAP.at, w: side / width, h: side / height } : null;
+// crop comes from the view extension (such as Apex minimap): a square at the top left, as fractions of the picture height.
+function minimapRect(width, height, crop) {
+  if (!(width > 0 && height > 0 && crop)) return null;
+  const at = crop.at * height;
+  const side = Math.min(crop.size * height, width - at);
+  return side > 0 ? { x: at / width, y: crop.at, w: side / width, h: side / height } : null;
 }
 
 // Checks on a small copy of the minimap crop (MINIMAP_LOOK.size square): the tile is hidden only when the crop is clearly not a minimap.

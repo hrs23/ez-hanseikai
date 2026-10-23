@@ -87,10 +87,16 @@ test("a menu or popup touches the edge of what opened it on the asked side, flip
 
 const MINIMAP_SIZES = [[1280, 720], [1366, 768], [1600, 900], [1920, 1080], [1920, 1200], [2560, 1080], [2560, 1440], [3440, 1440], [3840, 1600], [3840, 2160], [5120, 1440], [1440, 1080], [1024, 768], [1280, 960], [720, 1280], [1000, 1000], [1280, 536], [1280, 360], [960, 540], [960, 270]];
 
+// The crop Apex minimap declares in src-tauri/src/plugins/apex.rs.
+const APEX_CROP = (() => {
+  const m = /Kind::View\("minimap", Crop \{ at: ([\d.]+), size: ([\d.]+) \}\)/.exec(fs.readFileSync(path.join(ui, "..", "src-tauri", "src", "plugins", "apex.rs"), "utf8"));
+  return { at: Number(m[1]), size: Number(m[2]) };
+})();
+
 test("the minimap crop is a square inside the frame, anchored top left from the height, at every capture size", () => {
   const byHeight = new Map();
   for (const [w, h] of MINIMAP_SIZES) {
-    const r = ui$.minimapRect(w, h);
+    const r = ui$.minimapRect(w, h, APEX_CROP);
     const px = [r.x * w, r.y * h, r.w * w, r.h * h];
     assert.ok(px.every((v) => Number.isFinite(v) && v >= 0), `${w}x${h} ${px}`);
     assert.ok(px[2] > 0 && px[3] > 0, `${w}x${h} empty`);
@@ -102,12 +108,13 @@ test("the minimap crop is a square inside the frame, anchored top left from the 
     if (same && w >= h && same[0] >= h) assert.deepEqual([px[0], px[2]].map(Math.round), same[1], `${w}x${h} differs from ${same[0]}x${h}`);
     byHeight.set(h, [w, [px[0], px[2]].map(Math.round)]);
   }
-  const px = (w, h) => { const r = ui$.minimapRect(w, h); return [r.x * w, r.y * h, r.w * w, r.h * h].map(Math.round); };
+  const px = (w, h) => { const r = ui$.minimapRect(w, h, APEX_CROP); return [r.x * w, r.y * h, r.w * w, r.h * h].map(Math.round); };
   assert.deepEqual(px(1280, 720), [29, 29, 169, 169]);
   assert.deepEqual(px(1920, 1080), [43, 43, 254, 254]);
   assert.deepEqual(px(3840, 2160), [86, 86, 508, 508]);
   assert.deepEqual(px(100, 1000), [40, 40, 60, 60]);
-  for (const [w, h] of [[0, 0], [1920, 0], [0, 1080], [NaN, 1080], [1920, undefined], [-1, 1080], [10, 1000]]) assert.equal(ui$.minimapRect(w, h), null);
+  for (const [w, h] of [[0, 0], [1920, 0], [0, 1080], [NaN, 1080], [1920, undefined], [-1, 1080], [10, 1000]]) assert.equal(ui$.minimapRect(w, h, APEX_CROP), null);
+  assert.equal(ui$.minimapRect(1920, 1080, null), null);
 });
 
 // Made-up 24x24 crops: value-noise terrain stands in for the minimap, flat panels, black screens and documents for the rest.

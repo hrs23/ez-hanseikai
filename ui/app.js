@@ -218,8 +218,9 @@ function place(s) {
   }
   if (s === play && st) renderInk();
 }
+const miniPlugin = () => plugins.find((p) => p.view === "minimap" && p.on);
 function miniKey() {
-  const on = plugins.find((p) => p.view === "minimap" && p.on);
+  const on = miniPlugin();
   const chosen = on && on.settings && on.settings.source;
   const key = st && !play.view && on && (play.keys.includes(chosen) ? chosen : soundKey(0, play.keys, st.id, gameSound));
   return key && play.tiles[key] && play.tiles[key].media.video.videoWidth ? key : null;
@@ -250,7 +251,8 @@ function showMini(key, b) {
 }
 function drawMini(m) {
   const v = m.video;
-  const r = v && minimapRect(v.videoWidth, v.videoHeight);
+  const on = miniPlugin();
+  const r = v && on && minimapRect(v.videoWidth, v.videoHeight, on.crop);
   const px = Math.round(m.side * devicePixelRatio);
   const sig = r && [v.currentTime, v.videoWidth, v.videoHeight, px].join();
   if (!r || (v.paused && m.drawn === sig)) return;

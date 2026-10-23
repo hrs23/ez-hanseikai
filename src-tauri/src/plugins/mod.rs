@@ -35,7 +35,13 @@ pub struct Choice {
 
 pub enum Kind {
     Analysis(fn(&Job, &mut dyn FnMut(f64)) -> Result<Output, String>),
-    View(&'static str),
+    View(&'static str, Crop),
+}
+
+// The square a view tile shows: its top-left corner `at` from the picture's top and left, and its side `size`, both as fractions of the picture height.
+pub struct Crop {
+    pub at: f64,
+    pub size: f64,
 }
 
 impl Plugin {
@@ -96,11 +102,11 @@ pub fn find(id: &str) -> Option<&'static Plugin> {
 }
 
 pub fn manifest(plugin: &Plugin) -> Value {
-    let view = match plugin.kind {
-        Kind::View(view) => Some(view),
-        Kind::Analysis(_) => None,
+    let (view, crop) = match &plugin.kind {
+        Kind::View(view, crop) => (Some(*view), Some(json!({"at": crop.at, "size": crop.size}))),
+        Kind::Analysis(_) => (None, None),
     };
-    json!({"id": plugin.id, "name": plugin.name, "summary": plugin.summary, "sample": plugin.sample, "version": plugin.version, "view": view, "options": plugin.options.iter().map(|o| json!({"id": o.id, "name": o.name, "empty": o.empty})).collect::<Vec<_>>()})
+    json!({"id": plugin.id, "name": plugin.name, "summary": plugin.summary, "sample": plugin.sample, "version": plugin.version, "view": view, "crop": crop, "options": plugin.options.iter().map(|o| json!({"id": o.id, "name": o.name, "empty": o.empty})).collect::<Vec<_>>()})
 }
 
 pub fn child() -> Option<i32> {
