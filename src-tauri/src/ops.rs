@@ -570,7 +570,7 @@ mod tests {
     use crate::names;
     use std::path::Path;
 
-    const WINDOW_COMMANDS: [&str; 8] = ["ui_report", "open_set_folder", "open_data_folder", "open_link", "open_folder", "pick_export_base", "save_text", "show_main"];
+    const WINDOW_COMMANDS: [&str; 10] = ["feedback_preview", "send_feedback", "ui_report", "open_set_folder", "open_data_folder", "open_link", "open_folder", "pick_export_base", "save_text", "show_main"];
 
     fn files(dir: &str, ext: &str) -> Vec<(String, String)> {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join(dir);

@@ -90,7 +90,7 @@ const nameOf = (id) => (id === st.id ? st.name || t("You") : st.names[id] || lon
 const people = () => [st.id, ...st.peers.map((p) => p.id)];
 const liveSet = () => st.sets.find((s) => s.live) || null;
 const inRoom = () => !!st && !!st.room && !st.room.pending;
-const fail = (e) => flash(e, "error");
+const fail = (e) => flash(e, "error", { label: t("Report…"), run: () => openFeedback("bug", errorReport(e)) });
 const run = (cmd, args, then = refresh) => invoke(cmd, args).then(then).catch(fail);
 const quiet = (cmd, args) => invoke(cmd, args).catch(warn);
 const showingNow = () => nowView || !playSet();

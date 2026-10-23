@@ -30,7 +30,6 @@ const ERRORS_KEPT: usize = 50;
 const JOB_LINES: usize = 40;
 const NAME_MIN_CHARS: usize = 2;
 pub const UPDATE_HOST: &str = "github.com";
-pub const REPORT_HOST: &str = "ezh-reports.hiros.page";
 
 pub const TAKEN: usize = 0;
 pub const ENCODED: usize = 1;
@@ -329,7 +328,7 @@ pub fn flow_json(core: &Core) -> Value {
         "relay": relay::home(core).and_then(|u| u.host_str().map(String::from)),
         "download": ffmpeg::download_host(),
         "update": {"host": UPDATE_HOST},
-        "report": {"host": REPORT_HOST},
+        "report": {"host": crate::report::host()},
         "time": {"host": crate::clock::HOST, "ok": crate::clock::status()["ok"] == true},
         "api": {"on": *core.api_on.lock().unwrap()},
     })
@@ -348,7 +347,7 @@ pub fn flow_text(flow: &Value) -> String {
     }
     out.push_str(&format!("  address lookup: relay {}\n", host(&flow["relay"])));
     out.push_str(&format!("  update check: {}\n", flow["update"]["host"].as_str().unwrap_or("?")));
-    out.push_str(&format!("  feedback: {}, only when sent\n", flow["report"]["host"].as_str().unwrap_or("?")));
+    out.push_str(&format!("  feedback: {}\n", flow["report"]["host"].as_str().map_or("not in this build".to_string(), |host| format!("{host}, only when sent"))));
     out.push_str(&format!("  time check: {}, {}\n", flow["time"]["host"].as_str().unwrap_or("?"), if flow["time"]["ok"] == true { "ok" } else { "unreachable" }));
     let download = flow["download"].as_str().map_or("none now".to_string(), |host| format!("ffmpeg from {host}"));
     out.push_str(&format!("  downloads: {download}\n"));

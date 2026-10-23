@@ -11,7 +11,7 @@ const source = ["util.js", "i18n.js", "live.js", "media.js", "layout.js", "dock.
 const memory = new Map();
 const localStorage = { getItem: (k) => memory.get(k) ?? null, setItem: (k, v) => memory.set(k, v) };
 const context = vm.createContext({ localStorage, window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id, location: { search: "" } });
-const ui$ = vm.runInContext(`${source}\n({ uiCommands, uiState, uiRun, listMove, strokeAlpha, INK_TOOLS, INK_TOOL_TITLE, nextInkTool, LIMITS, escapeStep, editKey, cleanText, single, changed, matchEnds, matchStarts, matchLabel, labelMatchEnds, shownTags, noteMoments, progressText, matchChapters, stepTarget, matchTargets, rowHit, rowActions, authorOf, noteCount, matchCount, formatWhen, fullWhen, sessionWhen, keysOf, hotkeyRows, memberStatus, windowTitle, longId, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, analysisPill, analysisSub, analysisActions, analysisDetails, analysisDetailText, runningMark, cardParts, dropPos, dropSlot, boardSpan, boardFont, cellSpan, fitFont, deletePreview, cleanupPicked, cleanupTotal, cleanupHead, cleanupDone, exportChoice, exportArgs, exportView, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, voiceTone, known, VOICE_SIDES, VOICE_TONES, VOICE_SIDE_DEFAULT, VOICE_TONE_DEFAULT, minimapRect, talking, stillTalking, markSpeak, seekSum, osdSeek, osdVolume, osdSpeed, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, nextChip, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, popupSpot, POP_GAP, POP_EDGE, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ uiCommands, uiState, uiRun, listMove, strokeAlpha, INK_TOOLS, INK_TOOL_TITLE, nextInkTool, LIMITS, escapeStep, editKey, cleanText, single, changed, matchEnds, matchStarts, matchLabel, labelMatchEnds, shownTags, noteMoments, progressText, matchChapters, stepTarget, matchTargets, rowHit, rowActions, authorOf, noteCount, matchCount, formatWhen, fullWhen, sessionWhen, keysOf, hotkeyRows, memberStatus, windowTitle, longId, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, analysisPill, analysisSub, analysisActions, analysisDetails, analysisDetailText, runningMark, cardParts, dropPos, dropSlot, boardSpan, boardFont, cellSpan, fitFont, deletePreview, cleanupPicked, cleanupTotal, cleanupHead, cleanupDone, exportChoice, exportArgs, exportView, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, voiceTone, known, VOICE_SIDES, VOICE_TONES, VOICE_SIDE_DEFAULT, VOICE_TONE_DEFAULT, minimapRect, talking, stillTalking, markSpeak, seekSum, osdSeek, osdVolume, osdSpeed, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, feedbackPreview, feedbackReady, errorReport, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, nextChip, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, popupSpot, POP_GAP, POP_EDGE, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 test("a changed() check against a tile's own store reports again on a rebuilt tile", () => {
   const first = {};
   assert.equal(ui$.changed("what", [1], first), true);
@@ -456,6 +456,7 @@ test("where data goes says when a relay or a server is involved", () => {
   assert.deepEqual(plain(ui$.flowRows({ names, peers: [] }, { ...flow, time: { host: "time.cloudflare.com", ok: false } })[4]), { key: "Time check", level: "warn", text: "time.cloudflare.com · Unreachable" });
   assert.equal(direct[1].text, "Default · relay.example.net · Sees only encrypted traffic");
   assert.equal(direct[3].text, "reports.example.org · only when you send it");
+  assert.equal(ui$.flowRows({ names, peers: [] }, { ...flow, report: { host: null } })[3].text, "Not in this build");
   assert.equal(direct[2].text, "github.com · at start and every 4 h");
   const relayed = ui$.flowRows({ names, peers: [peerOf("a"), peerOf("b", { path: "relay", relay: "relay2.example.net" })] }, { ...flow, download: "files.example.org", api: { on: true } });
   assert.deepEqual(plain(relayed[0]), { key: "Members", level: "warn", text: "Through a relay server: Ren" });
@@ -463,6 +464,21 @@ test("where data goes says when a relay or a server is involved", () => {
   assert.deepEqual(plain(relayed[5]), { key: "Downloads", level: "warn", text: "Downloading Video tools from files.example.org" });
   assert.deepEqual(plain(relayed[6]), { key: "Local API", level: "info", text: "This PC only" });
   assert.equal(ui$.flowRows({ names, peers: [] }, null)[0].text, "No one else is online");
+});
+
+test("feedback shows what is sent, needs a comment or the diagnostics, and an error opens it with the message", () => {
+  ui$.setLanguage("en");
+  assert.equal(ui$.feedbackPreview("idea", "More maps", null), "Kind: Request\n\nMore maps");
+  assert.equal(ui$.feedbackPreview("bug", "  ", "report text"), "Kind: Problem\n\n(no comment)\n\n---\nreport text");
+  assert.equal(ui$.feedbackPreview("toString", "x", null), "Kind: Problem\n\nx");
+  assert.equal(ui$.feedbackPreview("comment", "x".repeat(ui$.LIMITS.feedback + 5), null).length, "Kind: Comment\n\n".length + ui$.LIMITS.feedback);
+  assert.deepEqual([ui$.feedbackReady(" ", false), ui$.feedbackReady(" ", true), ui$.feedbackReady("hi", false)], [false, true, true]);
+  assert.equal(ui$.errorReport(new Error("Export failed")), "Error: Export failed");
+  assert.equal(ui$.errorReport("Couldn't send. Check your connection."), "Error: Couldn't send. Check your connection.");
+  const html = read("index.html");
+  assert.deepEqual([...html.match(/id="fbkind"[^]*?<\/div>/)[0].matchAll(/data-v="(\w+)"/g)].map((m) => m[1]), ["bug", "idea", "comment"]);
+  assert.match(html, /id="fbdiag" type="checkbox" checked/);
+  assert.match(html, /id="fbimage" type="checkbox">/);
 });
 
 test("the new Diagnostics texts have Japanese translations", () => {
@@ -1167,7 +1183,7 @@ const rustConst = (file, name) => Number(new RegExp(`const ${name}: usize = (\\d
 
 test("every text input limit in the page is the limit the app cuts at", () => {
   const { LIMITS } = ui$;
-  assert.deepEqual([LIMITS.name, LIMITS.card, LIMITS.room, LIMITS.note, LIMITS.board, LIMITS.code, LIMITS.relay], [rustConst("main.rs", "NAME_MAX"), rustConst("main.rs", "NAME_MAX"), rustConst("main.rs", "ROOM_NAME_MAX"), rustConst("main.rs", "NOTE_MAX"), rustConst("main.rs", "BOARD_MAX"), rustConst("room.rs", "CODE_MAX"), rustConst("relay.rs", "URL_MAX")]);
+  assert.deepEqual([LIMITS.name, LIMITS.card, LIMITS.room, LIMITS.note, LIMITS.board, LIMITS.code, LIMITS.relay, LIMITS.feedback], [rustConst("main.rs", "NAME_MAX"), rustConst("main.rs", "NAME_MAX"), rustConst("main.rs", "ROOM_NAME_MAX"), rustConst("main.rs", "NOTE_MAX"), rustConst("main.rs", "BOARD_MAX"), rustConst("room.rs", "CODE_MAX"), rustConst("relay.rs", "URL_MAX"), rustConst("report.rs", "COMMENT_MAX")]);
 });
 
 test("typed text is cleaned like the app cleans it: one trimmed line, no invisible characters, counted in whole characters", () => {

@@ -12,7 +12,7 @@ function flowRows(s, flow) {
   const relay = [...new Set([flow.relay, ...relayed.map((p) => p.relay)].filter(Boolean))].join(", ");
   rows.push({ key: "Relay server", level: "info", text: [t(s.relays && s.relays.length ? "Custom" : "Default"), relay, t("Sees only encrypted traffic")].filter(Boolean).join(" · ") });
   rows.push({ key: "Update check", level: "info", text: t("github.com · at start and every 4 h") });
-  rows.push({ key: "Feedback", level: "info", text: t("{host} · only when you send it", { host: flow.report.host }) });
+  rows.push({ key: "Feedback", level: "info", text: flow.report.host ? t("{host} · only when you send it", { host: flow.report.host }) : t("Not in this build") });
   rows.push(flow.time.ok ? { key: "Time check", level: "info", text: t("{host} · at start and every hour", { host: flow.time.host }) } : { key: "Time check", level: "warn", text: `${flow.time.host} · ${t("Unreachable")}` });
   rows.push(flow.download ? { key: "Downloads", level: "warn", text: t("Downloading {what} from {host}", { what: t("Video tools"), host: flow.download }) } : { key: "Downloads", level: "info", text: t("Video tools, only when needed") });
   if (flow.api.on) rows.push({ key: "Local API", level: "info", text: t("This PC only") });
@@ -35,4 +35,16 @@ function leftText(seconds) {
 
 function progressText({ n, speed, left }) {
   return [`${n}%`, speed ? `${bytes(speed)}/s` : null, left != null ? leftText(left) : null].filter(Boolean).join(" · ");
+}
+
+const FEEDBACK_NAMES = { bug: "Problem", idea: "Request", comment: "Comment" };
+function feedbackPreview(kind, comment, diagnostics) {
+  const note = comment.trim() ? comment.slice(0, LIMITS.feedback) : t("(no comment)");
+  return [`${t("Kind")}: ${t(Object.hasOwn(FEEDBACK_NAMES, kind) ? FEEDBACK_NAMES[kind] : "Problem")}`, note, diagnostics == null ? null : `---\n${diagnostics}`].filter((x) => x != null).join("\n\n");
+}
+function feedbackReady(comment, withDiagnostics) {
+  return withDiagnostics || comment.trim() !== "";
+}
+function errorReport(e) {
+  return `${t("Error")}: ${t(String((e && e.message) || e))}`;
 }

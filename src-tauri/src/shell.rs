@@ -64,7 +64,7 @@ const JA: [(&str, &str); 43] = [
     ("Diagnostics", "診断"),
     ("Check for updates", "アップデートを確認"),
     ("Reset app…", "アプリをリセット…"),
-    ("Report a problem", "問題を報告"),
+    ("Send feedback…", "フィードバックを送る…"),
     ("Release notes", "リリースノート"),
     ("About", "バージョン情報"),
     ("Cancel the export and exit?", "エクスポートを中止してアプリを終了しますか？"),
@@ -639,7 +639,7 @@ fn build_menu(app: &AppHandle, lang: &str, toggle: &MenuItem<Wry>, mark: &MenuIt
         .separator()
         .item(&it("reset", "Reset app…", None)?)
         .separator()
-        .item(&it("issues", "Report a problem", None)?)
+        .item(&it("feedback", "Send feedback…", None)?)
         .item(&it("releases", "Release notes", None)?)
         .separator()
         .item(&it("about", "About", None)?)
@@ -710,7 +710,6 @@ pub fn setup(app: &tauri::App, core: Arc<Core>) -> tauri::Result<()> {
             "open-folder" => crate::data::open_folder(&core.dir),
             "exit" => dialog(exit_app),
             "mark" => run_hotkey(core, 0),
-            "issues" => open_link(&format!("{REPO}/issues/new")),
             "releases" => open_link(&format!("{REPO}/releases")),
             "about" => dialog(|app, core| { let lang = language(core); tell(app, &lang, &format!("{} {VERSION}\nMIT or Apache-2.0\nIcons: game-icons.net, CC BY 3.0\n{REPO}", tr(&lang, "Version"))) }),
             other => {

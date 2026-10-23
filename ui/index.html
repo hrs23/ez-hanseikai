@@ -215,6 +215,18 @@
   <div id="diagbody" class="diagbody"></div>
   <div class="row foot"><span class="sp"></span><button id="diagcopy"><span data-icon="copy" data-icon-class="sm"></span><span data-t="Copy report">Copy report</span></button><button id="diagsave"><span data-icon="download" data-icon-class="sm"></span><span data-t="Save as file…">Save as file…</span></button></div>
 </dialog>
+<dialog id="feedbackdlg" class="wide">
+  <div class="dlghead"><h2 data-t="Send feedback">Send feedback</h2><button class="icon close" data-icon="x" data-t-label="Close"></button></div>
+  <div class="fbform">
+  <div id="fbkind" class="seg" role="radiogroup" data-t-label="Kind"><button data-v="bug" data-t="Problem">Problem</button><button data-v="idea" data-t="Request">Request</button><button data-v="comment" data-t="Comment">Comment</button></div>
+  <textarea id="fbcomment" class="fbcomment" data-t-placeholder="What happened, or what would you like?" data-t-label="Comment"></textarea>
+  <label class="check"><input id="fbdiag" type="checkbox" checked><span data-t="Include diagnostics (names, IDs and addresses hidden)">Include diagnostics (names, IDs and addresses hidden)</span></label>
+  <label class="check"><input id="fbimage" type="checkbox"><span data-t="Include a picture of the app window">Include a picture of the app window</span></label>
+  <details id="fbpreview" class="fbpreview"><summary data-t="What is sent">What is sent</summary><img id="fbimg" alt="" hidden><pre id="fbtext"></pre></details>
+  <p id="fbnote" class="muted"></p>
+  </div>
+  <div class="row end"><button class="close" data-t="Cancel">Cancel</button><button id="fbsend" class="primary" data-t="Send">Send</button></div>
+</dialog>
 <dialog id="resetdlg">
   <h2 data-t="Reset the app?">Reset the app?</h2>
   <p class="muted" data-t="Settings, downloads and logs are removed.">Settings, downloads and logs are removed.</p>
@@ -288,5 +300,6 @@
 <script src="ai.js"></script>
 <script src="diag.js"></script>
 <script src="pages.js"></script>
+<script src="feedback.js"></script>
 </body>
 </html>

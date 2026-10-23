@@ -22,6 +22,7 @@ mod plugins;
 mod proc;
 mod record;
 mod relay;
+mod report;
 mod room;
 mod shell;
 mod sources;
@@ -417,6 +418,18 @@ fn show_main(app: AppHandle) {
 }
 
 #[tauri::command]
+async fn feedback_preview(core: State<'_, Arc<Core>>) -> Result<Value, String> {
+    let core = core.inner().clone();
+    off_thread(move || report::feedback_preview(&core, Value::Null)).await?
+}
+
+#[tauri::command]
+async fn send_feedback(core: State<'_, Arc<Core>>, args: Value) -> Result<Value, String> {
+    let core = core.inner().clone();
+    off_thread(move || report::send_feedback(&core, args)).await?
+}
+
+#[tauri::command]
 fn open_link(url: String) {
     shell::open_link(&url);
 }
@@ -670,7 +683,7 @@ fn main() {
             std::thread::spawn(move || thumbs::keeper(c));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![call, ui_report, open_set_folder, open_data_folder, open_link, open_folder, pick_export_base, save_text, show_main])
+        .invoke_handler(tauri::generate_handler![call, feedback_preview, send_feedback, ui_report, open_set_folder, open_data_folder, open_link, open_folder, pick_export_base, save_text, show_main])
         .build(tauri::generate_context!())
         .expect("failed to start");
     app.run(|app, event| {

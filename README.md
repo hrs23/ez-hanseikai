@@ -20,7 +20,7 @@ Work in progress. See [the design](docs/design.md).
 6. Any game: the app uses only the picture and sound, so it works with any game; game-specific features come from extensions.
 7. Simple: as few settings, screens and features as the job needs.
 8. Never touches the game: it only captures the screen and the game's sound, never injects code, draws overlays or reads game memory.
-9. No cloud: recordings and notes go straight to your teammates and stay on your PCs.
+9. No cloud: recordings and notes go straight to your teammates and stay on your PCs; the only thing sent elsewhere is feedback you choose to send.
 10. Nothing is lost by one person's delete: everyone keeps their own copy.
 11. Analysis is done by extensions that only read the recordings; each can be turned on or off on its own.
 12. Free and open source.
@@ -49,6 +49,7 @@ Data lives in `%LOCALAPPDATA%\dev.ez-hanseikai.app`; File > Open data folder ope
 - Your ID is the public half of a key made on first start. Connections are encrypted and accepted only from room members. When two members reach each other only through a relay server, only voice, notes and logs go that way and the picture waits for a direct connection, so until then a member reachable only through a relay keeps the only copy of their picture. Settings > General > Relay server is Default (the public relays) or one of your own to try first ([running one](docs/relay.md)); the one in use is published with your ID. An invite code works once; anyone who joins can invite others, so share it only with your team.
 - The local API (Settings > API) is off by default, listens on 127.0.0.1 only (from another PC, forward the port over SSH), and needs a token, and then does what the window does: see [docs/llms.txt](docs/llms.txt).
 - With the Screen button off, nothing of your screen is sent; what was already recorded still reaches the room. The upload limit (Settings > Capture) caps your upload. The app asks time.cloudflare.com for the time at start and every hour and sends nothing else there. Help > Diagnostics > Where data goes shows each connection and what goes over it.
+- Help > Send feedback… (also Report… on an error message) sends a comment, and if ticked the diagnostics report with names, IDs, addresses and your user folder hidden (on by default) and a picture of the app window (off by default), only when you press Send. Recordings, notes and game screens are never sent, and there is no reply. The server address is set when the release is built (`EZH_REPORT_URL`); a build without it cannot send.
 
 ## Contributing
 

@@ -1365,6 +1365,7 @@ dependencies = [
  "anyhow",
  "crc32fast",
  "iroh",
+ "png 0.17.16",
  "regex",
  "serde",
  "serde_json",
