@@ -1334,7 +1334,8 @@ pub fn sweep(room_dir: &Path, gone: &HashSet<String>, recording: Option<&str>) -
 
 pub fn sweep_dropped(core: &Core, room: &str, logs: &[Log]) {
     let recording = core.active_set.lock().unwrap().as_ref().filter(|a| a.room == room).map(|a| a.id.clone());
-    for set in sweep(&core.room_dir(room), &dropped(logs), recording.as_deref()) {
+    let gone: HashSet<String> = dropped(logs).into_iter().filter(|set| !core.in_use(room, set)).collect();
+    for set in sweep(&core.room_dir(room), &gone, recording.as_deref()) {
         data::forget(&core.files, &core.recording_dir(room, &set));
     }
 }

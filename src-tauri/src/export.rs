@@ -502,6 +502,10 @@ fn begin(core: &Core, set: (String, String), command: &mut Command, replace: boo
     let pipes = (child.child.stdout.take().unwrap(), child.child.stderr.take().unwrap());
     let mut slot = core.export.lock().unwrap();
     match slot.as_mut() {
+        Some(running) if replace && running.cancelled => {
+            child.kill();
+            return Err("Export cancelled".into());
+        }
         Some(running) if replace => running.child = child,
         Some(_) => {
             child.kill();

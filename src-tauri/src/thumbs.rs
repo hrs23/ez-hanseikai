@@ -107,7 +107,6 @@ fn make_missing(core: &Core) {
     let Some(room) = core.room_id() else { return };
     for set in room::sets(core, &room, &room::logs(core, &room)) {
         let key = format!("{room}/{}", set.id);
-        let _ = std::fs::remove_file(old_path(&core.room_dir(&room), &set.id));
         if set.recording() || path(&core.room_dir(&room), &set.id).exists() || given_up(&key) {
             continue;
         }

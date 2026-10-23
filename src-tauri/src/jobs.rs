@@ -672,7 +672,7 @@ fn watch(core: &Core, room: &str, plugin: &Plugin, job: &plugins::Job, share: (f
                 return (!stale(core, room, plugin)).then_some(Ok(output));
             }
             Ok(Reply::Failed(e)) => {
-                let _ = process.child.wait();
+                process.kill();
                 return Some(Err(e));
             }
             Err(RecvTimeoutError::Timeout) => {}
