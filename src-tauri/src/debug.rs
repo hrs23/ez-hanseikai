@@ -25,7 +25,8 @@ pub const CRASH: &str = "crash.txt";
 const EVENTS_KEPT: usize = 500;
 const TRANSFERS_KEPT: usize = 1500;
 const CRASH_TAIL: u64 = 256 << 10;
-const REPORT_LINES: usize = 400;
+// How much of the end of the log a report carries (bytes). Enough to look back well before a problem.
+const REPORT_LOG: usize = 400_000;
 const ERRORS_KEPT: usize = 50;
 const JOB_LINES: usize = 40;
 const NAME_MIN_CHARS: usize = 2;
@@ -594,6 +595,22 @@ fn last<T>(mut items: Vec<T>, count: usize) -> Vec<T> {
     items
 }
 
+/// The last whole lines of the log that fit in `max` bytes.
+pub fn log_tail(log: &str, max: usize) -> &str {
+    let log = log.trim_end_matches('\n');
+    if log.len() <= max {
+        return log;
+    }
+    let mut from = log.len() - max;
+    while !log.is_char_boundary(from) {
+        from += 1;
+    }
+    match log[from..].find('\n') {
+        Some(i) => &log[from + i + 1..],
+        None => "",
+    }
+}
+
 pub fn errors(log: &str) -> Vec<&str> {
     last(log.lines().filter(|l| l.contains(" WARN ") || l.contains(" ERROR ")).collect(), ERRORS_KEPT)
 }
@@ -612,7 +629,7 @@ fn jobs_text(logs: &[room::Log]) -> String {
 
 pub fn report_text(core: &Core, check: Option<&str>) -> String {
     let log = fs::read_to_string(core.dir.join("log.txt")).unwrap_or_default();
-    let recent = last(log.lines().collect(), REPORT_LINES);
+    let recent = log_tail(&log, REPORT_LOG);
     let mut out = String::new();
     out.push_str(&format!("{} {} on {} {}\n", env!("CARGO_PKG_NAME"), crate::VERSION, std::env::consts::OS, command_line("cmd", &["/c", "ver"])));
     out.push_str(&format!("previous version {}\n", if core.previous_version.is_empty() { "none" } else { &core.previous_version }));
@@ -628,7 +645,7 @@ pub fn report_text(core: &Core, check: Option<&str>) -> String {
     out.push_str("\n\nrecent crashes\n");
     out.push_str(&tail(&core.dir.join(CRASH), CRASH_TAIL));
     out.push_str("\n\nrecent log\n");
-    out.push_str(&recent.join("\n"));
+    out.push_str(recent);
     redact(&out, &home(), &known_names(core), &known_ids(core))
 }
 
@@ -648,6 +665,18 @@ mod tests {
 
     fn row(dir: &str, n: u32, result: &str) -> Value {
         json!({"dir": dir, "owner": "a", "capture": "1", "series": "v", "n": n, "result": result})
+    }
+
+    #[test]
+    fn the_log_tail_keeps_whole_lines_from_the_end() {
+        let log = "one\ntwo\nthree\n";
+        assert_eq!(log_tail(log, 100), "one\ntwo\nthree");
+        assert_eq!(log_tail(log, 9), "three");
+        assert_eq!(log_tail(log, 10), "two\nthree");
+        assert_eq!(log_tail("あいう\nえお", 7), "えお");
+        assert_eq!(log_tail("long line", 3), "");
+        assert_eq!(log_tail("a\nあい", 5), "あい");
+        assert_eq!(log_tail("a\nあい", 4), "");
     }
 
     #[test]

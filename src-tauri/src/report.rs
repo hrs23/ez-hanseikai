@@ -50,9 +50,24 @@ pub fn feedback_snap(core: &Arc<Core>) -> Value {
 }
 
 pub fn feedback_preview(core: &Arc<Core>, _: Value) -> Result<Value, String> {
-    let diagnostics: String = debug::diagnostics(core, false)?.chars().take(DIAG_MAX).collect();
+    let diagnostics = fit(&debug::diagnostics(core, false)?, DIAG_MAX);
     SHOWN.lock().unwrap().0 = diagnostics.clone();
     Ok(json!({"diagnostics": diagnostics, "to": host()}))
+}
+
+/// The text cut to `max` characters by dropping the middle, so the summary at the top and the newest log at the end both stay.
+pub fn fit(text: &str, max: usize) -> String {
+    const CUT: &str = "\n\n... (cut to fit) ...\n\n";
+    let n = text.chars().count();
+    if n <= max {
+        return text.to_string();
+    }
+    let head = max / 4;
+    let tail = max.saturating_sub(head + CUT.chars().count());
+    let mut out: String = text.chars().take(head).collect();
+    out.push_str(CUT);
+    out.extend(text.chars().skip(n - tail));
+    out
 }
 
 pub fn body(kind: &str, comment: &str, diagnostics: Option<&str>, image: Option<&[u8]>, lang: &str) -> Result<Value, String> {
@@ -196,6 +211,16 @@ fn snap(_: &Core) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_long_report_loses_its_middle_and_keeps_the_top_and_the_newest_log() {
+        assert_eq!(fit("short", 10), "short");
+        let text = format!("TOP{}END", "x".repeat(1000));
+        let out = fit(&text, 200);
+        assert_eq!(out.chars().count(), 200);
+        assert!(out.starts_with("TOP") && out.ends_with("END") && out.contains("cut to fit"));
+        assert_eq!(fit(&"あ".repeat(300), 100).chars().count(), 100);
+    }
 
     #[test]
     fn base64_matches_the_standard_alphabet_and_padding() {
