@@ -19,7 +19,7 @@ function scalars(values) {
 }
 
 function eventText(e) {
-  return [e.text, scalars(e.values)].filter(Boolean).join(" ") || kindLabel(e.kind);
+  return [e.plugin ? t(e.text) : e.text, scalars(e.values)].filter(Boolean).join(" ") || kindLabel(e.kind);
 }
 
 function noteCount(s, byKey = idx.byKey) {
@@ -123,7 +123,7 @@ function applyHint(text, caret, hint, value) {
 
 function tagName(tag) {
   const names = (st && st.tag_names) || {};
-  return "#" + (names[tag] || tag);
+  return "#" + (names[tag] ? t(names[tag]) : tag);
 }
 
 function chaptersOf(list) {

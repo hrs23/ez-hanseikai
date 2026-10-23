@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 use crate::proc::{self, Process, IDLE, NO_WINDOW};
 
 mod apex;
+mod excitement;
 
 pub const FLAG: &str = "--plugin";
 pub const LINE_MAX: usize = 16 << 20;
@@ -46,6 +47,8 @@ impl Plugin {
 pub struct Media {
     pub parts: Vec<PathBuf>,
     pub stream: String,
+    #[serde(default)]
+    pub start_s: f64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default, Debug)]
@@ -53,6 +56,8 @@ pub struct Job {
     pub plugin: String,
     pub duration_s: f64,
     pub picture: Media,
+    #[serde(default)]
+    pub voice: Media,
     pub ffmpeg: PathBuf,
 }
 
@@ -83,7 +88,7 @@ pub enum Reply {
     Failed(String),
 }
 
-pub const ALL: [Plugin; 2] = [apex::PLUGIN, apex::MINIMAP];
+pub const ALL: [Plugin; 3] = [excitement::PLUGIN, apex::PLUGIN, apex::MINIMAP];
 
 pub fn find(id: &str) -> Option<&'static Plugin> {
     ALL.iter().find(|p| p.id == id)
@@ -232,6 +237,22 @@ pub fn keyframes(job: &Job, filter: &str, width: usize, height: usize, mut each:
         if let Some(t) = t {
             each(t, &frame);
         }
+    }
+    let status = child.wait().map_err(|e| e.to_string())?;
+    if status.success() { Ok(()) } else { Err(format!("ffmpeg stopped with {status}")) }
+}
+
+pub fn sound(job: &Job, media: &Media, rate: u32, window: usize, mut each: impl FnMut(&[i16])) -> Result<(), String> {
+    let after = ["-vn", "-ac", "1", "-ar", &rate.to_string(), "-f", "s16le", "pipe:1"].map(String::from);
+    let mut child = ffmpeg(job, media, &["-v", "error"], &after, Stdio::piped(), Stdio::null()).map_err(|e| e.to_string())?;
+    let mut stdout = child.stdout.take().unwrap();
+    let mut bytes = vec![0u8; window * 2];
+    let mut samples = vec![0i16; window];
+    while stdout.read_exact(&mut bytes).is_ok() {
+        for (s, b) in samples.iter_mut().zip(bytes.chunks_exact(2)) {
+            *s = i16::from_le_bytes([b[0], b[1]]);
+        }
+        each(&samples);
     }
     let status = child.wait().map_err(|e| e.to_string())?;
     if status.success() { Ok(()) } else { Err(format!("ffmpeg stopped with {status}")) }

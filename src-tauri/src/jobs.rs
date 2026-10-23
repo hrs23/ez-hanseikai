@@ -86,6 +86,7 @@ pub struct Part {
     pub start_us: i64,
     pub end_us: i64,
     pub picture: Media,
+    pub voice: Media,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -489,8 +490,11 @@ pub fn inputs(core: &Core, room: &str, logs: &[Log], locate: impl Fn(&Set, &str)
                 let segs: Vec<&Seg> = f.segs_of(capture, SERIES[0]).collect();
                 let Some((start_us, end_us)) = span(&segs, f.offset_us) else { continue };
                 let v = series(core, room, f, capture, SERIES[0]);
-                complete &= whole(v.as_deref(), series(core, room, f, capture, SERIES[1]).as_deref());
-                parts.push(Part { start_us, end_us, picture: Media { parts: v.unwrap_or_default(), stream: "v:0".into() } });
+                let m = series(core, room, f, capture, SERIES[1]);
+                complete &= whole(v.as_deref(), m.as_deref());
+                let voice_start = span(&f.segs_of(capture, SERIES[1]).collect::<Vec<_>>(), f.offset_us).map_or(0.0, |(at, _)| (at - start_us) as f64 / 1e6);
+                let picture = Media { parts: v.unwrap_or_default(), stream: "v:0".into(), start_s: 0.0 };
+                parts.push(Part { start_us, end_us, picture, voice: Media { parts: m.unwrap_or_default(), stream: "a:0".into(), start_s: voice_start } });
             }
             parts.sort_by_key(|p| p.start_us);
             let Some(first) = parts.first() else { continue };
@@ -620,7 +624,7 @@ fn run_parts(core: &Arc<Core>, room: &str, plugin: &'static Plugin, input: &Inpu
     let mut tags = BTreeMap::new();
     let count = input.parts.len().max(1) as f64;
     for (i, part) in input.parts.iter().enumerate() {
-        let job = plugins::Job { plugin: plugin.id.into(), duration_s: (part.end_us - part.start_us) as f64 / 1e6, picture: part.picture.clone(), ffmpeg: ffmpeg::path() };
+        let job = plugins::Job { plugin: plugin.id.into(), duration_s: (part.end_us - part.start_us) as f64 / 1e6, picture: part.picture.clone(), voice: part.voice.clone(), ffmpeg: ffmpeg::path() };
         match watch(core, room, plugin, &job, (i as f64 / count, 1.0 / count))? {
             Ok(output) => {
                 found.extend(output.events.into_iter().map(|e| (part.start_us, e)));
