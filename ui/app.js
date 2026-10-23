@@ -607,6 +607,7 @@ function renderParty(set) {
   $("shared").classList.toggle("wp", !!(on && set));
   const others = set ? watchers(set.id) : [];
   const status = on ? st.party.status || [] : [];
+  renderStage(!!(on && set), others.length, st.events.length, clock.playing);
   if (!changed("wpbox", [on, others, status, st.names, lang])) return;
   if (on) {
     box.replaceChildren(el("div", { className: "wpbar" }, icon("users", "sm"), el("span", { textContent: t("Watch Party") }), ...status.map((s) => pill("gray", "spinner", t("Catching up with {name}", { name: nameOf(s.who) }))), avatars([st.id, ...others]), el("button", { className: "sm", onclick: () => setParty(false) }, icon("logout", "sm"), t("Leave"))));
@@ -651,6 +652,11 @@ function renderTools() {
 
 function openSession(id) {
   nowView = false;
+  if (id !== selected && selected && watchParty && st.party.on) {
+    const from = watchers(selected).length ? selected : null;
+    setParty(false);
+    partyFrom = from;
+  }
   if (id !== selected) openSet(id);
   go("player");
 }
@@ -980,7 +986,7 @@ function renderDebriefs(set) {
   const list = set ? debriefsOf(set.id) : [];
   $("debriefs").hidden = !list.length;
   if (!changed("debriefs", [list.map((d) => [d.id, d.end_us, onThisPc(d)]), lang])) return;
-  $("debriefs").replaceChildren(sectionHead("mic", t("Debrief recordings"), list.length), ...list.map((d) => el("div", { className: "prow", tabIndex: 0, oncontextmenu: (e) => { e.preventDefault(); debriefMenu(d, e); } },
+  $("debriefs").replaceChildren(sectionHead("mic", t("Debriefs of this recording"), list.length), ...list.map((d) => el("div", { className: "prow", tabIndex: 0, oncontextmenu: (e) => { e.preventDefault(); debriefMenu(d, e); } },
     el("span", { className: "pic" }, icon("mic", "sm")),
     el("div", { className: "ptx" }, el("div", { className: "nm" }, el("span", { textContent: t("{m} min", { m: Math.max(1, Math.round(((d.end_us || nowUs()) - d.start_us) / 6e7)) }) }), el("span", { className: "muted", textContent: ` · ${sessionWhen(d.id)}`, title: fullWhen(sessionStart(d.id)) }))),
     downloadButton(d) || el("button", { className: "sm", textContent: t("Save"), onclick: () => exportFolder(d) }))));

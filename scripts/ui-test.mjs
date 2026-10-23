@@ -834,6 +834,29 @@ function page(files, globals = {}) {
   return { ctx, boxes };
 }
 
+test("the Watch Party band builds flags and a walking chick, waves with confetti when someone joins, hops when an event is added, naps while nothing plays, and empties when the party ends", () => {
+  const timers = [];
+  const { ctx, boxes } = page(["util.js", "party.js"], { setTimeout: (fn) => timers.push(fn) });
+  const classes = new Set();
+  const box = Object.assign(new Fake("span"), { offsetWidth: 0, classList: { toggle: (n, on) => (on ? classes.add(n) : classes.delete(n)), add: (n) => classes.add(n), remove: (n) => classes.delete(n), contains: (n) => classes.has(n) } });
+  boxes.wpstage = box;
+  Fake.prototype.remove = function () { box.children = box.children.filter((c) => c !== this); };
+  const stage = (...args) => vm.runInContext(`renderStage(${args.join(", ")})`, ctx);
+  const count = (name) => vm.runInContext(name, ctx);
+  stage(true, 0, 5, true);
+  assert.deepEqual([box.children.length, box.children[0].children.length, box.children[1].children[0].tag, classes.has("on")], [2, count("PARTY_FLAGS"), "svg", true]);
+  stage(true, 1, 5, true);
+  assert.deepEqual([classes.has("wave"), box.children.length, box.children[2].children.length], [true, 3, count("PARTY_CONFETTI")]);
+  stage(true, 1, 6, true);
+  assert.equal(classes.has("jump"), true);
+  stage(true, 0, 6, false);
+  assert.deepEqual([classes.has("idle"), box.children.length], [true, 3]);
+  timers.forEach((fn) => fn());
+  assert.deepEqual([classes.has("wave"), classes.has("jump"), box.children.length], [false, false, 2]);
+  stage(false, 0, 0, true);
+  assert.deepEqual([box.children.length, classes.has("on")], [0, false]);
+});
+
 test("an avatar shows the image, a built-in shape or the initial; an unknown shape or none shows the plain person; a room without an icon shows a preset picked from its id, and a room with no id its initial", () => {
   const image = "data:image/webp;base64,AAAA";
   const state = { id: "me", name: "Aki", names: { ren: "Ren", koya: "Koya", mia: "Mia" }, colors: { me: 1, ren: 2, koya: 3, mia: 4 }, capture: { mix: { mic: { muted: false } } }, avatars: { me: "tiger-head", ren: image, koya: "gone", mia: "data:image/svg+xml;base64,AAAA" } };

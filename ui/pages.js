@@ -292,8 +292,8 @@ function renderStorage() {
   const used = storageInfo ? storageInfo.used_bytes : 0;
   const totalBytes = d.total || 1;
   const other = Math.max(0, totalBytes - d.free - used);
-  const sets = st.sets.filter((s) => !s.live);
-  const sig = [used, !!storageInfo, storageFailed, d, sets.map((s) => [s.id, s.progress.have, s.progress.total, s.shared, recvText(s)]), [...picked], lang];
+  const sets = st.sets.filter((s) => !s.live && !s.of);
+  const sig = [used, !!storageInfo, storageFailed, d, sets.map((s) => [s.id, withDebriefs(s), s.progress.total, s.shared, recvText(s), debriefsOf(s.id).length]), [...picked], lang];
   if (!changed("storage", sig)) return;
   $("storedir").textContent = storageInfo ? storageInfo.dir : "";
   const seg = (cls, n) => { const i = el("i", { className: cls }); i.style.width = (n / totalBytes) * 100 + "%"; return i; };
@@ -303,16 +303,16 @@ function renderStorage() {
   $("legend").replaceChildren(...(state ? [state] : [el("span", {}, el("i", { className: "app" }), `${st.app} ${bytes(used)}`), el("span", {}, el("i", { className: "other" }), t("Other files {size}", { size: bytes(other) })), el("span", { className: "sp" }), el("span", {}, el("i", { className: "free" }), free)]));
   $("selold").textContent = t("All but newest {n}", { n: KEEP_NEWEST });
   for (const id of [...picked]) if (!sets.some((s) => s.id === id)) picked.delete(id);
-  const biggest = Math.max(1, ...sets.map((s) => s.progress.have));
+  const biggest = Math.max(1, ...sets.map(withDebriefs));
   const rows = sets.map((s) => {
     const box = el("input", { type: "checkbox", checked: picked.has(s.id), disabled: !canDelete(s), ariaLabel: sessionName(s.id) });
     box.onchange = () => { if (box.checked) picked.add(s.id); else picked.delete(s.id); delete sigs.storage; renderStorage(); };
     const notes = noteCount(s);
-    return el("tr", { className: picked.has(s.id) ? "sel" : "" }, el("td", {}, box), el("td", {}, el("b", { textContent: sessionName(s.id), title: fullWhen(sessionStart(s.id)) }), " ", el("span", { className: "muted small", textContent: noPicture(s) ? t("voice only") : t(notes === 1 ? "{n} note" : "{n} notes", { n: notes }) })), el("td", { textContent: setLength(s) }), el("td", { textContent: String(s.players.length) }), el("td", {}, onThisPc(s) ? [el("span", { className: "sizebar" }, el("i", { style: `width:${(s.progress.have / biggest) * 100}%` })), bytes(s.progress.have)] : el("span", { className: "muted", textContent: "—" })), el("td", { className: "muted small", textContent: recvText(s) }));
+    return el("tr", { className: picked.has(s.id) ? "sel" : "" }, el("td", {}, box), el("td", {}, el("b", { textContent: sessionName(s.id), title: fullWhen(sessionStart(s.id)) }), " ", el("span", { className: "muted small", textContent: [noPicture(s) ? t("voice only") : t(notes === 1 ? "{n} note" : "{n} notes", { n: notes }), debriefsOf(s.id).length ? t(debriefsOf(s.id).length === 1 ? "1 debrief" : "{n} debriefs", { n: debriefsOf(s.id).length }) : ""].filter(Boolean).join(" · ") })), el("td", { textContent: setLength(s) }), el("td", { textContent: String(s.players.length) }), el("td", {}, onThisPc(s) ? [el("span", { className: "sizebar" }, el("i", { style: `width:${(withDebriefs(s) / biggest) * 100}%` })), bytes(withDebriefs(s))] : el("span", { className: "muted", textContent: "—" })), el("td", { className: "muted small", textContent: recvText(s) }));
   });
   const head = el("tr", {}, ...["", "Recorded", "Length", "People", "Size", ""].map((h) => el("th", { textContent: h ? t(h) : "" })));
   $("storetable").replaceChildren(rows.length ? el("table", { className: "table" }, el("thead", {}, head), el("tbody", {}, ...rows)) : el("div", { className: "empty", textContent: t("No recordings yet") }));
-  const size = sets.filter((s) => picked.has(s.id)).reduce((n, s) => n + s.progress.have, 0);
+  const size = sets.filter((s) => picked.has(s.id)).reduce((n, s) => n + withDebriefs(s), 0);
   $("selsum").textContent = picked.size ? t("{n} selected · {size}", { n: picked.size, size: bytes(size) }) : "";
   $("deletesel").disabled = !picked.size;
 }

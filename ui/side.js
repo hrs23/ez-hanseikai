@@ -144,14 +144,22 @@ function liveRow() {
 function wpPill(s, here, mine, watching) {
   const faces = watching && watching.length ? avatars(watching.slice(0, 2), "xs") : null;
   const title = watching ? watching.map(nameOf).join(", ") : "";
-  if (mine) return el("span", { className: "wpn on", title }, faces, icon("users", "sm"), el("span", { textContent: t("Watching") }));
+  if (mine) return faces ? el("span", { className: "wpn", title }, faces) : null;
   const join = (e) => { e.stopPropagation(); openSession(s.id); setParty(true); };
   if (!here) return faces ? el("span", { className: "wpn", title }, faces) : null;
   if (faces) return el("button", { className: "sm wpn live", title, onclick: join }, faces, icon("users", "sm"), el("span", { textContent: t("Join") }));
   return null;
 }
-function wtButton(s) {
+function wtButton(s, mine) {
+  if (mine) return el("button", { className: "sm wt on", title: t("Leave the Watch Party"), ariaLabel: t("Leave the Watch Party"), ariaPressed: true, onclick: (e) => { e.stopPropagation(); setParty(false); } }, icon("users", "sm"));
   return el("button", { className: "sm wt", onclick: (e) => { e.stopPropagation(); openSession(s.id); setParty(true); } }, icon("users", "sm"), el("span", { textContent: t("Watch Party") }));
+}
+function debriefPill(s) {
+  const list = debriefsOf(s.id);
+  if (!list.length) return null;
+  const p = pill("gray", "mic", String(list.length));
+  p.title = t("Debriefs of this recording: {names}", { names: list.map((d) => sessionName(d.id)).join(", ") });
+  return p;
 }
 function sessionRow(s) {
   const on = page === "player" && !showingNow() && selected === s.id;
@@ -159,13 +167,13 @@ function sessionRow(s) {
   const state = sessionState(s);
   const watching = st.party.watching[s.id];
   const running = runningMark(s);
+  const mine = !!watching && watching.includes(st.id);
   let l2;
   if (state && state.kind === "bar") l2 = el("div", { className: "prog", title: state.title || "" }, el("div", { className: "l2" }, icon(state.icon, "sm"), el("span", { textContent: state.text })), el("div", { className: "bar" }, el("i", { style: `width:${Math.round(state.frac * 100)}%` })));
-  else l2 = el("div", { className: "l2" }, el("span", { textContent: setLength(s) }), titles[s.id] ? el("span", { className: "muted", textContent: `· ${sessionWhen(s.id)}`, title: fullWhen(sessionStart(s.id)) }) : null, s.imported_by ? importedPill(s) : null, here && !(watching && watching.length) ? wtButton(s) : null);
-  const mine = !!watching && watching.includes(st.id);
+  else l2 = el("div", { className: "l2" }, el("span", { textContent: setLength(s) }), titles[s.id] ? el("span", { className: "muted", textContent: `· ${sessionWhen(s.id)}`, title: fullWhen(sessionStart(s.id)) }) : null, s.imported_by ? importedPill(s) : null, debriefPill(s), here && (mine || !(watching && watching.length)) ? wtButton(s, mine) : null);
   const row = el("div", { className: "srow" + (on ? " on" : "") + (running ? " run" : "") + (mine ? " wp" : "") + (here ? "" : " gone"), role: "option", tabIndex: 0, ariaSelected: on },
     thumbBox(s, false),
-    el("div", { className: "txt" }, el("div", { className: "l1" }, el("b", { textContent: sessionName(s.id), title: fullWhen(sessionStart(s.id)) }), wpPill(s, here, mine, watching), partyFrom === s.id && watching && watching.length ? el("button", { className: "sm", textContent: t("Back"), onclick: (e) => { e.stopPropagation(); openSession(s.id); } }) : null), l2, whereLine(s)), running ? el("span", { className: "arun", title: running }, icon("cpu", "sm")) : null);
+    el("div", { className: "txt" }, el("div", { className: "l1" }, el("b", { textContent: sessionName(s.id), title: fullWhen(sessionStart(s.id)) }), wpPill(s, here, mine, watching), partyFrom === s.id && watching && watching.length ? el("button", { className: "sm", textContent: t("Back"), onclick: (e) => { e.stopPropagation(); openSession(s.id); setParty(true); } }) : null), l2, whereLine(s)), running ? el("span", { className: "arun", title: running }, icon("cpu", "sm")) : null);
   row.onclick = () => { if (onThisPc(s)) openSession(s.id); };
   row.onkeydown = (e) => { if (e.key === "Enter" && onThisPc(s)) openSession(s.id); };
   row.oncontextmenu = (e) => { e.preventDefault(); sessionMenu(s.id, e); };

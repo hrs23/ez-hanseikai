@@ -5,6 +5,7 @@ function recordingRows() {
 }
 
 const debriefsOf = (id) => st.sets.filter((s) => s.of === id && !s.live);
+const withDebriefs = (s) => s.progress.have + debriefsOf(s.id).reduce((n, d) => n + d.progress.have, 0);
 
 function importedPill(s) {
   const p = pill("gray", "download", t("Imported"));
