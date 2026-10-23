@@ -298,7 +298,6 @@ function renderStorage() {
   const sets = st.sets.filter((s) => !s.live && !s.of);
   const sig = [used, !!storageInfo, storageFailed, d, sets.map((s) => [s.id, withDebriefs(s), s.progress.total, s.shared, recvText(s), debriefsOf(s.id).length]), [...picked], lang];
   if (!changed("storage", sig)) return;
-  $("storedir").textContent = storageInfo ? storageInfo.dir : "";
   const seg = (cls, n) => { const i = el("i", { className: cls }); i.style.width = (n / totalBytes) * 100 + "%"; return i; };
   $("usage").replaceChildren(seg("app", used), seg("other", other));
   const free = d.hours_left != null ? t("Free {free} · about {h} h of recording", { free: bytes(d.free), h: Math.floor(d.hours_left) }) : t("Free {free}", { free: bytes(d.free) });
@@ -313,7 +312,10 @@ function renderStorage() {
     const notes = noteCount(s);
     return el("tr", { className: picked.has(s.id) ? "sel" : "" }, el("td", {}, box), el("td", {}, el("b", { textContent: sessionName(s.id), title: fullWhen(sessionStart(s.id)) }), " ", el("span", { className: "muted small", textContent: [noPicture(s) ? t("voice only") : t(notes === 1 ? "{n} note" : "{n} notes", { n: notes }), debriefsOf(s.id).length ? t(debriefsOf(s.id).length === 1 ? "1 debrief" : "{n} debriefs", { n: debriefsOf(s.id).length }) : ""].filter(Boolean).join(" · ") })), el("td", { textContent: setLength(s) }), el("td", { textContent: String(s.players.length) }), el("td", {}, onThisPc(s) ? [el("span", { className: "sizebar" }, el("i", { style: `width:${(withDebriefs(s) / biggest) * 100}%` })), bytes(withDebriefs(s))] : el("span", { className: "muted", textContent: "—" })), el("td", { className: "muted small", textContent: recvText(s) }));
   });
-  const head = el("tr", {}, ...["", "Recorded", "Length", "People", "Size", ""].map((h) => el("th", { textContent: h ? t(h) : "" })));
+  const can = sets.filter(canDelete);
+  const all = el("input", { type: "checkbox", checked: can.length > 0 && can.every((s) => picked.has(s.id)), indeterminate: picked.size > 0 && !can.every((s) => picked.has(s.id)), disabled: !can.length, ariaLabel: t("Select all") });
+  all.onchange = () => { picked = new Set(all.checked ? can.map((s) => s.id) : []); delete sigs.storage; renderStorage(); };
+  const head = el("tr", {}, el("th", {}, all), ...["Recorded", "Length", "People", "Size", ""].map((h) => el("th", { textContent: h ? t(h) : "" })));
   $("storetable").replaceChildren(rows.length ? el("table", { className: "table" }, el("thead", {}, head), el("tbody", {}, ...rows)) : el("div", { className: "empty", textContent: t("No recordings yet") }));
   const size = sets.filter((s) => picked.has(s.id)).reduce((n, s) => n + withDebriefs(s), 0);
   $("selsum").textContent = picked.size ? t("{n} selected · {size}", { n: picked.size, size: bytes(size) }) : "";
@@ -436,7 +438,7 @@ function pressVoice() {
 }
 $("sessionsound").onchange = () => { sessionSound = $("sessionsound").checked; store("sessionSound", sessionSound); };
 $("copyid").onclick = () => navigator.clipboard.writeText(st.id).then(() => flash(t("ID copied"))).catch(fail);
-$("opendata").onclick = $("storeopen").onclick = () => dialog("open_data_folder").catch(fail);
+$("opendata").onclick = () => dialog("open_data_folder").catch(fail);
 let relayCustom = false;
 function renderRelay() {
   const custom = relayCustom || st.relays.length > 0;
@@ -451,39 +453,8 @@ function renderRelay() {
 $("relayurl").onchange = () => run("set_relays", { urls: [cleanText($("relayurl").value, LIMITS.relay)] });
 $("limit").onchange = () => run("set_limit", { mbps: $("limit").value ? Number($("limit").value) : null });
 $("checkupdate").onclick = () => checkUpdate(true);
-$("selnone").onclick = () => { picked.clear(); delete sigs.storage; renderStorage(); };
 $("selold").onclick = () => { picked = new Set(oldSessions(st.sets.filter((s) => !s.live))); delete sigs.storage; renderStorage(); };
 $("deletesel").onclick = () => confirmDelete([...picked]);
-function renderCleanup(plan, picked) {
-  const path = (p) => el("div", { className: "row small" }, el("span", { className: "mono ellip", textContent: p.path }), el("span", { className: "sp" }), el("span", { className: "muted", textContent: bytes(p.bytes) }));
-  const box = (on, flip) => { const b = el("input", { type: "checkbox", checked: on }); b.onchange = () => { flip(b.checked); renderCleanup(plan, picked); }; return b; };
-  const pick = (set, id) => (on) => { if (on) set.add(id); else set.delete(id); };
-  const groups = plan.groups.map((g) => el("details", { className: "delcard" },
-    el("summary", {}, box(picked.groups.has(g.id), pick(picked.groups, g.id)), " ", el("b", { textContent: cleanupHead(CLEANUP_GROUPS[g.id], g.count, g.bytes) }), g.id === "temp" ? el("div", { className: "small muted", textContent: t("Deleted, not moved to the Recycle Bin") }) : null),
-    ...g.items.map(path), g.more ? el("div", { className: "small muted", textContent: t("+{n} more", { n: g.more }) }) : null));
-  const folders = plan.folders.length || plan.kept.length ? [el("div", { className: "delcard" },
-    el("b", { textContent: cleanupHead("Old folders", plan.folders.length, plan.folders.reduce((s, f) => s + f.bytes, 0)) }),
-    ...plan.folders.map((f) => el("label", { className: "row small" }, box(picked.folders.has(f.path), pick(picked.folders, f.path)), el("span", { className: "mono ellip", textContent: f.path }), f.key ? el("span", { className: "warn", textContent: t("Contains an old ID key") }) : null, el("span", { className: "sp" }), el("span", { className: "muted", textContent: bytes(f.bytes) }))),
-    ...plan.kept.map((p) => el("div", { className: "row small muted" }, el("span", { className: "mono ellip", textContent: p }), el("span", { className: "sp" }), el("span", { textContent: t("Kept: it holds files the app did not make") }))))] : [];
-  $("cleanlist").replaceChildren(...groups, ...folders);
-  const total = cleanupTotal(plan, picked);
-  $("cleantotal").textContent = total.text;
-  $("cleanyes").disabled = !total.n;
-}
-$("cleanup").onclick = async () => {
-  const plan = await invoke("cleanup_plan").catch(fail);
-  if (!plan) return;
-  if (!plan.groups.length && !plan.folders.length && !plan.kept.length) { flash(t("Nothing to clean up")); return; }
-  const picked = cleanupPicked(plan);
-  renderCleanup(plan, picked);
-  $("cleanyes").onclick = async () => {
-    $("cleandlg").close();
-    const done = await invoke("cleanup_run", { groups: [...picked.groups], folders: [...picked.folders] }).catch(fail);
-    if (done) flash(cleanupDone(done));
-    loadStorage();
-  };
-  $("cleandlg").showModal();
-};
 $("diagcopy").onclick = () => diagnosticsText().then((text) => navigator.clipboard.writeText(text)).then(() => flash(t("Copied"))).catch(fail);
 $("diagsave").onclick = () => diagnosticsText().then((text) => dialog("save_text", { name: "ez-hanseikai-diagnostics.txt", text })).then((saved) => { if (saved) flash(t("Saved")); }).catch(fail);
 $("resetyes").onclick = () => {

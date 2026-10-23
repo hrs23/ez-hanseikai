@@ -1,27 +1,21 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use serde_json::{json, Value};
 use windows::core::{Ref, Result as WinResult, HRESULT, PCWSTR};
 use windows::Win32::UI::Shell::{IFileOperationProgressSink, IFileOperationProgressSink_Impl, IShellItem};
 
 use crate::room::{self, seg_name, INIT, LOGS, PENDING, SERIES};
-use crate::{data, debug, jobs, log, Core};
+use crate::{data, jobs, log, Core};
 
 pub const MIN_AGE: Duration = Duration::from_secs(86_400);
-const LISTED: usize = 200;
-const FOLDERS: &str = "folders";
-const BUSY: &str = "Try again when no recording, export or analysis is running.";
 const NEVER: [&str; 12] = ["key.bin", "rooms.json", "settings.json", "app.lock", "EBWebView", "crash.txt", "log.txt", "log.old.txt", "log.older.txt", "export", "ffmpeg.exe", "api.json"];
 const WHOLE: [&str; 4] = ["rooms.json", "settings.json", "resume.json", "encoders.json"];
 const THUMB: &str = ".16x9.jpg";
 const OLD_ROOT: [&str; 5] = ["log.bin", "peer", "peer.txt", "peers.txt", "running.marker"];
 const OLD_ROOM: [&str; 2] = ["sets", "live"];
 const OLD_CAPTURE: [&str; 2] = ["verified.json", "cap.json"];
-
-static SHOWN: Mutex<Vec<(&str, PathBuf)>> = Mutex::new(Vec::new());
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Way {
@@ -303,12 +297,11 @@ pub struct Done {
     pub deleted: u64,
     pub skipped: u64,
     pub freed: u64,
-    pub paths: Vec<PathBuf>,
 }
 
 pub fn run(places: &Places, shown: &[PathBuf], now: SystemTime, busy: &dyn Fn() -> bool, mover: &mut dyn FnMut(&Path, Way) -> bool) -> Result<Done, String> {
     if busy() {
-        return Err(BUSY.into());
+        return Err("busy".into());
     }
     let mut walk = walker(&places.dir, &places.settled, now);
     let mut done = Done::default();
@@ -328,7 +321,6 @@ pub fn run(places: &Places, shown: &[PathBuf], now: SystemTime, busy: &dyn Fn() 
         if mover(path, way) && std::fs::symlink_metadata(path).is_err() {
             *(if way == Way::Bin { &mut done.moved } else { &mut done.deleted }) += files;
             done.freed += bytes;
-            done.paths.push(path.clone());
         } else {
             done.skipped += files;
         }
@@ -336,24 +328,9 @@ pub fn run(places: &Places, shown: &[PathBuf], now: SystemTime, busy: &dyn Fn() 
     Ok(done)
 }
 
-pub fn summary(places: &Places, plan: &Plan) -> Value {
-    let groups: Vec<Value> = [TEMP, ORPHAN, OLD]
-        .into_iter()
-        .filter_map(|group| {
-            let mut items: Vec<&Item> = plan.items.iter().filter(|i| RULES[i.rule].group == group).collect();
-            if items.is_empty() {
-                return None;
-            }
-            items.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.path.cmp(&b.path)));
-            let rel = |i: &Item| i.path.strip_prefix(&places.dir).unwrap_or(&i.path).to_string_lossy().replace('\\', "/");
-            let listed: Vec<Value> = items.iter().take(LISTED).map(|i| json!({"path": rel(i), "bytes": i.bytes})).collect();
-            Some(json!({"id": group, "count": items.len(), "files": items.iter().map(|i| i.files).sum::<u64>(), "bytes": items.iter().map(|i| i.bytes).sum::<u64>(), "items": listed, "more": items.len().saturating_sub(LISTED)}))
-        })
-        .collect();
-    let mut folders: Vec<&Folder> = plan.folders.iter().collect();
-    folders.sort_by(|a, b| b.bytes.cmp(&a.bytes));
-    let folders: Vec<Value> = folders.iter().map(|f| json!({"path": f.path, "files": f.files, "bytes": f.bytes, "key": f.key})).collect();
-    json!({"groups": groups, "folders": folders, "kept": plan.kept})
+/// What a reset moves away: everything in the plan and the old folders, but one that holds an ID key only when the reset drops the ID too.
+pub fn picked(plan: &Plan, keep_id: bool) -> Vec<PathBuf> {
+    plan.items.iter().map(|i| i.path.clone()).chain(plan.folders.iter().filter(|f| !(keep_id && f.key)).map(|f| f.path.clone())).collect()
 }
 
 fn busy(core: &Core) -> bool {
@@ -367,37 +344,21 @@ fn places(core: &Core) -> Places {
     Places { dir: core.dir.clone(), settled: ids.into_iter().filter(|id| core.log_ready(id)).collect(), local: env("LOCALAPPDATA"), roaming: env("APPDATA"), protect: exe.into_iter().collect() }
 }
 
-pub fn plan_op(core: &Arc<Core>, _: Value) -> Result<Value, String> {
-    if busy(core) {
-        return Err(BUSY.into());
-    }
-    let places = places(core);
-    let plan = plan(&places, SystemTime::now());
-    let mut shown: Vec<(&'static str, PathBuf)> = plan.items.iter().map(|i| (RULES[i.rule].group, i.path.clone())).collect();
-    shown.extend(plan.folders.iter().map(|f| (FOLDERS, f.path.clone())));
-    *SHOWN.lock().unwrap() = shown;
-    Ok(summary(&places, &plan))
-}
-
-pub fn run_op(core: &Arc<Core>, args: Value) -> Result<Value, String> {
-    let groups: Vec<String> = crate::ops::arg(&args, "groups")?;
-    let folders: Vec<PathBuf> = crate::ops::arg::<Option<Vec<PathBuf>>>(&args, "folders")?.unwrap_or_default();
-    if busy(core) {
-        return Err(BUSY.into());
-    }
-    let shown: Vec<PathBuf> = std::mem::take(&mut *SHOWN.lock().unwrap()).into_iter().filter(|(group, path)| if *group == FOLDERS { folders.contains(path) } else { groups.iter().any(|g| g == group) }).map(|(_, path)| path).collect();
-    let (c, places) = (core.clone(), places(core));
+/// Runs before a reset: files older versions left and files nothing refers to go to the Recycle Bin, temporary files are deleted.
+pub fn before_reset(core: &Arc<Core>, keep_id: bool) {
+    let (c, places, now) = (core.clone(), places(core), SystemTime::now());
+    let plan = plan(&places, now);
+    let shown = picked(&plan, keep_id);
     let done = std::thread::spawn(move || {
         let _com = Com::new();
-        run(&places, &shown, SystemTime::now(), &|| busy(&c), &mut move_away)
+        run(&places, &shown, now, &|| busy(&c), &mut move_away)
     })
-    .join()
-    .map_err(|_| "Clean up failed.".to_string())??;
-    for path in &done.paths {
-        data::forget(&core.files, path.parent().unwrap_or(path));
+    .join();
+    match done {
+        Ok(Ok(d)) => tracing::info!("before the reset: {} files to the bin, {} deleted, {} skipped, {} bytes, {} old folders kept", d.moved, d.deleted, d.skipped, d.freed, plan.kept.len()),
+        Ok(Err(e)) => tracing::warn!("before the reset: nothing moved ({e})"),
+        Err(_) => tracing::warn!("before the reset: moving old files failed"),
     }
-    debug::event(core, core.started, format!("cleaned up {} files to the bin, {} deleted, {} skipped, {} bytes", done.moved, done.deleted, done.skipped, done.freed));
-    Ok(json!({"moved": done.moved, "deleted": done.deleted, "skipped": done.skipped, "freed": done.freed}))
 }
 
 fn move_away(path: &Path, way: Way) -> bool {
@@ -503,6 +464,7 @@ fn to_bin(path: &Path) -> bool {
 mod tests {
     use super::*;
     use crate::log::tests::{seed, temp, tree};
+    use serde_json::{json, Value};
     use std::collections::BTreeMap;
 
     const LATER: Duration = Duration::from_secs(2 * 86_400);
@@ -652,11 +614,13 @@ mod tests {
         ];
         assert_eq!(got, want.map(|(p, r, n)| (p.to_string(), r, n)));
         assert!((0..RULES.len()).all(|r| got.iter().any(|g| g.1 == r)), "a rule has no case");
-        let summary = summary(&f.places(), &plan(&f.places(), SystemTime::now() + LATER));
-        let groups: Vec<(&str, u64, u64, u64)> = summary["groups"].as_array().unwrap().iter().map(|g| (g["id"].as_str().unwrap(), g["count"].as_u64().unwrap(), g["files"].as_u64().unwrap(), g["bytes"].as_u64().unwrap())).collect();
+        let plan = plan(&f.places(), SystemTime::now() + LATER);
+        let groups = [TEMP, ORPHAN, OLD].map(|g| {
+            let items: Vec<&Item> = plan.items.iter().filter(|i| RULES[i.rule].group == g).collect();
+            (g, items.len(), items.iter().map(|i| i.files).sum::<u64>(), items.iter().map(|i| i.bytes).sum::<u64>())
+        });
         assert_eq!(groups, [(TEMP, 4, 4, 4), (ORPHAN, 5, 8, 8), (OLD, 11, 12, 12)]);
-        let orphans = &summary["groups"][1]["items"];
-        assert_eq!((orphans[0]["path"].as_str(), orphans[0]["bytes"].as_u64()), (Some("rooms/r/recordings/gone"), Some(3)));
+        assert_eq!(picked(&plan, true).len(), 20);
         let _ = std::fs::remove_dir_all(&f.dir);
     }
 
@@ -737,8 +701,9 @@ mod tests {
         let (folders, kept) = found(&places, later);
         assert_eq!(folders, [("local/dev.ggi-hanseikai.app".to_string(), 4, true), ("roaming/dev.ggi-hanseikai.app".to_string(), 0, false)]);
         assert_eq!(kept, ["local/GGI Hanseikai"]);
-        let summary = summary(&places, &plan(&places, later));
-        assert_eq!((summary["folders"][0]["key"].as_bool(), summary["folders"].as_array().unwrap().len(), summary["kept"].as_array().unwrap().len()), (Some(true), 2, 1));
+        let both = plan(&places, later);
+        assert_eq!(picked(&both, true), [roaming.join("dev.ggi-hanseikai.app")], "a reset that keeps the ID keeps an old folder with an ID key");
+        assert_eq!(picked(&both, false), [local.join("dev.ggi-hanseikai.app"), roaming.join("dev.ggi-hanseikai.app")]);
         places.protect.push(local.join("GGI Hanseikai"));
         places.dir = local.join("dev.ggi-hanseikai.app").join("inner");
         assert_eq!(found(&places, later), (vec![("roaming/dev.ggi-hanseikai.app".to_string(), 0, false)], vec![]));

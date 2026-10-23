@@ -1888,7 +1888,7 @@ async function library(ctx) {
     await allSee([a, b, c], "every recording still held", within(SYNC_ROUND_S), (st) => heldByAll(st, ctx.set, [a, b, c]));
   });
 
-  await step("C's Clean up lists, then moves only old files it made that nothing refers to to the Recycle Bin and deletes its temporary files", async () => {
+  await step("C's Reset that keeps the rooms moves only old files it made that nothing refers to to the Recycle Bin, deletes its temporary files and settings, and starts again with its ID and recordings", async () => {
     const room = path.join("rooms", ctx.room);
     const orphan = "2020-01-01 00-00-00";
     const made = { [path.join(room, "thumbs", `${orphan}.16x9.jpg`)]: "orphan thumbnail", [path.join(room, "recordings", orphan, c.id, "1", "v", "000001.m4s")]: "orphan segment" };
@@ -1900,19 +1900,18 @@ async function library(ctx) {
     const binned = { ...made, ...Object.fromEntries(["rec-1767225600000.mp4", "log.bin", "peer.txt", "peers.txt", path.join("peer", "a1b2", "log.bin")].map((name) => [name, oldFiles()[name]])) };
     const old = new Date(Date.now() - 2 * 86_400_000);
     for (const name of [...Object.keys(binned), temp]) fs.utimesSync(path.join(c.data, name), old, old);
-    const kept = Object.keys(oldFiles()).filter((name) => !(name in binned)).concat(["key.bin", "settings.json", "rooms.json", "log.old.txt"]);
-    const size = (names) => names.reduce((n, name) => n + fs.statSync(path.join(c.data, name)).size, 0);
-    await evaluate(c, `$("cleanup").click(); true`);
-    await waitFor("C shows what Clean up would move", within(UI_REFRESH_S * 5), () => evaluate(c, `$("cleandlg").open`));
-    const total = await evaluate(c, `$("cleantotal").textContent`);
-    const want = await evaluate(c, `t("Move {items} ({size}) to the Recycle Bin", { items: itemCount(8), size: bytes(${size(Object.keys(binned)) + size([temp])}) })`);
-    check(total === want, `C offered "${total}", not "${want}"`);
-    const listed = await evaluate(c, `$("cleanlist").textContent`);
-    for (const name of ["rec-1767225600000.mp4", "peer", `${orphan}.16x9.jpg`, `recordings/${orphan}`]) check(listed.includes(name), `the review does not list ${name}`);
-    await evaluate(c, `$("cleanyes").click(); true`);
-    await waitFor("the old and orphan files are gone", within(UI_REFRESH_S * 5), () => [...Object.keys(binned), temp].every((name) => !fs.existsSync(path.join(c.data, name))));
+    const kept = Object.keys(oldFiles()).filter((name) => name.startsWith("rooms") && !(name in binned)).concat(["key.bin", "rooms.json", "log.old.txt"]);
+    const id = c.id;
+    const before = c.proc.pid;
+    await evaluate(c, `openReset(); $("keeprooms").checked && ($("resetyes").click(), true)`);
+    await waitFor("C restarts", within(CALL_S * 4), () => c.proc.exitCode !== null);
+    for (const name of [...Object.keys(binned), temp, "settings.json"]) check(!fs.existsSync(path.join(c.data, name)), `${name} is still there`);
     for (const name of kept) check(fs.existsSync(path.join(c.data, name)), `${name} was removed`);
-    await allSee([a, b, c], "every recording still held", within(SYNC_ROUND_S), (st) => heldByAll(st, ctx.set, [a, b, c]));
+    const again = await waitFor("C's new process", within(COLD_START_S), () => processTable().find((p) => p.parent === before && /^ez-hanseikai/i.test(p.name)));
+    c.proc = { pid: again.pid, exitCode: null };
+    await attach(c);
+    check(c.id === id, `C came back as ${c.id}, not ${id}`);
+    await allSee([c], "the recording still here", within(SYNC_ROUND_S), (st) => !!setOf(st, ctx.set));
   });
 }
 

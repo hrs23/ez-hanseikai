@@ -44,8 +44,6 @@ pub const OPS: &[(&str, Op)] = &[
     ("check_update", |c, _| Ok(json!(find_update(c)?.map(|u| u.version)))),
     ("install_update", install_update),
     ("data_info", |c, _| Ok(json!({"dir": c.dir, "used_bytes": data::used_bytes(&c.dir), "free_bytes": c.free_bytes.load(Ordering::Relaxed)}))),
-    ("cleanup_plan", cleanup::plan_op),
-    ("cleanup_run", cleanup::run_op),
     ("reset", reset),
     ("dismiss_recovery", dismiss_recovery),
     ("retry_ffmpeg", retry_ffmpeg),
@@ -337,6 +335,7 @@ fn reset(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     let keep_rooms: bool = arg(&args, "keep_rooms")?;
     tracing::info!("resetting the app{}", if keep_rooms { ", keeping the rooms" } else { "" });
     data::release(core);
+    cleanup::before_reset(core, keep_rooms);
     data::reset(&core.dir, keep_rooms);
     data::forget(&core.files, &core.dir);
     core.app.restart()

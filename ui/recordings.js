@@ -53,37 +53,6 @@ function deleteForm(s) {
   return s.shared ? "Others still have it" : "This deletes it completely";
 }
 
-function fileCount(n) {
-  return t(n === 1 ? "1 file" : "{n} files", { n });
-}
-
-const CLEANUP_GROUPS = { temp: "Temporary files", orphan: "Leftovers of deleted recordings", old: "Files of older formats" };
-
-function itemCount(n) {
-  return t(n === 1 ? "1 item" : "{n} items", { n });
-}
-
-function cleanupPicked(plan) {
-  return { groups: new Set(plan.groups.map((g) => g.id)), folders: new Set(plan.folders.filter((f) => !f.key).map((f) => f.path)) };
-}
-
-function cleanupTotal(plan, picked) {
-  const groups = plan.groups.filter((g) => picked.groups.has(g.id));
-  const folders = plan.folders.filter((f) => picked.folders.has(f.path));
-  const n = groups.reduce((s, g) => s + g.count, 0) + folders.length;
-  const size = groups.reduce((s, g) => s + g.bytes, 0) + folders.reduce((s, f) => s + f.bytes, 0);
-  return { n, text: t("Move {items} ({size}) to the Recycle Bin", { items: itemCount(n), size: bytes(size) }) };
-}
-
-function cleanupHead(label, count, size) {
-  return `${t(label)} · ${itemCount(count)} · ${bytes(size)}`;
-}
-
-function cleanupDone(r) {
-  const parts = [r.moved ? t("Moved {files} to the Recycle Bin", { files: fileCount(r.moved) }) : "", r.deleted ? t("Deleted {files}", { files: fileCount(r.deleted) }) : "", r.skipped ? t("{files} could not be moved", { files: fileCount(r.skipped) }) : ""];
-  return parts.filter(Boolean).join(" · ") || t("Nothing to clean up");
-}
-
 function deletePreview(sets) {
   return sets.map((s) => ({
     id: s.id,

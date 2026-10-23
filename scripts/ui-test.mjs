@@ -11,7 +11,7 @@ const source = ["util.js", "i18n.js", "live.js", "media.js", "layout.js", "dock.
 const memory = new Map();
 const localStorage = { getItem: (k) => memory.get(k) ?? null, setItem: (k, v) => memory.set(k, v) };
 const context = vm.createContext({ localStorage, window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id, location: { search: "" } });
-const ui$ = vm.runInContext(`${source}\n({ uiCommands, uiState, uiRun, listMove, strokeAlpha, INK_TOOLS, INK_TOOL_TITLE, nextInkTool, LIMITS, escapeStep, editKey, cleanText, single, changed, matchEnds, matchStarts, matchLabel, labelMatchEnds, shownTags, noteMoments, progressText, matchChapters, stepTarget, matchTargets, rowHit, rowActions, authorOf, noteCount, matchCount, formatWhen, fullWhen, sessionWhen, keysOf, hotkeyRows, memberStatus, windowTitle, longId, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, analysisPill, analysisActions, analysisDetails, analysisDetailText, runningMark, cardParts, dropPos, dropSlot, boardSpan, boardFont, cellSpan, fitFont, deletePreview, cleanupPicked, cleanupTotal, cleanupHead, cleanupDone, exportChoice, exportArgs, exportView, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, voiceTone, known, VOICE_SIDES, VOICE_TONES, VOICE_SIDE_DEFAULT, VOICE_TONE_DEFAULT, minimapRect, talking, stillTalking, markSpeak, seekSum, osdSeek, osdVolume, osdSpeed, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, feedbackPreview, feedbackReady, errorReport, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, nextChip, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, popupSpot, POP_GAP, POP_EDGE, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ uiCommands, uiState, uiRun, listMove, strokeAlpha, INK_TOOLS, INK_TOOL_TITLE, nextInkTool, LIMITS, escapeStep, editKey, cleanText, single, changed, matchEnds, matchStarts, matchLabel, labelMatchEnds, shownTags, noteMoments, progressText, matchChapters, stepTarget, matchTargets, rowHit, rowActions, authorOf, noteCount, matchCount, formatWhen, fullWhen, sessionWhen, keysOf, hotkeyRows, memberStatus, windowTitle, longId, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, analysisPill, analysisActions, analysisDetails, analysisDetailText, runningMark, cardParts, dropPos, dropSlot, boardSpan, boardFont, cellSpan, fitFont, deletePreview, exportChoice, exportArgs, exportView, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, voiceTone, known, VOICE_SIDES, VOICE_TONES, VOICE_SIDE_DEFAULT, VOICE_TONE_DEFAULT, minimapRect, talking, stillTalking, markSpeak, seekSum, osdSeek, osdVolume, osdSpeed, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, feedbackPreview, feedbackReady, errorReport, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, nextChip, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, popupSpot, POP_GAP, POP_EDGE, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 test("a changed() check against a tile's own store reports again on a rebuilt tile", () => {
   const first = {};
   assert.equal(ui$.changed("what", [1], first), true);
@@ -266,24 +266,6 @@ test("the two delete confirmations read the same in both languages", () => {
     assert.equal(ui$.t(text), ja);
     ui$.setLanguage("en");
   }
-});
-
-test("the clean up review picks every group and each old folder without an ID key, and totals what is picked, in both languages", () => {
-  const plan = { groups: [{ id: "temp", count: 2, bytes: 10 }, { id: "orphan", count: 1, bytes: 3000 }], folders: [{ path: "C:/a", bytes: 1000, key: true }, { path: "C:/b", bytes: 1000, key: false }], kept: [] };
-  const picked = ui$.cleanupPicked(plan);
-  assert.deepEqual([[...picked.groups], [...picked.folders]], [["temp", "orphan"], ["C:/b"]]);
-  assert.deepEqual(plain(ui$.cleanupTotal(plan, picked)), { n: 4, text: "Move 4 items (4.0 KB) to the Recycle Bin" });
-  picked.groups.delete("temp");
-  picked.groups.delete("orphan");
-  picked.folders.add("C:/a");
-  assert.equal(ui$.cleanupTotal(plan, picked).text, "Move 2 items (2.0 KB) to the Recycle Bin");
-  assert.equal(ui$.cleanupHead("Old folders", 1, 1000), "Old folders · 1 item · 1.0 KB");
-  assert.equal(ui$.cleanupDone({ moved: 3, deleted: 1, skipped: 2 }), "Moved 3 files to the Recycle Bin · Deleted 1 file · 2 files could not be moved");
-  assert.equal(ui$.cleanupDone({ moved: 0, deleted: 0, skipped: 0 }), "Nothing to clean up");
-  ui$.setLanguage("ja");
-  assert.equal(ui$.cleanupTotal(plan, ui$.cleanupPicked(plan)).text, "4件 (4.0 KB) をごみ箱に移動");
-  assert.equal(ui$.cleanupHead("Old folders", 2, 10), "古いフォルダ · 2件 · 10 B");
-  ui$.setLanguage("en");
 });
 
 test("a party state moves the player only when it differs, quietly on joining, and never by a repeat of what was applied", () => {
