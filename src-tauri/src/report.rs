@@ -7,8 +7,10 @@ use serde_json::{json, Value};
 use crate::ops::arg;
 use crate::{debug, proc, Core, VERSION};
 
+pub const URL: &str = "https://ezh-relay.hiros.page:8444/v1/report";
+
 pub fn url() -> Option<&'static str> {
-    option_env!("EZH_REPORT_URL").filter(|u| u.starts_with("https://"))
+    Some(URL)
 }
 
 pub fn host() -> Option<&'static str> {
