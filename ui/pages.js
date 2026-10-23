@@ -296,7 +296,7 @@ function renderStorage() {
   const totalBytes = d.total || 1;
   const other = Math.max(0, totalBytes - d.free - used);
   const sets = st.sets.filter((s) => !s.live && !s.of);
-  const sig = [used, !!storageInfo, storageFailed, d, sets.map((s) => [s.id, withDebriefs(s), s.progress.total, s.shared, recvText(s), debriefsOf(s.id).length]), [...picked], lang];
+  const sig = [used, !!storageInfo, storageFailed, d, sets.map((s) => [s.id, withDebriefs(s), s.progress.total, s.shared, recvText(s)]), [...picked], lang];
   if (!changed("storage", sig)) return;
   const seg = (cls, n) => { const i = el("i", { className: cls }); i.style.width = (n / totalBytes) * 100 + "%"; return i; };
   $("usage").replaceChildren(seg("app", used), seg("other", other));
@@ -310,7 +310,7 @@ function renderStorage() {
     const box = el("input", { type: "checkbox", checked: picked.has(s.id), disabled: !canDelete(s), ariaLabel: sessionName(s.id) });
     box.onchange = () => { if (box.checked) picked.add(s.id); else picked.delete(s.id); delete sigs.storage; renderStorage(); };
     const notes = noteCount(s);
-    return el("tr", { className: picked.has(s.id) ? "sel" : "" }, el("td", {}, box), el("td", {}, el("b", { textContent: sessionName(s.id), title: fullWhen(sessionStart(s.id)) }), " ", el("span", { className: "muted small", textContent: [noPicture(s) ? t("voice only") : t(notes === 1 ? "{n} note" : "{n} notes", { n: notes }), debriefsOf(s.id).length ? t(debriefsOf(s.id).length === 1 ? "1 debrief" : "{n} debriefs", { n: debriefsOf(s.id).length }) : ""].filter(Boolean).join(" · ") })), el("td", { textContent: setLength(s) }), el("td", { textContent: String(s.players.length) }), el("td", {}, onThisPc(s) ? [el("span", { className: "sizebar" }, el("i", { style: `width:${(withDebriefs(s) / biggest) * 100}%` })), bytes(withDebriefs(s))] : el("span", { className: "muted", textContent: "—" })), el("td", { className: "muted small", textContent: recvText(s) }));
+    return el("tr", { className: picked.has(s.id) ? "sel" : "" }, el("td", {}, box), el("td", {}, el("b", { textContent: sessionName(s.id), title: fullWhen(sessionStart(s.id)) }), " ", el("span", { className: "muted small", textContent: [noPicture(s) ? t("voice only") : t(notes === 1 ? "{n} note" : "{n} notes", { n: notes })].filter(Boolean).join(" · ") })), el("td", { textContent: setLength(s) }), el("td", { textContent: String(s.players.length) }), el("td", {}, onThisPc(s) ? [el("span", { className: "sizebar" }, el("i", { style: `width:${(withDebriefs(s) / biggest) * 100}%` })), bytes(withDebriefs(s))] : el("span", { className: "muted", textContent: "—" })), el("td", { className: "muted small", textContent: recvText(s) }));
   });
   const can = sets.filter(canDelete);
   const all = el("input", { type: "checkbox", checked: can.length > 0 && can.every((s) => picked.has(s.id)), indeterminate: picked.size > 0 && !can.every((s) => picked.has(s.id)), disabled: !can.length, ariaLabel: t("Select all") });
