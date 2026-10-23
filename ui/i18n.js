@@ -302,6 +302,7 @@ const JA = {
   "Light": "軽量",
   "Link copied": "リンクをコピーしました",
   "Live": "ライブ",
+  "Live / Game plan / Members / Extensions": "ライブ / 作戦ボード / メンバー / 拡張機能",
   "Live picture and voice": "ライブの映像と声",
   "Log": "ログ",
   "Mark this moment": "この瞬間をマーク",

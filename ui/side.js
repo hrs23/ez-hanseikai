@@ -162,12 +162,13 @@ function sessionRow(s) {
   const watching = st.party.watching[s.id];
   const running = runningMark(s);
   const mine = !!watching && watching.includes(st.id);
+  const bar = !!state && state.kind === "bar";
   let l2;
-  if (state && state.kind === "bar") l2 = el("div", { className: "prog", title: state.title || "" }, el("div", { className: "l2" }, icon(state.icon, "sm"), el("span", { textContent: state.text })), el("div", { className: "bar" }, el("i", { style: `width:${Math.round(state.frac * 100)}%` })));
-  else l2 = el("div", { className: "l2" }, el("span", { textContent: setLength(s) }), titles[s.id] ? el("span", { className: "muted", textContent: `· ${sessionWhen(s.id)}`, title: fullWhen(sessionStart(s.id)) }) : null, s.imported_by ? importedPill(s) : null, here && (mine || !(watching && watching.length)) ? wtButton(s, mine) : null);
+  if (bar) l2 = el("div", { className: "prog", title: state.title || "" }, el("div", { className: "l2" }, icon(state.icon, "sm"), el("span", { textContent: state.text })), el("div", { className: "bar" }, el("i", { style: `width:${Math.round(state.frac * 100)}%` })));
+  else l2 = el("div", { className: "l2" }, el("span", { textContent: setLength(s) }), here ? el("span", { className: "size", textContent: `· ${bytes(sizeOf(s))}` }) : null, titles[s.id] ? el("span", { className: "muted", textContent: `· ${sessionWhen(s.id)}`, title: fullWhen(sessionStart(s.id)) }) : null, s.imported_by ? importedPill(s) : null, here && (mine || !(watching && watching.length)) ? wtButton(s, mine) : null);
   const row = el("div", { className: "srow" + (on ? " on" : "") + (running ? " run" : "") + (mine ? " wp" : "") + (here ? "" : " gone"), role: "option", tabIndex: 0, ariaSelected: on },
     thumbBox(s, false),
-    el("div", { className: "txt" }, el("div", { className: "l1" }, el("b", { textContent: sessionName(s.id), title: fullWhen(sessionStart(s.id)) }), wpPill(s, here, mine, watching), partyFrom === s.id && watching && watching.length ? el("button", { className: "sm", textContent: t("Back"), onclick: (e) => { e.stopPropagation(); openSession(s.id); setParty(true); } }) : null), l2, whereLine(s)), running ? el("span", { className: "arun", title: running }, icon("cpu", "sm")) : null);
+    el("div", { className: "txt" }, el("div", { className: "l1" }, el("b", { textContent: sessionName(s.id), title: fullWhen(sessionStart(s.id)) }), wpPill(s, here, mine, watching), partyFrom === s.id && watching && watching.length ? el("button", { className: "sm", textContent: t("Back"), onclick: (e) => { e.stopPropagation(); openSession(s.id); setParty(true); } }) : null), l2, here && !bar ? null : whereLine(s)), running ? el("span", { className: "arun", title: running }, icon("cpu", "sm")) : null);
   row.onclick = () => { if (onThisPc(s)) openSession(s.id); };
   row.onkeydown = (e) => { if (e.key === "Enter" && onThisPc(s)) openSession(s.id); };
   row.oncontextmenu = (e) => { e.preventDefault(); sessionMenu(s.id, e); };

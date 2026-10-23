@@ -109,6 +109,7 @@ function renderRoom() {
   if (page !== "room" || !inRoom()) return;
   $("boardpane").hidden = roomTab !== "board";
   $("roomtab").parentElement.hidden = roomTab === "board";
+  $("roomtitle").textContent = t(roomTab === "members" ? "Members" : "Extensions");
   if (roomTab === "board") renderBoard();
   else if (roomTab === "members") renderMembers();
   else renderExtensions();

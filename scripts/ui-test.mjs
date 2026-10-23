@@ -546,6 +546,7 @@ test("every English phrase in the pages has a Japanese one, and every Japanese e
     for (const m of s.matchAll(/\bt\(\s*"((?:[^"\\]|\\.)*)"/g)) phrases.add(text(m[1]));
     for (const m of s.matchAll(/\bt\([^)]*\?\s*"((?:[^"\\]|\\.)*)"\s*:\s*"((?:[^"\\]|\\.)*)"/g)) [m[1], m[2]].forEach((x) => phrases.add(text(x)));
   }
+  for (const m of read("pages.js").matchAll(/^ {2}\["((?:[^"\\]|\\.)*)", \[/gm)) phrases.add(text(m[1]));
   const messages = new Set();
   for (const s of rust) {
     for (const m of s.matchAll(/(?:Err\(|ok_or\(|ok_or_else\(\|\| |return Err\()"((?:[^"\\]|\\.)*)"/g)) messages.add(text(m[1]));
