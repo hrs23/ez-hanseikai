@@ -40,6 +40,8 @@ The end-to-end test `node scripts/e2e.mjs <app exe> <folder with ffmpeg.exe and 
 
 To look at the page after a UI change, `node scripts/screens/shoot.mjs [folder]` saves pictures of the main screens at two window sizes (to `screens/` by default). It opens the page in Chromium (`npm install` first; in a fresh setup also `npx playwright install chromium`) with the Tauri core replaced by `scripts/screens/mock.js`, a fixed room with members and recordings at a fixed time; videos do not play there. GitHub Actions takes them on every push in its own Linux job, beside the other jobs, and keeps them as the `screens` artifact for a week; check them after every UI change.
 
+`node scripts/stability.mjs <data folder | log file | report log.gz> ...` prints stability numbers per app version from the app's logs: running hours, unclean exits and panics, capture stalls per recording hour, and for sync the connections, drops within a minute, the relay share, connect failures, stopped syncs and live catch-ups. Give it every log you have (a PC's data folder, the logs of feedback reports); the same lines read twice count once.
+
 Every case the app is tested against is listed in [test-cases.md](test-cases.md).
 
 A new test or a new case adds its line to `docs/test-cases.md` (a ui-test fails when an end-to-end step is missing there).

@@ -1362,3 +1362,36 @@ test("a saved stroke shows near its moment when paused, and for two seconds with
   assert.equal(ui$.strokeAlpha(10, 11.75, true, true), 1);
 });
 
+
+test("stability numbers count per version, per running hour, and put an unclean exit on the run before", async () => {
+  const { measure, table } = await import("./stability.mjs");
+  const at = (m) => `2026-10-23T12:${String(m).padStart(2, "0")}:00.000  INFO ez_hanseikai: `;
+  const one = [
+    `${at(0)}EZ Hanseikai 0.32.0 started, process 1, data folder x`,
+    `${at(1)}ab outgoing: connected (+0.00s)`,
+    `${at(2)}ab outgoing: closed on the relay path after 30 s (+30.00s)`,
+    `${at(3)}recording of 1800 s ended: captured 30.0 fps, encoded 30.0 fps, dropped 0 frames`,
+    `${at(4)}capture is falling behind after 85 s: captured 2.0 fps, encoded 30.0 fps of 30, dropped 0 frames in the last 10 s`,
+    `${at(30)}ab outgoing: closed on the direct path after 600 s (+600.00s)`,
+    "2026-10-23T12:30:00.000 version 0.32.0 panic: boom",
+  ].join("\n");
+  const two = [
+    `${at(40)}EZ Hanseikai 0.32.1 started, process 2, data folder x`,
+    `2026-10-23T12:40:00.001  WARN ez_hanseikai: the app did not exit cleanly last time`,
+    `${at(40)}ab outgoing: connected (+0.00s)`,
+  ].join("\n");
+  // The same log read twice (a report and the folder) counts once.
+  const by = measure([one, two, one]);
+  const a = by.get("0.32.0"), b = by.get("0.32.1");
+  assert.equal(a.runs, 1);
+  assert.equal(a.ms, 30 * 60 * 1000);
+  assert.equal(a.unclean, 1);
+  assert.equal(b.unclean, 0);
+  assert.equal(a.crashFile, 1);
+  assert.equal(a.connected, 1);
+  assert.equal(a.shortConnections, 1);
+  const row = table(by).find((r) => r.version === "0.32.0");
+  assert.equal(row["capture stalls / rec h"], "2.00");
+  assert.equal(row["relay share"], "50%");
+  assert.equal(row["avg fps"], "30.0");
+});

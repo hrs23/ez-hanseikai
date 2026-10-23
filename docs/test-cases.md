@@ -220,6 +220,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - B restarts during the recording as an update does: the recording goes on and B is back in it with its screen in a new part. `e2e` (`recover`)
 - A's encoder is killed and A keeps recording the set in a new part. `e2e` (`recover`)
 - closing the captured window during the recording goes on with the voice, and a new screen adds a part. `e2e` (`recover`)
+- the stability numbers count per version and per running hour, count a log read twice once, and put an unclean exit on the run before. `ui-test`
 - C's disk is full during the recording: its part ends with a notice, the others go on, and C completes its copy once there is room. `e2e` (`recover`)
 - Diagnostics is a checklist of this PC and the connection with how you are connected, Settings > Privacy shows what goes where, and the report is masked. `e2e` (`library`)
 - a test feedback report with the diagnostics and log goes to the real report server (only when the version has no release yet or a manual run asks for it), which answers with its ID. `e2e` (`library`)
