@@ -369,6 +369,11 @@ fn handler_state(busy: Option<Duration>) -> String {
     busy.map_or_else(|| "the frame handler is idle".to_string(), |d| format!("the frame handler has been on one frame for {} ms", d.as_millis()))
 }
 
+/// A warning only when the app holds frames up; Windows sends no frame for a window that does not change, so few or none from Windows is not by itself a fault.
+fn stall_level(app_side: bool) -> tracing::Level {
+    if app_side { tracing::Level::WARN } else { tracing::Level::INFO }
+}
+
 /// Logs when the captured window stops updating, what the capture sees while it stays so, and when it updates again.
 #[derive(Default)]
 struct StallLog {
@@ -383,7 +388,7 @@ impl StallLog {
         match self.since {
             None if stalled => {
                 (self.since, self.counts, self.logged) = (Some(now), (arrived, taken), Some(now));
-                Some((tracing::Level::WARN, format!("the captured window stopped updating: no frame used for {} s, {}", STALLED_AFTER.as_secs(), handler_state(busy))))
+                Some((stall_level(busy.is_some()), format!("the captured window stopped updating: no frame used for {} s, {}", STALLED_AFTER.as_secs(), handler_state(busy))))
             }
             Some(at) if stalled => {
                 if self.logged.is_some_and(|l| now.duration_since(l) < STALL_LOG_EVERY) {
@@ -391,7 +396,7 @@ impl StallLog {
                 }
                 let (a, t) = (arrived.saturating_sub(self.counts.0), taken.saturating_sub(self.counts.1));
                 (self.counts, self.logged) = ((arrived, taken), Some(now));
-                Some((tracing::Level::WARN, format!("the captured window is still not updating after {} s: Windows handed over {a} frames and {t} were used in the last {} s, {}", (now.duration_since(at) + STALLED_AFTER).as_secs(), STALL_LOG_EVERY.as_secs(), handler_state(busy))))
+                Some((stall_level(busy.is_some() || a > t), format!("the captured window is still not updating after {} s: Windows handed over {a} frames and {t} were used in the last {} s, {}", (now.duration_since(at) + STALLED_AFTER).as_secs(), STALL_LOG_EVERY.as_secs(), handler_state(busy))))
             }
             Some(at) => {
                 self.since = None;
@@ -1295,6 +1300,16 @@ mod tests {
         let (level, back) = log.step(t + secs(40), false, 300, 200, None).unwrap();
         assert!(level == tracing::Level::INFO && back.contains("updating again after 45 s"), "{back}");
         assert_eq!(log.step(t + secs(41), false, 300, 200, None), None);
+    }
+
+    #[test]
+    fn a_window_that_does_not_change_is_not_a_warning() {
+        let (t, secs) = (Instant::now(), Duration::from_secs);
+        let mut log = StallLog::default();
+        assert_eq!(log.step(t, true, 10, 10, None).unwrap().0, tracing::Level::INFO);
+        let (level, still) = log.step(t + STALL_LOG_EVERY, true, 10, 10, None).unwrap();
+        assert!(level == tracing::Level::INFO && still.contains("handed over 0 frames"), "{still}");
+        assert_eq!(log.step(t + secs(60), true, 20, 12, None).unwrap().0, tracing::Level::WARN);
     }
 
     #[test]
