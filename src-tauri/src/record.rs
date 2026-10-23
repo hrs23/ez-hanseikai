@@ -754,7 +754,7 @@ impl Sink {
         }
         if !finish_part(&path) {
             let tail: Vec<String> = path.iter().rev().take(3).collect::<Vec<_>>().into_iter().rev().map(|p| p.to_string_lossy().into_owned()).collect();
-            tracing::error!("could not finish segment {} (renaming its .part failed), so it is left out of the recording", tail.join("/"));
+            tracing::warn!("could not finish segment {} (renaming its .part failed), so it is left out", tail.join("/"));
             return;
         }
         match &open.set {
