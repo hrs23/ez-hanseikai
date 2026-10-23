@@ -173,11 +173,13 @@ function stack(title, sub, large) {
 }
 
 const CREST_BOTTOM = "#14171d";
+const CREST_EDGE = { xs: 1, sm: 1 };
+const CREST_EDGE_DEFAULT = 2;
 const presetTile = (name, size) => {
   const color = colorOf(ROOM_PRESETS.indexOf(name));
   const a = picture("", `linear-gradient(var(--raised-3), ${CREST_BOTTOM})`, name, size, "room");
   a.style.color = color;
-  a.style.border = `1px solid ${color}`;
+  a.style.border = `${CREST_EDGE[size] || CREST_EDGE_DEFAULT}px solid ${color}`;
   return a;
 };
 const defaultPreset = (id) => ROOM_PRESETS[[...id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % ROOM_PRESETS.length];
