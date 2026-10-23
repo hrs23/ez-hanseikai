@@ -4,7 +4,7 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::export::{self, clip, encode_args, Captured, Cue, Job, Note, Options, Output};
-use crate::record::{AUDIO_KBPS, FPS};
+use crate::record::FPS;
 use crate::room::{self, Set};
 use crate::{ffmpeg, party, Core};
 
@@ -12,6 +12,7 @@ const FILE: &str = "debrief.mp4";
 const SUBTITLES: &str = "debrief.ass";
 const PIECES: &str = "pieces.txt";
 const METADATA: &str = "chapters.txt";
+const VOICES: &str = "voices.m4a";
 const CAPTION_S: f64 = 4.0;
 const MAX_INPUTS: usize = 16;
 const LAYOUTS: [(&str, usize, usize); 4] = [("grid", 1, 9), ("side", 2, 6), ("bottom", 2, 6), ("row", 2, 4)];
@@ -327,20 +328,13 @@ fn plan(spans: &[Span], players: &[Output], member: Option<&str>, size: (u32, u3
     pieces
 }
 
-fn final_args(delays: &[f64], chapters: bool, total: f64) -> Vec<String> {
-    let voices = delays.len();
-    let mut args: Vec<String> = ["-f", "concat", "-safe", "0", "-i", PIECES].map(String::from).to_vec();
+fn join_args(chapters: bool, total: f64) -> Vec<String> {
+    let mut args: Vec<String> = ["-f", "concat", "-safe", "0", "-i", PIECES, "-i", VOICES].map(String::from).to_vec();
     if chapters {
-        args.extend(["-f", "ffmetadata", "-i", METADATA].map(String::from));
+        args.extend(["-f", "ffmetadata", "-i", METADATA, "-map_chapters", "2"].map(String::from));
     }
-    let labels: Vec<String> = (0..voices).map(|i| format!("[s{i}]")).collect();
-    let graph = delays.iter().enumerate().map(|(i, d)| export::delayed_sound(i, *d)).collect::<String>() + &export::amix(&labels) + "[mix]";
-    args.extend(["-filter_complex".to_string(), graph, "-map".into(), format!("{voices}:v:0"), "-map".into(), "[mix]".into()]);
-    if chapters {
-        args.extend(["-map_chapters".to_string(), format!("{}", voices + 1)]);
-    }
-    args.extend(["-c:v", "copy", "-c:a", "aac", "-b:a"].map(String::from));
-    args.extend([format!("{AUDIO_KBPS}k"), "-t".into(), format!("{total:.3}")]);
+    args.extend(["-map", "0:v:0", "-map", "1:a:0", "-c", "copy", "-t"].map(String::from));
+    args.push(format!("{total:.3}"));
     args
 }
 
@@ -388,10 +382,12 @@ pub fn video(core: &Arc<Core>, room_id: &str, logs: &[room::Log], set: &Set, tot
             Job { feeds: p.feeds.iter().map(|c| c.pieces.clone()).collect(), args: encode_args(&graph, false, Some(ffmpeg::video_args(chosen.0, kbps)), len), partial: work.join(format!("piece-{n}.part.mp4")), path, total: len }
         })
         .collect();
-    jobs.push(Job { feeds: voices.iter().map(|c| c.pieces.clone()).collect(), args: final_args(&voices.iter().map(|c| c.input.delay_s).collect::<Vec<_>>(), !chapters.is_empty(), total), partial: work.join("debrief.part.mp4"), path: dir.join(FILE), total });
+    let inputs: Vec<export::Input> = voices.iter().map(|c| c.input.clone()).collect();
+    jobs.push(Job { feeds: voices.iter().map(|c| c.pieces.clone()).collect(), args: encode_args(&export::voice_graph(&inputs, total), true, None, total), partial: work.join("voices.part.m4a"), path: work.join(VOICES), total });
+    jobs.push(Job { feeds: Vec::new(), args: join_args(!chapters.is_empty(), total), partial: work.join("debrief.part.mp4"), path: dir.join(FILE), total });
     tracing::info!("debrief video export of {} started: {} pieces", set.id, pieces.len());
     let result = export::run_all(core, (room_id.to_string(), set.id.clone()), jobs, &work, dir);
-    for name in [SUBTITLES, METADATA, PIECES].into_iter().map(String::from).chain((0..pieces.len()).map(|n| format!("piece-{n}.mp4"))) {
+    for name in [SUBTITLES, METADATA, PIECES, VOICES].into_iter().map(String::from).chain((0..pieces.len()).map(|n| format!("piece-{n}.mp4"))) {
         let _ = std::fs::remove_file(work.join(name));
     }
     result?;
@@ -525,12 +521,9 @@ mod tests {
     }
 
     #[test]
-    fn the_last_step_joins_the_pieces_with_every_voice_and_the_chapters() {
-        let a = final_args(&[0.0, 2.5], true, 61.0).join(" ");
-        assert!(a.starts_with("-f concat -safe 0 -i pieces.txt -f ffmetadata -i chapters.txt -filter_complex [0:a:0]asetpts=PTS-STARTPTS,adelay=delays=0:all=1[s0];[1:a:0]asetpts=PTS-STARTPTS,adelay=delays=2500:all=1[s1];"));
-        assert!(a.contains("[s0][s1]amix=inputs=2:normalize=0:duration=longest,apad[mix] -map 2:v:0 -map [mix] -map_chapters 3 -c:v copy -c:a aac") && a.ends_with("-t 61.000"));
-        let b = final_args(&[0.0], false, 5.0).join(" ");
-        assert!(!b.contains("ffmetadata") && !b.contains("-map_chapters") && b.contains("-map 1:v:0"));
+    fn the_last_step_joins_the_pieces_and_the_mixed_voices_with_the_chapters_without_encoding() {
+        assert_eq!(join_args(true, 61.0).join(" "), "-f concat -safe 0 -i pieces.txt -i voices.m4a -f ffmetadata -i chapters.txt -map_chapters 2 -map 0:v:0 -map 1:a:0 -c copy -t 61.000");
+        assert_eq!(join_args(false, 5.0).join(" "), "-f concat -safe 0 -i pieces.txt -i voices.m4a -map 0:v:0 -map 1:a:0 -c copy -t 5.000");
     }
 
     fn captured(times: Vec<(f64, f64)>) -> Captured {

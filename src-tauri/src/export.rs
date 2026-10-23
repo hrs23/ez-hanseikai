@@ -183,12 +183,12 @@ pub fn cut(a: &str, delay: f64) -> String {
     if delay < 0.0 { format!("{a}setpts=PTS-STARTPTS,{a}trim=start={:.3},", -delay) } else { String::new() }
 }
 
-pub fn delayed_sound(i: usize, delay: f64) -> String {
+fn delayed_sound(i: usize, delay: f64) -> String {
     format!("[{i}:a:0]{}asetpts=PTS-STARTPTS,adelay=delays={}:all=1[s{i}];", cut("a", delay), (delay.max(0.0) * 1000.0).round() as u64)
 }
 
-pub fn amix(labels: &[String]) -> String {
-    format!("{}amix=inputs={}:normalize=0:duration=longest,apad", labels.concat(), labels.len())
+fn amix(labels: &[String], total: f64) -> String {
+    format!("{}amix=inputs={}:normalize=0:duration=longest,apad=whole_dur={total:.3}", labels.concat(), labels.len())
 }
 
 fn graph(inputs: &[Input], size: (u32, u32), total: f64) -> (String, bool) {
@@ -212,14 +212,14 @@ fn graph(inputs: &[Input], size: (u32, u32), total: f64) -> (String, bool) {
     }
     graph += &format!("[bg{layer}]format=yuv420p[vout]");
     if !sounds.is_empty() {
-        graph += &format!(";{}[mix]", amix(&sounds));
+        graph += &format!(";{}[mix]", amix(&sounds, total));
     }
     (graph, !sounds.is_empty())
 }
 
-fn voice_graph(inputs: &[Input]) -> String {
+pub fn voice_graph(inputs: &[Input], total: f64) -> String {
     let sounds: Vec<String> = (0..inputs.len()).map(|i| format!("[s{i}]")).collect();
-    inputs.iter().enumerate().map(|(i, input)| delayed_sound(i, input.delay_s)).collect::<String>() + &amix(&sounds) + "[mix]"
+    inputs.iter().enumerate().map(|(i, input)| delayed_sound(i, input.delay_s)).collect::<String>() + &amix(&sounds, total) + "[mix]"
 }
 
 fn copyable(inputs: &[Input], total: f64) -> bool {
@@ -579,7 +579,7 @@ fn job(out: &Output, video: bool, path: PathBuf, partial: PathBuf, take: Take) -
         let (graph, audio) = graph(&inputs, size, total);
         encode_args(&graph, audio, Some(ffmpeg::video_args(chosen.0, kbps)), total)
     } else {
-        encode_args(&voice_graph(&inputs), true, None, total)
+        encode_args(&voice_graph(&inputs, total), true, None, total)
     };
     Job { feeds: captured.iter().map(|c| c.pieces.clone()).collect(), args, partial, path, total }
 }
@@ -705,10 +705,10 @@ mod tests {
         assert!(g.contains("[bg1][v1]overlay=eof_action=pass[bg2];"));
         assert!(g.contains("[0:a:0]asetpts=PTS-STARTPTS,adelay=delays=0:all=1[s0];"));
         assert!(!g.contains("[1:a:0]"));
-        assert!(g.ends_with("[bg2]format=yuv420p[vout];[s0]amix=inputs=1:normalize=0:duration=longest,apad[mix]"));
+        assert!(g.ends_with("[bg2]format=yuv420p[vout];[s0]amix=inputs=1:normalize=0:duration=longest,apad=whole_dur=120.000[mix]"));
         let (silent, audio) = graph(&[input(2.0, true, false)], (640, 360), 10.0);
         assert!(!audio && silent.ends_with("[bg1]format=yuv420p[vout]"));
-        assert_eq!(voice_graph(&[input(1.25, false, true), input(9.0, false, true)]), "[0:a:0]asetpts=PTS-STARTPTS,adelay=delays=1250:all=1[s0];[1:a:0]asetpts=PTS-STARTPTS,adelay=delays=9000:all=1[s1];[s0][s1]amix=inputs=2:normalize=0:duration=longest,apad[mix]");
+        assert_eq!(voice_graph(&[input(1.25, false, true), input(9.0, false, true)], 30.0), "[0:a:0]asetpts=PTS-STARTPTS,adelay=delays=1250:all=1[s0];[1:a:0]asetpts=PTS-STARTPTS,adelay=delays=9000:all=1[s1];[s0][s1]amix=inputs=2:normalize=0:duration=longest,apad=whole_dur=30.000[mix]");
     }
 
     #[test]
@@ -747,7 +747,7 @@ mod tests {
         assert!(args(&first, true, Take { whole: false, ..WHOLE }).contains("-filter_complex"));
         let early = Output { video: vec![Captured { input: Input { end_s: 60.0, ..input(0.0, true, true) }, ..captured(0.0, true) }], ..first };
         let padded = args(&early, true, WHOLE);
-        assert!(padded.contains("color=c=black:s=1280x720:r=30:d=120.000") && padded.contains("duration=longest,apad[mix]") && padded.ends_with("-t 120.000"));
+        assert!(padded.contains("color=c=black:s=1280x720:r=30:d=120.000") && padded.contains("duration=longest,apad=whole_dur=120.000[mix]") && padded.ends_with("-t 120.000"));
     }
 
     fn segmented(video: bool) -> Captured {
@@ -763,7 +763,7 @@ mod tests {
         assert!(clip(&segmented(true), 40.0, 50.0).is_none());
         let (g, _) = graph(&[c.input], (1280, 720), 7.0);
         assert!(g.contains("[0:v]setpts=PTS-STARTPTS,trim=start=5.000,setpts=PTS-STARTPTS+0.000/TB"));
-        assert!(voice_graph(&[clip(&segmented(false), 25.0, 32.0).unwrap().input]).starts_with("[0:a:0]asetpts=PTS-STARTPTS,atrim=start=5.000,asetpts=PTS-STARTPTS,adelay=delays=0:all=1[s0];"));
+        assert!(voice_graph(&[clip(&segmented(false), 25.0, 32.0).unwrap().input], 7.0).starts_with("[0:a:0]asetpts=PTS-STARTPTS,atrim=start=5.000,asetpts=PTS-STARTPTS,adelay=delays=0:all=1[s0];"));
         let late = clip(&segmented(true), 5.0, 32.0).unwrap();
         assert_eq!((late.input.delay_s, late.pieces.len()), (5.0, 4));
     }
