@@ -19,7 +19,7 @@ const JA = {
   "{name}'s video missing": "{name} の映像がありません",
   "Receiving {name}'s video": "{name} の映像を受信中",
   "{name}'s video hasn't arrived": "{name} の映像はまだ届いていません",
-  "Not sharing": "共有していません",
+  "Not sending screen": "画面を送っていません",
   "Runner": "担当",
   "Picture from": "映像の元",
   "Whose app sound plays": "アプリの音を再生中のメンバー",

@@ -3,7 +3,7 @@ const PICTURE_LAG_S = 10;
 
 function memberStatus(m, now) {
   if (!m.connected) return m.seen_us ? { kind: "off", text: t("Offline · last seen {time}", { time: seenLabel(m.seen_us, now) }), title: fullWhen(new Date(m.seen_us / 1000)) } : { kind: "off", text: t("Offline") };
-  if (!m.sharing) return { kind: "idle", text: t("Not sharing") };
+  if (!m.sharing) return { kind: "idle", text: t("Not sending screen") };
   return m.relayed ? { kind: "idle", text: t("No picture via relay") } : { kind: "standby", text: t("Standby") };
 }
 
