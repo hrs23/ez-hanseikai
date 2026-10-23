@@ -1,5 +1,6 @@
 #!/bin/bash
 [ "${CLAUDE_CODE_REMOTE:-}" = true ] && [ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ] || exit 0
+command -v ssh >/dev/null || apt-get install -y -qq openssh-client >/dev/null 2>&1
 sock=/tmp/tailscaled.sock
 tailscaled --tun=userspace-networking --socket=$sock --state=mem: >/tmp/tailscaled.log 2>&1 &
 sleep 3
