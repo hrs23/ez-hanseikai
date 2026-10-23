@@ -5,6 +5,7 @@ One list of every case the app is tested against, by area. Each line is a situat
 - `e2e`: a step of `scripts/e2e.mjs`, named as it prints it, with its `E2E_PART` (`live`, `recover` or `library`).
 - `unit`: Rust tests, run by `cargo test` in `src-tauri`.
 - `ui-test`: a test of `scripts/ui-test.mjs`, run by `node --test scripts/ui-test.mjs`.
+- `screens`: a picture of `scripts/screens`, run by `npx playwright test -c scripts/screens`.
 - `manual`: only a person can check it.
 - `todo`: known, with no test yet.
 
@@ -83,6 +84,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - full screen in the player and on the board is left like any video player: Esc (after a menu, dialog or popup has closed first, and a text field has been left), F, F11, double-click on a picture while in full screen (not on the controls), the control bar's full screen button (pressed while on), and an Exit full screen button at the top right (tooltip Exit full screen (Esc), at least 32px, above popups, clear of the Watch Party pill) that shows when the mouse moves and fades after 2.5 s of stillness unless hovered or focused, together with the controls and the mouse cursor. `manual`; which key does what `ui-test`
 - recording alone, the player follows the picture as it grows. `e2e` (`live`)
 - each ended recording gets a thumbnail, and the sidebar lists recordings with it. `e2e` (`library`)
+- the Live, player, Members, Game plan, Settings, Diagnostics, Send feedback and start screens look as in their baseline pictures. `screens`
 - a sidebar recording row has two lines: its time, then its length and size; a recording not on this PC shows its size and Download on a third line. Game plan, Members and Extensions show their name in a header as tall as the Live header. `manual`
 - A recording in HEVC and in AV1 plays on every PC; a PC that cannot play one makes the room choose another codec. `manual`
 - a far seek and an immediate Play start every tile at once, alone and in Watch Party; a tile whose recording began within a second of the seek is not counted as apart. `e2e` (`library`)
