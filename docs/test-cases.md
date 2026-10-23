@@ -16,6 +16,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - B joins A's room with approval. `e2e` (`live`)
 - C joins late through B's invite while B is cut off, approved on A once B is back. `e2e` (`live`)
 - removing C for the whole room while a recording runs stops it fetching and leaves the others recording. `e2e` (`live`)
+- C, removed from the room, joins with the invite it already used: the join ends with a message instead of waiting, and C enters the room again. `e2e` (`live`)
 - B leaves the room from its menu and enters it again with its recordings and notes, A and B leave and enter again at once, a new room moves B out of it, and B deletes it from the list. `e2e` (`live`)
 - leaving a room while one of its recordings is open shows no "Join a room first." toast. `manual`
 - C removes the room from this PC while sharing and its folder does not come back. `e2e` (`live`)

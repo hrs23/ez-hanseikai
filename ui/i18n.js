@@ -436,6 +436,7 @@ const JA = {
   "You have the latest version": "最新版です",
   "Your name": "名前",
   "Your request to join was declined.": "参加のリクエストは拒否されました。",
+  "That invite code can no longer be used. Ask for a new one.": "この招待コードはもう使えません。新しいコードをもらってください。",
   "{by} removed you from the room": "{by} があなたをルームから外しました",
   "{by} removed {name} from the room": "{by} が {name} をルームから外しました",
   "{by} started recording": "{by} が録画を開始しました",

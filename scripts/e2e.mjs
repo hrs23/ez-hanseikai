@@ -743,6 +743,7 @@ async function live(ctx) {
     await waitFor(`A has logged ${SEGMENTS_BEFORE_LATE_JOIN} segments`, within(SEGMENT_S * (SEGMENTS_BEFORE_LATE_JOIN + 1)), () => segsOf(logOf(a, ctx.room, a.id), ctx.set, "v").length >= SEGMENTS_BEFORE_LATE_JOIN);
     c = await launch("c");
     const code = await invoke(b, "create_invite", { reuse: false });
+    ctx.usedCode = code;
     marker(b, "offline", true);
     await invoke(c, "join_room", { code });
     await sleep(DIAL_S * 1000);
@@ -894,6 +895,14 @@ async function live(ctx) {
     await invoke(a, "stop_recording");
     await allSee([a, b], "the set ended", within(LOG_SYNC_S * 2), (st) => !st.active_set && setOf(st, running) && !setOf(st, running).live);
     await invoke(c, "stop_recording");
+  });
+
+  await step("C, removed from the room, joins with the invite it already used: the join ends with a message instead of waiting, and C enters the room again", async () => {
+    await invoke(c, "close_room", { id: ctx.room });
+    await invoke(c, "join_room", { code: ctx.usedCode });
+    await waitFor("C's join ends with a message", within(DIAL_S * 2), async () => { const st = await state(c); return !st.room?.pending && !st.rooms.some((r) => r.id.startsWith("pending-")) && st.notice.includes("invite code"); });
+    await invoke(c, "enter_room", { id: ctx.room });
+    check((await state(c)).room?.id === ctx.room, "C did not enter the room again after the refused join");
   });
 
   await step("B leaves the room from its menu and enters it again with its recordings and notes, A and B leave and enter again at once, a new room moves B out of it, and B deletes it from the list", async () => {

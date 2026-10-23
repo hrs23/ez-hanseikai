@@ -957,6 +957,11 @@ async fn present_invite(core: &Arc<Core>, id: &EndpointId, conn: &Connection) ->
             sleep(LOG_SYNC).await;
             continue;
         }
+        if reply["ok"] == false {
+            room::forget_room(core, &pending);
+            *core.notice.lock().unwrap() = "That invite code can no longer be used. Ask for a new one.".into();
+            return false;
+        }
         if reply["ok"] != true {
             return false;
         }
