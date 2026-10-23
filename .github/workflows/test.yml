@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       send_report:
-        description: Send one test feedback report to the real report server from the e2e library part
+        description: Send one test feedback report to the real report server from the e2e library part (a version with no release yet always sends one)
         type: boolean
         default: false
 
@@ -108,13 +108,20 @@ jobs:
           path: app
       - run: Copy-Item ffmpeg/ffmpeg.exe app/ffmpeg.exe
         shell: pwsh
+      - name: Send a test report when this version is not released yet
+        if: matrix.part == 'library'
+        shell: bash
+        run: |
+          tag="v$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml)"
+          if [ "${{ inputs.send_report }}" = "true" ] || [ -z "$(git ls-remote --tags origin "refs/tags/$tag")" ]; then
+            echo "E2E_SEND_REPORT=$tag ${{ github.sha }} run ${{ github.run_id }}" >> "$GITHUB_ENV"
+          fi
       - name: End-to-end test
         timeout-minutes: 30
         run: node scripts/e2e.mjs app/ez-hanseikai.exe ffmpeg
         env:
           E2E_OUT: ${{ runner.temp }}/e2e
           E2E_PART: ${{ matrix.part }}
-          E2E_SEND_REPORT: ${{ inputs.send_report && matrix.part == 'library' && format('{0} run {1}', github.sha, github.run_id) || '' }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: failure()
         with:
