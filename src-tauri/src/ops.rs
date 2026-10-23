@@ -47,6 +47,7 @@ pub const OPS: &[(&str, Op)] = &[
     ("data_info", |c, _| Ok(json!({"dir": c.dir, "used_bytes": data::used_bytes(&c.dir), "free_bytes": c.free_bytes.load(Ordering::Relaxed)}))),
     ("reset", reset),
     ("dismiss_recovery", dismiss_recovery),
+    ("crash_seen", |c, _| { debug::crash_seen(&c.dir); c.crashed.store(false, Ordering::Relaxed); Ok(Value::Null) }),
     ("retry_ffmpeg", retry_ffmpeg),
     ("add_event", add_event),
     ("event_action", event_action),

@@ -160,7 +160,7 @@ pub fn open_folder(dir: &Path) {
 pub fn reset(dir: &Path, keep_rooms: bool) {
     let rooms = ["key.bin", "rooms.json", "rooms"];
     for (name, path) in crate::entries(dir) {
-        if ["EBWebView", LOCK, debug::CRASH].contains(&name.as_str()) || debug::LOG_FILES.contains(&name.as_str()) || (keep_rooms && rooms.contains(&name.as_str())) {
+        if ["EBWebView", LOCK, debug::CRASH, debug::CRASH_SEEN].contains(&name.as_str()) || debug::LOG_FILES.contains(&name.as_str()) || (keep_rooms && rooms.contains(&name.as_str())) {
             continue;
         }
         let _ = remove_path(&path);

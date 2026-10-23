@@ -1333,6 +1333,10 @@ function notices() {
   const list = [];
   if (st.ffmpeg === "downloading") list.push({ key: "ffmpeg", level: "info", icon: "spinner", spin: true, text: downloadLine(t("Downloading video tools…"), st.ffmpeg_progress), sticky: true });
   if (st.ffmpeg === "failed") list.push({ key: "ffmpegfail", level: "error", icon: "fail", text: t("Couldn't download the video tools. Check your connection."), action: { label: t("Retry"), run: () => run("retry_ffmpeg", null) } });
+  if (st.crashed) {
+    const seen = () => { dismissed.add("crash"); run("crash_seen", null); };
+    list.push({ key: "crash", level: "warn", icon: "alert", text: t("The app did not close normally last time."), action: { label: t("Send report…"), run: () => { seen(); openFeedback("bug"); } }, close: seen });
+  }
   if (st.notice) list.push({ key: "n:" + st.notice, level: "warn", icon: "alert", text: t(st.notice) });
   for (const p of st.peers.filter((x) => x.connected && x.other_version)) list.push({ key: "v:" + p.id, level: "warn", icon: "alert", text: t("{name} is on a different version. Both of you need the latest one.", { name: nameOf(p.id) }) });
   if (available) list.push({ key: "update", level: "info", icon: "download", text: t("Version {version} is available", { version: available.version }), action: { label: t("Install"), primary: true, run: installUpdate } });
@@ -1345,7 +1349,7 @@ function renderNotices() {
   $("notices").replaceChildren(...list.map((n) => el("div", { className: "notice " + n.level, role: n.level === "error" ? "alert" : "status" },
     icon(n.icon, n.spin ? "spin" : ""), el("span", { className: "text", textContent: n.text }),
     n.action ? el("button", { className: "sm" + (n.action.primary ? " primary" : ""), textContent: n.action.label, onclick: n.action.run }) : null,
-    n.sticky ? null : iconButton("x", t("Close"), () => { dismissed.add(n.key); delete sigs.notices; renderNotices(); }))));
+    n.sticky ? null : iconButton("x", t("Close"), () => { dismissed.add(n.key); if (n.close) n.close(); delete sigs.notices; renderNotices(); }))));
 }
 function exportOptions(set, video) {
   const shown = video ? setById(set.of) : set;

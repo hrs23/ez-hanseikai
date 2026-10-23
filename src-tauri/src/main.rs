@@ -31,7 +31,7 @@ mod thumbs;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
@@ -234,6 +234,7 @@ pub struct Core {
     pub want: Mutex<HashMap<String, bool>>,
     pub pacer: Mutex<net::Pacer>,
     pub previous_version: String,
+    pub crashed: AtomicBool,
     pub ffmpeg_status: Mutex<String>,
     pub events: Mutex<VecDeque<debug::Event>>,
     pub started: Instant,
@@ -492,6 +493,7 @@ async fn init(app: AppHandle, dir: PathBuf, left_lock: bool) -> Result<Arc<Core>
     if left_lock {
         tracing::warn!("the app did not exit cleanly last time");
     }
+    let crashed = left_lock || debug::new_crash(&dir);
     let previous_version = std::fs::read_to_string(dir.join("version.txt")).unwrap_or_default().trim().to_string();
     let _ = std::fs::write(dir.join("version.txt"), VERSION);
     let key_path = dir.join("key.bin");
@@ -542,6 +544,7 @@ async fn init(app: AppHandle, dir: PathBuf, left_lock: bool) -> Result<Arc<Core>
         want: Mutex::new(HashMap::new()),
         pacer: Mutex::new(net::Pacer::new()),
         previous_version,
+        crashed: AtomicBool::new(crashed),
         ffmpeg_status: Mutex::new(String::new()),
         events: Mutex::new(VecDeque::new()),
         started: Instant::now(),

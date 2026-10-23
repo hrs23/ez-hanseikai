@@ -121,6 +121,28 @@ pub fn init(dir: &Path) {
     }));
 }
 
+pub const CRASH_SEEN: &str = "crash-seen.txt";
+
+fn crash_len(dir: &Path) -> u64 {
+    fs::metadata(dir.join(CRASH)).map(|m| m.len()).unwrap_or(0)
+}
+
+/// Whether the crash file holds a crash that was not yet offered for sending:
+/// it grew past the size noted when the last one was offered, or was cut and holds one again.
+pub fn new_crash(dir: &Path) -> bool {
+    let seen = fs::read_to_string(dir.join(CRASH_SEEN)).ok().and_then(|s| s.trim().parse::<u64>().ok()).unwrap_or(0);
+    is_new_crash(crash_len(dir), seen)
+}
+
+fn is_new_crash(len: u64, seen: u64) -> bool {
+    len > seen || (len < seen && len > 0)
+}
+
+/// Notes the crashes there are now as offered.
+pub fn crash_seen(dir: &Path) {
+    let _ = fs::write(dir.join(CRASH_SEEN), crash_len(dir).to_string());
+}
+
 pub fn event(core: &Core, since: Instant, line: String) {
     let line = format!("{line} (+{:.2}s)", since.elapsed().as_secs_f64());
     tracing::info!("{line}");
@@ -613,6 +635,16 @@ pub fn report_text(core: &Core, check: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_crash_is_new_when_the_file_grew_or_was_cut_and_holds_one_again() {
+        assert!(is_new_crash(10, 0));
+        assert!(is_new_crash(20, 10));
+        assert!(!is_new_crash(10, 10));
+        assert!(!is_new_crash(0, 0));
+        assert!(is_new_crash(5, 10));
+        assert!(!is_new_crash(0, 10));
+    }
 
     fn row(dir: &str, n: u32, result: &str) -> Value {
         json!({"dir": dir, "owner": "a", "capture": "1", "series": "v", "n": n, "result": result})

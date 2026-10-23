@@ -214,7 +214,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 
 - a second app on A's data folder exits and leaves A running. `e2e` (`live`)
 - C loses its own log and gets all of it back before writing again. `e2e` (`live`)
-- B crashes mid-recording and recovers its open segment. `e2e` (`recover`)
+- B crashes mid-recording and recovers its open segment, and offers once to send a report. `e2e` (`recover`)
 - B restarts during the recording as an update does: the recording goes on and B is back in it with its screen in a new part. `e2e` (`recover`)
 - A's encoder is killed and A keeps recording the set in a new part. `e2e` (`recover`)
 - closing the captured window during the recording goes on with the voice, and a new screen adds a part. `e2e` (`recover`)

@@ -1,4 +1,6 @@
 const JA = {
+  "The app did not close normally last time.": "前回、アプリが正しく終了しませんでした。",
+  "Send report…": "レポートを送る…",
   "Privacy": "プライバシー",
   "Recordings, notes and voices go only to the members of this room, encrypted end to end. A relay server only passes on encrypted data it cannot read. Besides the members, the app talks only to the servers below, and sends a report only when you press Send in Send feedback.": "録画・メモ・声はこのルームのメンバーにだけ、端から端まで暗号化して送られます。中継サーバーは中身を読めない暗号化されたデータを受け渡すだけです。メンバーのほかにアプリがやり取りするのは下のサーバーだけで、レポートはフィードバック送信で「送信」を押したときだけ送られます。",
   "Send feedback…": "フィードバックを送る…",

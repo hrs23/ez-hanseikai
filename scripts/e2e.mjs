@@ -989,7 +989,7 @@ async function recover(ctx) {
     await waitFor(`everyone holds what was logged by now (${brief(limits)})`, within((SEGMENT_S + SYNC_ROUND_S) * 6), () => !holdEverything(all, ctx.room, ctx.set, all, limits));
   });
 
-  await step("B crashes mid-recording and recovers its open segment", async () => {
+  await step("B crashes mid-recording and recovers its open segment, and offers once to send a report", async () => {
     const capture = segsOf(logOf(b, ctx.room, b.id), ctx.set, "v").at(-1).capture;
     const dir = path.join(roomDir(b, ctx.room), "recordings", ctx.set, b.id, capture);
     const openPart = (series) => {
@@ -1013,6 +1013,9 @@ async function recover(ctx) {
     check(!kept.length, `B kept ${kept.length} live files over its restart`);
     const recovery = (await state(b)).recovery;
     check(!recovery, `B says ${brief(recovery)} after the crash`);
+    check((await state(b)).crashed === true, "B does not offer to send a report after the crash");
+    await invoke(b, "crash_seen");
+    check((await state(b)).crashed === false, "B still offers a report after it was offered");
     await share(b);
     await waitFor("B logged its recovered segments and ended its part", within(COLD_START_S), () => {
       const own = logOf(b, ctx.room, b.id);

@@ -1542,6 +1542,7 @@ pub fn state_json(core: &Core) -> Value {
         "notice": core.notice.lock().unwrap().clone(),
         "disk": disk,
         "previous_version": core.previous_version,
+        "crashed": core.crashed.load(Ordering::Relaxed),
         "recording": core.any_recording(),
         "capture": record::capture_json(core, live(&my_id)),
         "active_set": core.active_set_json(),
