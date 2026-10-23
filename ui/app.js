@@ -225,9 +225,9 @@ function miniKey() {
   return key && play.tiles[key] && play.tiles[key].media.video.videoWidth ? key : null;
 }
 function showMini(key, b) {
-  const m = play.mini || (play.mini = { gen: 0, video: null, sigs: {}, canvas: el("canvas"), av: el("span"), name: el("span", { className: "nm" }) });
+  const m = play.mini || (play.mini = { gen: 0, video: null, look: { shown: null, run: 0 }, sigs: {}, canvas: el("canvas"), av: el("span"), name: el("span", { className: "nm" }) });
   if (!m.box) play.el.append((m.box = el("div", { className: "tile mini" }, el("div", { className: "nl" }, m.av, m.name), el("div", { className: "pic" }, m.canvas))));
-  m.box.hidden = !key;
+  m.box.hidden = !key || m.look.shown === false;
   m.name.textContent = key ? `${t("Minimap")} · ${nameOf(key)}` : t("Minimap");
   if (key && changed("av", [key, nameOf(key), look(key)], m.sigs)) m.av.replaceChildren(avatar(key, "sm"));
   m.side = key ? b.h : 0;
@@ -236,6 +236,9 @@ function showMini(key, b) {
   m.video = v;
   const gen = ++m.gen;
   m.drawn = null;
+  m.look = { shown: null, run: 0 };
+  m.checked = 0;
+  m.box.hidden = !key;
   if (!v) return;
   const frame = () => {
     if (m.gen !== gen || !v.isConnected) return;
@@ -255,7 +258,27 @@ function drawMini(m) {
   const c = m.canvas.getContext("2d");
   c.imageSmoothingQuality = "high";
   c.drawImage(v, r.x * v.videoWidth, r.y * v.videoHeight, r.w * v.videoWidth, r.h * v.videoHeight, 0, 0, px, px);
-  if (v.readyState >= v.HAVE_CURRENT_DATA) m.drawn = sig;
+  if (v.readyState < v.HAVE_CURRENT_DATA) return;
+  m.drawn = sig;
+  if (v.paused || performance.now() - m.checked >= MINIMAP_LOOK.everyMs) checkMini(m, v.paused);
+}
+// Hides the minimap tile while its crop is clearly not a minimap (a menu, a loading or black screen, another window), with hysteresis.
+function checkMini(m, now) {
+  m.checked = performance.now();
+  const n = MINIMAP_LOOK.size;
+  const small = m.small || (m.small = Object.assign(el("canvas"), { width: n, height: n }));
+  let look = null;
+  try {
+    const c = small.getContext("2d", { willReadFrequently: true });
+    c.drawImage(m.canvas, 0, 0, n, n);
+    look = minimapLook(c.getImageData(0, 0, n, n).data, n);
+  } catch {}
+  if (!look) return;
+  const was = m.look.shown;
+  m.look = minimapShown(m.look, !look.not, now);
+  if (m.look.shown === was) return;
+  m.box.hidden = !m.look.shown;
+  if (was !== null || !m.look.shown) playerLog(`minimap ${m.look.shown ? "shown" : `hidden (${look.not})`} flat=${look.flat.toFixed(2)} dark=${look.dark.toFixed(2)} bright=${look.bright.toFixed(2)}`);
 }
 for (const s of [rec, play]) new ResizeObserver(() => place(s)).observe(s.el);
 

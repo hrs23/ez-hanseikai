@@ -11,7 +11,7 @@ const source = ["util.js", "i18n.js", "live.js", "media.js", "layout.js", "dock.
 const memory = new Map();
 const localStorage = { getItem: (k) => memory.get(k) ?? null, setItem: (k, v) => memory.set(k, v) };
 const context = vm.createContext({ localStorage, window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id, location: { search: "" } });
-const ui$ = vm.runInContext(`${source}\n({ uiCommands, uiState, uiRun, listMove, strokeAlpha, INK_TOOLS, INK_TOOL_TITLE, nextInkTool, LIMITS, escapeStep, editKey, cleanText, single, changed, matchEnds, matchStarts, matchLabel, labelMatchEnds, shownTags, noteMoments, progressText, matchChapters, stepTarget, matchTargets, rowHit, rowActions, authorOf, noteCount, matchCount, formatWhen, fullWhen, sessionWhen, keysOf, hotkeyRows, memberStatus, windowTitle, longId, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, analysisPill, analysisActions, analysisDetails, analysisDetailText, runningMark, cardParts, dropPos, dropSlot, boardSpan, boardFont, cellSpan, fitFont, deletePreview, exportChoice, exportArgs, exportView, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, voiceTone, known, VOICE_SIDES, VOICE_TONES, VOICE_SIDE_DEFAULT, VOICE_TONE_DEFAULT, minimapRect, talking, stillTalking, markSpeak, seekSum, osdSeek, osdVolume, osdSpeed, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, feedbackPreview, feedbackReady, errorReport, shownError, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, nextChip, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, popupSpot, POP_GAP, POP_EDGE, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ uiCommands, uiState, uiRun, listMove, strokeAlpha, INK_TOOLS, INK_TOOL_TITLE, nextInkTool, LIMITS, escapeStep, editKey, cleanText, single, changed, matchEnds, matchStarts, matchLabel, labelMatchEnds, shownTags, noteMoments, progressText, matchChapters, stepTarget, matchTargets, rowHit, rowActions, authorOf, noteCount, matchCount, formatWhen, fullWhen, sessionWhen, keysOf, hotkeyRows, memberStatus, windowTitle, longId, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, analysisPill, analysisActions, analysisDetails, analysisDetailText, runningMark, cardParts, dropPos, dropSlot, boardSpan, boardFont, cellSpan, fitFont, deletePreview, exportChoice, exportArgs, exportView, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, voiceTone, known, VOICE_SIDES, VOICE_TONES, VOICE_SIDE_DEFAULT, VOICE_TONE_DEFAULT, minimapRect, minimapLook, minimapShown, MINIMAP_LOOK, talking, stillTalking, markSpeak, seekSum, osdSeek, osdVolume, osdSpeed, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, feedbackPreview, feedbackReady, errorReport, shownError, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, nextChip, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, popupSpot, POP_GAP, POP_EDGE, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 test("a changed() check against a tile's own store reports again on a rebuilt tile", () => {
   const first = {};
   assert.equal(ui$.changed("what", [1], first), true);
@@ -108,6 +108,69 @@ test("the minimap crop is a square inside the frame, anchored top left from the 
   assert.deepEqual(px(3840, 2160), [86, 86, 508, 508]);
   assert.deepEqual(px(100, 1000), [40, 40, 60, 60]);
   for (const [w, h] of [[0, 0], [1920, 0], [0, 1080], [NaN, 1080], [1920, undefined], [-1, 1080], [10, 1000]]) assert.equal(ui$.minimapRect(w, h), null);
+});
+
+// Made-up 24x24 crops: value-noise terrain stands in for the minimap, flat panels, black screens and documents for the rest.
+function crop(paint, seed = 1) {
+  const n = ui$.MINIMAP_LOOK.size;
+  let r = seed;
+  const rand = () => ((r = (r * 1103515245 + 12345) % 2147483648) / 2147483648);
+  const grid = Array.from({ length: 7 * 7 }, rand);
+  const noise = (x, y) => {
+    const gx = (x / n) * 6, gy = (y / n) * 6, ix = Math.floor(gx), iy = Math.floor(gy), fx = gx - ix, fy = gy - iy;
+    const g = (a, b) => grid[b * 7 + a];
+    return (g(ix, iy) * (1 - fx) + g(ix + 1, iy) * fx) * (1 - fy) + (g(ix, iy + 1) * (1 - fx) + g(ix + 1, iy + 1) * fx) * fy;
+  };
+  const px = new Uint8ClampedArray(n * n * 4);
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+    const [R, G, B] = paint(x, y, noise(x, y), rand, n);
+    const jitter = () => (rand() - 0.5) * 3;
+    px.set([R + jitter(), G + jitter(), B + jitter(), 255], (y * n + x) * 4);
+  }
+  return px;
+}
+const terrain = (shade, tint = [0, 0, 0]) => (x, y, v, rand, n) => {
+  const d = Math.hypot(x - n / 2, y - n / 2);
+  if (d < 1.5) return [240, 240, 240];
+  const l = shade * (0.5 + v) + rand() * 30;
+  return [l * 0.9 + tint[0], l + tint[1], l * 0.7 + tint[2]];
+};
+const MAPS = {
+  terrain: terrain(110),
+  "dark terrain": terrain(60),
+  "snowy terrain": terrain(170),
+  "terrain in the red zone": terrain(80, [90, -20, -20]),
+  "terrain at the sea edge": (x, y, v, rand, n) => (x < n * 0.35 ? [20, 40, 60] : terrain(110)(x, y, v, rand, n)),
+  "half sea": (x, y, v, rand, n) => (x < n * 0.5 ? [20, 40, 60] : terrain(110)(x, y, v, rand, n)),
+};
+const NOT_MAPS = {
+  "a black screen": () => [2, 2, 2],
+  "a loading screen with a line of text": (x, y) => (y === 18 && x % 3 ? [220, 220, 220] : [6, 6, 8]),
+  "a menu panel": (x, y) => [30 + y * 0.6, 34 + y * 0.6, 44 + y * 0.6],
+  "a menu panel with text": (x, y) => (y % 6 === 2 && x > 3 && x < 18 && x % 2 ? [200, 200, 200] : [36, 40, 52]),
+  "a dark app window with boxes and text": (x, y) => (x === 3 || y === 9 || (y === 14 && x > 5 && x % 2) ? [70, 72, 80] : (y === 4 || y === 19) && x > 5 && x < 20 && x % 3 ? [210, 210, 210] : [18, 20, 26]),
+  "a document": (x, y) => (y % 4 === 1 && x > 2 && x < 21 && x % 3 ? [30, 30, 30] : [250, 250, 250]),
+};
+
+test("the minimap check keeps textured map crops and turns down flat, black and white ones", () => {
+  for (const [name, paint] of Object.entries(MAPS)) for (const seed of [1, 7, 42]) {
+    const look = ui$.minimapLook(crop(paint, seed));
+    assert.equal(look.not, "", `${name} (seed ${seed}) ${JSON.stringify(look)}`);
+  }
+  for (const [name, paint] of Object.entries(NOT_MAPS)) {
+    const look = ui$.minimapLook(crop(paint));
+    assert.notEqual(look.not, "", `${name} ${JSON.stringify(look)}`);
+  }
+  assert.equal(ui$.minimapLook(null), null);
+  assert.equal(ui$.minimapLook(new Uint8ClampedArray(10)), null);
+});
+
+test("the minimap tile hides only after several checks in a row and comes back after a few, deciding at once at first and when paused", () => {
+  const run = (checks, state = { shown: null, run: 0 }) => checks.map((isMap) => (state = ui$.minimapShown(state, isMap)).shown);
+  assert.deepEqual(run([false]), [false]);
+  assert.deepEqual(run([true, false, false, true, false, false, false]), [true, true, true, true, true, true, false]);
+  assert.deepEqual(run([false, true, false, true, true]), [false, false, false, false, true]);
+  assert.equal(ui$.minimapShown({ shown: true, run: 0 }, false, true).shown, false);
 });
 
 test("the page scripts together declare no name twice", () => {

@@ -53,6 +53,39 @@ function minimapRect(width, height) {
   return side > 0 ? { x: at / width, y: MINIMAP.at, w: side / width, h: side / height } : null;
 }
 
+// Checks on a small copy of the minimap crop (MINIMAP_LOOK.size square): the tile is hidden only when the crop is clearly not a minimap.
+// flat: neighbouring pixels nearly equal (a menu panel, a loading screen); dark or bright: nearly all near black or near white (a black screen, a document).
+const MINIMAP_LOOK = { size: 24, flatStep: 4, flatShare: 0.7, dark: 24, darkShare: 0.9, bright: 225, brightShare: 0.6, hideAfter: 3, showAfter: 2, everyMs: 500 };
+
+function minimapLook(rgba, size = MINIMAP_LOOK.size) {
+  const n = size * size;
+  if (!rgba || rgba.length < n * 4) return null;
+  const luma = new Float32Array(n);
+  for (let i = 0; i < n; i++) luma[i] = 0.299 * rgba[i * 4] + 0.587 * rgba[i * 4 + 1] + 0.114 * rgba[i * 4 + 2];
+  let flat = 0, pairs = 0, dark = 0, bright = 0;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const v = luma[y * size + x];
+      if (v < MINIMAP_LOOK.dark) dark++;
+      if (v > MINIMAP_LOOK.bright) bright++;
+      if (x + 1 < size) { pairs++; if (Math.abs(v - luma[y * size + x + 1]) < MINIMAP_LOOK.flatStep) flat++; }
+      if (y + 1 < size) { pairs++; if (Math.abs(v - luma[(y + 1) * size + x]) < MINIMAP_LOOK.flatStep) flat++; }
+    }
+  }
+  const look = { flat: flat / pairs, dark: dark / n, bright: bright / n };
+  look.not = look.flat > MINIMAP_LOOK.flatShare ? "flat" : look.dark > MINIMAP_LOOK.darkShare ? "dark" : look.bright > MINIMAP_LOOK.brightShare ? "bright" : "";
+  return look;
+}
+
+// Hysteresis for the minimap tile: hide after a few checks in a row say "not a minimap", show again after a few say it is.
+// A first check (state.shown null) or a still picture (now) decides at once.
+function minimapShown(state, isMap, now = false) {
+  if (state.shown === null || now) return { shown: isMap, run: 0 };
+  if (isMap === state.shown) return { shown: state.shown, run: 0 };
+  const run = state.run + 1;
+  return run >= (state.shown ? MINIMAP_LOOK.hideAfter : MINIMAP_LOOK.showAfter) ? { shown: isMap, run: 0 } : { shown: state.shown, run };
+}
+
 const osdSpeed = (rate) => `${rate}×`;
 const osdSeek = (run) => t(run < 0 ? "−{n} s" : "+{n} s", { n: Math.abs(run) });
 const osdVolume = (volume, muted) => (muted || volume === 0 ? t("Muted") : t("Volume {n}%", { n: Math.round(volume * 100) }));
