@@ -140,11 +140,7 @@ function tile(s, key) {
     tl.box.onpointermove = inkMove;
     tl.box.onpointerup = (e) => { if (inkUp(e)) tl.drew = true; };
     tl.box.onpointercancel = tl.box.onlostpointercapture = inkUp;
-    tl.box.onclick = (e) => {
-      if (e.target.closest(".nl")) return;
-      if (tl.drew) { tl.drew = false; return; }
-      chooseSound(key);
-    };
+    tl.box.onclick = () => { tl.drew = false; };
     tl.box.ondblclick = (e) => { if (e.target.closest(".nl") || tl.drew) return; if (full) toggleFull(); else focus(); };
     tl.box.oncontextmenu = (e) => { e.preventDefault(); stageMenu(e, key); };
   } else {

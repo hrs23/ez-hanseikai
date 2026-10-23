@@ -1484,11 +1484,13 @@ async function library(ctx) {
     await evaluate(a, `act("pause", nowM()); true`);
   });
 
-  await step("clicking a tile, or Switch app sound in its right-click menu, picks whose app sound plays and clicks keep no focus", async () => {
+  await step("Switch app sound in a tile's right-click menu, or its button in the app sound popup, picks whose app sound plays (a plain click on a tile does not) and clicks keep no focus", async () => {
     await openTiles(a);
     const pick = await evaluate(a, `play.keys.find((k) => k !== soundKey(0, play.keys, st.id, gameSound))`);
+    const heardBefore = await evaluate(a, `soundKey(0, play.keys, st.id, gameSound)`);
     await clickAt(a, `play.tiles[${JSON.stringify(pick)}].box`);
-    await waitFor("the clicked tile's sound plays", within(UI_REFRESH_S * 3), () => evaluate(a, `soundKey(0, play.keys, st.id, gameSound) === ${JSON.stringify(pick)} && play.keys.every((k) => (k === ${JSON.stringify(pick)}) === !play.tiles[k].media.video.muted && (k === ${JSON.stringify(pick)}) === !play.tiles[k].snd.hidden) && $("gamesound").title === t("{name} app sound is playing", { name: nameOf(${JSON.stringify(pick)}) })`));
+    await sleep(UI_REFRESH_S * 1000);
+    check((await evaluate(a, `soundKey(0, play.keys, st.id, gameSound)`)) === heardBefore, "a plain click on a tile changed whose app sound plays");
     check(await evaluate(a, `[...$("views").children].slice(0, -1).every((b, i) => (b.querySelector(".key") === null) === (i > MAX_KEYED) && (i > MAX_KEYED || b.querySelector(".key").textContent === String(i)))`), "the view buttons show their shortcut numbers");
     const next = await evaluate(a, `play.keys[(play.keys.indexOf(${JSON.stringify(pick)}) + 1) % play.keys.length]`);
     await evaluate(a, `play.tiles[${JSON.stringify(next)}].box.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 80, clientY: 120 })); true`);
