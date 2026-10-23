@@ -35,7 +35,7 @@ Requires Windows 10 version 2004 or later, or Windows 11.
 
 ## Update
 
-The app checks for a new version at start, every four hours while it runs (or Help > Check for updates), and shows it above the page with Install. Install works while recording or exporting too: it ends your part and cancels the export first, and afterwards the app is back in the room and, while the recording still runs, records again in a new part. Updates are signed and checked before they install. An older version may not read data from a newer one, so going back means starting with an empty data folder. Updating from GGI Hanseikai moves the data folder to [its name](#uninstall), removes the old app and its shortcuts, and Windows asks about the firewall again.
+The app checks for a new version at start, every four hours while it runs (or Help > Check for updates), and shows it above the page with Install. Install works while recording or exporting too: it ends your part and cancels the export first, and afterwards the app is back in the room and, while the recording still runs, records again in a new part. Updates are signed and checked before they install. An older version may not read data from a newer one, so going back means starting with an empty data folder.
 
 ## Uninstall
 
