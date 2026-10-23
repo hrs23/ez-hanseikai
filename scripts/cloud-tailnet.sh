@@ -1,12 +1,12 @@
 #!/bin/bash
-[ "${CLAUDE_CODE_REMOTE:-}" = true ] && [ -n "${TS_AUTHKEY:-}" ] || exit 0
+[ "${CLAUDE_CODE_REMOTE:-}" = true ] && [ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ] || exit 0
 sock=/tmp/tailscaled.sock
 tailscaled --tun=userspace-networking --socket=$sock --state=mem: >/tmp/tailscaled.log 2>&1 &
 sleep 3
-tailscale --socket=$sock up --authkey="$TS_AUTHKEY" --hostname=ezh-cloud
+tailscale --socket=$sock up --authkey="$(op read "op://Agent - Dev/EZH cloud session/TS_AUTHKEY")" --hostname=ezh-cloud
 umask 077
 mkdir -p ~/.ssh
-echo "$CCW_SSH_KEY_B64" | base64 -d >~/.ssh/ezh_cloud
+op read "op://Agent - Dev/EZH cloud session/private_key" >~/.ssh/ezh_cloud
 for h in zephyrus galleria; do
 cat >>~/.ssh/config <<EOF
 Host ezh-$h
