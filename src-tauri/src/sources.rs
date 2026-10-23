@@ -13,6 +13,25 @@ pub enum Item {
     Test,
 }
 
+impl Item {
+    /// The picture size the capture will deliver, known before its first frame arrives.
+    pub fn size(&self) -> Option<(u32, u32)> {
+        let (w, h) = match self {
+            Item::Window(w) if !minimized(w) => {
+                use ::windows::Win32::Foundation::RECT;
+                use ::windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS};
+                let mut r = RECT::default();
+                let hwnd = ::windows::Win32::Foundation::HWND(w.as_raw_hwnd());
+                unsafe { DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &mut r as *mut RECT as *mut _, std::mem::size_of::<RECT>() as u32) }.ok()?;
+                (u32::try_from(r.right - r.left).ok()?, u32::try_from(r.bottom - r.top).ok()?)
+            }
+            Item::Display(m) => (m.width().ok()?, m.height().ok()?),
+            _ => return None,
+        };
+        (w >= 2 && h >= 2).then_some((w & !1, h & !1))
+    }
+}
+
 pub struct Found {
     pub item: Item,
     pub key: usize,

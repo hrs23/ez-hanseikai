@@ -56,7 +56,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - When another app holds the global shortcut at recording start, its Settings > Shortcuts row reads In use by another app until the keys are changed or reset. `manual`
 - While recording with the window focused and no text field focused, M turns the microphone and V the screen picture off and on like the dock buttons (V asks before it stops sending), the buttons' tooltips show (M) and (V), and in the player M is Mute and V does nothing. `manual`
 - Closing the captured window while on standby shows that the source closed and lets the screen be chosen again, with no stuck encoder. `todo`
-- capture: a picture fits inside with even bars; an empty or tiny output never panics; colors become studio range bt709; a narrow picture gets black bars on the sides. `unit`
+- capture: a picture fits inside with even bars; an empty or tiny output never panics; colors become studio range bt709; a narrow picture gets black bars on the sides; the black picture sent before the first frame is what a black capture turns into. `unit`
 - data: the standby ring keeps the newest segments and only standby is trimmed. `unit`
 - ffmpeg: choice skips dropped encoders down to the fallback; a dropped backend falls to another backend of the same codec; probe results are reused only for the same key. `unit`
 - media: splitter finds init and whole fragments across reads; scan finds times and the last whole fragment; huge box sizes in damaged files stop the scan; patch moves times to zero even in partial ranges; segments cut on count and on set changes. `unit`

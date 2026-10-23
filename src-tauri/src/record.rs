@@ -1042,16 +1042,26 @@ pub fn recover(core: &Core) {
 }
 
 fn repeat(core: Arc<Core>) {
+    let mut black = Arc::new(Vec::new());
     loop {
         thread::sleep(REPEAT_POLL);
         let canvas = *core.engine.canvas.lock().unwrap();
         let sink = current_sink(&core, canvas);
         let mut last = core.engine.last.lock().unwrap();
-        if last.0.is_empty() || last.2.elapsed() < REPEAT_AFTER {
+        if last.2.elapsed() < REPEAT_AFTER {
             continue;
         }
-        if let Some(sink) = sink.filter(|s| !s.voice && s.out == last.1) {
-            sink.write_video(last.0.clone());
+        if let Some(sink) = sink.filter(|s| !s.voice) {
+            // Until the capture gives a picture of this size, the encoder gets black so it keeps running and the voice keeps going out.
+            let picture = if !last.0.is_empty() && last.1 == sink.out {
+                last.0.clone()
+            } else {
+                if black.len() != sink.out.0 as usize * sink.out.1 as usize * 3 / 2 {
+                    black = Arc::new(crate::capture::black(sink.out));
+                }
+                black.clone()
+            };
+            sink.write_video(picture);
         }
         last.2 = Instant::now() - (REPEAT_AFTER - REPEAT_POLL);
     }
@@ -1134,7 +1144,7 @@ fn ensure_video(core: &Arc<Core>, wanted: Option<&Found>) {
     }
     match started {
         Ok(control) => {
-            *e.canvas.lock().unwrap() = None;
+            *e.canvas.lock().unwrap() = f.item.size();
             *e.fresh.lock().unwrap() = Instant::now();
             *video = Some(Video { control: Some(control), key: f.key });
         }

@@ -47,6 +47,15 @@ fn chroma(r: i32, g: i32, b: i32) -> (u8, u8) {
     ((128 + ((-26 * r - 86 * g + 112 * b + 128) >> 8)) as u8, (128 + ((112 * r - 102 * g - 10 * b + 128) >> 8)) as u8)
 }
 
+/// A black picture, sent while the capture has not given one yet.
+pub fn black((w, h): (u32, u32)) -> Vec<u8> {
+    let (y, (u, v)) = (luma(0, 0, 0), chroma(0, 0, 0));
+    let pixels = w as usize * h as usize;
+    let mut out = vec![y; pixels];
+    out.extend(std::iter::repeat_n([u, v], pixels / 4).flatten());
+    out
+}
+
 pub fn nv12(src: &[u8], (w, h): (u32, u32), (ow, oh): (u32, u32), out: &mut Vec<u8>) {
     let (x0, y0, dw, dh) = fit_rect((w, h), (ow, oh));
     let (w, h, ow, oh) = (w as usize, h as usize, ow as usize, oh as usize);
@@ -341,6 +350,13 @@ pub(crate) fn check_capture() -> Vec<crate::check::Line> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn black_is_what_a_black_capture_turns_into() {
+        let mut converted = Vec::new();
+        nv12(&[0, 0, 0, 255].repeat(16 * 8), (16, 8), (8, 4), &mut converted);
+        assert_eq!(black((8, 4)), converted);
+    }
 
     #[test]
     fn a_picture_fits_inside_with_even_bars() {
