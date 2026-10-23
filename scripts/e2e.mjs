@@ -1903,12 +1903,14 @@ async function library(ctx) {
     const kept = Object.keys(oldFiles()).filter((name) => name.startsWith("rooms") && !(name in binned)).concat(["key.bin", "rooms.json", "log.old.txt"]);
     const id = c.id;
     const before = c.proc.pid;
+    c.killed = true;
     await evaluate(c, `openReset(); $("keeprooms").checked && ($("resetyes").click(), true)`);
     await waitFor("C restarts", within(CALL_S * 4), () => c.proc.exitCode !== null);
     for (const name of [...Object.keys(binned), temp, "settings.json"]) check(!fs.existsSync(path.join(c.data, name)), `${name} is still there`);
     for (const name of kept) check(fs.existsSync(path.join(c.data, name)), `${name} was removed`);
     const again = await waitFor("C's new process", within(COLD_START_S), () => processTable().find((p) => p.parent === before && /^ez-hanseikai/i.test(p.name)));
     c.proc = { pid: again.pid, exitCode: null };
+    c.killed = false;
     await attach(c);
     check(c.id === id, `C came back as ${c.id}, not ${id}`);
     await allSee([c], "the recording still here", within(SYNC_ROUND_S), (st) => !!setOf(st, ctx.set));

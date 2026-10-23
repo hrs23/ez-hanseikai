@@ -10,6 +10,7 @@ use crate::room::{self, seg_name, INIT, LOGS, PENDING, SERIES};
 use crate::{data, jobs, log, Core};
 
 pub const MIN_AGE: Duration = Duration::from_secs(86_400);
+const BUSY: &str = "busy";
 const NEVER: [&str; 12] = ["key.bin", "rooms.json", "settings.json", "app.lock", "EBWebView", "crash.txt", "log.txt", "log.old.txt", "log.older.txt", "export", "ffmpeg.exe", "api.json"];
 const WHOLE: [&str; 4] = ["rooms.json", "settings.json", "resume.json", "encoders.json"];
 const THUMB: &str = ".16x9.jpg";
@@ -301,7 +302,7 @@ pub struct Done {
 
 pub fn run(places: &Places, shown: &[PathBuf], now: SystemTime, busy: &dyn Fn() -> bool, mover: &mut dyn FnMut(&Path, Way) -> bool) -> Result<Done, String> {
     if busy() {
-        return Err("busy".into());
+        return Err(BUSY.into());
     }
     let mut walk = walker(&places.dir, &places.settled, now);
     let mut done = Done::default();
