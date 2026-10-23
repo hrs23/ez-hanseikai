@@ -32,6 +32,11 @@ pub fn seg_number(name: &str) -> Option<u32> {
     name.strip_suffix(".part").unwrap_or(name).strip_suffix(".m4s")?.parse().ok()
 }
 
+/// The number of a finished segment file whose name is exactly what the app writes.
+pub fn seg_file(name: &str) -> Option<u32> {
+    seg_number(name).filter(|n| *n > 0 && seg_name(*n) == name)
+}
+
 pub fn recording_dir(room_dir: &Path, set: &str) -> PathBuf {
     room_dir.join(RECORDINGS).join(set)
 }
@@ -1516,7 +1521,7 @@ pub fn state_json(core: &Core) -> Value {
         e["seekable"] = json!(can_seek);
         e["mine"] = json!(mine);
     }
-    let mut asks: Vec<Value> = core.asks.lock().unwrap().iter().filter(|a| a.answer.is_none()).map(|a| json!({"id": a.id, "name": a.name})).collect();
+    let mut asks = crate::net::pending_asks(core);
     for p in core.peers.lock().unwrap().iter().filter(|p| p.alive().is_some()) {
         for a in &p.asks {
             if !asks.iter().any(|b| b["id"] == a["id"]) {

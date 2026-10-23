@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime};
 use windows::core::{Ref, Result as WinResult, HRESULT, PCWSTR};
 use windows::Win32::UI::Shell::{IFileOperationProgressSink, IFileOperationProgressSink_Impl, IShellItem};
 
-use crate::room::{self, seg_name, INIT, LOGS, PENDING, SERIES};
+use crate::room::{self, INIT, LOGS, PENDING, SERIES};
 use crate::{data, jobs, log, Core};
 
 pub const MIN_AGE: Duration = Duration::from_secs(86_400);
@@ -64,7 +64,7 @@ pub const RULES: &[Rule] = &[
 
 fn media(owner: &str, capture: &str, series: &str, name: &str) -> Option<Option<u32>> {
     let whole = name.strip_suffix(".part").unwrap_or(name);
-    let n = if whole == INIT { None } else { Some(room::seg_number(whole).filter(|n| *n > 0 && seg_name(*n) == whole)?) };
+    let n = if whole == INIT { None } else { Some(room::seg_file(whole)?) };
     (room::member_id(owner) && room::capture_id(capture) && SERIES.contains(&series)).then_some(n)
 }
 

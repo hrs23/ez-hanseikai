@@ -242,7 +242,7 @@ fn names(dir: &Path) -> HashMap<u32, u64> {
     let mut out = HashMap::new();
     for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
-        let n = if name == INIT { Some(0) } else { room::seg_number(&name).filter(|n| *n > 0 && seg_name(*n) == name) };
+        let n = if name == INIT { Some(0) } else { room::seg_file(&name) };
         if let Some((n, meta)) = n.zip(entry.metadata().ok().filter(std::fs::Metadata::is_file)) {
             out.insert(n, meta.len());
         }
