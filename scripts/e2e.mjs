@@ -321,7 +321,8 @@ async function attach(app) {
 }
 
 async function share(app) {
-  check(!(await state(app)).capture.source, `${app.key} starts with a capture source`);
+  const had = (await state(app)).capture.source;
+  check(!had || JSON.stringify(had) === JSON.stringify(SOURCE), `${app.key} starts with a capture source it never chose: ${JSON.stringify(had)}`);
   await invoke(app, "set_source", { source: SOURCE });
 }
 
