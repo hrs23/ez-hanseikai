@@ -84,20 +84,29 @@ function extensionRunner(p) {
   const none = members.includes(p.runner) ? [] : [el("option", { value: "", textContent: "—", selected: true, disabled: true })];
   return el("div", { className: "field" }, el("label", { textContent: t("Runner") }), el("select", { ariaLabel: t("Runner"), onchange: change }, ...none, ...members.map((id) => el("option", { value: id, textContent: nameOf(id), selected: p.runner === id }))));
 }
+function extensionOptions(p) {
+  const members = people();
+  const rows = (p.options || []).map((o) => {
+    const chosen = p.settings && p.settings[o.id];
+    const change = (e) => invoke("set_plugin_setting", { id: p.id, setting: o.id, value: e.target.value }).then(pollPlugins).catch(fail);
+    return el("div", { className: "field" }, el("label", { textContent: t(o.name) }), el("select", { ariaLabel: t(o.name), onchange: change }, el("option", { value: "", textContent: t(o.empty), selected: !members.includes(chosen) }), ...members.map((id) => el("option", { value: id, textContent: nameOf(id), selected: chosen === id }))));
+  });
+  return rows.length ? el("div", { className: "psec" }, ...rows) : null;
+}
 function extensionRecordings(p) {
   const rows = st.sets.filter((s) => !s.live).flatMap((s) => (s.analysis || []).filter((a) => a.plugin === p.id && (a.state === "left" || a.state === "running" || a.state === "failed")).map((a) => ({ s, a })));
   if (!rows.length) return null;
   return el("div", { className: "psec" }, el("div", { className: "h3", textContent: t("Recordings") }), ...rows.map(({ s, a }) => el("div", { className: "wrow" }, el("b", { textContent: sessionName(s.id) }), el("span", { className: a.state === "failed" ? "warn" : "muted", textContent: analysisReason(a, nameOf) }), el("span", { className: "sp" }), a.state === "failed" ? el("button", { className: "sm", textContent: t("Retry"), onclick: () => retryAnalysis(s, p.id) }) : null)));
 }
 function extensionRow(p) {
-  const more = p.on && !p.view;
+  const more = p.on && (!p.view || (p.options || []).length > 0);
   const open = more && openExtensions.has(p.id);
   const line = p.view ? "" : extensionLine(p, nameOf);
   const toggle = el("input", { type: "checkbox", className: "switch", role: "switch", checked: p.on, ariaLabel: t(p.name), onclick: (e) => e.stopPropagation(), onchange: (e) => { const on = e.target.checked; askRoom(t(on ? "Turn on {name} for the room?" : "Turn off {name} for the room?", { name: t(p.name) }), t(on ? "Turn on" : "Turn off"), () => savePlugin(p, on)); } });
   const head = el("div", { className: "phead" + (more ? " click" : ""), onclick: more ? () => { if (open) openExtensions.delete(p.id); else openExtensions.add(p.id); store("ext-open", [...openExtensions]); delete sigs.roomtab; renderRoom(); } : null },
     el("span", { className: "pic" }, icon("puzzle")), withClass(stack(t(p.name), t(p.summary), true), "pt"), sampleOf(p.sample), el("span", { className: "sp" }),
     line ? el("span", { className: p.on && (!p.runner || p.failed) ? "warn" : "muted", textContent: line }) : null, toggle, more ? icon(open ? "chevron-up" : "chevron-down", "sm") : null);
-  const body = open ? el("div", { className: "pbody" }, el("div", { className: "psec" }, extensionRunner(p)), extensionRecordings(p)) : null;
+  const body = open ? el("div", { className: "pbody" }, p.view ? null : el("div", { className: "psec" }, extensionRunner(p)), extensionOptions(p), extensionRecordings(p)) : null;
   return el("div", { className: "plug" + (open ? " open" : "") }, head, body);
 }
 function loadState(loaded, failed, empty, retry) {

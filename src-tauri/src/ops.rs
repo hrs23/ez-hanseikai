@@ -63,6 +63,7 @@ pub const OPS: &[(&str, Op)] = &[
     ("room_plugins", jobs::room_plugins),
     ("set_room_plugin", jobs::set_room_plugin),
     ("set_plugin_runner", jobs::set_plugin_runner),
+    ("set_plugin_setting", jobs::set_plugin_setting),
     ("retry_job", jobs::retry_job),
     ("delete_set", |c, a| {
         let (room, set) = recording_ids(c, &a)?;

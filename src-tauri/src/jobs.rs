@@ -25,6 +25,7 @@ pub const AUTO_ANALYSIS_US: i64 = 3_600_000_000;
 pub struct Config {
     pub on: bool,
     pub runner: Option<String>,
+    pub settings: BTreeMap<String, String>,
 }
 
 impl Config {
@@ -138,7 +139,8 @@ fn newest(logs: &[Log], caps: Option<&HashMap<String, u64>>) -> BTreeMap<String,
             let at = (t - log.offset_us, log.owner.clone());
             if latest.get(id).is_none_or(|(old, _)| at > *old) {
                 let runner = r["runner"].as_str().filter(|m| !m.is_empty()).unwrap_or(&log.owner).to_string();
-                let config = Config { on: r["on"] == true, runner: Some(runner) };
+                let settings = r["settings"].as_object().into_iter().flatten().filter_map(|(k, v)| Some((k.clone(), v.as_str().filter(|v| !v.is_empty())?.to_string()))).collect();
+                let config = Config { on: r["on"] == true, runner: Some(runner), settings };
                 latest.insert(id.to_string(), (at, config));
             }
         }
@@ -742,6 +744,7 @@ pub fn plugins_json(core: &Core, room: &str) -> Vec<Value> {
             let mut v = plugins::manifest(p);
             v["on"] = json!(config.is_some_and(|c| c.on));
             v["runner"] = json!(config.and_then(|c| c.runner.clone()));
+            v["settings"] = json!(config.map(|c| c.settings.clone()).unwrap_or_default());
             v["left"] = json!(count(p.id, &["left", "running"]));
             v["failed"] = json!(count(p.id, &["failed"]));
             v["waiting_for"] = waiting_for.unwrap_or(Value::Null);
@@ -759,7 +762,8 @@ pub fn set_room_plugin(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     let plugin = plugins::find(&arg::<String>(&args, "id")?).ok_or("Unknown extension.")?;
     let logs = room::logs(core, &room);
     let runner = plugin.analyzes().then(|| room_configs(core, &room, &logs).remove(plugin.id).and_then(|c| c.runner).unwrap_or_else(|| core.me()));
-    let config = Config { on: arg(&args, "on")?, runner };
+    let settings = every_config(&logs, None).remove(plugin.id).map(|c| c.settings).unwrap_or_default();
+    let config = Config { on: arg(&args, "on")?, runner, settings };
     core.append_log(&room, &plugin_record(plugin, &config, change_time(now_us(), &logs, plugin.id)));
     Ok(Value::Null)
 }
@@ -769,12 +773,15 @@ fn plugin_record(plugin: &Plugin, config: &Config, t_us: i64) -> Value {
     if let Some(runner) = &config.runner {
         record["runner"] = json!(runner);
     }
+    if !config.settings.is_empty() {
+        record["settings"] = json!(config.settings);
+    }
     record
 }
 
 fn runner_record(plugin: &Plugin, runner: String, logs: &[Log], now: i64) -> Value {
-    let on = configs(logs, None).get(plugin.id).is_some_and(|c| c.on);
-    plugin_record(plugin, &Config { on, runner: Some(runner) }, change_time(now, logs, plugin.id))
+    let (on, settings) = every_config(logs, None).remove(plugin.id).map_or((false, BTreeMap::new()), |c| (c.on, c.settings));
+    plugin_record(plugin, &Config { on, runner: Some(runner), settings }, change_time(now, logs, plugin.id))
 }
 
 pub fn set_plugin_runner(core: &Arc<Core>, args: Value) -> Result<Value, String> {
@@ -786,6 +793,27 @@ pub fn set_plugin_runner(core: &Arc<Core>, args: Value) -> Result<Value, String>
         return Err("Unknown member.".into());
     }
     core.append_log(&room, &runner_record(plugin, runner, &logs, now_us()));
+    Ok(Value::Null)
+}
+
+pub fn set_plugin_setting(core: &Arc<Core>, args: Value) -> Result<Value, String> {
+    let room = core.joined_room()?;
+    let plugin = plugins::find(&arg::<String>(&args, "id")?).ok_or("Unknown extension.")?;
+    let (setting, value): (String, String) = (arg(&args, "setting")?, arg(&args, "value")?);
+    if !plugin.options.iter().any(|o| o.id == setting) {
+        return Err("Unknown setting.".into());
+    }
+    if !value.is_empty() && !room_members(core, &room).contains(&value) {
+        return Err("Unknown member.".into());
+    }
+    let logs = room::logs(core, &room);
+    let mut config = every_config(&logs, None).remove(plugin.id).unwrap_or(Config { on: false, runner: None, settings: BTreeMap::new() });
+    if value.is_empty() {
+        config.settings.remove(&setting);
+    } else {
+        config.settings.insert(setting, value);
+    }
+    core.append_log(&room, &plugin_record(plugin, &config, change_time(now_us(), &logs, plugin.id)));
     Ok(Value::Null)
 }
 
@@ -971,7 +999,7 @@ mod tests {
         assert_eq!(record["version"], json!(plugin.version));
         append(&mut logs, 1, record);
         let config = &configs(&logs, None)[APEX];
-        assert_eq!(config, &Config { on: true, runner: Some("b".into()) });
+        assert_eq!(config, &Config { on: true, runner: Some("b".into()), settings: BTreeMap::new() });
         let fresh = runner_record(plugin, "b".into(), &[], 100);
         assert_eq!((fresh["on"].clone(), fresh["version"].clone(), fresh["settings"].clone()), (json!(false), json!(plugin.version), Value::Null));
     }
@@ -1146,9 +1174,22 @@ mod tests {
     }
 
     #[test]
+    fn an_extension_setting_is_read_from_the_log_and_kept_by_the_other_changes() {
+        let plugin = plugins::find("apex-minimap").unwrap();
+        let mut logs = base_logs(vec![], vec![]);
+        let config = Config { on: true, runner: None, settings: BTreeMap::from([("source".to_string(), "b".to_string())]) };
+        append(&mut logs, 1, plugin_record(plugin, &config, 100));
+        assert_eq!(every_config(&logs, None)["apex-minimap"].settings, config.settings);
+        append(&mut logs, 1, plugin_record(plugin, &Config { settings: BTreeMap::new(), ..config }, 200));
+        assert!(every_config(&logs, None)["apex-minimap"].settings.is_empty());
+        let moved = runner_record(plugin, "a".into(), &logs, 300);
+        assert_eq!(moved.get("settings"), None);
+    }
+
+    #[test]
     fn turning_an_extension_on_stamps_the_shipped_version() {
         let plugin = plugins::find(APEX).unwrap();
-        let record = plugin_record(plugin, &Config { on: true, runner: Some("a".into()) }, 1);
+        let record = plugin_record(plugin, &Config { on: true, runner: Some("a".into()), settings: BTreeMap::new() }, 1);
         assert_eq!(record, json!({"k": "plugin", "plugin": APEX, "on": true, "version": plugin.version, "runner": "a", "t_us": 1}));
     }
 
