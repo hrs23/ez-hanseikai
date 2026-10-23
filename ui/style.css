@@ -790,25 +790,4 @@ body.full .side, body.full .splitter, body.full .notices { display: none !import
 #namefield input { padding-right: calc(var(--control-sm) + var(--s3)); }
 .quick .cancel { flex: none; }
 .bhead .cancel { flex: none; }
-
-.wpstage { position: relative; align-self: stretch; min-width: 0; overflow: hidden; pointer-events: none; }
-.wpstage.on { border-radius: var(--r-full); background: linear-gradient(color-mix(in srgb, var(--accent) 10%, transparent), transparent); }
-.wpstage .flags { position: absolute; inset: 0 0 auto 0; display: flex; justify-content: space-between; height: 8px; }
-.wpstage .flags i { width: 0; height: 0; border-inline: 4px solid transparent; border-top: 8px solid var(--c); opacity: 0.85; }
-.wpstage .walker { position: absolute; bottom: 0; left: 0; width: 30px; height: 30px; animation: wpwalk 30s linear infinite; }
-.wpstage .sprite { --n: 6; --t: 0.8s; display: block; width: 100%; height: 100%; background: url("chick/walk.svg") 0 0 / calc(var(--n) * 100%) 100% no-repeat; animation: wpframes var(--t) steps(var(--n)) infinite; }
-.wpstage.blink .sprite { --n: 4; --t: 0.42s; background-image: url("chick/blink.svg"); animation-iteration-count: 1; }
-.wpstage.jump .sprite { --n: 6; --t: 0.9s; background-image: url("chick/jump.svg"); animation-iteration-count: 1; }
-.wpstage.wave .sprite { --n: 4; --t: 0.35s; background-image: url("chick/wave.svg"); animation-iteration-count: 4; }
-.wpstage.idle .walker { animation-play-state: paused; }
-.wpstage.idle .sprite { animation-play-state: paused; }
-.wpstage.idle.nap .sprite { --n: 4; --t: 2.4s; background-image: url("chick/sleep.svg"); animation-play-state: running; animation-iteration-count: infinite; }
-.wpstage .cfs { position: absolute; inset: 0; }
-.wpstage .cf { position: absolute; top: -6px; left: var(--x); width: 4px; height: 7px; border-radius: 1px; background: var(--c); animation: wpfall 1.5s var(--d) ease-in forwards; opacity: 0; }
-@keyframes wpwalk { 0% { left: 0; transform: scaleX(1); } 48% { left: calc(100% - 30px); transform: scaleX(1); } 50% { left: calc(100% - 30px); transform: scaleX(-1); } 98% { left: 0; transform: scaleX(-1); } 100% { left: 0; transform: scaleX(1); } }
-@keyframes wpframes { to { background-position-x: calc(var(--n) * 100% / (var(--n) - 1)); } }
-@keyframes wpfall { 0% { opacity: 1; transform: translate(0, 0) rotate(0); } 100% { opacity: 0; transform: translate(var(--dx), 36px) rotate(var(--r)); } }
-@media (prefers-reduced-motion: reduce) {
-  .wpstage .walker { left: calc(50% - 15px); }
-  .wpstage .cfs { display: none; }
 }

@@ -603,7 +603,6 @@ function renderParty(set) {
   $("shared").classList.toggle("wp", !!(on && set));
   const others = set ? watchers(set.id) : [];
   const status = on ? st.party.status || [] : [];
-  renderStage(!!(on && set), others.length, st.events.length, clock.playing);
   if (!changed("wpbox", [on, others, status, st.names, lang])) return;
   if (on) {
     box.replaceChildren(el("div", { className: "wpbar" }, icon("users", "sm"), el("span", { textContent: t("Watch Party") }), ...status.map((s) => pill("gray", "spinner", t("Catching up with {name}", { name: nameOf(s.who) }))), avatars([st.id, ...others]), el("button", { className: "sm", onclick: () => setParty(false) }, icon("logout", "sm"), t("Leave"))));
