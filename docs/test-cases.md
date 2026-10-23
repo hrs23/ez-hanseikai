@@ -179,6 +179,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - C's Reset that keeps the rooms moves only old files it made that nothing refers to to the Recycle Bin, deletes its temporary files and settings, and starts again with its ID and recordings. `e2e` (`library`)
 - Files that a reset moved come back from the Windows Recycle Bin with Restore, and the app reads a restored recording again. `manual`
 - cleanup: the plan lists only known app files that nothing refers to with one item per whole folder, in groups; a reset picks all of it and an old folder with an ID key only when it drops the ID; a run moves exactly the plan through the mover and keeps everything else; a run checks again before each move and refuses while busy; old folders go whole only by exact name with known entries and never the current ones, a folder with an unknown entry is kept, and one holding key.bin is flagged; every pattern names what it removes. `unit`
+- a recording made by the last release is still there and whole after the update. `e2e` (`install`)
 - the installed app starts, downloads ffmpeg on first run and checks it, and records with it. `e2e` (`install`)
 - The installer run over a running app closes it, installs and starts the new version with the same rooms and recordings. `manual`
 - The in-app update installs the new version, also on a PC that was on the Beta channel, ends your part first and cancels a running export, and while recording the app comes back into the recording in a new part. `manual`

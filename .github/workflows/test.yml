@@ -177,7 +177,23 @@ jobs:
         with:
           name: installer
           path: nsis
-      - name: Install silently
+      - name: Install the last release silently
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = 'v' + (Select-String -Path src-tauri/Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
+          $last = gh release list --exclude-pre-releases --limit 10 --json tagName --jq '.[].tagName' | Where-Object { $_ -ne $tag } | Select-Object -First 1
+          gh release download $last --pattern '*-setup.exe' --dir last
+          $setup = Get-ChildItem last -Filter *-setup.exe | Select-Object -First 1
+          $p = Start-Process -Wait -PassThru -FilePath $setup.FullName -ArgumentList '/S'
+          if ($p.ExitCode -ne 0) { throw "the $last installer exited with $($p.ExitCode)" }
+          Stop-Process -Name ez-hanseikai -Force -ErrorAction SilentlyContinue
+          $exe = Get-ChildItem $env:LOCALAPPDATA -Filter ez-hanseikai.exe -Recurse -Depth 2 -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $exe) { throw "no ez-hanseikai.exe after installing $last" }
+          Copy-Item -Recurse $exe.DirectoryName old-app
+          "E2E_OLD_EXE=$(Resolve-Path old-app/ez-hanseikai.exe)" >> $env:GITHUB_ENV
+      - name: Install the new installer over it silently
         shell: pwsh
         run: |
           $setup = Get-ChildItem nsis -Filter *-setup.exe | Select-Object -First 1

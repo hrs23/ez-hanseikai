@@ -279,7 +279,7 @@ function start(key, extra) {
     ...app.extra,
   };
   const stderr = fs.openSync(path.join(OUT, `${key}-stderr.txt`), "a");
-  app.proc = spawn(EXE, [], { env, stdio: ["ignore", "ignore", stderr], windowsHide: true });
+  app.proc = spawn(app.exe || EXE, [], { env, stdio: ["ignore", "ignore", stderr], windowsHide: true });
   fs.closeSync(stderr);
   app.killed = false;
   app.cdp = null;
@@ -1966,7 +1966,36 @@ async function library(ctx) {
 }
 
 async function install(ctx) {
-  let a;
+  let a, b;
+  if (process.env.E2E_OLD_EXE) await step("a recording made by the last release is still there and whole after the update", async () => {
+    const home = path.join(OUT, "apps", "b", "data");
+    fs.mkdirSync(home, { recursive: true });
+    fs.copyFileSync(path.join(FFMPEG_DIR, "ffmpeg.exe"), path.join(home, "ffmpeg.exe"));
+    apps.b = { key: "b", name: NAMES.b, data: home, exe: path.resolve(process.env.E2E_OLD_EXE) };
+    b = await launch("b");
+    const old = (await state(b)).version;
+    const room = await invoke(b, "create_room", { name: "Before the update" });
+    await allSee([b], "encoding its test source", within(COLD_START_S), (st) => st.capture.live);
+    await invoke(b, "start_recording");
+    const set = (await state(b)).active_set.id;
+    await waitFor("B logs 2 segments", within(SEGMENT_S * 3), () => segsOf(logOf(b, room, b.id), set, "v").length >= 2);
+    await invoke(b, "stop_recording");
+    await allSee([b], "the recording ended", within(LOG_SYNC_S * 2), (st) => !st.active_set && setOf(st, set) && !setOf(st, set).live);
+    const id = b.id;
+    kill(b);
+    await stopped(b);
+    delete b.exe;
+    start("b");
+    await attach(b);
+    const st = await state(b);
+    check(st.version !== old && (!process.env.E2E_VERSION || st.version === process.env.E2E_VERSION), `B runs ${st.version} after updating from ${old}`);
+    check(b.id === id && st.room?.id === room, `B came back as ${b.id.slice(0, 10)} in ${st.room?.id}, not ${id.slice(0, 10)} in ${room}`);
+    check(!!setOf(st, set) && !setOf(st, set).live, "B lost the recording it made before the update");
+    const missing = holdEverything([b], room, set, [b]);
+    check(!missing, missing);
+    kill(b);
+    await stopped(b);
+  });
   await step("the installed app starts, downloads ffmpeg on first run and checks it, and records with it", async () => {
     check(!fs.existsSync(path.join(path.dirname(EXE), "ffmpeg.exe")), `ffmpeg is already beside ${EXE}`);
     a = await attach(start("a"));
