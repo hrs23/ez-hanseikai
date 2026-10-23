@@ -836,12 +836,12 @@ function page(files, globals = {}) {
 
 test("an avatar shows the image, a built-in shape or the initial; an unknown shape or none shows the plain person; a room without an icon shows a preset picked from its id, and a room with no id its initial", () => {
   const image = "data:image/webp;base64,AAAA";
-  const state = { id: "me", name: "Aki", names: { ren: "Ren", koya: "Koya", mia: "Mia" }, colors: { me: 1, ren: 2, koya: 3, mia: 4 }, capture: { mix: { mic: { muted: false } } }, avatars: { me: "tiger", ren: image, koya: "gone", mia: "data:image/svg+xml;base64,AAAA" } };
+  const state = { id: "me", name: "Aki", names: { ren: "Ren", koya: "Koya", mia: "Mia" }, colors: { me: 1, ren: 2, koya: 3, mia: 4 }, capture: { mix: { mic: { muted: false } } }, avatars: { me: "tiger-head", ren: image, koya: "gone", mia: "data:image/svg+xml;base64,AAAA" } };
   const { ctx } = page(["util.js", "faces.js", "live.js"], { speaking: new Set(), st: state, nameOf: (id) => id, colorIndex: (id) => state.colors[id] || 0 });
   const draw = (code) => vm.runInContext(code, ctx);
   const tiger = draw(`avatar("me", "sm")`);
   assert.deepEqual([tiger.find("path").length, tiger.textContent, tiger.style.background], [1, "", "var(--member-sky)"]);
-  assert.equal(draw(`avatar("me", "sm")`).find("path")[0].attributes.d, draw(`FACES.tiger`));
+  assert.equal(draw(`avatar("me", "sm")`).find("path")[0].attributes.d, draw(`FACES["tiger-head"]`));
   assert.equal(draw(`avatar("ren")`).find("img")[0].src, image);
   for (const id of ["koya", "mia", "nobody"]) {
     const a = draw(`avatar("${id}")`);
@@ -855,8 +855,8 @@ test("an avatar shows the image, a built-in shape or the initial; an unknown sha
   const shape = (icon) => draw(`roomIcon({ id: "ab12", name: "Practice", icon: "${icon}" }, "sm")`).find("path")[0]?.attributes.d;
   assert.deepEqual([draw(`ROOM_PRESETS.length`), draw(`ROOM_PRESETS.some((n) => FACES[n])`)], [24, false]);
   assert.deepEqual([draw(`PRESETS.length`), draw(`PRESETS.some((n) => ROOM_FACES[n])`)], [24, false]);
-  assert.equal(shape("lightning-bolt"), draw(`ROOM_FACES["lightning-bolt"]`));
-  assert.equal(shape("cat"), draw(`FACES.lynx`));
+  assert.equal(shape("lightning-helix"), draw(`ROOM_FACES["lightning-helix"]`));
+  assert.equal(shape("cat"), draw(`FACES["lynx-head"]`));
   const fallback = draw(`ROOM_FACES[defaultPreset("ab12")]`);
   for (const icon of ["unknown", "", "constructor", "__proto__", "toString", "a b'\\\"<>&\\u00e9\\u3042", "data:image/svg+xml;base64,AAAA"]) assert.equal(shape(icon), fallback);
   const odd = (icon) => draw(`roomIcon({ id: "ab12", name: "Practice", icon: ${JSON.stringify(icon)} }, "sm")`);
@@ -871,13 +871,13 @@ test("an avatar shows the image, a built-in shape or the initial; an unknown sha
   assert.ok(draw(`ROOM_PRESETS`).includes(draw(`defaultPreset("ab12")`)));
   const legacyCrests = "flame bolt crown skull swords shield crosshair rocket wings trophy gem comet peak mask star chevrons".split(" ");
   const legacyAnimals = "cat fox frog panda owl bunny octopus bear penguin koala wolf tiger raccoon shark whale crab".split(" ");
-  const old = { bolt: "lightning-bolt", swords: "crossed-swords", shield: "heater-shield", wings: "wing", chevrons: "chevron-stack", gem: "diamond" };
+  const old = { bolt: "lightning-helix", swords: "crossed-swords", shield: "checked-shield", wings: "angel-wings", chevrons: "crown", gem: "eclipse", skull: "skull-crossed-bones", star: "sun", comet: "fire-ray" };
   for (const name of legacyCrests) {
     const d = shape(name);
     assert.ok(d, name);
     assert.equal(d, name in old ? draw(`ROOM_FACES["${old[name]}"]`) : draw(`ROOM_FACES[${JSON.stringify(name)}] || LEGACY_ROOM_FACES[${JSON.stringify(name)}]`));
   }
-  const animal = { cat: "lynx", octopus: "kraken", whale: "orca" };
+  const animal = { cat: "lynx-head", octopus: "spider-alt", whale: "shark-jaws", fox: "fox-head", owl: "owl", bear: "bear-head", wolf: "wolf-head", tiger: "tiger-head", shark: "shark-jaws" };
   for (const name of legacyAnimals) {
     const face = draw(`picture("", "red", ${JSON.stringify(name)}, "sm")`);
     assert.equal(face.find("path")[0].attributes.d, draw(`FACES[${JSON.stringify(animal[name] || name)}] || LEGACY_FACES[${JSON.stringify(name)}]`), name);

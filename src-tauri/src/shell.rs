@@ -712,7 +712,7 @@ pub fn setup(app: &tauri::App, core: Arc<Core>) -> tauri::Result<()> {
             "mark" => run_hotkey(core, 0),
             "issues" => open_link(&format!("{REPO}/issues/new")),
             "releases" => open_link(&format!("{REPO}/releases")),
-            "about" => dialog(|app, core| { let lang = language(core); tell(app, &lang, &format!("{} {VERSION}\nMIT or Apache-2.0\n{REPO}", tr(&lang, "Version"))) }),
+            "about" => dialog(|app, core| { let lang = language(core); tell(app, &lang, &format!("{} {VERSION}\nMIT or Apache-2.0\nIcons: game-icons.net, CC BY 3.0\n{REPO}", tr(&lang, "Version"))) }),
             other => {
                 show_window(app);
                 let _ = app.emit("menu", other.to_string());

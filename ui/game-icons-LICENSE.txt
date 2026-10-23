@@ -1,0 +1,59 @@
+Icon shapes in faces.js (avatar animals and characters, room crests) come from game-icons.net,
+made by Lorc, Delapouite, DarkZaitzev, Carl Olsen, Caro Asercion and Skoll, and are used under the Creative Commons Attribution 3.0 license:
+https://creativecommons.org/licenses/by/3.0/
+
+Icons made by Lorc, Delapouite, DarkZaitzev, Carl Olsen, Caro Asercion and Skoll. Available on https://game-icons.net
+
+Source: https://github.com/game-icons/icons at commit 82d948812bfe3f269ef8f731dcdb07b08160edc4. Changes: the black background square was removed and the shapes were scaled from 512 to 24 units; the app draws them in the member's or room's color.
+
+Avatars (name, author, file in the source repository):
+  wolf-head  Lorc  lorc/wolf-head.svg
+  fox-head  Lorc  lorc/fox-head.svg
+  hawk-emblem  Lorc  lorc/hawk-emblem.svg
+  eagle-head  Delapouite  delapouite/eagle-head.svg
+  raven  Lorc  lorc/raven.svg
+  owl  Lorc  lorc/owl.svg
+  cobra  Delapouite  delapouite/cobra.svg
+  scorpion  Lorc  lorc/scorpion.svg
+  shark-jaws  Lorc  lorc/shark-jaws.svg
+  bear-head  Delapouite  delapouite/bear-head.svg
+  tiger-head  Delapouite  delapouite/tiger-head.svg
+  lynx-head  Delapouite  delapouite/lynx-head.svg
+  hyena-head  Caro Asercion  caro-asercion/hyena-head.svg
+  stag-head  Lorc  lorc/stag-head.svg
+  charging-bull  Delapouite  delapouite/charging-bull.svg
+  dragon-head  Lorc  lorc/dragon-head.svg
+  ninja-mask  Lorc  lorc/ninja-mask.svg
+  ninja-head  DarkZaitzev  darkzaitzev/ninja-head.svg
+  visored-helm  Lorc  lorc/visored-helm.svg
+  robot-golem  Lorc  lorc/robot-golem.svg
+  cyborg-face  Delapouite  delapouite/cyborg-face.svg
+  werewolf  Lorc  lorc/werewolf.svg
+  dinosaur-rex  Lorc  lorc/dinosaur-rex.svg
+  spider-alt  Carl Olsen  carl-olsen/spider-alt.svg
+
+Room crests:
+  crossed-swords  Lorc  lorc/crossed-swords.svg
+  crown  Lorc  lorc/crown.svg
+  horned-helm  Lorc  lorc/horned-helm.svg
+  lightning-helix  Lorc  lorc/lightning-helix.svg
+  fire-ray  Lorc  lorc/fire-ray.svg
+  flame  Carl Olsen  carl-olsen/flame.svg
+  trident  Lorc  lorc/trident.svg
+  battle-axe  Lorc  lorc/battle-axe.svg
+  crosshair  Delapouite  delapouite/crosshair.svg
+  angel-wings  Lorc  lorc/angel-wings.svg
+  fangs  Skoll  skoll/fangs.svg
+  claw-slashes  Lorc  lorc/claw-slashes.svg
+  anvil  Lorc  lorc/anvil.svg
+  eclipse  Lorc  lorc/eclipse.svg
+  sun  Lorc  lorc/sun.svg
+  checked-shield  Lorc  lorc/checked-shield.svg
+  fire-shield  Lorc  lorc/fire-shield.svg
+  laurels  Lorc  lorc/laurels.svg
+  winged-sword  Lorc  lorc/winged-sword.svg
+  crossed-axes  Lorc  lorc/crossed-axes.svg
+  skull-crossed-bones  Lorc  lorc/skull-crossed-bones.svg
+  skull-shield  Lorc  lorc/skull-shield.svg
+  stone-tower  Lorc  lorc/stone-tower.svg
+  arrowhead  Lorc  lorc/arrowhead.svg
