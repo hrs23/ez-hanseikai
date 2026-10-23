@@ -836,7 +836,7 @@ function page(files, globals = {}) {
 
 test("the Watch Party band builds flags and a walking chick, waves with confetti when someone joins, hops when an event is added, naps while nothing plays, and empties when the party ends", () => {
   const timers = [];
-  const { ctx, boxes } = page(["util.js", "party.js"], { setTimeout: (fn) => timers.push(fn) });
+  const { ctx, boxes } = page(["util.js", "party.js"], { setTimeout: (fn) => timers.push(fn), setInterval: () => 1, clearInterval() {}, clearTimeout() {} });
   const classes = new Set();
   const box = Object.assign(new Fake("span"), { offsetWidth: 0, classList: { toggle: (n, on) => (on ? classes.add(n) : classes.delete(n)), add: (n) => classes.add(n), remove: (n) => classes.delete(n), contains: (n) => classes.has(n) } });
   boxes.wpstage = box;
@@ -844,7 +844,7 @@ test("the Watch Party band builds flags and a walking chick, waves with confetti
   const stage = (...args) => vm.runInContext(`renderStage(${args.join(", ")})`, ctx);
   const count = (name) => vm.runInContext(name, ctx);
   stage(true, 0, 5, true);
-  assert.deepEqual([box.children.length, box.children[0].children.length, box.children[1].children[0].tag, classes.has("on")], [2, count("PARTY_FLAGS"), "svg", true]);
+  assert.deepEqual([box.children.length, box.children[0].children.length, box.children[1].children[0].tag, classes.has("on")], [2, count("PARTY_FLAGS"), "i", true]);
   stage(true, 1, 5, true);
   assert.deepEqual([classes.has("wave"), box.children.length, box.children[2].children.length], [true, 3, count("PARTY_CONFETTI")]);
   stage(true, 1, 6, true);
@@ -852,7 +852,7 @@ test("the Watch Party band builds flags and a walking chick, waves with confetti
   stage(true, 0, 6, false);
   assert.deepEqual([classes.has("idle"), box.children.length], [true, 3]);
   timers.forEach((fn) => fn());
-  assert.deepEqual([classes.has("wave"), classes.has("jump"), box.children.length], [false, false, 2]);
+  assert.deepEqual([classes.has("wave"), classes.has("jump"), classes.has("nap"), box.children.length], [false, false, true, 2]);
   stage(false, 0, 0, true);
   assert.deepEqual([box.children.length, classes.has("on")], [0, false]);
 });
