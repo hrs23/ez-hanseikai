@@ -6,6 +6,7 @@ const SHORTCUTS = [
   ["Back / forward 5 s (Shift 1 s)", ["←", "→"]],
   ["Back / forward 10 s (Shift 1 min)", ["J", "L"]],
   ["Back / forward 1 min", ["Ctrl+←", "Ctrl+→"]],
+  ["Start / end (live)", ["Home", "End"]],
   ["Slower / faster", ["<", ">"]],
   ["Mute / volume", ["M", "↑", "↓"]],
   ["Player full screen / leave", ["F", "Esc"]],
@@ -53,10 +54,12 @@ function renderStart() {
   if (!changed("rooms", [others.map((r) => [r.id, r.name, stamp(r.icon), r.used_us]), lang])) return;
   $("roomlist").replaceChildren(...others.map((r, i) => {
     const enter = () => run("enter_room", { id: r.id }, openLive);
-    const more = iconButton("more", t("More"), (e) => { e.stopPropagation(); openMenu([{ label: t("Delete room…"), icon: "trash", danger: true, run: () => deleteRoom(r) }], e.currentTarget); }, "icon sm more");
+    const menu = (at) => openMenu([{ label: t("Delete room…"), icon: "trash", danger: true, run: () => deleteRoom(r) }], at);
+    const more = iconButton("more", t("More"), (e) => { e.stopPropagation(); menu(e.currentTarget); }, "icon sm more");
     const row = el("div", { className: "rrow", tabIndex: 0, role: "button" }, nameChip(roomIcon(r, "lg"), r.name), el("span", { className: "sp" }), r.used_us ? el("span", { className: "muted small", textContent: formatWhen(new Date(r.used_us / 1000), new Date(), lang), title: fullWhen(new Date(r.used_us / 1000), lang) }) : null, el("button", { className: "sm" + (i ? "" : " primary"), textContent: t("Enter"), onclick: (e) => { e.stopPropagation(); enter(); } }), more);
     row.onclick = enter;
     row.onkeydown = (e) => { if (e.key === "Enter") enter(); };
+    row.oncontextmenu = (e) => { e.preventDefault(); menu(e); };
     return row;
   }));
 }
@@ -393,6 +396,7 @@ $("startname").onkeydown = (e) => { if (e.key === "Escape" && st.name && !compos
 $("newroom").onclick = single(() => run("set_name", { name: typedName() }, createRoom));
 $("joincode").oninput = () => renderStart();
 $("join").onclick = single(() => run("set_name", { name: typedName() }, () => joinWith($("joincode"))));
+arrowList($("roomlist"), ".rrow");
 $("joincode").onkeydown = (e) => { if (e.key === "Enter" && !composing(e) && !$("join").disabled) $("join").click(); };
 $("pendingcancel").onclick = () => st.room && run("remove_room", { id: st.room.id });
 const roomDraft = () => cleanText($("roomnameinput").value, LIMITS.room) !== st.room.name || iconDraft !== st.room.icon;

@@ -326,6 +326,7 @@ listenMain("levels", (e) => {
 $("roomname").onclick = (e) => roomMenu(e.currentTarget);
 for (const b of document.querySelectorAll("[data-nav]")) b.onclick = () => navigate(b.dataset.nav);
 $("startbtn").onclick = () => toggleRecording();
+arrowList($("sessions"), ".srow");
 $("splitter").onpointerdown = dragSide;
 $("splitter").ondblclick = () => setSideWidth(SIDE_DEFAULT);
 $("splitter").onkeydown = (e) => {

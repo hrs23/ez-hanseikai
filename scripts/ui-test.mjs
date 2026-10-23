@@ -11,7 +11,7 @@ const source = ["util.js", "i18n.js", "live.js", "media.js", "layout.js", "dock.
 const memory = new Map();
 const localStorage = { getItem: (k) => memory.get(k) ?? null, setItem: (k, v) => memory.set(k, v) };
 const context = vm.createContext({ localStorage, window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id, location: { search: "" } });
-const ui$ = vm.runInContext(`${source}\n({ uiCommands, uiState, uiRun, strokeAlpha, INK_TOOLS, INK_TOOL_TITLE, nextInkTool, LIMITS, escapeStep, editKey, cleanText, single, changed, matchEnds, matchStarts, matchLabel, labelMatchEnds, shownTags, noteMoments, progressText, matchChapters, stepTarget, matchTargets, rowHit, rowActions, authorOf, noteCount, matchCount, formatWhen, fullWhen, sessionWhen, keysOf, hotkeyRows, memberStatus, windowTitle, longId, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, analysisPill, analysisSub, analysisActions, analysisDetails, analysisDetailText, runningMark, cardParts, dropPos, dropSlot, boardSpan, boardFont, cellSpan, fitFont, deletePreview, cleanupPicked, cleanupTotal, cleanupHead, cleanupDone, exportChoice, exportArgs, exportView, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, voiceTone, known, VOICE_SIDES, VOICE_TONES, VOICE_SIDE_DEFAULT, VOICE_TONE_DEFAULT, minimapRect, talking, stillTalking, markSpeak, seekSum, osdSeek, osdVolume, osdSpeed, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, nextChip, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, popupSpot, POP_GAP, POP_EDGE, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ uiCommands, uiState, uiRun, listMove, strokeAlpha, INK_TOOLS, INK_TOOL_TITLE, nextInkTool, LIMITS, escapeStep, editKey, cleanText, single, changed, matchEnds, matchStarts, matchLabel, labelMatchEnds, shownTags, noteMoments, progressText, matchChapters, stepTarget, matchTargets, rowHit, rowActions, authorOf, noteCount, matchCount, formatWhen, fullWhen, sessionWhen, keysOf, hotkeyRows, memberStatus, windowTitle, longId, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, analysisPill, analysisSub, analysisActions, analysisDetails, analysisDetailText, runningMark, cardParts, dropPos, dropSlot, boardSpan, boardFont, cellSpan, fitFont, deletePreview, cleanupPicked, cleanupTotal, cleanupHead, cleanupDone, exportChoice, exportArgs, exportView, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, voiceTone, known, VOICE_SIDES, VOICE_TONES, VOICE_SIDE_DEFAULT, VOICE_TONE_DEFAULT, minimapRect, talking, stillTalking, markSpeak, seekSum, osdSeek, osdVolume, osdSpeed, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, nextChip, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, popupSpot, POP_GAP, POP_EDGE, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 test("a changed() check against a tile's own store reports again on a rebuilt tile", () => {
   const first = {};
   assert.equal(ui$.changed("what", [1], first), true);
@@ -1204,6 +1204,21 @@ test("an inline editor cancels on Esc and saves on Enter (Ctrl+Enter in a multi-
   assert.equal(key({ key: "a" }), null);
   assert.equal(key({ key: "Enter", isComposing: true }), null);
   assert.equal(key({ key: "Escape", keyCode: 229 }), null);
+});
+
+test("arrow keys move one row in a list and stop at its ends, wrap in a menu, and Home and End go to the first and last", () => {
+  const move = ui$.listMove;
+  assert.equal(move("ArrowDown", 0, 3, false), 1);
+  assert.equal(move("ArrowDown", 2, 3, false), 2);
+  assert.equal(move("ArrowUp", 0, 3, false), 0);
+  assert.equal(move("ArrowDown", 2, 3, true), 0);
+  assert.equal(move("ArrowUp", 0, 3, true), 2);
+  assert.equal(move("ArrowDown", -1, 3, true), 0);
+  assert.equal(move("ArrowUp", -1, 3, true), 2);
+  assert.equal(move("Home", 2, 3, false), 0);
+  assert.equal(move("End", 0, 3, true), 2);
+  assert.equal(move("Enter", 0, 3, false), null);
+  assert.equal(move("ArrowDown", -1, 0, true), null);
 });
 
 test("Esc closes a menu or dialog first, then a popup, then leaves a text field, then full screen, then closes the Board window, then the panel", () => {
