@@ -513,7 +513,7 @@ function openMix(anchor) {
   const keys = [...play.keys, ...play.voice];
   const heard = soundKey(play.view, play.keys, st.id, gameSound);
   const pick = (key) => el("button", { className: "icon sm" + (key === heard ? " on" : ""), title: t("Switch app sound"), ariaLabel: t("Switch app sound"), onclick: () => { chooseSound(key); openMix(anchor); } }, icon("volume-2", "sm"));
-  showPop([el("div", { className: "head" }, el("b", { textContent: t("Volume per member") })), el("div", { className: "mixgrid" }, ...keys.map((key) => el("div", { className: "mixm" }, el("div", { className: "who" }, avatar(key, "sm", null, false, true), el("span", { className: "nm", textContent: nameOf(key) }), play.keys.length > 1 && !play.view && play.tiles[key] ? pick(key) : null), play.tiles[key] ? mixRow(key, "app", t("App sound")) : null, mixRow(key, "voice", t("Voice"))))), el("button", { className: "poplink", onclick: openVoiceSettings }, icon("sliders", "sm"), t("Recorded voices position and tone…"))], anchor, true, keys.length > 2 ? "wide" : "");
+  showPop([el("div", { className: "head" }, el("b", { textContent: t("Volume per member") })), el("div", { className: "mixgrid" }, ...keys.map((key) => el("div", { className: "mixm" }, el("div", { className: "who" }, avatar(key, "sm", null, false, true), el("span", { className: "nm", textContent: nameOf(key) }), play.keys.length > 1 && !play.view && play.tiles[key] ? pick(key) : null), play.tiles[key] ? mixRow(key, "app", t("App sound")) : null, mixRow(key, "voice", t("Voice"))))), el("button", { className: "poplink", onclick: openVoiceSettings }, icon("sliders", "sm"), t("Recorded voices direction and tone…"))], anchor, true, keys.length > 2 ? "wide" : "");
 }
 function openVoiceSettings() {
   closePop();

@@ -509,16 +509,17 @@ const JA = {
   "Downloading {what} from {host}": "{host} から {what} をダウンロード中",
   "Video tools": "動画ツール",
   "Recorded voices": "録画の声",
-  "Recorded voices position and tone…": "録画の声の位置と音色…",
-  "Side": "位置",
+  "Recorded voices direction and tone…": "録画の声の方向と音色…",
+  "Direction": "方向",
+  "Left in a Watch Party, center otherwise": "反省会では左、それ以外は中央",
   "Auto": "自動",
   "Left": "左",
   "Right": "右",
   "Center": "中央",
   "Tone": "音色",
   "Clear": "そのまま",
-  "Mild": "弱",
-  "Strong": "強",
+  "Muffled": "こもらせる",
+  "Phone": "電話風",
 };
 
 let language = "en";
