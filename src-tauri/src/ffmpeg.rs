@@ -200,9 +200,8 @@ fn download(dir: &Path) -> Result<(), String> {
             }
         })
     };
-    let mut command = Command::new("powershell");
+    let mut command = proc::powershell(&["-ExecutionPolicy", "Bypass", "-Command", DOWNLOAD]);
     command
-        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", DOWNLOAD])
         .env("EZH_URL", URL)
         .env("EZH_SHA", SHA256)
         .env("EZH_SIZE", SIZE.to_string())

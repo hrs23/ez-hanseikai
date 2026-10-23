@@ -100,6 +100,13 @@ pub fn accept(listener: &TcpListener, keep_going: impl Fn() -> bool) -> Option<T
     }
 }
 
+/// Windows PowerShell with its own module path: a path inherited from PowerShell 7 (an app started from pwsh) hides built-in commands such as Get-FileHash.
+pub fn powershell(args: &[&str]) -> Command {
+    let mut command = Command::new("powershell");
+    command.args(["-NoProfile", "-NonInteractive"]).args(args).env_remove("PSModulePath");
+    command
+}
+
 pub fn spawn(command: &mut Command, flags: u32) -> std::io::Result<Process> {
     let child = command.creation_flags(NO_WINDOW | flags).spawn()?;
     let job = Job::new().filter(|job| unsafe { AssignProcessToJobObject(job.handle(), HANDLE(child.as_raw_handle())) }.is_ok());
@@ -120,5 +127,18 @@ pub fn run(command: &mut Command, flags: u32, wait: Duration) -> Result<String, 
         Some(s) if s.success() => Ok(text),
         Some(s) => Err(if text.is_empty() { format!("stopped with {s}") } else { text }),
         None => Err(format!("did not finish in {} s", wait.as_secs())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // cargo test runs from pwsh in GitHub Actions, so this inherits PowerShell 7's module path there.
+    #[test]
+    fn powershell_finds_its_built_in_commands_when_started_from_powershell_7() {
+        let mut command = powershell(&["-Command", "Get-FileHash -LiteralPath $env:ComSpec -Algorithm SHA256 | Out-Null; Get-CimInstance Win32_OperatingSystem | Out-Null"]);
+        assert!(command.get_envs().any(|(k, v)| k == "PSModulePath" && v.is_none()));
+        assert_eq!(run(&mut command, 0, Duration::from_secs(60)), Ok(String::new()));
     }
 }

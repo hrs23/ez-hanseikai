@@ -1,4 +1,3 @@
-use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -112,8 +111,8 @@ pub fn send_feedback(core: &Arc<Core>, args: Value) -> Result<Value, String> {
     let body = body(&kind, &comment, with_diag.then_some((diagnostics.as_str(), log.as_slice())), if with_image { image.as_deref() } else { None }, &lang)?;
     let path = core.dir.join("feedback.json");
     std::fs::write(&path, body.to_string()).map_err(|e| e.to_string())?;
-    let mut command = Command::new("powershell");
-    command.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", SEND]).env("EZH_URL", url).env("EZH_BODY", &path);
+    let mut command = crate::proc::powershell(&["-ExecutionPolicy", "Bypass", "-Command", SEND]);
+    command.env("EZH_URL", url).env("EZH_BODY", &path);
     let sent = proc::run(&mut command, 0, SEND_WAIT);
     let _ = std::fs::remove_file(&path);
     match sent {

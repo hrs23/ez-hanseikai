@@ -77,7 +77,7 @@ fn display_size() -> (u32, u32) {
 
 pub fn warm() {
     std::thread::spawn(|| {
-        let _ = HARDWARE.set(Hardware::parse(&debug::command_line("powershell", &["-NoProfile", "-NonInteractive", "-Command", SCRIPT]), display_size()));
+        let _ = HARDWARE.set(Hardware::parse(&debug::output(&mut crate::proc::powershell(&["-Command", SCRIPT])), display_size()));
     });
 }
 

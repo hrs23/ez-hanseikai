@@ -523,8 +523,11 @@ pub fn transfer_summary(rows: &VecDeque<Value>) -> BTreeMap<String, u64> {
 }
 
 pub fn command_line(program: &str, args: &[&str]) -> String {
-    Command::new(program)
-        .args(args)
+    output(Command::new(program).args(args))
+}
+
+pub fn output(command: &mut Command) -> String {
+    command
         .creation_flags(NO_WINDOW)
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
