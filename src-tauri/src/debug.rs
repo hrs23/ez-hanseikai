@@ -601,7 +601,7 @@ fn last<T>(mut items: Vec<T>, count: usize) -> Vec<T> {
 /// without one, such as a backtrace line, which belongs to the line above.
 fn level_rank(line: &str) -> Option<usize> {
     let head = line.char_indices().nth(48).map_or(line, |(i, _)| &line[..i]);
-    LEVELS.iter().position(|l| head.contains(&format!(" {l} ")))
+    LEVELS.iter().enumerate().filter_map(|(i, l)| head.find(&format!(" {l} ")).map(|at| (at, i))).min().map(|(_, i)| i)
 }
 
 /// The share of the size each level gets first (ERROR, WARN, INFO, DEBUG, TRACE), so every level keeps some lines.
