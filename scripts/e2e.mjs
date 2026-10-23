@@ -1379,7 +1379,8 @@ async function library(ctx) {
     check(connected(await state(a), [b.id, c.id]), "A lost a member while it changed relays");
     check((await state(a)).relays.length === 1, "the relay is not kept");
     await invoke(a, "set_relays", { urls: [] });
-    await waitFor("A is back on the public relays", within(RELAY_WAIT_S * 3), async () => logLines(a).some((l) => l.includes("relay: the public relays")));
+    check((await state(a)).relays.length === 0, "the relay was not cleared");
+    await waitFor("A is on a public relay", within(RELAY_WAIT_S * 3), async () => { const host = await relayHost(); return host !== "" && !host.startsWith("127."); });
     check(connected(await state(a), [b.id, c.id]), "A lost a member after the relay list was cleared");
   });
 

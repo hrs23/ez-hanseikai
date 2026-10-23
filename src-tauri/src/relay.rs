@@ -135,7 +135,8 @@ mod tests {
 
     #[test]
     fn custom_relays_come_first_each_alone_and_the_public_relays_last_together() {
-        let custom = parse(&["https://relay.example.org/".into(), " ".into(), "https://second.example.net".into()]).unwrap();
+        let custom = vec![url("https://relay.example.org/").unwrap(), url("https://second.example.net").unwrap()];
+        assert_eq!(parse(&["https://relay.example.org/".into(), " ".into()]).unwrap(), custom[..1]);
         let list = groups(&custom);
         assert_eq!(list.len(), 3);
         assert_eq!((list[0].len(), list[0][0].host_str(), list[1][0].host_str()), (1, Some("relay.example.org"), Some("second.example.net")));
