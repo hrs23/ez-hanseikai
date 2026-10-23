@@ -175,7 +175,7 @@ pub fn open_board(app: &AppHandle, dir: &Path) {
     }
     let (handle, dir) = (app.clone(), dir.to_path_buf());
     let _ = app.run_on_main_thread(move || {
-        let builder = tauri::WebviewWindowBuilder::new(&handle, BOARD, tauri::WebviewUrl::App("index.html?board".into())).title(app_name(&handle, "")).inner_size(1100.0, 760.0).min_inner_size(480.0, 320.0).center().resizable(true).zoom_hotkeys_enabled(true).decorations(true).theme(Some(tauri::Theme::Dark)).background_color(tauri::window::Color(12, 14, 18, 255));
+        let builder = tauri::WebviewWindowBuilder::new(&handle, BOARD, tauri::WebviewUrl::App("index.html?board".into())).title(app_name(&handle, "")).inner_size(1100.0, 760.0).min_inner_size(480.0, 320.0).center().resizable(true).decorations(true).theme(Some(tauri::Theme::Dark)).background_color(tauri::window::Color(12, 14, 18, 255));
         match crate::profile(builder, &dir).build() {
             Ok(window) => {
                 let _ = window.unmaximize();

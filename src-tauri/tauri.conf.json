@@ -15,8 +15,7 @@
         "minWidth": 960,
         "minHeight": 600,
         "theme": "Dark",
-        "backgroundColor": "#0f1115",
-        "zoomHotkeysEnabled": true
+        "backgroundColor": "#0f1115"
       }
     ],
     "security": {
