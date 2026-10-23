@@ -259,6 +259,22 @@ impl Capture {
     }
 }
 
+/// Marks the frame handler as working until dropped, so a stall can tell a stuck handler from Windows sending nothing.
+struct Busy;
+
+impl Busy {
+    fn start() -> Self {
+        *debug::FRAME_BUSY.lock().unwrap() = Some(Instant::now());
+        Busy
+    }
+}
+
+impl Drop for Busy {
+    fn drop(&mut self) {
+        *debug::FRAME_BUSY.lock().unwrap() = None;
+    }
+}
+
 impl GraphicsCaptureApiHandler for Capture {
     type Flags = Arc<Core>;
     type Error = Err;
@@ -268,6 +284,8 @@ impl GraphicsCaptureApiHandler for Capture {
     }
 
     fn on_frame_arrived(&mut self, frame: &mut Frame, _control: InternalCaptureControl) -> Result<(), Self::Error> {
+        debug::frame(debug::ARRIVED);
+        let _busy = Busy::start();
         let (w, h) = (frame.width(), frame.height());
         if self.last.elapsed() < FRAME_GAP || w < 2 || h < 2 || !crate::record::wants_picture(&self.core) {
             return Ok(());

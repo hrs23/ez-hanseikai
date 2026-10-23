@@ -37,7 +37,11 @@ pub const UPDATE_HOST: &str = "github.com";
 pub const TAKEN: usize = 0;
 pub const ENCODED: usize = 1;
 pub const DROPPED: usize = 2;
-pub static FRAMES: [AtomicU64; 3] = [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+/// Every frame Windows hands the capture, used or not.
+pub const ARRIVED: usize = 3;
+pub static FRAMES: [AtomicU64; 4] = [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+/// When the capture's frame handler started the frame it is still working on.
+pub static FRAME_BUSY: Mutex<Option<Instant>> = Mutex::new(None);
 
 static TRANSFERS: Mutex<VecDeque<Value>> = Mutex::new(VecDeque::new());
 static ACTIVE: Mutex<Vec<(u64, Value)>> = Mutex::new(Vec::new());

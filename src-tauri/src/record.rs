@@ -34,6 +34,7 @@ const VOICE_FRAGMENT_US: &str = "1000000";
 const REPEAT_AFTER: Duration = Duration::from_millis(250);
 const STALLED_AFTER: Duration = Duration::from_secs(5);
 const FFMPEG_REPEAT_EVERY: Duration = Duration::from_secs(60);
+const STALL_LOG_EVERY: Duration = Duration::from_secs(30);
 const REPEAT_POLL: Duration = Duration::from_millis(100);
 const PCM_FRAME_BYTES: u64 = 4;
 const PAD_AFTER_FRAMES: u64 = SAMPLE_RATE as u64 / 50;
@@ -360,29 +361,40 @@ fn stalled(window: bool, capturing: bool, quiet: Duration) -> bool {
     window && capturing && quiet >= STALLED_AFTER
 }
 
-/// The log line when the captured window stops or starts sending frames again; `since` holds when it stopped.
-pub fn stall_line(since: &mut Option<Instant>, stalled: bool, quiet: Duration, now: Instant) -> Option<(tracing::Level, String)> {
-    match (*since, stalled) {
-        (None, true) => {
-            *since = Some(now.checked_sub(quiet).unwrap_or(now));
-            Some((tracing::Level::WARN, format!("the captured window sent no new frame for {} s; it may be minimized, hidden or not drawing", quiet.as_secs())))
-        }
-        (Some(at), false) => {
-            *since = None;
-            Some((tracing::Level::INFO, format!("the captured window sends frames again after {} s", now.saturating_duration_since(at).as_secs())))
-        }
-        _ => None,
-    }
+fn handler_state(busy: Option<Duration>) -> String {
+    busy.map_or_else(|| "the frame handler is idle".to_string(), |d| format!("the frame handler has been on one frame for {} ms", d.as_millis()))
 }
 
-fn log_stall(core: &Core, since: &mut Option<Instant>) {
-    let e = &core.engine;
-    let quiet = e.fresh.lock().unwrap().elapsed();
-    let now_stalled = stalled(e.names.lock().unwrap().kind == "window", e.video.lock().unwrap().is_some(), quiet);
-    match stall_line(since, now_stalled, quiet, Instant::now()) {
-        Some((level, line)) if level == tracing::Level::WARN => tracing::warn!("{line}"),
-        Some((_, line)) => tracing::info!("{line}"),
-        None => {}
+/// Logs when the captured window stops updating, what the capture sees while it stays so, and when it updates again.
+#[derive(Default)]
+struct StallLog {
+    since: Option<Instant>,
+    counts: (u64, u64),
+    logged: Option<Instant>,
+}
+
+impl StallLog {
+    /// `arrived` counts every frame Windows handed over, `taken` the ones used.
+    fn step(&mut self, now: Instant, stalled: bool, arrived: u64, taken: u64, busy: Option<Duration>) -> Option<(tracing::Level, String)> {
+        match self.since {
+            None if stalled => {
+                (self.since, self.counts, self.logged) = (Some(now), (arrived, taken), Some(now));
+                Some((tracing::Level::WARN, format!("the captured window stopped updating: no frame used for {} s, {}", STALLED_AFTER.as_secs(), handler_state(busy))))
+            }
+            Some(at) if stalled => {
+                if self.logged.is_some_and(|l| now.duration_since(l) < STALL_LOG_EVERY) {
+                    return None;
+                }
+                let (a, t) = (arrived.saturating_sub(self.counts.0), taken.saturating_sub(self.counts.1));
+                (self.counts, self.logged) = ((arrived, taken), Some(now));
+                Some((tracing::Level::WARN, format!("the captured window is still not updating after {} s: Windows handed over {a} frames and {t} were used in the last {} s, {}", (now.duration_since(at) + STALLED_AFTER).as_secs(), STALL_LOG_EVERY.as_secs(), handler_state(busy))))
+            }
+            Some(at) => {
+                self.since = None;
+                Some((tracing::Level::INFO, format!("the captured window is updating again after {} s", (now.duration_since(at) + STALLED_AFTER).as_secs())))
+            }
+            None => None,
+        }
     }
 }
 
@@ -1182,7 +1194,7 @@ pub fn supervise(core: Arc<Core>) {
     let e = &core.engine;
     let mut scanned: Option<(Value, Instant)> = None;
     let mut found: Option<Found> = None;
-    let mut stalled_since = None;
+    let mut stall_log = StallLog::default();
     loop {
         let source = e.source.lock().unwrap().clone();
         let ended = e.video.lock().unwrap().as_ref().is_some_and(Video::finished);
@@ -1197,7 +1209,14 @@ pub fn supervise(core: Arc<Core>) {
         }
         ensure_video(&core, found.as_ref().filter(|_| want(&core).is_some_and(|(_, voice)| !voice) && ffmpeg::encoders_ready()));
         check_sink(&core);
-        log_stall(&core, &mut stalled_since);
+        let now_stalled = stalled(e.names.lock().unwrap().kind == "window", e.video.lock().unwrap().is_some(), e.fresh.lock().unwrap().elapsed());
+        let busy = debug::FRAME_BUSY.lock().unwrap().map(|at| at.elapsed());
+        let count = |i: usize| debug::FRAMES[i].load(Ordering::Relaxed);
+        match stall_log.step(Instant::now(), now_stalled, count(debug::ARRIVED), count(debug::TAKEN), busy) {
+            Some((level, line)) if level == tracing::Level::WARN => tracing::warn!("{line}"),
+            Some((_, line)) => tracing::info!("{line}"),
+            None => {}
+        }
         hw::tick(&core);
         thread::sleep(SUPERVISE_EVERY);
     }
@@ -1225,18 +1244,19 @@ mod tests {
     }
 
     #[test]
-    fn a_window_that_stops_sending_frames_is_logged_once_with_its_return() {
-        let secs = Duration::from_secs;
-        let t = Instant::now();
-        let mut since = None;
-        let (level, line) = stall_line(&mut since, true, secs(5), t).unwrap();
+    fn a_stall_is_logged_when_it_starts_while_it_lasts_and_when_it_ends() {
+        let (t, secs) = (Instant::now(), Duration::from_secs);
+        let mut log = StallLog::default();
+        assert_eq!(log.step(t, false, 10, 10, None), None);
+        let (level, first) = log.step(t, true, 100, 50, Some(Duration::from_millis(4200))).unwrap();
         assert_eq!(level, tracing::Level::WARN);
-        assert!(line.starts_with("the captured window sent no new frame for 5 s"));
-        assert!(stall_line(&mut since, true, secs(30), t + secs(25)).is_none());
-        let (level, line) = stall_line(&mut since, false, secs(0), t + secs(40)).unwrap();
-        assert_eq!(level, tracing::Level::INFO);
-        assert_eq!(line, "the captured window sends frames again after 45 s");
-        assert!(stall_line(&mut since, false, secs(0), t + secs(41)).is_none());
+        assert!(first.contains("stopped updating") && first.contains("4200 ms"), "{first}");
+        assert_eq!(log.step(t + secs(10), true, 103, 50, None), None);
+        let (_, still) = log.step(t + STALL_LOG_EVERY, true, 106, 51, None).unwrap();
+        assert!(still.contains("handed over 6 frames and 1 were used") && still.contains("idle") && still.contains("after 35 s"), "{still}");
+        let (level, back) = log.step(t + secs(40), false, 300, 200, None).unwrap();
+        assert!(level == tracing::Level::INFO && back.contains("updating again after 45 s"), "{back}");
+        assert_eq!(log.step(t + secs(41), false, 300, 200, None), None);
     }
 
     #[test]
