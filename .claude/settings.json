@@ -1,0 +1,7 @@
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "bash scripts/cloud-tailnet.sh" }] }
+    ]
+  }
+}
