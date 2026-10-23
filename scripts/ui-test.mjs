@@ -851,6 +851,33 @@ function page(files, globals = {}) {
   return { ctx, boxes };
 }
 
+test("a picked picture the page cannot decode goes through ffmpeg, a huge one is refused first, and the icon steps its quality down until it fits", async () => {
+  const sent = [];
+  const decodes = (x) => (x.type === "image/png" ? Promise.resolve({ width: 256, height: 256, from: "ffmpeg" }) : x.name.endsWith(".png") ? Promise.resolve({ width: 4032, height: 3024, from: "page" }) : Promise.reject(new Error("InvalidStateError")));
+  const window = { __TAURI__: { core: { invoke: async (name, bytes) => { sent.push([name, bytes.length]); if (name !== "convert_picture") throw "No such command."; return new Uint8Array([1, 2, 3]).buffer; } } } };
+  const { ctx } = page(["util.js", "faces.js"], { window, createImageBitmap: decodes, Blob, Uint8Array });
+  const run = (code) => vm.runInContext(code, ctx);
+  const file = (name, size) => ({ name, size, type: "", arrayBuffer: async () => new ArrayBuffer(size) });
+  assert.equal((await run("openImage")(file("photo.png", 10))).from, "page");
+  assert.deepEqual(sent, []);
+  assert.equal((await run("openImage")(file("IMG_0001.HEIC", 20))).from, "ffmpeg");
+  assert.deepEqual(sent, [["convert_picture", 20]]);
+  await assert.rejects(run("openImage")(file("huge.heic", run("IMAGE_FILE_MAX") + 1)), (e) => e === "That picture file is too large.");
+  assert.equal(sent.length, 1);
+  const max = run("IMAGE_MAX");
+  const tried = [];
+  const sized = (sizes) => (q) => { tried.push(q); return "x".repeat(sizes[tried.length - 1]); };
+  assert.equal(run("fitImage")(sized([max])).length, max);
+  tried.length = 0;
+  assert.equal(run("fitImage")(sized([max + 1, max + 1, 100])).length, 100);
+  assert.deepEqual(tried, [...run("IMAGE_QUALITIES")].slice(0, 3));
+  tried.length = 0;
+  assert.throws(() => run("fitImage")(sized(run("IMAGE_QUALITIES").map(() => max + 1))), (e) => e === "That image is too large.");
+  const rust = fs.readFileSync(path.join(ui, "..", "src-tauri", "src", "room.rs"), "utf8");
+  assert.equal(Number(rust.match(/pub const IMAGE_MAX: usize = (\d+);/)[1]), max);
+  assert.match(read("index.html"), /id="imagefile" type="file" accept="image\/\*,\.heic,\.heif,\.avif"/);
+});
+
 test("an avatar shows the image, a built-in shape or the initial; an unknown shape or none shows the plain person; a room without an icon shows a preset picked from its id, and a room with no id its initial", () => {
   const image = "data:image/webp;base64,AAAA";
   const state = { id: "me", name: "Aki", names: { ren: "Ren", koya: "Koya", mia: "Mia" }, colors: { me: 1, ren: 2, koya: 3, mia: 4 }, capture: { mix: { mic: { muted: false } } }, avatars: { me: "tiger-head", ren: image, koya: "gone", mia: "data:image/svg+xml;base64,AAAA" } };

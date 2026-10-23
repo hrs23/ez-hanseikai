@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -51,6 +51,8 @@ const RETRY_MAX: Duration = Duration::from_secs(300);
 const DROP_FOR: Duration = Duration::from_secs(600);
 const RETRY_POLL: Duration = Duration::from_millis(500);
 const KEYFRAME_EVERY: u32 = 2 * FPS;
+const PICTURE_SIDE: u32 = 256;
+const PICTURE_WAIT: Duration = Duration::from_secs(30);
 pub const FRAGMENTED: &str = "frag_keyframe+empty_moov+default_base_moof";
 pub const FALLBACK: (&str, &str, f64) = ("libx264", "h264", 1.0);
 pub const CANDIDATES: [(&str, &str, f64); 10] = [
@@ -72,6 +74,7 @@ static DROPPED: Mutex<Vec<(&'static str, Instant)>> = Mutex::new(Vec::new());
 static FAILED: Mutex<Option<String>> = Mutex::new(None);
 static RETRY: AtomicBool = AtomicBool::new(false);
 static DOWNLOADING: Mutex<Option<(u64, Instant)>> = Mutex::new(None);
+static PICTURES: AtomicU64 = AtomicU64::new(0);
 
 pub fn set_data_dir(dir: PathBuf) {
     let _ = DATA_DIR.set(dir);
@@ -127,6 +130,37 @@ pub fn command(level: &str) -> Command {
     let mut command = Command::new(path());
     command.args(["-hide_banner", "-loglevel", level, "-y"]);
     command
+}
+
+fn picture_args(grid: bool) -> Vec<String> {
+    let filter = format!("crop='min(iw,ih)':'min(iw,ih)',scale={PICTURE_SIDE}:{PICTURE_SIDE}");
+    let pick = if grid { vec!["-filter_complex".into(), format!("[0:g:0]{filter}[out]"), "-map".into(), "[out]".into()] } else { vec!["-vf".into(), filter] };
+    [pick, ["-frames:v", "1", "-c:v", "png"].map(String::from).to_vec()].concat()
+}
+
+pub fn convert_picture(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    ready()?;
+    let dir = std::env::temp_dir().join(format!("ezh-picture-{}-{}", std::process::id(), PICTURES.fetch_add(1, Ordering::Relaxed)));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let (input, output) = (dir.join("in"), dir.join("out.png"));
+    let made = std::fs::write(&input, bytes).map_err(|e| e.to_string()).and_then(|_| {
+        [false, true]
+            .into_iter()
+            .find_map(|grid| {
+                let mut command = command("error");
+                command.arg("-i").arg(&input).args(picture_args(grid)).arg(&output);
+                match proc::run(&mut command, proc::BELOW_NORMAL, PICTURE_WAIT) {
+                    Ok(_) => std::fs::read(&output).ok(),
+                    Err(e) => {
+                        tracing::info!("ffmpeg could not open the picture (grid {grid}): {e}");
+                        None
+                    }
+                }
+            })
+            .ok_or_else(|| "This file is not a picture the app can open.".to_string())
+    });
+    let _ = std::fs::remove_dir_all(&dir);
+    made
 }
 
 pub fn pace(done: u64, total: u64, seconds: f64) -> (u64, Option<u64>) {
@@ -291,6 +325,18 @@ pub fn encoder() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_picture_is_cut_to_a_centered_square_from_the_plain_stream_or_the_tile_grid() {
+        let plain = picture_args(false);
+        assert_eq!(plain[0], "-vf");
+        assert_eq!(plain[1], format!("crop='min(iw,ih)':'min(iw,ih)',scale={PICTURE_SIDE}:{PICTURE_SIDE}"));
+        let grid = picture_args(true);
+        assert_eq!(grid[..4], ["-filter_complex".to_string(), format!("[0:g:0]{}[out]", plain[1]), "-map".into(), "[out]".into()]);
+        for args in [plain, grid] {
+            assert_eq!(args[args.len() - 4..], ["-frames:v", "1", "-c:v", "png"].map(String::from));
+        }
+    }
 
     #[test]
     fn choice_skips_dropped_encoders_down_to_the_fallback() {

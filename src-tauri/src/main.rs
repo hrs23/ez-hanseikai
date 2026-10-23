@@ -436,6 +436,13 @@ async fn send_feedback(core: State<'_, Arc<Core>>, args: Value) -> Result<Value,
 }
 
 #[tauri::command]
+async fn convert_picture(request: tauri::ipc::Request<'_>) -> Result<tauri::ipc::Response, String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else { return Err("That image is not valid.".into()) };
+    let bytes = bytes.clone();
+    off_thread(move || ffmpeg::convert_picture(&bytes)).await?.map(tauri::ipc::Response::new)
+}
+
+#[tauri::command]
 fn open_link(url: String) {
     shell::open_link(&url);
 }
@@ -689,7 +696,7 @@ fn main() {
             std::thread::spawn(move || thumbs::keeper(c));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![call, feedback_snap, feedback_preview, send_feedback, ui_report, open_set_folder, open_data_folder, open_link, open_folder, pick_export_base, save_text, show_main])
+        .invoke_handler(tauri::generate_handler![call, convert_picture, feedback_snap, feedback_preview, send_feedback, ui_report, open_set_folder, open_data_folder, open_link, open_folder, pick_export_base, save_text, show_main])
         .build(tauri::generate_context!())
         .expect("failed to start");
     app.run(|app, event| {

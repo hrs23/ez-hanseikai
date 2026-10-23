@@ -123,7 +123,9 @@ const glyphOf = (current, legacy, name) => {
 const faceGlyph = (name) => glyphOf(FACES, LEGACY_FACES, name);
 const roomGlyph = (name) => glyphOf(ROOM_FACES, LEGACY_ROOM_FACES, name);
 const IMAGE_SIDE = 96;
-const IMAGE_QUALITY = 0.85;
+const IMAGE_QUALITIES = [0.85, 0.7, 0.5, 0.3];
+const IMAGE_MAX = 16384;
+const IMAGE_FILE_MAX = 50 * 1024 * 1024;
 
 function initial(name) {
   return ([...String(name || "?").trim()][0] || "?").toUpperCase();
@@ -218,13 +220,31 @@ function presetImage(name) {
   return canvas.toDataURL("image/png");
 }
 
+function fitImage(encode) {
+  for (const quality of IMAGE_QUALITIES) {
+    const url = encode(quality);
+    if (url.length <= IMAGE_MAX) return url;
+  }
+  throw "That image is too large.";
+}
+
+async function openImage(file) {
+  try {
+    return await createImageBitmap(file);
+  } catch {
+    if (file.size > IMAGE_FILE_MAX) throw "That picture file is too large.";
+    const png = await dialog("convert_picture", new Uint8Array(await file.arrayBuffer()));
+    return createImageBitmap(new Blob([png], { type: "image/png" }));
+  }
+}
+
 async function squareImage(file) {
-  const bitmap = await createImageBitmap(file);
+  const bitmap = await openImage(file);
   const side = Math.min(bitmap.width, bitmap.height);
   const canvas = el("canvas", { width: IMAGE_SIDE, height: IMAGE_SIDE });
   canvas.getContext("2d").drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, IMAGE_SIDE, IMAGE_SIDE);
   bitmap.close();
-  return canvas.toDataURL("image/webp", IMAGE_QUALITY);
+  return fitImage((quality) => canvas.toDataURL("image/webp", quality));
 }
 
 function pickImage(apply) {
@@ -232,7 +252,7 @@ function pickImage(apply) {
   input.onchange = () => {
     const file = input.files[0];
     input.value = "";
-    if (file) squareImage(file).then(apply).catch(() => fail("That image is not valid."));
+    if (file) squareImage(file).then(apply).catch((e) => fail(typeof e === "string" ? e : "That image is not valid."));
   };
   input.click();
 }

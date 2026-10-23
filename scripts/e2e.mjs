@@ -1196,6 +1196,17 @@ async function library(ctx) {
     await screenshot(a, "room-members");
   });
 
+  await step("a tiled HEIC photo, which the page cannot decode, becomes the avatar through ffmpeg", async () => {
+    const heic = fs.readFileSync(path.join(import.meta.dirname, "fixtures", "tiles.heic")).toString("base64");
+    const avatar = await evaluate(a, `squareImage(new File([Uint8Array.from(atob("${heic}"), (c) => c.charCodeAt(0))], "IMG_0001.HEIC")).catch((e) => "error: " + e)`);
+    check(avatar.startsWith("data:image/webp;base64,"), `the HEIC photo did not become an avatar: ${brief(avatar.slice(0, 200))}`);
+    const colors = await evaluate(a, `(async () => { const i = new Image(); i.src = ${JSON.stringify(avatar)}; await i.decode(); const c = document.createElement("canvas"); c.width = c.height = IMAGE_SIDE; const g = c.getContext("2d"); g.drawImage(i, 0, 0); return [0.05, 0.5, 0.95].map((x) => [...g.getImageData(Math.round(IMAGE_SIDE * x), IMAGE_SIDE / 2, 1, 1).data.slice(0, 3)]); })()`);
+    const [left, middle, right] = colors.map(([r, g, b]) => (r > 150 && g < 90 && b < 90 ? "red" : g > 150 && r < 90 && b < 90 ? "green" : b > 150 && r < 90 && g < 90 ? "blue" : `${r},${g},${b}`));
+    check(left === "red" && middle === "green" && right === "blue", `the avatar is not the centered square of the whole tiled photo: ${left} / ${middle} / ${right}`);
+    await invoke(a, "set_profile", { avatar });
+    check((await state(a)).avatars[a.id] === avatar, "A's avatar is not the converted photo");
+  });
+
   await step("an Apex match detection job for the set is claimed once and finished", async () => {
     const all = [a, b, c];
     const sizes = Object.fromEntries(all.map((owner) => [owner.key, fileSize(logFile(owner, ctx.room, owner.id))]));

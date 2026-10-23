@@ -25,6 +25,9 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - the room menu lists the room commands and a rename in its settings reaches everyone. `e2e` (`library`)
 - each member row says one short state. `e2e` (`library`)
 - B's chosen colour and built-in avatar and A's room icon reach everyone. `e2e` (`library`)
+- a tiled HEIC photo, which the page cannot decode, becomes the avatar through ffmpeg, as the centered square of the whole photo. `e2e` (`library`)
+- A picked picture the page decodes is used as is, one it cannot goes through ffmpeg and one over 50 MB is refused first; the icon steps its quality down until it fits the 16384-character limit; the file picker offers every image type and HEIC, HEIF and AVIF. `ui-test`
+- A picture is cut to a centered square from the plain stream, or from the tile grid when the file is one. `unit`
 - A real two-PC test with friends: create a room, invite, join, approve, and see everyone's name, avatar, color and state. `manual`
 - Picking a photo in Settings crops it to the middle and shows on the other PC. `manual`
 - Pasting your own invite code is refused as not valid. `todo`

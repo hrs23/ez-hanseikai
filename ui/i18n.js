@@ -548,6 +548,8 @@ const JA = {
   "Remove": "削除",
   "That image is too large.": "画像が大きすぎます。",
   "That image is not valid.": "この画像は使えません。",
+  "That picture file is too large.": "画像ファイルが大きすぎます。",
+  "This file is not a picture the app can open.": "このファイルは画像として開けません。",
   "Room settings": "ルームの設定",
   "Room settings…": "ルームの設定…",
   "Leave {room} and delete its recordings and notes?": "{room} から抜けて、録画とメモを消しますか？",
