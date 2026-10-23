@@ -97,14 +97,12 @@ function nativeKey(e) {
   if (a.type === "range" || a.getAttribute("role") === "separator") return /^(Arrow|Home$|End$|Page)/.test(e.key);
   return (e.key === " " || e.key === "Enter") && (a.tagName === "BUTTON" || a.type === "checkbox" || a.tagName === "SUMMARY");
 }
-function listMove(key, i, n, wrap) {
+function listMove(key, i, n) {
   if (!n) return null;
   if (key === "Home") return 0;
   if (key === "End") return n - 1;
   const d = key === "ArrowDown" ? 1 : key === "ArrowUp" ? -1 : 0;
   if (!d) return null;
-  if (i < 0) return d > 0 ? 0 : n - 1;
-  if (wrap) return (i + d + n) % n;
   return Math.max(0, Math.min(n - 1, i + d));
 }
 function arrowList(box, selector) {
@@ -112,7 +110,7 @@ function arrowList(box, selector) {
     if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
     const rows = [...box.querySelectorAll(selector)];
     const i = rows.indexOf(document.activeElement);
-    const to = i < 0 ? null : listMove(e.key, i, rows.length, false);
+    const to = i < 0 ? null : listMove(e.key, i, rows.length);
     if (to === null) return;
     e.preventDefault();
     e.stopPropagation();

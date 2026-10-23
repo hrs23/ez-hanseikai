@@ -1739,9 +1739,8 @@ function stageKey(e, key) {
 function menuKey(e) {
   const list = [...$("menu").querySelectorAll("button:not(:disabled)")];
   const i = list.indexOf(document.activeElement);
-  const to = listMove(e.key, i, list.length, true);
   if (e.key === "Escape" || e.key === "Tab") { e.preventDefault(); closeMenu(); }
-  else if (to !== null) { e.preventDefault(); list[to].focus(); }
+  else if ((e.key === "ArrowDown" || e.key === "ArrowUp") && list.length) { e.preventDefault(); const down = e.key === "ArrowDown"; list[i < 0 ? (down ? 0 : list.length - 1) : (i + (down ? 1 : -1) + list.length) % list.length].focus(); }
 }
 function escapeKey() {
   const step = escapeStep({ menu: !$("menu").hidden, dialog: !!document.querySelector("dialog[open]"), pop: !$("pop").hidden, typing: !!typing(), full: full || boardFull, window: boardWindow, panel: panelOpen });

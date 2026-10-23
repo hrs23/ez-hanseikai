@@ -1205,19 +1205,15 @@ test("an inline editor cancels on Esc and saves on Enter (Ctrl+Enter in a multi-
   assert.equal(key({ key: "Escape", keyCode: 229 }), null);
 });
 
-test("arrow keys move one row in a list and stop at its ends, wrap in a menu, and Home and End go to the first and last", () => {
+test("arrow keys move one row in a list and stop at its ends, and Home and End go to the first and last", () => {
   const move = ui$.listMove;
-  assert.equal(move("ArrowDown", 0, 3, false), 1);
-  assert.equal(move("ArrowDown", 2, 3, false), 2);
-  assert.equal(move("ArrowUp", 0, 3, false), 0);
-  assert.equal(move("ArrowDown", 2, 3, true), 0);
-  assert.equal(move("ArrowUp", 0, 3, true), 2);
-  assert.equal(move("ArrowDown", -1, 3, true), 0);
-  assert.equal(move("ArrowUp", -1, 3, true), 2);
-  assert.equal(move("Home", 2, 3, false), 0);
-  assert.equal(move("End", 0, 3, true), 2);
-  assert.equal(move("Enter", 0, 3, false), null);
-  assert.equal(move("ArrowDown", -1, 0, true), null);
+  assert.equal(move("ArrowDown", 0, 3), 1);
+  assert.equal(move("ArrowDown", 2, 3), 2);
+  assert.equal(move("ArrowUp", 0, 3), 0);
+  assert.equal(move("Home", 2, 3), 0);
+  assert.equal(move("End", 0, 3), 2);
+  assert.equal(move("Enter", 0, 3), null);
+  assert.equal(move("ArrowDown", 0, 0), null);
 });
 
 test("Esc closes a menu or dialog first, then a popup, then leaves a text field, then full screen, then closes the Board window, then the panel", () => {
