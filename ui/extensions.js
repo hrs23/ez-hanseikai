@@ -29,13 +29,6 @@ function analysisPill(a) {
   if (a.state === "running") return { text: analyzing(a), tone: "run" };
   return { text: a.state === "idle" ? t("Not analyzed") : t("Waiting"), tone: "gray" };
 }
-function analysisSub(a, runner, name) {
-  if (a.state === "running") return runner ? t("{name}'s PC", { name: name(runner) }) : "";
-  if (a.state === "failed") return a.reason === "missing" ? t("File missing") : a.error || "";
-  if (a.state !== "left") return "";
-  const reason = analysisReason(a, name);
-  return reason === t("Waiting") ? "" : reason;
-}
 function analysisActions(a) {
   return [
     { id: "details" },

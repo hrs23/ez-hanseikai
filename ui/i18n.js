@@ -385,7 +385,7 @@ const JA = {
   "Done": "済み",
   "{name}'s PC": "{name} のPC",
   "Timeline": "タイムライン",
-  "Debriefs of this recording": "この録画の反省",
+  "Debriefs": "反省",
   "1 debrief": "反省 1 件",
   "{n} debriefs": "反省 {n} 件",
   "{m} min": "{m}分",

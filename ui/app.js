@@ -974,11 +974,13 @@ function renderAnalysis(set) {
   $("analysis").replaceChildren(sectionHead("cpu", t("Analysis"), list.length), ...list.map((a) => {
     const runner = (plugins.find((p) => p.id === a.plugin) || {}).runner;
     const pill = analysisPill(a);
-    const sub = analysisSub(a, runner, nameOf);
-    const row = el("div", { className: "prow " + a.state, tabIndex: 0, oncontextmenu: (e) => { e.preventDefault(); analysisMenu(set, a, e); } },
+    const why = [analysisState(a, runner, nameOf), a.error].filter(Boolean).join("\n");
+    const row = el("div", { className: "prow " + a.state, tabIndex: 0, title: why, oncontextmenu: (e) => { e.preventDefault(); analysisMenu(set, a, e); } },
       el("span", { className: "pic" }, icon(a.state === "done" ? "check" : a.state === "failed" ? "alert" : a.state === "running" ? "spinner" : "cpu", "sm")),
-      el("div", { className: "ptx" }, el("div", { className: "nm", textContent: pluginName(a.plugin) }), el("div", { className: "meta" }, el("span", { className: "pill state " + pill.tone, textContent: pill.text }), sub ? el("span", { className: "sub", textContent: sub, title: sub }) : null), progressBar(a)),
-      a.state === "failed" || a.state === "idle" ? el("button", { className: "sm", textContent: t(a.state === "idle" ? "Analyze" : "Retry"), onclick: () => retryAnalysis(set, a.plugin) }) : null);
+      el("span", { className: "nm", textContent: pluginName(a.plugin) }),
+      el("span", { className: "st " + pill.tone, textContent: pill.text }),
+      a.state === "failed" || a.state === "idle" ? el("button", { className: "sm", textContent: t(a.state === "idle" ? "Analyze" : "Retry"), onclick: () => retryAnalysis(set, a.plugin) }) : null,
+      progressBar(a));
     return row;
   }));
 }
@@ -986,9 +988,10 @@ function renderDebriefs(set) {
   const list = set ? debriefsOf(set.id) : [];
   $("debriefs").hidden = !list.length;
   if (!changed("debriefs", [list.map((d) => [d.id, d.end_us, onThisPc(d)]), lang])) return;
-  $("debriefs").replaceChildren(sectionHead("mic", t("Debriefs of this recording"), list.length), ...list.map((d) => el("div", { className: "prow", tabIndex: 0, oncontextmenu: (e) => { e.preventDefault(); debriefMenu(d, e); } },
+  $("debriefs").replaceChildren(sectionHead("mic", t("Debriefs"), list.length), ...list.map((d) => el("div", { className: "prow", tabIndex: 0, oncontextmenu: (e) => { e.preventDefault(); debriefMenu(d, e); } },
     el("span", { className: "pic" }, icon("mic", "sm")),
-    el("div", { className: "ptx" }, el("div", { className: "nm" }, el("span", { textContent: t("{m} min", { m: Math.max(1, Math.round(((d.end_us || nowUs()) - d.start_us) / 6e7)) }) }), el("span", { className: "muted", textContent: ` · ${sessionWhen(d.id)}`, title: fullWhen(sessionStart(d.id)) }))),
+    el("span", { className: "nm", textContent: t("{m} min", { m: Math.max(1, Math.round(((d.end_us || nowUs()) - d.start_us) / 6e7)) }) }),
+    el("span", { className: "st", textContent: sessionWhen(d.id), title: fullWhen(sessionStart(d.id)) }),
     downloadButton(d) || el("button", { className: "sm", textContent: t("Save"), onclick: () => exportFolder(d) }))));
 }
 function debriefMenu(d, at) {

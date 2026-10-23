@@ -11,7 +11,7 @@ const source = ["util.js", "i18n.js", "live.js", "media.js", "layout.js", "dock.
 const memory = new Map();
 const localStorage = { getItem: (k) => memory.get(k) ?? null, setItem: (k, v) => memory.set(k, v) };
 const context = vm.createContext({ localStorage, window: { __TAURI__: { core: {} } }, document: { querySelectorAll: () => [], documentElement: {} }, console, Intl, Date, URL, nameOf: (id) => id, location: { search: "" } });
-const ui$ = vm.runInContext(`${source}\n({ uiCommands, uiState, uiRun, listMove, strokeAlpha, INK_TOOLS, INK_TOOL_TITLE, nextInkTool, LIMITS, escapeStep, editKey, cleanText, single, changed, matchEnds, matchStarts, matchLabel, labelMatchEnds, shownTags, noteMoments, progressText, matchChapters, stepTarget, matchTargets, rowHit, rowActions, authorOf, noteCount, matchCount, formatWhen, fullWhen, sessionWhen, keysOf, hotkeyRows, memberStatus, windowTitle, longId, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, analysisPill, analysisSub, analysisActions, analysisDetails, analysisDetailText, runningMark, cardParts, dropPos, dropSlot, boardSpan, boardFont, cellSpan, fitFont, deletePreview, cleanupPicked, cleanupTotal, cleanupHead, cleanupDone, exportChoice, exportArgs, exportView, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, voiceTone, known, VOICE_SIDES, VOICE_TONES, VOICE_SIDE_DEFAULT, VOICE_TONE_DEFAULT, minimapRect, talking, stillTalking, markSpeak, seekSum, osdSeek, osdVolume, osdSpeed, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, feedbackPreview, feedbackReady, errorReport, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, nextChip, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, popupSpot, POP_GAP, POP_EDGE, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
+const ui$ = vm.runInContext(`${source}\n({ uiCommands, uiState, uiRun, listMove, strokeAlpha, INK_TOOLS, INK_TOOL_TITLE, nextInkTool, LIMITS, escapeStep, editKey, cleanText, single, changed, matchEnds, matchStarts, matchLabel, labelMatchEnds, shownTags, noteMoments, progressText, matchChapters, stepTarget, matchTargets, rowHit, rowActions, authorOf, noteCount, matchCount, formatWhen, fullWhen, sessionWhen, keysOf, hotkeyRows, memberStatus, windowTitle, longId, sendsPicture, viewLine, tileProblem, livePlayers, noScreen, ordered, extensionLine, analysisReason, analysisState, analysisPill, analysisActions, analysisDetails, analysisDetailText, runningMark, cardParts, dropPos, dropSlot, boardSpan, boardFont, cellSpan, fitFont, deletePreview, cleanupPicked, cleanupTotal, cleanupHead, cleanupDone, exportChoice, exportArgs, exportView, oldSessions, onThisPc, sizeOf, canDelete, deleteForm, noPicture, soundKey, voiceTone, known, VOICE_SIDES, VOICE_TONES, VOICE_SIDE_DEFAULT, VOICE_TONE_DEFAULT, minimapRect, talking, stillTalking, markSpeak, seekSum, osdSeek, osdVolume, osdSpeed, SPEAK_HANG_MS, downloadStats, sessionNotice, aiPurposes, aiPrompt, aiFacts, aiTask, aiTaskKey, aiMenuItems, aiPreview, aiCopyText, aiTaskOf, aiDebrief, apiUrl, apiReferenceBlocks, rateOf, liveEdge, netState, leftText, flowRows, feedbackPreview, feedbackReady, errorReport, liveStep, liveFollow, liveAvail, partyMove, sameParty, plan, grownIndex, covers, endOf, waiting, AHEAD_S, HOLD_MAX_MS, RETRY_MS, LIVE_LAG_MAX_S, LIVE_HEADROOM_S, LIVE_SHRINK_GAP_S, LIVE_CATCH_UP, JA, t, sessionName, mdParse, mdInline, mdVouched, mdHooks, tagName, mentionParts, chipMatches, nextChip, mentionWho, hintAt, applyHint, memberNames, clampSide, captureStates, micLevel, meterPos, SIDE_MIN, SIDE_MAX, SIDE_DEFAULT, popupSpot, POP_GAP, POP_EDGE, setTitles: (x) => { titles = x; }, setStorage: (x) => { st = x; }, setLanguage: (l) => { language = l; } })`, context);
 test("a changed() check against a tile's own store reports again on a rebuilt tile", () => {
   const first = {};
   assert.equal(ui$.changed("what", [1], first), true);
@@ -572,6 +572,22 @@ test("every English phrase in the pages has a Japanese one, and every Japanese e
   assert.deepEqual(Object.keys(ui$.JA).filter((k) => !strings.has(k.toLowerCase())), []);
 });
 
+test("the side panel's Analysis and Debrief rows are one roomy line each under short headers", () => {
+  const css = read("style.css");
+  const rule = (sel) => css.match(new RegExp(`^${sel.replace(/[.]/g, "\\.")} \\{([^}]*)\\}`, "m"))[1];
+  assert.ok(parseInt(rule(".prow").match(/min-height: (\d+)px/)[1], 10) >= 40);
+  assert.match(rule(".prow .nm"), /white-space: nowrap/);
+  assert.match(rule(".prow .st"), /white-space: nowrap/);
+  assert.match(rule(".plow .phd"), /padding: var\(--s3\)/);
+  const app = read("app.js");
+  const render = app.slice(app.indexOf("function renderAnalysis("), app.indexOf("function debriefMenu("));
+  assert.doesNotMatch(render, /ptx|meta|pill state/);
+  ui$.setLanguage("ja");
+  assert.equal(ui$.t("Analysis"), "解析");
+  assert.equal(ui$.t("Debriefs"), "反省");
+  ui$.setLanguage("en");
+});
+
 test("Settings has a switch to notify when someone joins, kept by the app", () => {
   assert.match(read("index.html"), /data-t="Notify when someone joins"[^\n]*<input id="notifyjoins" type="checkbox" class="switch" role="switch">/);
   assert.match(read("pages.js"), /\$\("notifyjoins"\)\.checked = st\.notify_joins/);
@@ -1088,12 +1104,6 @@ test("an extension row says one thing: no runner, what failed, who it waits for,
   assert.deepEqual(pill({ state: "running", progress: 0.5 }), { text: "Analyzing 50%", tone: "run" });
   assert.deepEqual(pill({ state: "left" }), { text: "Waiting", tone: "gray" });
   assert.deepEqual(pill({ state: "idle" }), { text: "Not analyzed", tone: "gray" });
-  assert.equal(ui$.analysisSub({ state: "running" }, "a", name), "Ren's PC");
-  assert.equal(ui$.analysisSub({ state: "failed", error: "boom" }, "a", name), "boom");
-  assert.equal(ui$.analysisSub({ state: "failed", reason: "missing" }, "a", name), "File missing");
-  assert.equal(ui$.analysisSub({ state: "left", reason: "receiving" }, "a", name), "Receiving");
-  assert.equal(ui$.analysisSub({ state: "left" }, "a", name), "");
-  assert.equal(ui$.analysisSub({ state: "done" }, "a", name), "");
   const ids = (a) => plain(ui$.analysisActions(a)).map((x) => x.id + (x.disabled ? "!" : ""));
   assert.deepEqual(ids({ state: "done" }), ["details", "again"]);
   assert.deepEqual(ids({ state: "idle" }), ["details", "again"]);
