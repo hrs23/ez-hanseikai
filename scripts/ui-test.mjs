@@ -687,14 +687,14 @@ test("a member row says one short state", () => {
   const at = new Date(2026, 9, 19, 12, 0);
   ui$.setLanguage("en");
   const say = (m) => ui$.memberStatus({ connected: true, sharing: false, ...m }, at).text;
-  assert.equal(say({}), "Not sending screen");
+  assert.equal(say({}), "Online · no screen");
   assert.equal(say({ sharing: true }), "Standby");
   assert.equal(say({ sharing: true, relayed: true }), "No picture via relay");
-  assert.equal(say({ relayed: true }), "Not sending screen");
+  assert.equal(say({ relayed: true }), "Online · no screen");
   assert.equal(say({ connected: false }), "Offline");
   assert.equal(say({ connected: false, seen_us: new Date(2026, 9, 19, 9, 5).getTime() * 1000 }), "Offline · last seen Oct 19 09:05");
   ui$.setLanguage("ja");
-  assert.equal(say({}), "画面を送っていません");
+  assert.equal(say({}), "オンライン · 画面なし");
   assert.equal(say({ sharing: true }), "待機中");
   assert.equal(say({ sharing: true, relayed: true }), "中継のため映像なし");
   assert.match(say({ connected: false }), /^オフライン/);
