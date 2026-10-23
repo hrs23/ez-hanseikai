@@ -874,6 +874,11 @@ function act(cmd, m, prev) {
 listenMain("party", () => refresh());
 const togglePlay = () => act(clock.playing ? "pause" : "play", nowM());
 const seekTo = (m) => act("seek", Math.max(0, m));
+function seekEdge(end) {
+  if (end && playSet().live) { goLive(); share(); renderPlayer(); return; }
+  seekTo(end ? total() : 0);
+  osd(end ? "rotate-cw" : "rotate-ccw", fmt(nowM()), { kind: "seek", bar: end ? 1 : 0 });
+}
 function jump(delta) {
   const run = seekSum(seekRun, delta);
   seekTo(Math.min(total(), nowM() + delta));
@@ -1271,10 +1276,17 @@ function closeMenu() {
   anchorMenu(null);
   if (menuReturn && menuReturn.isConnected) menuReturn.focus();
 }
+let reopening = null;
 document.addEventListener("mousedown", (e) => {
+  reopening = [$("menu"), $("pop")].map((box) => !box.hidden && box.anchor && box.anchor.at instanceof Element && box.anchor.at.contains(e.target) ? box.anchor.at : null).find(Boolean) || null;
   if (!$("menu").contains(e.target)) closeMenu();
   if (!$("pop").contains(e.target)) closePop();
 });
+document.addEventListener("click", (e) => {
+  const opener = reopening;
+  reopening = null;
+  if (opener && opener.contains(e.target)) e.stopPropagation();
+}, true);
 function closePop() {
   if ($("pop").hidden) return;
   $("pop").hidden = true;
@@ -1714,6 +1726,8 @@ const PLAYER_KEYS = {
   x: () => clearInk(false),
   "Shift+p": () => stepSet(-1),
   "Shift+n": () => stepSet(1),
+  Home: () => seekEdge(false),
+  End: () => seekEdge(true),
 };
 function stageKey(e, key) {
   const s = current();
@@ -1725,8 +1739,9 @@ function stageKey(e, key) {
 function menuKey(e) {
   const list = [...$("menu").querySelectorAll("button:not(:disabled)")];
   const i = list.indexOf(document.activeElement);
+  const to = listMove(e.key, i, list.length, true);
   if (e.key === "Escape" || e.key === "Tab") { e.preventDefault(); closeMenu(); }
-  else if ((e.key === "ArrowDown" || e.key === "ArrowUp") && list.length) { e.preventDefault(); const down = e.key === "ArrowDown"; list[i < 0 ? (down ? 0 : list.length - 1) : (i + (down ? 1 : -1) + list.length) % list.length].focus(); }
+  else if (to !== null) { e.preventDefault(); list[to].focus(); }
 }
 function escapeKey() {
   const step = escapeStep({ menu: !$("menu").hidden, dialog: !!document.querySelector("dialog[open]"), pop: !$("pop").hidden, typing: !!typing(), full: full || boardFull, window: boardWindow, panel: panelOpen });

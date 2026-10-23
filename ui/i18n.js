@@ -102,6 +102,7 @@ const JA = {
   "Auto grid": "自動グリッド",
   "Automatic": "自動",
   "Back / forward 1 min": "1分戻る / 進む",
+  "Start / end (live)": "先頭 / 最後（ライブ）",
   "Back / forward 10 s (Shift 1 min)": "10秒戻る / 進む (Shiftで1分)",
   "Back / forward 5 s (Shift 1 s)": "5秒戻る / 進む (Shiftで1秒)",
   "Back 5 s": "5秒戻る",
