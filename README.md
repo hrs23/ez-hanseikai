@@ -75,3 +75,5 @@ See [docs/development.md](docs/development.md). The docs are [the design](docs/d
 MIT or Apache-2.0, at your option.
 
 The bundled fonts (Inter, Noto Sans JP, M PLUS 1) are under the SIL Open Font License 1.1, see `ui/fonts`.
+
+The avatar and room crest shapes are from [game-icons.net](https://game-icons.net) by Lorc, Delapouite, DarkZaitzev, Carl Olsen, Caro Asercion and Skoll, under CC BY 3.0, see `ui/game-icons-LICENSE.txt`.
