@@ -315,18 +315,15 @@ function renderDiagnostics() {
   fetchChecks(st.id);
   const peers = st.peers;
   if (!changed("diag", [checkSig(st.id), peers.map((p) => [p.id, p.connected, p.path, p.relay, p.rtt_ms, p.version]), st.names, lang])) return;
-  const head = el("tr", {}, ...["Member", "Path", "Round trip", "Version"].map((h) => el("th", { textContent: t(h) })));
-  const rows = peers.map((p) => {
-    const tr = el("tr", { className: "pick" + (p.connected ? "" : " dim") }, el("td", {}, nameChip(avatar(p.id, "", null, false, true), nameOf(p.id))), el("td", { className: p.connected ? (p.path === "relay" ? "warn" : "ok") : "faint", textContent: p.connected ? (p.path === "relay" ? [t("Relay"), p.relay].filter(Boolean).join(" ") : t("Direct")) : t("Offline") }), el("td", { textContent: p.connected ? `${p.rtt_ms} ms` : "—" }), el("td", { className: p.version && p.version !== st.version ? "warn" : "", textContent: p.version || "—" }));
-    tr.onclick = () => { $("diagdlg").close(); openProfile(p.id); };
-    return tr;
-  });
-  const members = peers.length ? [el("div", { className: "h3", textContent: t("Members") }), el("div", { className: "tablebox" }, el("table", { className: "table" }, el("thead", {}, head), el("tbody", {}, ...rows)))] : [];
-  $("diagbody").replaceChildren(...checkGroups(st.id), ...members);
+  const node = (id, sub, cls = "") => el("div", { className: "node " + cls }, avatar(id, "lg", null, false, true), stack(nameOf(id), sub));
+  const older = (p) => (p.version && p.version !== st.version ? p.version : "");
+  const links = peers.map((p) => el("div", { className: "flink " + (p.connected ? p.path : "off") }, el("span", { className: "line" }), p.connected && p.path === "relay" ? el("span", { className: "relaybox" }, el("b", { textContent: t("Relay server") }), el("small", { textContent: [p.relay, `${p.rtt_ms} ms`].filter(Boolean).join(" · ") })) : el("span", { className: "label", textContent: p.connected ? `${t("Direct")} · ${p.rtt_ms} ms` : t("Offline") }), node(p.id, older(p), p.connected ? "" : "dim")));
+  const diagram = el("div", { className: "flowmap" }, node(st.id, ""), el("div", { className: "links" }, ...(links.length ? links : [el("div", { className: "none", textContent: t("No other members") })])));
+  $("diagbody").replaceChildren(...checkGroups(st.id, null, [flowRows(st, null)[0]]), el("div", { className: "h3", textContent: t("How you are connected") }), diagram);
 }
-// Settings > Where data goes: what this PC sends, to whom, and which servers it talks to.
+// Settings > Privacy: what goes where, in plain words, then the traffic to each member.
 function renderFlow() {
-  if (!$("settings").open || settingsPane !== "data") return;
+  if (!$("settings").open || settingsPane !== "privacy") return;
   if (Date.now() - flowAt >= DIAG_FEED_MS) {
     flowAt = Date.now();
     invoke("debug_flow").then((f) => { flow = f; delete sigs.flow; renderFlow(); }).catch(warn);
@@ -334,15 +331,12 @@ function renderFlow() {
   if (!changed("flow", [st.peers, st.capture.sharing, flow, lang])) return;
   const peers = st.peers;
   const what = () => [st.capture.sharing ? t("Live picture and voice") : null, t("Recorded files"), t("Log")].filter(Boolean).join(" · ");
-  const node = (id, sub, cls = "") => el("div", { className: "node " + cls }, avatar(id, "lg", null, false, true), stack(nameOf(id), sub));
-  const links = peers.map((p) => el("div", { className: "flink " + (p.connected ? p.path : "off") }, el("span", { className: "line" }), p.connected && p.path === "relay" ? el("span", { className: "relaybox" }, el("b", { textContent: t("Relay server") }), el("small", { textContent: p.relay || t("content not visible") })) : el("span", { className: "label", textContent: p.connected ? `${t("Direct")} · ${t("encrypted")} · ${p.rtt_ms} ms` : t("Offline") }), node(p.id, "", p.connected ? "" : "dim")));
-  const diagram = el("div", { className: "flowmap" }, node(st.id, ""), el("div", { className: "links" }, ...(links.length ? links : [el("div", { className: "none", textContent: t("No other members") })])));
-  const head = el("tr", {}, ...["Peer", "Path", "What is sent", "Sent", "Received"].map((h) => el("th", { textContent: t(h) })));
+  const head = el("tr", {}, ...["Member", "Path", "What is sent", "Sent", "Received"].map((h) => el("th", { textContent: t(h) })));
   const rows = peers.map((p) => el("tr", { className: p.connected ? "" : "dim" }, el("td", {}, el("b", { textContent: nameOf(p.id) })), el("td", { className: p.connected ? (p.path === "relay" ? "warn" : "ok") : "faint", textContent: p.connected ? (p.path === "relay" ? [t("Relay"), p.relay].filter(Boolean).join(" ") : t("Direct")) : t("Offline") }), el("td", { textContent: p.connected ? what() : "—" }), el("td", { textContent: p.sent != null ? bytes(p.sent) : "—" }), el("td", { textContent: p.received != null ? bytes(p.received) : "—" })));
-  $("flowbody").replaceChildren(el("div", { className: "okbox" }, ...flowRows(st, flow).map(okLine)), diagram, el("div", { className: "tablebox" }, el("table", { className: "table" }, el("thead", {}, head), el("tbody", {}, ...rows))));
-}
-function diagnosticsText() {
-  return invoke("debug_report", { save: false });
+  $("flowbody").replaceChildren(
+    el("div", { className: "okbox" }, ...flowRows(st, flow).slice(1).map(okLine)),
+    el("div", { className: "h3", textContent: t("Members") }),
+    peers.length ? el("div", { className: "tablebox" }, el("table", { className: "table" }, el("thead", {}, head), el("tbody", {}, ...rows))) : el("div", { className: "none", textContent: t("No other members") }));
 }
 
 function openReset() {
@@ -431,8 +425,7 @@ $("checkupdate").onclick = () => checkUpdate(true);
 $("selold").onclick = () => { picked = new Set(oldSessions(st.sets.filter((s) => !s.live))); delete sigs.storage; renderStorage(); };
 $("deletesel").onclick = () => confirmDelete([...picked]);
 $("diagagain").onclick = () => fetchChecks(st.id, true);
-$("diagcopy").onclick = () => diagnosticsText().then((text) => navigator.clipboard.writeText(text)).then(() => flash(t("Copied"))).catch(fail);
-$("diagsave").onclick = () => diagnosticsText().then((text) => dialog("save_text", { name: "ez-hanseikai-diagnostics.txt", text })).then((saved) => { if (saved) flash(t("Saved")); }).catch(fail);
+$("diagreport").onclick = () => { $("diagdlg").close(); openFeedback("bug"); };
 $("resetyes").onclick = () => {
   $("resetdlg").close();
   const keepRooms = $("keeprooms").checked;

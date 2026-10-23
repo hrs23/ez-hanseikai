@@ -19,19 +19,22 @@ function fetchChecks(id, again) {
       renderDiagnostics();
     });
 }
-function checkLine(l) {
-  return el("div", { className: "ok-line lv-" + l.level }, icon(LEVEL_ICONS[l.level] || "info", "sm"), el("span", { textContent: t(l.text, l.args) }));
+// One checklist row: the item, a check when it passes, and what was found or what is wrong.
+function checkRow(i) {
+  const bad = i.lines.filter((l) => l.level === "warn" || l.level === "fail");
+  const shown = bad.length ? bad : i.lines.slice(0, 1);
+  return okLine({ key: i.item, level: i.level, text: shown.map((l) => t(l.text, l.args)).join(" · ") });
 }
-function checkBox(lines) {
-  return el("div", { className: "okbox" }, ...lines.map(checkLine));
+function checkBox(items, extra = []) {
+  return el("div", { className: "okbox checklist" }, ...items.map(checkRow), ...extra.map(okLine));
 }
 // The two groups of one member's checks, under headings, or a line that says why there are none.
-function checkGroups(id, action) {
+function checkGroups(id, action, extra) {
   const c = checks[id];
   const note = (iconName, text, cls = "") => el("div", { className: "okbox" }, el("div", { className: "ok-line " + cls }, icon(iconName, "sm" + (iconName === "spinner" ? " spin" : "")), el("span", { textContent: text })));
   if (!c || (c.busy && !c.data)) return [note("spinner", t("Checking…"))];
   if (!c.data) return [note("alert", t("No answer. Their app may be older."), "lv-warn")];
-  return [el("div", { className: "row" }, el("div", { className: "h3 grow", textContent: t("PC") }), action || ""), checkBox(c.data.pc), el("div", { className: "h3", textContent: t("Connection") }), checkBox(c.data.net)];
+  return [el("div", { className: "row" }, el("div", { className: "h3 grow", textContent: t("PC") }), action || ""), checkBox(c.data.pc), el("div", { className: "h3", textContent: t("Connection") }), checkBox(c.data.net, extra)];
 }
 const checkSig = (id) => checks[id] && [checks[id].busy, checks[id].data];
 
@@ -62,16 +65,13 @@ function renderMemberProfile() {
   if (online) fetchChecks(id);
   const state = memberOf(id).status;
   const receivingFrom = st.sets.filter((s) => !s.live).flatMap((s) => s.players.filter((x) => x.owner === id && x.total && x.have < x.total).map((x) => ({ s, x })));
-  const sig = [id, state, p && [p.connected, p.path, p.relay, p.rtt_ms, p.sent, p.received, p.offset_us, p.version], speed, checkSig(id), receivingFrom.map((r) => [r.s.id, r.x.have]), st.names, look(id), lang];
+  const sig = [id, state, p && [p.connected, p.path, p.relay, p.rtt_ms, p.version], speed, checkSig(id), receivingFrom.map((r) => [r.s.id, r.x.have]), st.names, look(id), lang];
   if (!changed("memberprof", sig)) return;
   const kv = [];
   const add = (k, v) => kv.push(el("dt", { textContent: k }), el("dd", { textContent: v }));
   if (p && p.connected) {
     add(t("Path"), p.path === "relay" ? [t("Via relay server"), p.relay].filter(Boolean).join(" · ") : t("Direct"));
     add(t("Round trip"), `${p.rtt_ms} ms`);
-    if (p.sent != null) add(t("Sent"), bytes(p.sent));
-    if (p.received != null) add(t("Received"), bytes(p.received));
-    if (p.offset_us != null) add(t("Clock offset"), `${p.offset_us >= 0 ? "+" : "−"}${(Math.abs(p.offset_us) / 1e6).toFixed(2)} s`);
   }
   add(t("Version"), (me ? st.version : p && p.version) || "—");
   const measuring = !!speed && speed.id === id && !speed.line;

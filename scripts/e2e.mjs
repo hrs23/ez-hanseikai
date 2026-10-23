@@ -1259,7 +1259,7 @@ async function library(ctx) {
     await waitFor("the sidebar header shows the room name as a menu", within(UI_REFRESH_S * 5), () => evaluate(a, `$("roomname").querySelector(".nm").textContent === "Practice" && $("roomname").getAttribute("aria-haspopup") === "menu"`));
     await evaluate(a, `$("roomname").click(); true`);
     const labels = await evaluate(a, `[...$("menu").querySelectorAll("button")].map((b) => b.textContent)`);
-    check(labels.filter((l) => l !== "Cancel invite").join() === ["Room settings…", "Copy invite code", "Close room"].join(), `the room menu lists ${labels}`);
+    check(labels.filter((l) => l !== "Cancel invite").join() === ["Room profile", "Room settings…", "Copy invite code", "Close room"].join(), `the room menu lists ${labels}`);
     await evaluate(a, `[...$("menu").querySelectorAll("button")].find((b) => b.textContent === t("Room settings…")).click(); true`);
     await waitFor("A shows the room settings", within(UI_REFRESH_S * 3), () => evaluate(a, `$("roomdlg").open && $("roomnameinput").value === "Practice" && $("roomsave").disabled`));
     await screenshot(a, "room-settings");
@@ -1367,7 +1367,7 @@ async function library(ctx) {
 
   await step("a member's profile shows their connection and the checks of their PC and connection", async () => {
     const lines = await invoke(a, "check", { id: b.id });
-    check(Array.isArray(lines?.pc) && lines.pc.length > 0 && Array.isArray(lines.net) && lines.net.length > 0 && [...lines.pc, ...lines.net].every((l) => ["ok", "warn", "fail", "info"].includes(l.level) && typeof l.text === "string"), `B's checks ${brief(lines)}`);
+    check(Array.isArray(lines?.pc) && lines.pc.length > 0 && Array.isArray(lines.net) && lines.net.length > 0 && [...lines.pc, ...lines.net].every((i) => typeof i.item === "string" && ["ok", "warn", "fail"].includes(i.level) && i.lines.length > 0 && i.lines.every((l) => typeof l.text === "string")), `B's checks ${brief(lines)}`);
     await evaluate(a, `openProfile(${JSON.stringify(b.id)}); true`);
     await waitFor("B's profile has Measure speed and B's checks", within(UI_REFRESH_S * 10), () => evaluate(a, `$("profiledlg").open && [...$("profiledlg").querySelectorAll("button")].some((x) => x.textContent === t("Measure speed")) && $("profiledlg").querySelectorAll(".okbox .ok-line").length >= 3`));
     await screenshot(a, "profile");
@@ -1716,13 +1716,13 @@ async function library(ctx) {
     check(await evaluate(a, `page === "player" && selected === ${JSON.stringify(ctx.set)} && !clock.playing && Math.abs(nowM() - ${SEEK_TO_S}) < 0.5`), "the window is not where ui_state says");
   });
 
-  await step("Diagnostics checks this PC and the connection, Settings shows where data goes, and the report is masked", async () => {
-    await evaluate(a, `openSettings("data"); true`);
-    await waitFor("Settings shows where data goes", within(UI_REFRESH_S * 5), () => evaluate(a, `!!$("flowbody").querySelector(".flowmap") && $("flowbody").textContent.includes(t("Time check"))`));
+  await step("Diagnostics is a checklist of this PC and the connection with how you are connected, Settings > Privacy shows what goes where, and the report is masked", async () => {
+    await evaluate(a, `openSettings("privacy"); true`);
+    await waitFor("Privacy shows what goes where", within(UI_REFRESH_S * 5), () => evaluate(a, `$("flowbody").textContent.includes(t("Time check")) && !!$("flowbody").querySelector("table")`));
     await evaluate(a, `$("settings").close(); openDiagnostics(); true`);
-    await waitFor("Diagnostics shows the checks", within(UI_REFRESH_S * 10), () => evaluate(a, `$("diagbody").querySelectorAll(".okbox .ok-line").length >= 3 && !$("diagbody").querySelector(".flowmap")`));
+    await waitFor("Diagnostics shows the checklist and the map", within(UI_REFRESH_S * 10), () => evaluate(a, `$("diagbody").querySelectorAll(".checklist .ok-line").length >= 8 && !!$("diagbody").querySelector(".flowmap")`));
     await screenshot(a, "diagnostics");
-    const report = await evaluate(a, `diagnosticsText()`);
+    const report = await invoke(a, "debug_report", { save: false });
     check(report.includes("ez-hanseikai") && report.includes("environment check") && report.includes("jobs") && report.includes("recent log") && report.includes("\nhardware: ") && report.includes("\nwhere data goes\n"), "the report lacks its parts");
     for (const secret of [NAMES.a, NAMES.b, NAMES.c, a.id, b.id]) check(!report.includes(secret), `the report holds ${secret.slice(0, 4)}`);
     check(!/[A-Za-z]:\\/.test(report) && !/\b\d{1,3}(\.\d{1,3}){3}\b/.test(report), "the report holds a path or an address");
