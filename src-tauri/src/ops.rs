@@ -8,7 +8,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
 use crate::noise::{self, Repeats};
-use crate::{api, audio, clean_name, cleanup, clean_note, clean_text, data, debug, export, ffmpeg, jobs, merge, net, now_us, party, record, relay, room, shell, sources, Core, BOARD_MAX, EVENT_KINDS, NAME_MAX, NOTE_MAX, REPO, VALUES_MAX};
+use crate::{api, audio, clean_name, cleanup, clean_note, clean_text, data, debug, export, ffmpeg, jobs, merge, net, now_us, party, record, relay, room, shell, sources, state, Core, BOARD_MAX, EVENT_KINDS, NAME_MAX, NOTE_MAX, REPO, VALUES_MAX};
 
 pub type Op = fn(&Arc<Core>, Value) -> Result<Value, String>;
 
@@ -83,7 +83,7 @@ pub const OPS: &[(&str, Op)] = &[
     ("new_api_token", new_api_token),
     ("api_info", api_info),
     ("api_reference", |_, _| Ok(json!(api::reference()))),
-    ("state", |c, _| Ok(room::state_json(c))),
+    ("state", |c, _| Ok(state::state_json(c))),
     ("debug_flow", debug::debug_flow),
     ("debug_report", debug::debug_report),
     ("ui_commands", |c, _| Ok(c.ui.lock().unwrap()["commands"].clone())),

@@ -485,7 +485,7 @@ pub fn text(core: &Core) -> String {
     }
     if let Some(room) = core.room_id() {
         let logs = room::logs(core, &room);
-        for set in room::sets_json(core, &room, &logs, &[]) {
+        for set in crate::state::sets_json(core, &room, &logs, &[]) {
             out.push_str(&format!("set {}\n", set["id"].as_str().unwrap_or_default()));
             for p in set["players"].as_array().into_iter().flatten() {
                 out.push_str(&format!(

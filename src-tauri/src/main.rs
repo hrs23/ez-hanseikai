@@ -27,6 +27,7 @@ mod report;
 mod room;
 mod shell;
 mod sources;
+mod state;
 mod stream;
 mod thumbs;
 
