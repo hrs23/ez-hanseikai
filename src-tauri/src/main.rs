@@ -289,7 +289,9 @@ impl Core {
     pub fn append_log(&self, room: &str, record: &Value) {
         let _guard = self.log_lock.lock().unwrap();
         let path = if self.log_ready(room) { self.log_path(room, &self.me()) } else { self.pending_path(room) };
-        let _ = log::append(&path, record);
+        if let Err(e) = log::append(&path, record) {
+            tracing::warn!("could not add a record to the room log: {e}");
+        }
         let _ = self.app.emit("log", room);
     }
 

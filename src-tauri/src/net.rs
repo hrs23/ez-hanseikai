@@ -58,6 +58,7 @@ pub async fn request(conn: &Connection, req: &Value) -> Result<Vec<u8>> {
 async fn request_within(conn: &Connection, req: &Value, limit: Duration) -> Result<Vec<u8>> {
     timeout(limit, async {
         let (mut send, mut recv) = conn.open_bi().await?;
+        let _ = send.set_priority(LOG_PRIORITY);
         let body = serde_json::to_vec(req)?;
         debug::message("out", req["t"].as_str(), body.len());
         send.write_all(&body).await?;
@@ -1081,7 +1082,7 @@ async fn run(core: &Arc<Core>, id: EndpointId, conn: Connection, outgoing: bool)
     debug::event(core, started, format!("{label}: connected"));
     watch_paths(core, &conn, label.clone());
     let serving = tokio::spawn(serve(core.clone(), conn.clone()));
-    if !outgoing || present_invite(core, &id, &conn).await {
+    if present_invite(core, &id, &conn).await {
         match hello(core, &id, &conn).await {
             Some(PROTOCOL) => {
                 if let Err(e) = sync(core, &id, &conn).await {
