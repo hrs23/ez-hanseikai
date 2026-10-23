@@ -48,3 +48,6 @@ function feedbackReady(comment, withDiagnostics) {
 function errorReport(e) {
   return `${t("Error")}: ${t(String((e && e.message) || e))}`;
 }
+function shownError(last, visible) {
+  return last && visible ? `${t("Error")}: ${last.text}` : "";
+}

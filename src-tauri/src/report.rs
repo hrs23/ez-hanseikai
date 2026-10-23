@@ -42,12 +42,17 @@ $request.GetResponse().Dispose()
 
 static SHOWN: Mutex<(String, Option<Vec<u8>>)> = Mutex::new((String::new(), None));
 
-pub fn feedback_preview(core: &Arc<Core>, _: Value) -> Result<Value, String> {
-    let diagnostics: String = debug::diagnostics(core, false)?.chars().take(DIAG_MAX).collect();
+pub fn feedback_snap(core: &Arc<Core>) -> Value {
     let image = snap(core).ok();
     let picture = image.as_ref().map(|png| format!("data:image/png;base64,{}", base64(png)));
-    *SHOWN.lock().unwrap() = (diagnostics.clone(), image);
-    Ok(json!({"diagnostics": diagnostics, "image": picture, "to": host()}))
+    *SHOWN.lock().unwrap() = (String::new(), image);
+    json!(picture)
+}
+
+pub fn feedback_preview(core: &Arc<Core>, _: Value) -> Result<Value, String> {
+    let diagnostics: String = debug::diagnostics(core, false)?.chars().take(DIAG_MAX).collect();
+    SHOWN.lock().unwrap().0 = diagnostics.clone();
+    Ok(json!({"diagnostics": diagnostics, "to": host()}))
 }
 
 pub fn body(kind: &str, comment: &str, diagnostics: Option<&str>, image: Option<&[u8]>, lang: &str) -> Result<Value, String> {

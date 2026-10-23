@@ -639,7 +639,7 @@ fn build_menu(app: &AppHandle, lang: &str, toggle: &MenuItem<Wry>, mark: &MenuIt
         .separator()
         .item(&it("reset", "Reset app…", None)?)
         .separator()
-        .item(&it("feedback", "Send feedback…", None)?)
+        .item(&it("feedback", "Send feedback…", Some("CmdOrCtrl+Shift+F"))?)
         .item(&it("releases", "Release notes", None)?)
         .separator()
         .item(&it("about", "About", None)?)

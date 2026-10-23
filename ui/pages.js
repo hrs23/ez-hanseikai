@@ -20,6 +20,7 @@ const SHORTCUTS = [
   ["Drawing tool: pen, laser, off / clear drawings", ["P", "X"]],
   ["Undo", ["Ctrl+Z"]],
   ["Shortcuts", ["?"]],
+  ["Send feedback", ["Ctrl+Shift+F"]],
 ];
 
 let askName = false;

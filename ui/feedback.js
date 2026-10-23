@@ -4,26 +4,27 @@ function renderFeedback() {
   pick($("fbkind"), feedback.kind, (v) => { feedback.kind = v; renderFeedback(); });
   const shown = feedback.shown;
   const host = shown && shown.to;
-  $("fbimage").disabled = !(shown && shown.image);
+  $("fbimage").disabled = !feedback.image;
   if ($("fbimage").disabled) $("fbimage").checked = false;
   $("fbimg").hidden = !$("fbimage").checked;
-  if (shown && shown.image) $("fbimg").src = shown.image;
+  if (feedback.image) $("fbimg").src = feedback.image;
   $("fbtext").textContent = shown ? feedbackPreview(feedback.kind, $("fbcomment").value, $("fbdiag").checked ? shown.diagnostics : null) : t("Preparing…");
   $("fbnote").textContent = host ? t("Sent only to {host}, only when you press Send. Recordings, notes and game screens are never sent, and there is no reply.", { host }) : shown ? t("Feedback is not set up in this build.") : "";
   $("fbsend").disabled = !host || !feedbackReady($("fbcomment").value, $("fbdiag").checked);
 }
 
 async function openFeedback(kind = "bug", comment = "") {
-  feedback = { kind: Object.hasOwn(FEEDBACK_NAMES, kind) ? kind : "bug", shown: null };
+  feedback = { kind: Object.hasOwn(FEEDBACK_NAMES, kind) ? kind : "bug", shown: null, image: null };
   $("fbcomment").value = comment;
   $("fbdiag").checked = true;
   $("fbimage").checked = false;
   $("fbpreview").open = false;
+  if (!$("feedbackdlg").open) feedback.image = await dialog("feedback_snap").catch(() => null);
   renderFeedback();
   const ask = dialog("feedback_preview");
   if (!$("feedbackdlg").open) $("feedbackdlg").showModal();
   $("fbcomment").focus();
-  try { feedback.shown = await ask; } catch (e) { feedback.shown = { diagnostics: "", image: null, to: null }; fail(e); }
+  try { feedback.shown = await ask; } catch (e) { feedback.shown = { diagnostics: "", to: null }; fail(e); }
   renderFeedback();
 }
 
@@ -40,4 +41,4 @@ $("fbsend").onclick = single(async () => {
     renderFeedback();
   }
 });
-menuActions.feedback = () => openFeedback();
+menuActions.feedback = () => openFeedback("bug", shownError(lastError, !$("toast").hidden));

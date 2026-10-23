@@ -1310,8 +1310,10 @@ function stageMenu(e, key) {
   ], e);
 }
 
+let lastError = null;
 function flash(msg, kind = "info", action = null) {
   const text = typeof msg === "object" && msg && msg.code ? codeText(msg) : t(String(msg));
+  lastError = kind === "error" ? { text } : null;
   $("toasttext").textContent = text;
   $("toasticon").replaceChildren(icon({ error: "alert", update: "refresh" }[kind] || "check"));
   $("toastaction").hidden = !action;

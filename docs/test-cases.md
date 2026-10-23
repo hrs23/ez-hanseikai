@@ -216,7 +216,7 @@ A test fails when an end-to-end step name is missing here. A new test or a new c
 - closing the captured window during the recording goes on with the voice, and a new screen adds a part. `e2e` (`recover`)
 - C's disk is full during the recording: its part ends with a notice, the others go on, and C completes its copy once there is room. `e2e` (`recover`)
 - Diagnostics opens on where data goes and copies a masked report. `e2e` (`library`)
-- Help > Send feedback… and Report… on an error open one dialog: kind (Problem, Request, Comment), comment, diagnostics (on), a picture of the app window (off) and what is sent; Send needs a comment or the diagnostics. `ui-test`
+- Help > Send feedback… (Ctrl+Shift+F, also over an open dialog, with the error on screen copied into the comment) and Report… on an error open one dialog, with the window picture taken before it opens: kind (Problem, Request, Comment), comment, diagnostics (on), a picture of the app window (off) and what is sent; Send needs a comment or the diagnostics. `ui-test`
 - a feedback report keeps only a known kind, a comment cut at its limit and what was ticked; the window picture is RGB PNG shrunk to a width limit; send errors say what to do. `unit`
 - feedback is sent only from the window, never through the local API. `unit`
 - The first start shows the Windows firewall prompt and the app works after Allow. `manual`
